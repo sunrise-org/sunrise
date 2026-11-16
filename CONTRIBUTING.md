@@ -251,8 +251,8 @@ How Sunrise is run, and how people join the Team or lead a group: [GOVERNANCE.md
 
 ## Licence and DCO
 
-Sunrise's code is under the [PolyForm Shield licence](LICENSE), and so is what you contribute: it comes in under the same
-licence it goes out under, and you keep your copyright. There is no CLA. Instead, sign off every commit (`git commit -s`)
+Sunrise's code is under the licence in [LICENSE](LICENSE): PolyForm Shield 1.0.0 with the Sunrise Additional Terms,
+version 1.0 or later. Your contribution comes in under that same licence, and you keep your copyright. There is no CLA. Instead, sign off every commit (`git commit -s`)
 to certify the [Developer Certificate of Origin](https://developercertificate.org/): that you wrote it, or have the
 right to submit it under the project's licence. The DCO check fails a pull request with a commit that isn't signed off;
 `git rebase --signoff origin/main` fixes a branch.
