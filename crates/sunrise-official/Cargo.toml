@@ -23,6 +23,9 @@ sunrise-discord = { path = "../sunrise-discord" }
 sunrise-perf-share = { path = "../sunrise-perf-share" }
 log = "0.4"
 
+[dev-dependencies]
+sunrise-hooks = { path = "../sunrise-hooks" }
+
 [build-dependencies]
 # The build script runs on the host, but embeds resources based on the target OS.
 winresource = "0.1"

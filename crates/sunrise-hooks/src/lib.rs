@@ -19,6 +19,7 @@
 
 pub mod hud;
 pub mod lang;
+pub mod launch;
 pub mod pages;
 pub mod perf;
 pub mod players;
@@ -253,6 +254,7 @@ pub mod engine {
         crate::pages::engine::all();
         crate::hud::engine::all();
         crate::lang::all();
+        crate::launch::engine::all();
     }
 
     /// [`Hooks::started`].
@@ -312,6 +314,15 @@ pub mod engine {
     /// Whether any hook is registered: without one the engine builds no view to hand them.
     pub fn any() -> bool {
         !all().is_empty()
+    }
+
+    /// How many hooks, stores, pages, HUD layers and lang files are registered; seals them.
+    pub fn registered() -> usize {
+        all().len()
+            + crate::settings::all().len()
+            + crate::pages::engine::all().len()
+            + crate::hud::engine::all().len()
+            + crate::lang::all().len()
     }
 
     /// [`Hooks::frame`].

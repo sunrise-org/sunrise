@@ -295,6 +295,11 @@ A Sunrise crate that runs in the game:
 2. is added to `sunrise-official`'s dependencies and to its `register()`:
    `sunrise_platform::hooks::register(&my_crate::HOOKS)`.
 
+`register()` adds them only when the game was started with `--sunrise-extras`, the launcher's **Sunrise Extras**
+switch (off by default, #2345). Without it nothing registers and the official game is the vanilla one. The switch is
+declared through `sunrise_platform::launch::declare`: the engine drops declared switches before it reads its own
+options and lists them in `--launch-api`, so it names none of them.
+
 Registration happens before the game runs: the engine seals the list as it starts (`entry::main`), and a later
 `register` returns `TooLate`. Hooks run in the order they registered, on the render thread unless the method says
 otherwise, and must return quickly. With nothing registered a dispatch is one load and an empty loop, so the plain
@@ -310,7 +315,8 @@ that belongs to one subsystem (an input source, the compositor) lives in the eng
 same shape: registered before the game runs, read-only after.
 
 **What players get.** The release builds (`game-build.yml`, so the nightly and the release; `tools/ci/build-musl.sh`)
-build `sunrise-official` and ship it as `sunrise-client`, the name the launcher and players know. The launcher's
+build `sunrise-official` and ship it as `sunrise-client`, the name the launcher and players know; its Sunrise parts
+run only with the Sunrise Extras switch on. The launcher's
 native-mod builds of the game do the same, and its generated executable for trait mods calls
 `sunrise_official::register()` (`launcher/src/native_mods/api.rs`). The dedicated server build (`sunrise-engine`)
 stays sunrise-client's, with no Sunrise part. sunrise-client's own executable, the one `cargo run -p

@@ -55,7 +55,7 @@ def check_ctl(bins, resources, official=False):
     work, env = ac.scratch('profile', resources)
     ctl, perf, socket = commands(bins, work, env)
     try:
-        ctl('launch', '--world', 'Prof', '--creative', '--offscreen', '--wait')
+        ctl('launch', '--world', 'Prof', '--creative', '--offscreen', '--wait', *(['--sunrise-extras'] if official else []))
         assert ctl('profile', 'status')['capturing'] is False
         before = ctl('status')['frames']
         started = ctl('profile', 'start', '--hz', '250')

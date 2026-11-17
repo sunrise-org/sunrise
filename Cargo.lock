@@ -5192,6 +5192,7 @@ dependencies = [
  "sunrise-friends",
  "sunrise-game",
  "sunrise-heartbeat",
+ "sunrise-hooks",
  "sunrise-perf-share",
  "sunrise-platform",
  "winresource",

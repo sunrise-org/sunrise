@@ -8,7 +8,7 @@ reference implementation. Proposed in horizon-rust/horizon#3545.
 
 | | |
 | --- | --- |
-| Version | 0.1.1, printed by `sunrise-client --launch-api` and `sunrise-prepare --launch-api` |
+| Version | 0.1.2, printed by `sunrise-client --launch-api` and `sunrise-prepare --launch-api` |
 | Level | experimental ([stability.md](stability.md)): preview once preparing and the guide are covered too |
 | Covers | starting `sunrise-client`: its options, the session JSON, the exit codes, the crash report's path; preparing with `sunrise-prepare`: `--launch-api`, `--output`, `--check`, `--complete`, `--progress json` |
 | Not yet | finding a build (see Not there yet) |
@@ -23,7 +23,9 @@ The whole way, from picking a build to playing: [launch-guide.md](launch-guide.m
    files; a launcher that does downloads them only for that owner.
 2. Ask the build what it takes: `sunrise-client --launch-api` prints JSON with `launch_api` (the version),
    `options` and `content` (which mods, shader packs and packs it loads). Pass only options it lists: any other is
-   refused with exit code 2.
+   refused with exit code 2. The official build also lists `--sunrise-extras`, the launcher's "Sunrise Extras"
+   switch: with it the game runs Sunrise's own layer (Discord, Play with Friends, the ping...), without it the game
+   is vanilla's.
 3. Start it with a folder per instance:
 
    ```sh
@@ -120,6 +122,8 @@ test keeps the contract and the code together.
 
 ## Changelog
 
+- 0.1.2: `options` also lists the switches the executable declares itself (`sunrise_platform::launch`): the
+  official build's `--sunrise-extras`.
 - 0.1.1: `sunrise-client` advertises `--developer-single-player` and the
   `developer_single_player` capability for unsigned developer launches; the shared preparer
   version moves with the game's Launch API.

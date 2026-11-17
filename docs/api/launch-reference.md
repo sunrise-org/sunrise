@@ -1,7 +1,7 @@
 <!-- Generated from crates/sunrise-client/src/game/runtime/launch_api.rs; a test fails when this file is out of date. Update it with: SUNRISE_WRITE_DOCS=1 cargo test -p sunrise-client --lib launch_api -->
 # Launch API reference
 
-What `sunrise-client` promises a launcher that starts it, Launch API 0.1.1. The guide: [launch.md](launch.md); stability and versions: [stability.md](stability.md).
+What `sunrise-client` promises a launcher that starts it, Launch API 0.1.2. The guide: [launch.md](launch.md); stability and versions: [stability.md](stability.md).
 
 ## Options
 
@@ -71,7 +71,7 @@ Prints one JSON object on stdout and exits 0. `sunrise` is the build's version; 
     2,
     101
   ],
-  "launch_api": "0.1.1",
+  "launch_api": "0.1.2",
   "minecraft": "26.3",
   "options": [
     {

@@ -88,6 +88,11 @@ pub mod lang {
     pub use sunrise_hooks::lang::{Files, register};
 }
 
+/// Switches an executable takes on the game's command line (`sunrise_hooks::launch`).
+pub mod launch {
+    pub use sunrise_hooks::launch::declare;
+}
+
 /// Drawing on the HUD (docs/layers.md, "Platform registries").
 pub mod hud {
     pub use sunrise_hooks::hud::{Canvas, Corner, Layer, register};

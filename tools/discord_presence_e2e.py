@@ -136,8 +136,8 @@ class Game:
             self.discord.start()
         extra = {'SUNRISE_HOME': self.home, 'SUNRISE_TELEMETRY_URL': 'off', 'SUNRISE_DISCORD_IPC_DIR': self.discord.dir}
         self.env = lab.game_env(**extra)
-        self.ctl_run('launch', '--offscreen', '--game', str(bins / 'sunrise-official'), '--resources',
-                     str(lab.RESOURCES.resolve()), *args)
+        self.ctl_run('launch', '--offscreen', '--game', str(bins / 'sunrise-official'), '--sunrise-extras',
+                     '--resources', str(lab.RESOURCES.resolve()), *args)
 
     def ctl_run(self, *words, timeout=600):
         r = subprocess.run([str(self.ctl), '--socket', str(self.socket), *words], cwd=self.home, env=self.env,

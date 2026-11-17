@@ -92,7 +92,7 @@ class Game:
         self.endpoint = self.home / 'c.sock'
         self.log = (self.home / 'client.log').open('w+')
         self.process = subprocess.Popen(Game.prefix + [
-            str(client), '--resources', str(resources), '--render-distance', '2', '--test-terrain',
+            str(client), '--sunrise-extras', '--resources', str(resources), '--render-distance', '2', '--test-terrain',
             '--control-socket', str(self.endpoint), '--timeout-seconds', '600',
         ] + Game.extra, cwd=self.home,
             env={**game_environment({**os.environ, **env}, self.home), 'SUNRISE_HOME': str(self.home)},

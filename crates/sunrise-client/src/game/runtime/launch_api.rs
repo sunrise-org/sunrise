@@ -3,7 +3,7 @@
 //! Update it with: `SUNRISE_WRITE_DOCS=1 cargo test -p sunrise-client --lib launch_api`.
 
 /// The Launch API's version (docs/api/stability.md): an addition makes the next patch.
-pub const VERSION: &str = "0.1.1";
+pub const VERSION: &str = "0.1.2";
 
 /// One option of the contract: its name, its value's placeholder (none for a flag), what it does.
 pub struct LaunchOption {
@@ -158,9 +158,12 @@ pub fn reply(sunrise: &str) -> String {
 }
 
 fn reply_value(sunrise: &str) -> serde_json::Value {
-    let options: Vec<_> = OPTIONS
+    let declared = sunrise_hooks::launch::engine::all()
         .iter()
-        .map(|o| serde_json::json!({ "name": o.name, "value": o.value }))
+        .map(|&name| (name, None));
+    let options: Vec<_> = (OPTIONS.iter().map(|o| (o.name, o.value)))
+        .chain(declared)
+        .map(|(name, value)| serde_json::json!({ "name": name, "value": value }))
         .collect();
     serde_json::json!({
         "launch_api": VERSION,

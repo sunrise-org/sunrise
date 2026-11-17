@@ -9,7 +9,7 @@
 #![forbid(unsafe_code)]
 
 use sunrise_platform::hooks::{self, GetTheGame, Hooks};
-use sunrise_platform::{pages, settings};
+use sunrise_platform::{launch, pages, settings};
 
 /// Every Sunrise part in the game, in the order its hooks run.
 const PARTS: [&dyn Hooks; 5] = [
@@ -50,9 +50,20 @@ const STORES: [&dyn settings::Store; 1] = [&sunrise_discord::SETTING];
 /// Their rows and pages in the options screens.
 const PAGES: [&dyn pages::Page; 1] = [&sunrise_discord::SECTION];
 
+/// The launcher's "Sunrise Extras" switch: without it the game is vanilla's and nothing registers.
+pub const EXTRAS: &str = "--sunrise-extras";
+
 /// Registers Sunrise's in-game parts with the game. The executable calls it before it runs the
 /// game, and so does the launcher's generated executable for native mods.
 pub fn register() {
+    match launch::declare(EXTRAS) {
+        Ok(true) => register_parts(),
+        Ok(false) => {}
+        Err(e) => log::warn!("Sunrise: {EXTRAS} was not declared: {e}"),
+    }
+}
+
+fn register_parts() {
     let late = PARTS.into_iter().map(hooks::register);
     let late = late.chain(STORES.into_iter().map(settings::register));
     for result in late.chain(PAGES.into_iter().map(pages::register)) {
@@ -60,5 +71,15 @@ pub fn register() {
             // The executable registered after starting the game: a bug, not a player's problem.
             log::warn!("Sunrise: an in-game part did not register: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn without_the_switch_nothing_registers() {
+        super::register();
+        assert_eq!(sunrise_hooks::engine::registered(), 0);
+        assert_eq!(sunrise_hooks::launch::engine::all(), [super::EXTRAS]);
     }
 }

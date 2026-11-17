@@ -27,7 +27,9 @@ pub fn prepare() -> Startup {
     sunrise_mod_package::holder::enter();
     let result: crate::Result<_> = (|| {
         let mut command = std::process::Command::new(std::env::current_exe()?);
-        command.args(std::env::args_os().skip(1));
+        command.args(sunrise_hooks::launch::engine::without_declared(
+            std::env::args_os().skip(1),
+        ));
         let launch = LaunchArguments::for_command(&command)?;
         let options = game::Options::validate(launch.clone())?;
         Ok((launch, options))
