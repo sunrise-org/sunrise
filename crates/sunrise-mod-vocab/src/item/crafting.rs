@@ -214,6 +214,14 @@ pub enum RecipeLookupError {
     /// through Host::recipes_of_type and match in mod memory, without per-tick crossings.
     NotMatchable,
 }
+impl From<crate::StackWriteError> for RecipeLookupError {
+    fn from(error: crate::StackWriteError) -> Self {
+        match error {
+            crate::StackWriteError::UnknownItem => Self::InvalidItem,
+            _ => Self::InvalidInput,
+        }
+    }
+}
 impl crate::NoBackend for RecipeLookupError {
     fn no_backend() -> Self {
         Self::UnavailableLevel

@@ -1,0 +1,3 @@
+ids = ["method:prelude::PlayersServerHost::player_award_used_recipe"]
+why = "Adds PlayersServerHost::player_award_used_recipe (#1977): a server mod can award a used recipe with its input stacks, unlocking the recipe and firing vanilla's recipe_crafted criterion with the same ingredient matching and ordering."
+migrate = "Additive: nothing to change for existing mods."

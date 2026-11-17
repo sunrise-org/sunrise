@@ -946,6 +946,20 @@ pub trait PlayersBackendMut {
     #[access(WorldOnly)]
     fn player_award_recipes(&mut self, player: PlayerRef, recipes: &[&str]) -> Option<i32>;
     /// Side: server.
+    /// `RecipeCraftingHolder.awardUsedRecipes`: validates `recipe`, unlocks it in the player's
+    /// recipe book as `player_award_recipes` does, then fires the `recipe_crafted` advancement
+    /// trigger with `ingredients` in the order supplied. The trigger keeps vanilla's unordered
+    /// ingredient matching. Unknown recipe ids return `RecipeLookupError::InvalidRecipe`; invalid
+    /// or unknown item stacks return the corresponding typed refusal before anything changes.
+    /// The number of recipe displays added, or None for a player it can't reach.
+    #[access(WorldOnly)]
+    fn player_award_used_recipe(
+        &mut self,
+        player: PlayerRef,
+        recipe: &str,
+        ingredients: &[ItemStack],
+    ) -> Result<Option<i32>, RecipeLookupError>;
+    /// Side: server.
     /// `ServerPlayer.resetRecipes`, as `/recipe take` does. The number of
     /// recipe displays taken out, None for a player it can't reach.
     #[access(WorldOnly)]

@@ -4,7 +4,8 @@
 //! isn't online here. Writes return false (or None) for those, for a dead
 //! player, and, inside another player's turn, for anyone but that player.
 use super::{Game, stats::Stats};
-use mod_api::{PlayerRef, StatType};
+use mod_api::{PlayerRef, RecipeLookupError, StatType};
+use sunrise_client::items::ItemStack;
 
 use super::native_namespaced_id::namespaced;
 
@@ -118,6 +119,31 @@ impl Game<'_> {
     ) -> Option<i32> {
         self.native_player_change_recipes(player, true, recipes)
     }
+    /// `RecipeCraftingHolder.awardUsedRecipes`: unlocks the recipe before firing the
+    /// `recipe_crafted` trigger, as vanilla does. All checked inputs are converted before the
+    /// player record is changed, so a refusal is side-effect free.
+    pub(super) fn player_award_used_recipe(
+        &mut self,
+        player: PlayerRef,
+        recipe: &str,
+        ingredients: &[ItemStack],
+    ) -> Result<Option<i32>, RecipeLookupError> {
+        if !self.native_player_current(player) {
+            return Ok(None);
+        }
+        let recipe = namespaced(recipe);
+        if !self.stations().recipe_index.contains(&recipe) {
+            return Err(RecipeLookupError::InvalidRecipe);
+        }
+        let trigger_ingredients = ingredients.iter().cloned().map(Some).collect::<Vec<_>>();
+        let mut count = 0;
+        let reached = self.native_as_player_handle(player, |game| {
+            count = i32::try_from(game.award_recipes(std::slice::from_ref(&recipe)))
+                .unwrap_or(i32::MAX);
+            game.trigger_recipe_crafted(&recipe, &trigger_ingredients);
+        });
+        Ok(reached.then_some(count))
+    }
     /// `ServerPlayer.resetRecipes`, as `/recipe take` does. The number of
     /// recipe displays taken out, None for a player it can't reach.
     pub(super) fn player_reset_recipes(
@@ -154,8 +180,13 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::native_entity_refs::tests::with_game;
-    use mod_api::StatType;
+    use super::super::{
+        api_values::test_snapshot,
+        native_entity_refs::tests::{bind_local_player, with_game},
+    };
+    use mod_api::{RecipeLookupError, StatType};
+    use std::sync::Arc;
+    use sunrise_client::{advancements::Tree, items::ItemStack};
 
     #[test]
     #[ignore = "daily"]
@@ -241,6 +272,67 @@ mod tests {
             // A guest without play state yet has counted nothing.
             game.lan.as_mut().unwrap().play.remove(&1);
             assert_eq!(jump(game), Some(0));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn award_used_recipe_unlocks_and_matches_recipe_crafted_ingredients() {
+        with_game(|game| {
+            let scratch = tempfile::tempdir().unwrap();
+            let dir = scratch.path().join("data/testmod/advancement");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("used.json"),
+                r#"{
+                    "criteria": {
+                        "crafted": {
+                            "trigger": "minecraft:recipe_crafted",
+                            "conditions": {
+                                "recipes": "minecraft:oak_planks",
+                                "ingredients": [{"items": "minecraft:oak_log"}]
+                            }
+                        }
+                    }
+                }"#,
+            )
+            .unwrap();
+            game.adv.tree = Arc::new(Tree::load(&scratch.path().join("data")));
+            game.adv.loaded = true;
+            bind_local_player(game, 7, 7);
+            let player = game.player(7).unwrap();
+            let wrong = test_snapshot(&ItemStack::new("minecraft:stone", 1));
+            let right = test_snapshot(&ItemStack::new("minecraft:oak_log", 1));
+
+            assert_eq!(
+                game.player_award_used_recipe(player, "minecraft:oak_planks", &[wrong]),
+                Ok(Some(1))
+            );
+            assert!(game.player_has_discovered_recipe(player, "minecraft:oak_planks").unwrap());
+            assert!(!game.adv.progress.has("testmod:used", "crafted"));
+
+            assert_eq!(
+                game.player_award_used_recipe(player, "minecraft:oak_planks", &[right]),
+                Ok(Some(0))
+            );
+            assert!(game.adv.progress.has("testmod:used", "crafted"));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn award_used_recipe_rejects_unknown_recipe_before_mutating() {
+        with_game(|game| {
+            bind_local_player(game, 7, 7);
+            let player = game.player(7).unwrap();
+            let stack = test_snapshot(&ItemStack::new("minecraft:stone", 1));
+            assert_eq!(
+                game.player_award_used_recipe(player, "minecraft:not_a_recipe", &[stack]),
+                Err(RecipeLookupError::InvalidRecipe)
+            );
+            assert!(!game
+                .player_has_discovered_recipe(player, "minecraft:not_a_recipe")
+                .unwrap());
         });
     }
 }
