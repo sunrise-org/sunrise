@@ -1,7 +1,8 @@
 //! The render hook pair around a living entity (#3681): `render_living_pre` and
 //! `render_living_post`, wrapped for a player by `render_player_pre` and `render_player_post`. A
 //! canceled pre hook skips the entity's model, its layers, its post hooks and the frame's later
-//! passes; a culled entity is asked neither; the hooks run in the draw queue's order.
+//! name tag and leash passes, but not its flames and shadow; a culled entity is asked neither; the
+//! hooks run in the draw queue's order.
 use super::Game;
 use mod_api::{
     BlockEntityDrawContext, Hooks, RenderLivingPostEvent, RenderLivingPreEvent,
@@ -167,9 +168,8 @@ fn a_canceled_living_pre_skips_the_model_and_the_post_hook() {
             canceled.len()
         );
         assert_eq!(markers(&canceled), 4);
-        // The frame's later passes (name tag, shadow, flames, leash) leave it out.
+        // The frame's later name tag and leash passes leave it out.
         assert!(game.render_canceled(91));
-        assert_eq!(game.drawn_mobs().count(), 0);
     });
 }
 
@@ -191,6 +191,49 @@ fn a_canceled_entity_draws_no_name_tag() {
         assert!(tag(game) > 0, "a named zombie's tag");
         heard.lock().unwrap().cancel_living.push(91);
         assert_eq!(tag(game), 0, "none once its pre hook cancels");
+    });
+}
+
+/// The vertices of one whole entity frame (`entity_geometry`) with a zombie standing on stone,
+/// burning when `burning`, with entity shadows on when `shadows`.
+fn zombie_frame(game: &mut Game<'_>, burning: bool, shadows: bool) -> usize {
+    let mut zombie = mob(game, "minecraft:zombie", 91, 0.0);
+    zombie.fire_ticks = if burning { 100 } else { 0 };
+    game.mobs.clear();
+    game.mobs.push(zombie);
+    game.settings.entity_shadows = shadows;
+    let (out, _, _, _) = game.entity_geometry(CAMERA, 1.0, None, Vec::new());
+    out.len()
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_canceled_pre_keeps_the_flames_and_the_shadow() {
+    let heard: Arc<Mutex<Heard>> = Arc::default();
+    with_pair(&heard, |game| {
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+        let stone = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:stone")
+            .unwrap();
+        game.world.set(0, 63, 0, stone).unwrap();
+        // What the flames and the shadow add to the frame, measured with the zombie drawn and
+        // again with its pre hook canceled: a cancel takes neither away.
+        let added = |game: &mut Game<'_>| {
+            let plain = zombie_frame(game, false, false);
+            let flames = zombie_frame(game, true, false) - plain;
+            let shadow = zombie_frame(game, false, true) - plain;
+            (flames, shadow)
+        };
+        let (flames, shadow) = added(game);
+        assert!(flames > 0 && shadow > 0, "{flames} {shadow}");
+        heard.lock().unwrap().cancel_living.push(91);
+        assert_eq!(added(game), (flames, shadow));
+        assert!(game.render_canceled(91));
     });
 }
 

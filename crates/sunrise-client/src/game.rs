@@ -5401,7 +5401,7 @@ impl Game<'_> {
         // Mobs and their projectiles (a span each).
         self.mob_geometry(camera, alpha, &mut out);
         self.mark_motion(out.len(), 0);
-        for m in self.drawn_mobs() {
+        for m in &self.mobs {
             // Blaze.isOnFire: a charged blaze burns.
             let blazing = m.species() == sunrise_client::mobs::Species::Blaze && m.extra.flag;
             if (m.is_on_fire() || blazing) && !m.removed {
@@ -5436,7 +5436,7 @@ impl Game<'_> {
         if self.own_body_in_view()
             && let Some(p) = &self.player
             && p.fire_ticks > 0
-            && !(p.spectator || self.own_render_canceled())
+            && !p.spectator
         {
             let feet = self
                 .previous_position
@@ -5504,7 +5504,7 @@ impl Game<'_> {
                 )
             };
             let mut casters: Vec<(glam::DVec3, f32, f32)> =
-                sunrise_client::shadows::mob_casters(self.drawn_mobs(), a).collect();
+                sunrise_client::shadows::mob_casters(&self.mobs, a).collect();
             let item = sunrise_client::shadows::shadow_params("minecraft:item");
             casters.extend(
                 self.dropped

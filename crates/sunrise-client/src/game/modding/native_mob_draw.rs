@@ -6,8 +6,9 @@
 //! renderer a mod registered for its type (`register_entity_renderers`); after them, the layers mods added
 //! to its type or player model (`register_entity_layers`, `EntityRenderersEvent.AddLayers`), then
 //! `render_living_post` and `render_player_post`. A canceled pre hook skips all of the entity's
-//! drawing this frame, the later passes' name tag, shadow, flames and leash included: they ask
-//! [`Game::render_canceled`], which the frame's entity pass starts afresh.
+//! own drawing this frame, the later passes' name tag and leash included: they ask
+//! [`Game::render_canceled`], which the frame's entity pass starts afresh. The flames of a burning
+//! entity and its shadow are queued by the frame after the entity's drawing and stay (#1285).
 pub use mod_api::game::{MobRender, PlayerRender};
 
 use super::{Game, native_block_entity_draw::BlockEntityDraw};
@@ -147,17 +148,14 @@ impl Game<'_> {
         FRAME.with_borrow(|frame| frame.listened)
     }
     /// Whether a mod's pre hook canceled the drawing of entity `id` this frame: the later passes
-    /// (flames, name tags, shadows, leashes) leave it out too.
+    /// that are part of its drawing (its name tag and leash) leave it out too; its flames and
+    /// shadow don't ask.
     pub(in crate::game) fn render_canceled(&self, id: u32) -> bool {
         FRAME.with_borrow(|frame| !frame.canceled.is_empty() && frame.canceled.contains(&id))
     }
     /// Whether this window's own player was canceled this frame.
     pub(in crate::game) fn own_render_canceled(&self) -> bool {
         u32::try_from(self.own_entity_id()).is_ok_and(|id| self.render_canceled(id))
-    }
-    /// The mobs of the level a pre hook didn't cancel this frame.
-    pub(in crate::game) fn drawn_mobs(&self) -> impl Iterator<Item = &Mob> {
-        self.mobs.iter().filter(|m| !self.render_canceled(m.id))
     }
     /// The mods' pre hooks for `mob`, before any of its model is drawn, lit by `light` (packed as
     /// the entity pass packs it): `render_player_pre` for a player (`who`: its name, and whether

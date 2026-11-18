@@ -9,11 +9,13 @@ pub trait Hooks {
     /// from the body's own draw, so a part a pre hook hid reads as not visible; read-only: attach
     /// geometry to an arm or the head without animating it again; None for a model that isn't
     /// humanoid. The order today: before this hook its model, its vanilla layers and the mods'
-    /// layers are drawn; after it, in the frame's later passes, its name tag, its leash, its
-    /// flames and its shadow (the reference draws the leash and the name tag first, #3915). A type
-    /// with a mod's registered renderer (`register_entity_renderers`) has its own model's order,
-    /// the renderer in the model's place, so it changes with #3915 and not before. For a player,
-    /// its `render_player_post` follows.
+    /// layers are drawn; after it, in the frame's later passes, its name tag and its leash (the
+    /// reference draws them first, #1285), then the flames of a burning entity and its shadow,
+    /// which the frame queues after the entity's drawing: this hook neither sees nor replaces
+    /// them, and a canceled `render_living_pre` doesn't stop them. A type with a mod's registered
+    /// renderer (`register_entity_renderers`) has its own model's order, the renderer in the
+    /// model's place, so it changes with #1285 and not before. For a player, its
+    /// `render_player_post` follows.
     #[hook(
         side = "client",
         contract = "listen",

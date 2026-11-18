@@ -110,8 +110,8 @@ items, a worn head), as a NeoForge `LivingEntityRenderer` does. Vanilla's turn, 
 tip-over aren't applied for it: the pose stack starts at the feet, not turned, so the renderer turns by
 `body_rot` and scales by `scale` itself. Around it the entity keeps everything else:
 `render_living_pre` (a cancel skips the renderer), the layers mods added to the type, with no posed
-parts ([entity layers](entity-layers.md)), `render_living_post`, and the frame's later passes (name
-tag, leash, flames, shadow), in the order the type's own model has ([model drawing](model-drawing.md)).
+parts ([entity layers](entity-layers.md)), `render_living_post`, the frame's later passes (name
+tag, leash), and its flames and shadow, in the order the type's own model has ([model drawing](model-drawing.md)).
 
 ## Register it
 

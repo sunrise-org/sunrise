@@ -108,7 +108,7 @@ impl Game<'_> {
         // The mods' pre hooks (a player's `render_player_pre`, then `render_living_pre`),
         // before any of the vanilla model's parts (a sulfur cube's swallowed block) are
         // drawn. A cancel skips the rest of the entity's drawing and its post hooks; the
-        // frame's later passes (flames, name tag, shadow, leash) leave it out too.
+        // frame's later name tag and leash passes leave it out too, its flames and shadow stay.
         let who = is_player
             .then(|| self.remote_player_name(mob.id))
             .flatten()

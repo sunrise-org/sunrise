@@ -816,7 +816,7 @@ impl Game<'_> {
         let body = self.own_body_visible();
         // The mods' pre hooks (`render_player_pre`, then `render_living_pre`), as for the other
         // players: a cancel skips the rest of this player's drawing and its post hooks, and the
-        // frame's later passes (flames, name tag) leave it out too.
+        // frame's later name tag pass leaves it out too; its flames stay.
         let name = self.own_profile_name();
         let who = PlayerRender {
             name: &name,

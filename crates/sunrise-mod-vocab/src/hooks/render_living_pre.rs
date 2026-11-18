@@ -8,10 +8,11 @@ pub trait Hooks {
     /// feet, turned with its body: +z the way it faces, +x its left, +y up, in blocks, with the
     /// helpers block entities draw with (`cube`, `quad`, `block`, `item`, `model_part`); what it
     /// draws is kept. Set `canceled` to skip all of the entity's drawing this frame: its model,
-    /// armour, held items and layers, the mods' layers, its name tag, shadow, flames, leash and
-    /// glowing outline, and `render_living_post`, and the renderer a mod registered for its type
+    /// armour, held items and layers, the mods' layers, its name tag, leash and glowing outline,
+    /// and `render_living_post`, and the renderer a mod registered for its type
     /// (`register_entity_renderers`), which draws in the model's place; a mod drawing a model of
-    /// its own draws it here and cancels. A player's `render_player_pre` comes first, and a cancel here still asks its
+    /// its own draws it here and cancels. The flames of a burning entity and its shadow, which the
+    /// frame queues after the entity's drawing, still draw. A player's `render_player_pre` comes first, and a cancel here still asks its
     /// `render_player_post`. Left uncanceled, `hidden.hide_named(name)` leaves only the part of
     /// that name out of the vanilla model this frame (a villager's `nose`), drawn on the CPU or the
     /// GPU: a hidden part takes its children with it and leaves the layers drawn on the model itself

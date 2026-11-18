@@ -1,0 +1,3 @@
+ids = ["hook:render_living_pre", "hook:render_player_pre"]
+why = "A canceled render_living_pre or render_player_pre no longer stops the flames of a burning entity or its shadow: the frame queues them after the entity's drawing, as the reference order of #1285 has it. The cancel still skips the model, the layers, the name tag, the leash, the glowing outline and the post hooks."
+migrate = "A mod that canceled an entity to hide it entirely and relied on its shadow and flames going too now sees them drawn. Hide the entity some other way, or accept them: they are not part of the entity's own drawing."
