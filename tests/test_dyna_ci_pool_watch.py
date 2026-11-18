@@ -27,7 +27,7 @@ def job(status, label="dyna-large", started=None, completed=None, runner=None):
 
 
 class Watch(unittest.TestCase):
-    def sweep(self, runs, jobs, me=999, later=None):
+    def sweep(self, runs, jobs, me=999, later=None, label=watch.LABEL):
         """`later` changes `runs` and `jobs` during the pause between the two looks."""
         requests, cancelled, sleeps = [], [], []
 
@@ -47,7 +47,7 @@ class Watch(unittest.TestCase):
                 listed = [entry for entry in listed if datetime.fromisoformat(entry["created_at"]) >= since]
             return [{"workflow_runs": listed}]
 
-        code = watch.watch(api, cancelled.append, lambda: NOW, sleep, "o/r", me, STALL)
+        code = watch.watch(api, cancelled.append, lambda: NOW, sleep, "o/r", me, STALL, label)
         return code, cancelled, sleeps, requests
 
     def test_a_dead_pool_has_its_stranded_runs_cancelled_after_a_second_quiet_look(self):
@@ -59,13 +59,12 @@ class Watch(unittest.TestCase):
         code, cancelled, sleeps, _ = self.sweep(runs, jobs)
         self.assertEqual((code, cancelled, sleeps), (1, [1, 2], [watch.QUIET_RECHECK]))
 
-    def test_jobs_on_the_shared_sunrise_pool_label_count_as_the_pool(self):
-        runs = [run(1, "queued", 45), run(2, "completed", 30, updated=1)]
-        stranded = {1: [job("queued", "sunrise-pool")], 2: [job("completed", "ubuntu-latest", 15, 1, "GitHub Actions 1")]}
-        self.assertEqual(self.sweep(runs, stranded)[:2], (1, [1]))
-        alive = {1: [job("queued", "sunrise-pool")],
-                 2: [job("completed", "sunrise-pool", 15, 1, "sunrise-pool-sunrise-runner-x7k2p")]}
-        self.assertEqual(self.sweep(runs, alive)[:2], (0, []))
+    def test_arc_and_dyna_are_watched_apart(self):
+        # Run 1 waits for ARC while Dyna is busy: ARC's watch cancels it, Dyna's does not.
+        runs = [run(1, "queued", 45), run(2, "in_progress", 30)]
+        jobs = {1: [job("queued", watch.ARC_LABEL)], 2: [job("in_progress", started=10, runner="dyna-ci-1")]}
+        self.assertEqual(self.sweep(runs, jobs, label=watch.ARC_LABEL)[:2], (1, [1]))
+        self.assertEqual(self.sweep(runs, jobs)[:2], (0, []))
 
     def test_a_pool_that_just_finished_a_whole_run_is_alive(self):
         # Run 2 ended on a Dyna runner a minute ago: only the finished runs show that.

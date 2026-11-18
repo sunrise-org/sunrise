@@ -6,7 +6,7 @@
 # ENABLED is the owner's kill switch. SAME_REPO is false for a fork's pull request.
 # LEASE is a Unix time the pool renews while it has runners, so a dead pool sends
 # new runs to GitHub-hosted runners instead of leaving them queued.
-# ARC is true when the caller's jobs ask for sunrise-pool and SUNRISE_POOL_ARC says ARC serves it.
+# ARC is true when the caller can run on ARC (sunrise-pool) and SUNRISE_POOL_ARC is on; then pool=arc says so.
 #
 # This only routes jobs. A pull request can edit this file, so the check a fork
 # cannot change lives in the runners: job-started.sh in Dyna's image and in ARC's (sunrise-org/infra).
@@ -35,13 +35,15 @@ if [ "${ENABLED:-}" = true ] && [ "${SAME_REPO:-}" = true ] && { [ "${EVENT:-}" 
     '' | *[!0-9]*) ;;
     *) if [ "$LEASE" -gt "$reference" ] && [[ "$reason" != snapshot\ rejected:* ]]; then self_hosted=true; fi ;;
   esac
-  # ARC (sunrise-pool on hw-0) keeps serving a sunrise-pool caller when Dyna's lease has lapsed.
+  # Dyna's lease lapsed: a caller that can use ARC (sunrise-pool on hw-0) goes there instead of GitHub's runners.
   if [ "$self_hosted" = false ] && [ "${ARC:-}" = true ]; then
     self_hosted=true
+    pool=arc
     reason="$reason; Dyna's lease lapsed, ARC serves sunrise-pool"
   fi
 fi
 echo "self_hosted=$self_hosted"
+[ -z "${pool:-}" ] || echo "pool=$pool"
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   echo "routing_reason=$reason; enabled=${ENABLED:-unset}; lease=${LEASE:-unset}; now=$now; reference=$reference" >> "$GITHUB_OUTPUT"
 fi

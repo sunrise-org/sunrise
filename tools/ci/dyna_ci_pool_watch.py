@@ -23,7 +23,9 @@ import subprocess
 import sys
 import time
 
-LABEL = ("dyna-", "sunrise-pool")
+LABEL = "dyna-"
+# ARC on hw-0 serves the gate while Dyna's lease has lapsed; watched apart, as one pool can be up while the other is down.
+ARC_LABEL = "sunrise-pool"
 # A pool that lost its last job can be between jobs, so one quiet look proves nothing.
 QUIET_RECHECK = 180
 
@@ -34,7 +36,7 @@ def seconds(stamp):
 
 
 def on_pool(job, label):
-    """Whether the job asks for the pool: any label that starts with a prefix (dyna-small, ..., sunrise-pool)."""
+    """Whether the job asks for this pool: any label that starts with the prefix (dyna-small, dyna-medium, ...)."""
     return any(name.startswith(label) for name in job.get("labels", []))
 
 
@@ -141,10 +143,10 @@ def gh(*args):
 
 def main():
     repo = os.environ["GITHUB_REPOSITORY"]
-    return watch(lambda path: pages(gh("api", "--paginate", path)),
-                 lambda run: gh("run", "cancel", "-R", repo, str(run)), time.time, time.sleep, repo,
-                 int(os.environ["GITHUB_RUN_ID"]), int(os.environ.get("STALL_MINUTES", "20")) * 60,
-                 os.environ.get("POOL_LABEL", LABEL))
+    return max([watch(lambda path: pages(gh("api", "--paginate", path)),
+                      lambda run: gh("run", "cancel", "-R", repo, str(run)), time.time, time.sleep, repo,
+                      int(os.environ["GITHUB_RUN_ID"]), int(os.environ.get("STALL_MINUTES", "20")) * 60, label)
+                for label in (os.environ.get("POOL_LABEL", LABEL), ARC_LABEL)])
 
 
 if __name__ == "__main__":

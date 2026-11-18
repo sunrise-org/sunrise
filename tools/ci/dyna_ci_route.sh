@@ -26,7 +26,7 @@ if [ -z "$LEASE" ]; then
   CREATED_AT=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" -q .created_at 2>/dev/null || true)
   [ -z "$CREATED_AT" ] || CREATED=$(date -d "$CREATED_AT" +%s 2>/dev/null || true)
 fi
-# ARC counts only for callers whose jobs ask for sunrise-pool (POOL); every other caller still asks for Dyna's labels.
+# ARC counts only for callers that can send their jobs to sunrise-pool (POOL); the others know only Dyna's labels.
 ARC=
 if [ "${POOL:-}" = sunrise-pool ]; then
   if [ "${SAME_REPO:-}" = true ]; then

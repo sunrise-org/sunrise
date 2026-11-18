@@ -38,7 +38,7 @@ class DynaRoutingTests(unittest.TestCase):
             self.assertEqual(self.route("push", lease=lease), "self_hosted=false")
 
     @unittest.skipUnless(POSIX_BASH, "needs a bash that is not WSL's")
-    def test_arc_keeps_a_sunrise_pool_caller_self_hosted_after_dynas_lease_lapses(self):
+    def test_arc_takes_the_gate_only_while_dynas_lease_has_lapsed(self):
         now = int(time.time())
         # POOL, live SUNRISE_POOL_ARC, its snapshot, the switch, the event, expected
         cases = (("sunrise-pool", "true", "", "true", "push", "true"),
@@ -60,8 +60,11 @@ class DynaRoutingTests(unittest.TestCase):
                     env.pop("GITHUB_OUTPUT", None)
                     result = subprocess.run(["bash", ROOT / "tools/ci/dyna_ci_route.sh"], env=env,
                                             capture_output=True, text=True, check=True)
-                    self.assertEqual(result.stdout, f"self_hosted={expected}\n")
+                    pool = "pool=arc\n" if expected == "true" else ""
+                    self.assertEqual(result.stdout, f"self_hosted={expected}\n{pool}")
         self.assertEqual(self.route("push", same_repo="false", lease="0", arc="true"), "self_hosted=false")
+        # A live lease keeps Dyna even with ARC on: no pool line, so the jobs ask for Dyna's labels.
+        self.assertEqual(self.route("push", arc="true"), "self_hosted=true")
 
     @unittest.skipUnless(POSIX_BASH, "needs a bash that is not WSL's")
     def test_route_reads_the_lease_live_else_judges_the_snapshot_at_the_runs_creation(self):
@@ -280,12 +283,13 @@ class DynaRoutingTests(unittest.TestCase):
         for item in ("vars.DYNA_CI_SELF_HOSTED", "vars.DYNA_CI_POOL_UNTIL", "github.event_name",
                      "github.event.pull_request.head.repo.full_name == github.repository", "dyna_ci_route.sh"):
             self.assertIn(item, route)
-        for item in ("POOL: sunrise-pool", "vars.SUNRISE_POOL_ARC"):
+        for item in ("POOL: sunrise-pool", "vars.SUNRISE_POOL_ARC", "pool: ${{ steps.runner.outputs.pool || 'dyna' }}"):
             self.assertIn(item, route)
-        for name in ("verify", "verify-static", "launcher"):
+        for name, label in (("verify", "dyna-large"), ("verify-static", "dyna-medium"), ("launcher", "dyna-medium")):
             block = blocks[name]
             self.assertIn("needs: changes", block)
-            self.assertIn("needs.changes.outputs.self_hosted == 'true' && 'sunrise-pool'", block)
+            self.assertIn(f"needs.changes.outputs.self_hosted == 'true' && "
+                          f"(needs.changes.outputs.pool == 'arc' && 'sunrise-pool' || '{label}')", block)
             self.assertNotIn("secrets.", block)
             self.assertNotIn("permissions:", block)
         # The watch for a dead pool runs off the pool, as one scheduled sweep, never as a job of each run.
@@ -326,6 +330,7 @@ class DynaRoutingTests(unittest.TestCase):
             shared = runtime.split(f"{field}:", 1)[1].split("\n", 1)[0]
             if field == "runs-on":
                 shared = shared.replace("'ubuntu-latest') || ", "'ubuntu-latest') || " + fork, 1)
+                shared = shared.replace("|| 'dyna-large')", "|| 'dyna-medium')", 1)
             else:
                 shared = shared.replace("${{ ", "${{ " + fork, 1)
             shared = shared.replace("${{ ", "${{ " + outside, 1)

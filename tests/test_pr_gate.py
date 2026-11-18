@@ -129,22 +129,26 @@ class WorkflowTests(unittest.TestCase):
             for rust, forced, label, pool in itertools.product(("true", "false"), ("true", "false"),
                                                                ("", "boat"), ("all", "")):
                 outputs = {"rust_required": rust, "forced_github": forced, "hosted_label": label,
-                           "self_hosted": "false", "trusted": "false", "heavy": "true"}
+                           "self_hosted": "false", "trusted": "false", "heavy": "true", "pool": "dyna"}
                 with self.subTest(job=name, outputs=outputs, pool=pool):
                     runner = self.runs_on(name, outputs, pool)
                     # verify-static, one of a contributor's two checks, never waits on a paid pool either.
                     self.assertIn(runner, ("ubuntu-latest",) if name == "verify-static" else ("ubuntu-latest", "boat"))
         # The control: the same expressions do reach our runners for a trusted head.
         trusted = {"rust_required": "true", "forced_github": "false", "hosted_label": "",
-                   "self_hosted": "true", "trusted": "true", "heavy": "true"}
-        self.assertEqual(self.runs_on("verify", trusted, "all"), "sunrise-pool")
-        self.assertEqual(self.runs_on("verify-static", trusted, "all"), "sunrise-pool")
+                   "self_hosted": "true", "trusted": "true", "heavy": "true", "pool": "dyna"}
+        self.assertEqual(self.runs_on("verify", trusted, "all"), "dyna-large")
+        self.assertEqual(self.runs_on("verify-static", trusted, "all"), "dyna-medium")
+        # Dyna's lease lapsed and ARC on: the same jobs go to ARC's own label.
+        arc = trusted | {"pool": "arc"}
+        for name in ("lint", "verify", "verify-static", "launcher"):
+            self.assertEqual(self.runs_on(name, arc, ""), "sunrise-pool", name)
 
     def test_a_pull_request_outside_the_gate_gets_githubs_runner_for_verify_static(self):
         # Our own branch, Rust changed, every switch pointing at our runners or boat: still GitHub's runner.
         for rust, label, pool in itertools.product(("true", "false"), ("", "boat-large"), ("all", "")):
             outputs = {"rust_required": rust, "forced_github": "false", "hosted_label": label,
-                       "self_hosted": "false", "trusted": "true", "heavy": "false"}
+                       "self_hosted": "false", "trusted": "true", "heavy": "false", "pool": "dyna"}
             with self.subTest(rust=rust, label=label, pool=pool):
                 self.assertEqual(self.runs_on("verify-static", outputs, pool), "ubuntu-latest")
 
