@@ -103,4 +103,3 @@ chatSearch:false
 combatFeel:modern
 combatIndicator:false
 combatSounds:false
-combatRules:false
