@@ -1,4 +1,6 @@
 use mod_api::Hooks;
+#[allow(unused_imports)]
+use mod_api::*;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static ENTITY_PRE_CALLS: AtomicU32 = AtomicU32::new(0);

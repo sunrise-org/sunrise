@@ -6,6 +6,8 @@
 //! codec, is kept by transactions, and goes with the entity when it is removed, unloaded
 //! or moved to another level.
 
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 use crate::*;
 use std::fmt;
 

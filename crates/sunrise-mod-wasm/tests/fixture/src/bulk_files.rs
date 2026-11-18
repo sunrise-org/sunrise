@@ -1,3 +1,5 @@
+#[allow(unused_imports)]
+use mod_api::*;
 use mod_api::{ConfigEntryKind, ConfigFileError, ConfigPath, ServerHost};
 
 /// The same consumer runs natively, through the loopback, and inside the real wasm member.

@@ -4,6 +4,8 @@
 //! is given the host, so a handler may look up and call a neighbour's capability (a pipe), and
 //! it keeps its state where the game keeps the block entity's (its slots, its saved compound, its
 //! attachments).
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 use crate::{
     Direction, Host, ItemResource, LevelRef, ResourceHandler, ServerHost, Transaction,
     backend_mut_of, backend_of,

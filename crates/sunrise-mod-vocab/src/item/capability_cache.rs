@@ -3,6 +3,8 @@
 //! polled). Its check is constant time: whether the level is in place, the block entity at the
 //! position, the block state there, the capability generation there and the game's count of mod
 //! switches, each compared with what they were at the lookup.
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 use crate::{
     BlockEntityRef, BlockSide, BlockState, Capability, CapabilityKey, Direction, LevelRef,
     ServerHost,

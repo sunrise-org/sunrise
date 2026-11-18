@@ -46,7 +46,7 @@ jobs:
           # through a target symlink. Each member still has its own workspace and
           # link invocation. Dispatches on other branches reuse dependency artifacts; main also exercises
           # independent dependency compilation in the original per-member targets.
-          for member in fixture mixed-output-fixture library-fixture/{library,observer,dependent} groups/{counter_lib,alpha,beta,gamma,hog}; do
+          for member in fixture minimal_mod mixed-output-fixture library-fixture/{library,observer,dependent} groups/{counter_lib,alpha,beta,gamma,hog}; do
             root="$GITHUB_WORKSPACE/crates/sunrise-mod-wasm/tests/$member/target/sunrise-mod"
             mkdir -p "$root"
             artifacts="$cache/shared"
@@ -108,12 +108,14 @@ jobs:
           cargo build -p cargo-sunrise-mod
           cd crates/sunrise-mod-wasm/tests/fixture
           "$GITHUB_WORKSPACE/target/debug/cargo-sunrise-mod" sunrise-mod build --wasm --catalog points.json
+          (cd ../minimal_mod && "$GITHUB_WORKSPACE/target/debug/cargo-sunrise-mod" sunrise-mod build --wasm --catalog ../fixture/points.json)
           "$GITHUB_WORKSPACE/target/debug/cargo-sunrise-mod" sunrise-mod wasm-std "$GITHUB_WORKSPACE/target/sunrise-wasm-std.wasm" --catalog points.json
       # Each group of the fixture's tests below runs once the fixture is built, whatever an earlier group's result: a
       # failure in one hides no other (the daily files each by name).
       - name: Validate and load the fixture
         env:
           SUNRISE_WASM_FIXTURE: ${{ github.workspace }}/crates/sunrise-mod-wasm/tests/fixture/target/sunrise-mod/wasm_fixture.smod
+          SUNRISE_WASM_MINIMAL_MOD: ${{ github.workspace }}/crates/sunrise-mod-wasm/tests/minimal_mod/target/sunrise-mod/minimal_mod.smod
           SUNRISE_WASM_STD: ${{ github.workspace }}/target/sunrise-wasm-std.wasm
         shell: bash
         run: |

@@ -7,6 +7,8 @@
 //! dispenser's answer for a fluid container ([`dispense_container`]): nothing changes until a mod
 //! calls them.
 use crate::content::resource::{Ends, move_once};
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 use crate::{
     Capability, Direction, DispenseItemEvent, Dispensed, FLUIDS, FluidResource, FluidStack,
     GameEventContext, Hand, HostTransaction, ITEM_FLUIDS, ItemPlace, LevelRef, PlayerRef,

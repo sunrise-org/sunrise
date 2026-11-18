@@ -3,6 +3,8 @@
 //! [`ITEMS`](crate::ITEMS) is of items. Amounts are millibuckets: a bucket is 1000.
 use crate::__private::ingredient_parser::WalkedIngredient;
 use crate::Components;
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 use crate::{
     BlockSide, CapabilityKey, DataLoadContext, FluidIdentity, FluidKey, ItemCapabilityKey,
     ItemPlace, ItemResource, ItemStack, ResourceHandler, ServerHost, Transaction,

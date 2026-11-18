@@ -1,4 +1,6 @@
 //! Assertions run inside the real wasm guest, not in a native stand-in.
+#[allow(unused_imports)]
+use mod_api::*;
 pub fn read(host: &dyn mod_api::Host) {
     use mod_api::{DatapackReadError as E, DatapackValue, DimensionKey, LevelRef, WorldEpoch};
     let level = LevelRef::new(WorldEpoch::new(1), DimensionKey::OVERWORLD);

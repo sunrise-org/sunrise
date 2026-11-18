@@ -1,5 +1,7 @@
 //! Owned item values. Registry-dependent validation belongs to the game's write boundary.
 use crate::ItemKey;
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use sunrise_core::nbt::{Compound, JavaString, Tag};

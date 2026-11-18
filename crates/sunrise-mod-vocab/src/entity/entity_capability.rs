@@ -1,6 +1,8 @@
 //! Entity capabilities (arismoko/horizon#41 §7): what a mod registers for an entity type to
 //! answer a capability, such as [`ENTITY_ITEMS`], beside the game's own (NeoForge's
 //! `Capabilities.Item.ENTITY`). A player's inventory is the game's own answer for a player.
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 use crate::{
     Capability, ComponentId, Direction, EnergyHandler, EntityRef, EquipmentSlot, FluidResource,
     Host, ItemPlace, ItemResource, PREVENT_ARMOR_CHANGE, ProvidedBy, ResourceHandler, ServerHost,

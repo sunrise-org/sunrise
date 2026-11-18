@@ -22,6 +22,8 @@
 //! assert_eq!(widgets.text_field(name).unwrap().value(), "Steve");
 //! assert!(widgets.button(done).unwrap().active);
 //! ```
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 use crate::{ClientHost, DrawContext, SoundPlay, Text};
 
 #[path = "widgets_text_edit.rs"]

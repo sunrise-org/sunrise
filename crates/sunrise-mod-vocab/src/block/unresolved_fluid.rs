@@ -1,4 +1,6 @@
 //! Opaque identities for fluid names retained from unavailable content.
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 use crate::{FluidKey, Host, UnresolvedFluid};
 /// A registered fluid, or an opaque retained name from unavailable content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

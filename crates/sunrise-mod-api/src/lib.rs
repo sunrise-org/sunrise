@@ -78,6 +78,19 @@ pub mod wire {
     pub use wire_guest as guest;
 }
 
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+pub use crate::wire::guest::wasm_ext;
+#[cfg(target_arch = "wasm32")]
+pub use crate::wire::guest::wasm_ext::*;
+
+/// Common traits and types for mod development.
+pub mod prelude {
+    #[cfg(target_arch = "wasm32")]
+    pub use crate::wire::guest::wasm_ext::*;
+    pub use mod_vocab::prelude::*;
+}
+
 /// Platform-owned crash attribution with shared vocabulary types.
 #[doc(hidden)]
 pub mod content {

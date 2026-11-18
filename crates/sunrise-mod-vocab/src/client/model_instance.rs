@@ -3,6 +3,8 @@
 //! `ModelInstance::tint` is `0xAARRGGBB`, the same packed colour as [`crate::WorldQuad::color`].
 //! [`LightCoords`] is block and sky light, each `0..=15`. The engine converts tint and light
 //! to the frame format. Mods never assume that format.
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 
 /// Block and sky light, each `0..=15`, in vanilla's convention.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

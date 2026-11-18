@@ -1,4 +1,6 @@
 //! Opt-in compiled-guest registration ordering and published capability metadata.
+#[allow(unused_imports)]
+use mod_api::*;
 use mod_api::{
     CapabilityKey, ComponentId, EnergyHandler, EntityCapabilityKey, HostTransaction,
     ItemCapabilityKey, ItemComponentEnergy, ItemPlace, Registrar, RegistrationContext, ServerHost,

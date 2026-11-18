@@ -180,6 +180,18 @@ fn expand(mut implementation: ItemImpl, export: bool) -> TokenStream {
             cfgs.push(cfg_attributes(method));
         }
     }
+    for item in &mut implementation.items {
+        if let syn::ImplItem::Fn(method) = item {
+            method.block.stmts.insert(
+                0,
+                syn::parse_quote! {
+                    #[cfg(target_arch = "wasm32")]
+                    #[allow(unused_imports)]
+                    use mod_api::wasm_ext::*;
+                },
+            );
+        }
+    }
     let id = format_ident!("HookId");
     let ids = format_ident!("hook_ids");
     let subscribed_name = format_ident!("{}", part.unwrap_or("subscribed"));
@@ -289,6 +301,17 @@ fn expand(mut implementation: ItemImpl, export: bool) -> TokenStream {
                 },
                 Err(_) => quote!(),
             };
+        let hook_calls = methods.iter().filter(|m| *m != "subscribed").map(|method| {
+            let fn_ident = syn::Ident::new(
+                &format!("__sunrise_hook_{method}"),
+                proc_macro2::Span::call_site(),
+            );
+            quote! {
+                if mod_api::wire::guest::#fn_ident(id, input, out)? {
+                    return Ok(true);
+                }
+            }
+        });
         quote! {
             pub fn hooks() -> Box<dyn mod_api::Hooks> { Box::new(<#ty as Default>::default()) }
             /// The mod's hooks for the guest runtime in `mod_api::wire::guest`, when built to wasm.
@@ -297,6 +320,15 @@ fn expand(mut implementation: ItemImpl, export: bool) -> TokenStream {
             fn __sunrise_mod_hooks() -> Box<dyn mod_api::Hooks> {
                 #registrations
                 hooks()
+            }
+            #[cfg(target_arch = "wasm32")]
+            #[unsafe(no_mangle)]
+            fn __sunrise_mod_dispatch(id: u64, input: &mut mod_api::wire::Reader<'_>, out: &mut mod_api::wire::Writer) -> Result<bool, mod_api::wire::WireError> {
+                if mod_api::wire::guest::__sunrise_hook_subscribed(id, input, out)? {
+                    return Ok(true);
+                }
+                #(#hook_calls)*
+                Ok(false)
             }
         }
     } else {

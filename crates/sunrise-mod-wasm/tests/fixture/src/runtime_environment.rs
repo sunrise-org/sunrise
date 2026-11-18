@@ -1,4 +1,6 @@
 //! Opt-in proof of registration snapshot transport and generated Host string replies.
+#[allow(unused_imports)]
+use mod_api::*;
 use mod_api::{RegistrationContext, RuntimeEnvironment, ServerHost, Text};
 use std::sync::OnceLock;
 

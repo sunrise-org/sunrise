@@ -1,4 +1,8 @@
 // Types that lived in the API root before the domain split.
+#[allow(unused_imports)]
+use crate::host::entities::EntitiesHost;
+#[allow(unused_imports)]
+use crate::host::living::LivingHost;
 use crate::*;
 
 /// A baked standalone model resolved through [`RenderAssets::model`].

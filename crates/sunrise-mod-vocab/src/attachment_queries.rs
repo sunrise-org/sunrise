@@ -2,11 +2,13 @@
 #[cfg(test)]
 #[path = "attachment_queries/tests.rs"]
 mod tests;
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 use crate::*;
 use sunrise_mod_runtime::attachments as runtime;
 
 /// Read queries available on either host side.
-pub trait AttachmentQueries: Host {
+pub trait AttachmentQueries: Host + crate::host::mod_state::ModStateHost {
     /// Capture a SNAPSHOT of membership and value bindings in the current dimension.
     /// Later changes appear only in fresh queries. This is a residency view: an
     /// entity removed but not yet swept may still appear; stale writes fail.
@@ -18,10 +20,12 @@ pub trait AttachmentQueries: Host {
         self.attachment_query(key.namespace, key.name)?.query(key)
     }
 }
-impl<H: Host + ?Sized> AttachmentQueries for H {}
+impl<H: Host + crate::host::mod_state::ModStateHost + ?Sized> AttachmentQueries for H {}
 
 /// Explicit write-through queries, available only on server hosts.
-pub trait AttachmentQueriesMut: ServerHost {
+pub trait AttachmentQueriesMut:
+    ServerHost + crate::host::mod_state::ModStateServerHost + AttachmentQueries
+{
     /// Capture a SNAPSHOT, not mutable references into the live store.
     /// Set/remove join the caller's journal; no implicit transaction or Drop commit
     /// occurs. Later changes require a fresh query, and stale writes fail.
@@ -35,7 +39,10 @@ pub trait AttachmentQueriesMut: ServerHost {
         })
     }
 }
-impl<H: ServerHost + ?Sized> AttachmentQueriesMut for H {}
+impl<H: ServerHost + crate::host::mod_state::ModStateServerHost + AttachmentQueries + ?Sized>
+    AttachmentQueriesMut for H
+{
+}
 
 // no wire: borrowed runtime attachment rows retain storage lifetimes and write authority.
 /// A server write-through snapshot. Values and membership remain captured.

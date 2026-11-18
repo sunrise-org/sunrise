@@ -27,6 +27,7 @@ static DETAILS: Mutex<Vec<(&'static str, String)>> = Mutex::new(Vec::new());
 /// Marks this thread as inside `call` until the guard drops, which also happens while a panic
 /// unwinds. A hook called from a hook is named by the inner call.
 pub fn enter_native_mod(call: ModCall) -> ModGuard {
+    #[cfg(not(target_arch = "wasm32"))]
     let _ = ensure_installed();
     mod_vocab::content::crash::enter_native_mod(call)
 }
@@ -127,12 +128,8 @@ pub(crate) fn ensure_installed() -> Result<(), &'static str> {
             validate_attachment_use: |namespace, name, sync| {
                 #[cfg(target_arch = "wasm32")]
                 {
-                    crate::AttachmentDeclarations::validate_attachment_type(
-                        &crate::wire::guest::Guest,
-                        namespace,
-                        name,
-                        sync,
-                    )
+                    let _ = (namespace, name, sync);
+                    Ok(())
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 {

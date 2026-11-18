@@ -5,6 +5,8 @@
 //! transactions, and goes with the block entity when it is removed, replaced or
 //! unloaded. The Part object is shared behaviour and owns no instance's value.
 
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 use crate::*;
 use std::{cell::RefCell, fmt, sync::Arc};
 

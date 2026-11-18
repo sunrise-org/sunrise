@@ -1,4 +1,6 @@
 //! Owned trading snapshots; the game keeps its own trading state and validates writes.
+#[allow(unused_imports)]
+use crate::host::items::ItemsHost;
 use crate::{Host, ItemStack};
 
 /// An item payment, with an optional exact component predicate.

@@ -2,6 +2,8 @@
 //! capability helpers inside one are kept by the game and made final only when the outermost
 //! transaction commits; an abort puts back everything its closure changed.
 use crate::ServerHost;
+#[allow(unused_imports)]
+use crate::host::mod_state::ModStateServerHost;
 
 /// An open transaction, as NeoForge's `TransactionContext`: what every write of a handler or a
 /// place takes. `host.transaction` gets one from the game and lends it to its closure alone.
@@ -149,7 +151,7 @@ pub trait HostTransaction: ServerHost {
     ) -> Result<T, E>;
 }
 
-impl<H: ServerHost + ?Sized> HostTransaction for H {
+impl<H: ServerHost + ModStateServerHost + ?Sized> HostTransaction for H {
     fn transaction<T, E>(
         &mut self,
         f: impl FnOnce(&mut Self, &Transaction) -> Result<T, E>,
@@ -160,18 +162,18 @@ impl<H: ServerHost + ?Sized> HostTransaction for H {
 
 /// `host.transaction` for a host of a known type, which `f` gets back: the game's own moves (a
 /// hopper's) run in one through this.
-pub fn run_transaction<H: ServerHost + ?Sized, T, E>(
+pub fn run_transaction<H: ServerHost + ModStateServerHost + ?Sized, T, E>(
     host: &mut H,
     f: impl FnOnce(&mut H, &Transaction) -> Result<T, E>,
 ) -> Result<T, E> {
     /// Closes its transaction when dropped: committed when `f` gave `Ok`, else aborted, as on
     /// a panic unwinding past it.
-    struct Open<'a, H: ServerHost + ?Sized> {
+    struct Open<'a, H: ServerHost + ModStateServerHost + ?Sized> {
         host: &'a mut H,
         seal: TransactionSeal,
         commit: bool,
     }
-    impl<H: ServerHost + ?Sized> Drop for Open<'_, H> {
+    impl<H: ServerHost + ModStateServerHost + ?Sized> Drop for Open<'_, H> {
         fn drop(&mut self) {
             self.host.transaction_close(&self.seal, self.commit);
         }

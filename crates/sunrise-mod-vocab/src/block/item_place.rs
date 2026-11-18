@@ -9,6 +9,8 @@
 //! it is, journaled: an abort puts it back, at every level of an item inside an item. A handler
 //! answering more than it was asked is a mod bug, named once, and the write aborts.
 use crate::HostTransaction;
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 use crate::{
     BundleItems, Capability, Direction, ENTITY_ITEMS, EquipmentSlot, Hand, ITEMS, ItemResource,
     ItemStack, LevelRef, MenuRef, MenuSlotBacking, ResourceHandler, ServerHost, Transaction,

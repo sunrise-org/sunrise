@@ -234,9 +234,9 @@ pub(super) fn guest(
         };
         writeln!(out, "impl {} for {proxy} {{", trait_path(owner)).unwrap();
         out.push_str(match owner {
-            "Host" => "fn backend(&self) -> Option<crate::BackendRef<'_>> { Some(crate::BackendRef::of(self)) }\nfn capability_providers(&self) -> &'static dyn crate::CapabilityProviders { &Guest }\n",
-            "ServerHost" => "fn backend_mut(&mut self) -> Option<crate::BackendMutRef<'_>> { Some(crate::BackendMutRef::of(self)) }\n",
-            "ClientHost" => "fn client_backend_mut(&mut self) -> Option<crate::ClientBackendMutRef<'_>> { Some(crate::ClientBackendMutRef::of(self)) }\n",
+            "Host" => "fn backend(&self) -> Option<crate::BackendRef<'_>> { Some(crate::BackendRef::guest()) }\n#[cfg(not(target_arch = \"wasm32\"))]\nfn capability_providers(&self) -> &'static dyn crate::CapabilityProviders { &Guest }\n",
+            "ServerHost" => "fn backend_mut(&mut self) -> Option<crate::BackendMutRef<'_>> { Some(crate::BackendMutRef::guest()) }\n",
+            "ClientHost" => "fn client_backend_mut(&mut self) -> Option<crate::ClientBackendMutRef<'_>> { Some(crate::ClientBackendMutRef::guest()) }\n",
             _ => "",
         });
         for m in all
@@ -300,6 +300,92 @@ pub(super) fn guest(
         out.push_str("}\n");
     }
     out.push_str(&resource_codec(types, names));
+    out.push_str(&wasm_extension_traits(types, &all, dropped, excused));
+    out
+}
+
+fn wasm_extension_traits(
+    types: &Types<'_>,
+    all: &[&Method],
+    dropped: &[Method],
+    excused: &[(&'static str, String)],
+) -> String {
+    let mut out = String::from(
+        "#[cfg(target_arch = \"wasm32\")]\n#[doc(hidden)]\npub mod wasm_ext {\n    use super::*;\n",
+    );
+
+    let is_excused = |m: &Method| excused.iter().any(|(o, n)| *o == m.owner && *n == m.name);
+
+    for (trait_name, target_dyn, filter_owner) in [
+        ("WasmHostExt", "dyn crate::Host + '_", &["Host"][..]),
+        (
+            "WasmServerHostExt",
+            "dyn crate::ServerHost + '_",
+            &["ServerHost", "Host"][..],
+        ),
+        (
+            "WasmClientHostExt",
+            "dyn crate::ClientHost + '_",
+            &["ClientHost", "Host"][..],
+        ),
+    ] {
+        let mut trait_methods = String::new();
+        let mut impl_methods = String::new();
+        let mut seen = std::collections::BTreeSet::new();
+
+        let mut candidate_methods = Vec::new();
+        for m in all.iter().copied().filter(|m| {
+            filter_owner.contains(&m.owner)
+                && m.receiver.is_some()
+                && (!is_excused(m)
+                    || super::frame_accessor(m)
+                    || super::fallible_frame_accessor(m).is_some())
+        }) {
+            if seen.insert(m.name.clone()) {
+                candidate_methods.push(m);
+            }
+        }
+        for m in dropped.iter().filter(|m| {
+            filter_owner.contains(&m.owner)
+                && m.receiver.is_some()
+                && (!is_excused(m)
+                    || super::frame_accessor(m)
+                    || super::fallible_frame_accessor(m).is_some())
+                && !super::exports().contains(&m.owner)
+        }) {
+            if seen.insert(m.name.clone()) {
+                candidate_methods.push(m);
+            }
+        }
+
+        for m in candidate_methods {
+            let sig = rust_sig(types, m);
+            trait_methods.push_str(&format!("    {sig};\n"));
+
+            let target_trait = trait_path(m.via.as_deref().unwrap_or(m.owner));
+            let receiver = match m.receiver {
+                Some(true) => "&mut *::std::boxed::Box::leak(::std::boxed::Box::new(Guest))",
+                _ => "&Guest",
+            };
+            let args: Vec<String> = (0..m.params.len()).map(|i| format!("p{i}")).collect();
+            let call_args = if args.is_empty() {
+                receiver.to_string()
+            } else {
+                format!("{receiver}, {}", args.join(", "))
+            };
+
+            impl_methods.push_str(&format!(
+                "    #[inline]\n    {sig} {{\n        <Guest as {target_trait}>::{}({call_args})\n    }}\n",
+                m.name
+            ));
+        }
+
+        out.push_str(&format!(
+            "    pub trait {trait_name} {{\n{trait_methods}    }}\n    impl {trait_name} for {target_dyn} {{\n{impl_methods}    }}\n"
+        ));
+    }
+
+    out.push_str("}\n");
     out
 }
 
@@ -344,7 +430,7 @@ fn resource_codec(types: &Types<'_>, names: &super::Names) -> String {
         }
     }
     format!(
-        "struct GuestCodec; impl crate::wire::ResourceCodec for GuestCodec {{ fn store(&self,value:Box<dyn std::any::Any>)->Result<crate::wire::Id,crate::wire::WireError> {{ {store} Err(crate::wire::WireError::Invalid(\"unknown handler type\")) }} fn load(&self,id:crate::wire::Id,view:std::any::TypeId)->Result<Box<dyn std::any::Any>,crate::wire::WireError> {{ {load} Err(crate::wire::WireError::Invalid(\"unknown held view\")) }} }} thread_local! {{ static CODEC:std::rc::Rc<dyn crate::wire::ResourceCodec> = std::rc::Rc::new(GuestCodec); }} pub fn resource_scope()->crate::wire::ResourceScope {{ CODEC.with(|codec| crate::wire::ResourceScope::new(codec.clone())) }}\n"
+        "struct GuestCodec; impl crate::wire::ResourceCodec for GuestCodec {{ fn store(&self,value:Box<dyn std::any::Any>)->Result<crate::wire::Id,crate::wire::WireError> {{ {store} Err(crate::wire::WireError::Invalid(\"unknown handler type\")) }} fn load(&self,id:crate::wire::Id,view:std::any::TypeId)->Result<Box<dyn std::any::Any>,crate::wire::WireError> {{ #[cfg(not(target_arch = \"wasm32\"))] {{ {load} }} #[cfg(target_arch = \"wasm32\")] {{ if view==std::any::TypeId::of::<std::sync::Arc<dyn std::any::Any + Send + Sync>>() {{ let value=if id==crate::wire::Unsupported::ID {{crate::wire::Unsupported::shared()}} else {{crate::wire::guest::handler::<dyn std::any::Any + Send + Sync>(id)?}}; return Ok(Box::new(value)); }} return crate::wire::guest::load_held(id, view); }} Err(crate::wire::WireError::Invalid(\"unknown held view\")) }} }} thread_local! {{ static CODEC:std::rc::Rc<dyn crate::wire::ResourceCodec> = std::rc::Rc::new(GuestCodec); }} pub fn resource_scope()->crate::wire::ResourceScope {{ CODEC.with(|codec| crate::wire::ResourceScope::new(codec.clone())) }}\n"
     )
 }
 
@@ -1129,6 +1215,8 @@ pub(super) fn dispatch(
         .filter(|m| exports().contains(&m.owner))
         .collect();
     let mut arms = String::new();
+    let mut wasm_arms = String::new();
+    let mut hook_fns = String::new();
     let mut preparation = String::new();
     let mut apart = Vec::new();
     for m in all.iter() {
@@ -1257,6 +1345,29 @@ pub(super) fn dispatch(
         if m.owner == "Hooks" && m.name == "register" {
             back.push_str("for warning in crate::__private::take_registration_warnings(&p1) { crate::RegistrationRefusalRegistrar::registration_warning(&mut host, warning); } if let Some(reason) = crate::__private::take_registration_refusal(&p1) { crate::RegistrationRefusalRegistrar::registration_refusal(&mut host, reason); }");
         }
+        if m.owner == "Hooks" {
+            writeln!(
+                hook_fns,
+                "#[doc(hidden)] pub fn __sunrise_hook_{}(id: u64, input: &mut crate::wire::Reader<'_>, out: &mut crate::wire::Writer) -> Result<bool, crate::wire::WireError> {{\n\
+    if id != {id}u64 {{ return Ok(false); }}\n\
+    let mut host = Guest;\n\
+    let receiver = super::hooks();\n\
+    {body}\n\
+    let answer = {answer};\n\
+    out.put_owned(answer);\n\
+    {back}\n\
+    Ok(true)\n\
+}}",
+                m.name
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                wasm_arms,
+                "{id}u64 => {{ let receiver = {receiver}; {body} let answer = {answer}; out.put_owned(answer); {back} }}"
+            )
+            .unwrap();
+        }
         writeln!(
             arms,
             "{id}u64 => {{ let receiver = {receiver}; {body} let answer = {answer}; out.put_owned(answer); {back} }}"
@@ -1264,7 +1375,27 @@ pub(super) fn dispatch(
         .unwrap();
     }
     let code = format!(
-        "// @generated by sunrise-mod-api-gen; do not edit.\n{preparation}\npub fn hook(id: u64, input: &mut crate::wire::Reader<'_>, out: &mut crate::wire::Writer) -> Result<(), crate::wire::WireError> {{\nlet mut host = Guest;\nmatch id {{\n{arms}_ => return Err(crate::wire::WireError::Tag(id as u32)) }}\nOk(())\n}}\n"
+        "// @generated by sunrise-mod-api-gen; do not edit.\n\
+{preparation}\n\
+{hook_fns}\n\
+#[cfg(not(target_arch = \"wasm32\"))]\n\
+pub fn hook(id: u64, input: &mut crate::wire::Reader<'_>, out: &mut crate::wire::Writer) -> Result<(), crate::wire::WireError> {{\n\
+    let mut host = Guest;\n\
+    match id {{\n\
+{arms}\
+        _ => return Err(crate::wire::WireError::Tag(id as u32))\n\
+    }}\n\
+    Ok(())\n\
+}}\n\
+#[cfg(target_arch = \"wasm32\")]\n\
+pub fn hook(id: u64, input: &mut crate::wire::Reader<'_>, out: &mut crate::wire::Writer) -> Result<(), crate::wire::WireError> {{\n\
+    let mut host = Guest;\n\
+    match id {{\n\
+{wasm_arms}\
+        _ => return Err(crate::wire::WireError::Tag(id as u32))\n\
+    }}\n\
+    Ok(())\n\
+}}\n"
     );
     (code, apart)
 }

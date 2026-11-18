@@ -130,3 +130,132 @@ fn a_mod_built_before_the_break_is_refused_once_with_the_rebuild_text() {
         );
     })
 }
+
+struct MathHost {
+    called: std::sync::atomic::AtomicBool,
+}
+impl mod_api::prelude::MathHost for MathHost {
+    fn math_profile(&self) -> mod_api::MathProfile {
+        self.called.store(true, std::sync::atomic::Ordering::SeqCst);
+        mod_api::MathProfile::StrictMath
+    }
+}
+impl mod_api::Host for MathHost {}
+mod_api::impl_host_areas!(MathHost, except(math));
+impl mod_api::ClientHost for MathHost {}
+mod_api::impl_client_host_areas!(MathHost);
+
+fn wasm_call_imports(module: &[u8]) -> Vec<String> {
+    let mut found = Vec::new();
+    for payload in wasmparser::Parser::new(0).parse_all(module) {
+        if let Ok(wasmparser::Payload::ImportSection(section)) = payload {
+            for import in section.into_imports().flatten() {
+                if import.module == "sunrise" && import.name.starts_with("call:") {
+                    found.push(import.name.to_owned());
+                }
+            }
+            break;
+        }
+    }
+    found
+}
+
+fn minimal_mod() -> (WasmPackage, Vec<u8>) {
+    let minimal = std::env::var("SUNRISE_WASM_MINIMAL_MOD").unwrap_or_else(|_| {
+        let default_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/minimal_mod/target/sunrise-mod/minimal_mod.smod");
+        default_path.to_str().unwrap().to_owned()
+    });
+    let std = std::env::var("SUNRISE_WASM_STD").unwrap_or_else(|_| {
+        let default_std = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/sunrise-wasm-std.wasm");
+        default_std.to_str().unwrap().to_owned()
+    });
+    let path = std::path::Path::new(&minimal);
+    if !path.exists() {
+        panic!("minimal mod smod does not exist at {minimal}");
+    }
+    let mut package = WasmPackage {
+        manifest: Package::read(path).unwrap().manifest,
+        module: Package::read_wasm(path).unwrap(),
+    };
+    package.manifest.inject.clear();
+    (package, std::fs::read(std).unwrap())
+}
+
+/// A built mod imports ONLY host calls its code can reach; a one-call mod has exactly one
+/// call import, loads on the host table, and executes its hook with observable host result.
+#[test]
+#[ignore = "needs SUNRISE_WASM_MINIMAL_MOD and SUNRISE_WASM_STD, which the wasm-mods workflow builds"]
+fn minimal_mod_imports_only_reached_host_calls_and_executes_with_observable_result() {
+    test_stack::on_guest_stack(|| {
+        mod_api::__private::initialize().unwrap();
+        let (package, std) = minimal_mod();
+
+        // 1. Verify exact call imports in the wasm module: exactly 1 call import.
+        let call_imports = wasm_call_imports(&package.module);
+        assert_eq!(
+            call_imports.len(),
+            1,
+            "minimal mod must import exactly one host call, found: {call_imports:?}"
+        );
+        assert!(
+            call_imports[0].starts_with("call:Host::math_profile#"),
+            "expected math_profile call, found: {}",
+            call_imports[0]
+        );
+
+        // 2. Verify an unused call being changed/added causes no refusal.
+        let mismatches = sunrise_mod_wasm::fixture::mismatches_with_added_call(
+            &package.module,
+            "call:Host::a_method_never_called#00112233445566778899aabbccddeeff",
+        )
+        .unwrap();
+        assert!(
+            mismatches.is_empty(),
+            "unused call caused refusal: {mismatches:?}"
+        );
+
+        // 3. Verify a used call being changed refuses the mod by name.
+        let (mut broken_package, _) = minimal_mod();
+        let (broken_module, name) = changed(&broken_package.module, b"call:Host::math_profile#");
+        broken_package.module = broken_module;
+        let loaded_broken = load(&std, vec![broken_package]);
+        assert!(loaded_broken.mods.is_empty());
+        let reason = loaded_broken.refused[0].1.to_string();
+        let item = name.split('#').next().unwrap();
+        assert!(
+            reason.contains(item.trim_start_matches("call:")) && reason.contains("changed"),
+            "{name}: {reason}"
+        );
+
+        // 4. Load minimal mod and execute hook with observable host result.
+        let info = mod_api::PackageInfo::new(
+            package.manifest.id.clone(),
+            package.manifest.version.clone(),
+            mod_api::PackageKind::Code,
+            mod_api::Side::Both,
+            vec![package.manifest.id.clone()],
+            vec![],
+        );
+        let loaded = load(&std, vec![package]);
+        assert!(loaded.refused.is_empty(), "{:?}", loaded.refused);
+        assert_eq!(loaded.mods.len(), 1);
+        loaded.initialize(&[info]).expect("guest initialization");
+
+        let _registration =
+            mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::Registration);
+        let host = MathHost {
+            called: std::sync::atomic::AtomicBool::new(false),
+        };
+        mod_api::testing::with_mods(loaded.mods.into(), || {
+            let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+            let mut checked = -2.0;
+            mod_api::dispatch_tick_target_millis(&host, &mut checked);
+            assert!(
+                host.called.load(std::sync::atomic::Ordering::SeqCst),
+                "host.math_profile was not called across wire!"
+            );
+        });
+    });
+}

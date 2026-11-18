@@ -306,9 +306,11 @@ pub fn build(
 }
 
 fn member_export(name: &str) -> bool {
-    !matches!(name, "__sunrise_mod_hooks" | "__dso_handle" | "__tls_base")
-        && !rustc_demangle::try_demangle(name)
-            .is_ok_and(|symbol| format!("{symbol:#}").starts_with("__rustc::"))
+    !matches!(
+        name,
+        "__sunrise_mod_hooks" | "__sunrise_mod_dispatch" | "__dso_handle" | "__tls_base"
+    ) && !rustc_demangle::try_demangle(name)
+        .is_ok_and(|symbol| format!("{symbol:#}").starts_with("__rustc::"))
 }
 
 fn group_export(name: &str, krate: &str) -> bool {
@@ -444,7 +446,7 @@ pub fn link(role: &str, args: Vec<String>) -> Result<(), String> {
         ]
         .map(str::to_owned),
     );
-    if role == "std" || std::env::var_os("SUNRISE_GROUP_PACKAGE").is_some() {
+    if role == "std" {
         out.push("--export-all".to_owned());
     }
     if role != "std" {
@@ -607,6 +609,7 @@ mod export_tests {
             "_RNvCs5fGHjzWXRav_7___rustc35___rust_no_alloc_shim_is_unstable_v2"
         ));
         assert!(!member_export("__sunrise_mod_hooks"));
+        assert!(!member_export("__sunrise_mod_dispatch"));
         assert!(!member_export("__dso_handle"));
         assert!(!member_export("__tls_base"));
         assert!(member_export(

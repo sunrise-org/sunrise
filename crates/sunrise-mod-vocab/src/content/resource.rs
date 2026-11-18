@@ -1,6 +1,8 @@
 //! NeoForge 26.3's transfer API ( §7): a resource is what a handler holds, without an amount
 //! ([`ItemResource`]), and a [`ResourceHandler`] is the indexed contents of one holder, written
 //! only inside a transaction.
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 use crate::{
     Capability, Host, HostTransaction, ItemStack, ServerHost, Tag, Transaction, backend_of,
 };

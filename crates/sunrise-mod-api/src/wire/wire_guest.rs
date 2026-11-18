@@ -18,15 +18,22 @@ mod generated {
     use crate::*;
     include!(concat!(env!("OUT_DIR"), "/wire_guest_generated.rs"));
 }
-pub use generated::{Guest, hook, hook_name};
+pub use generated::*;
 
 unsafe extern "Rust" {
     /// The mod's hooks, defined by `#[mod_api::sunrise_mod]` in the mod's crate.
     safe fn __sunrise_mod_hooks() -> Box<dyn crate::Hooks>;
+    #[cfg(target_arch = "wasm32")]
+    safe fn __sunrise_mod_dispatch(
+        id: u64,
+        input: &mut crate::wire::Reader<'_>,
+        out: &mut crate::wire::Writer,
+    ) -> Result<bool, crate::wire::WireError>;
 }
 
 /// The mod's hooks, made once.
-fn hooks() -> &'static dyn crate::Hooks {
+#[doc(hidden)]
+pub fn hooks() -> &'static dyn crate::Hooks {
     static HOOKS: std::sync::OnceLock<Box<dyn crate::Hooks>> = std::sync::OnceLock::new();
     &**HOOKS.get_or_init(__sunrise_mod_hooks)
 }
@@ -755,7 +762,34 @@ pub fn extend(base: u64, mask: u64, dispatch: Extension) {
     });
 }
 
+type HeldLoader = fn(crate::wire::Id) -> Box<dyn std::any::Any>;
+thread_local! {
+    static HELD_LOADERS: std::cell::RefCell<std::collections::BTreeMap<std::any::TypeId, HeldLoader>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+#[doc(hidden)]
+pub fn register_held_loader(view: std::any::TypeId, loader: HeldLoader) {
+    HELD_LOADERS.with(|l| l.borrow_mut().insert(view, loader));
+}
+
+#[doc(hidden)]
+pub fn load_held(
+    id: crate::wire::Id,
+    view: std::any::TypeId,
+) -> Result<Box<dyn std::any::Any>, crate::wire::WireError> {
+    HELD_LOADERS.with(|l| {
+        l.borrow()
+            .get(&view)
+            .map(|loader| loader(id))
+            .ok_or(crate::wire::WireError::Invalid("unknown held view"))
+    })
+}
+
 fn dispatch(id: u64, input: &mut Reader<'_>, out: &mut Writer) -> Result<(), WireError> {
+    #[cfg(target_arch = "wasm32")]
+    if __sunrise_mod_dispatch(id, input, out)? {
+        return Ok(());
+    }
     let extension = EXTENSIONS.with(|tables| {
         tables
             .borrow()
@@ -765,7 +799,16 @@ fn dispatch(id: u64, input: &mut Reader<'_>, out: &mut Writer) -> Result<(), Wir
     });
     match extension {
         Some(call) => call(id, input, out),
-        None => hook(id, input, out),
+        None => {
+            #[cfg(target_arch = "wasm32")]
+            {
+                Err(WireError::Tag(id as u32))
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                hook(id, input, out)
+            }
+        }
     }
 }
 

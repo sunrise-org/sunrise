@@ -1,4 +1,6 @@
 use super::*;
+#[allow(unused_imports)]
+use crate::host::block_entities::BlockEntitiesHost;
 /// Which block keys each scoped hook has a prepared subscriber for, and which keys' parts answer
 /// `explosion_resistance` impurely: plain bits, read on any thread. It holds no part, no mod
 /// handle and no callable, so a tick phase may hold an `Arc` of it for the phase's length while

@@ -1,4 +1,6 @@
 //! Assertions execute inside wasm against the real Game's generated host imports.
+#[allow(unused_imports)]
+use mod_api::*;
 use mod_api::HostBlockStates;
 use std::sync::OnceLock;
 

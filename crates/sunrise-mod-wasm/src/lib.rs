@@ -749,6 +749,9 @@ fn load_with_cache(
     let packages: Vec<WasmPackage> = packages
         .into_iter()
         .filter(|package| {
+            if package.module.is_empty() {
+                return true;
+            }
             let member = link::Member {
                 name: &package.manifest.id,
                 module: &package.module,
@@ -1444,14 +1447,24 @@ mod mixed_install_tests {
         let header = |id| {
             format!("id='{id}'\nname='{id}'\nversion='1'\napi='0.2'\ncapabilities=['registries']\n")
         };
-        let module = b"\x00\x61\x73\x6d\x01\x00\x00\x00\x00\x0f\x08\x64\x79\x6c\x69\x6e\x6b\x2e\x30\x01\x04\x00\x00\x00\x00\x01\x04\x01\x60\x00\x00\x03\x02\x01\x00\x07\x2e\x03\x0e\x73\x75\x6e\x72\x69\x73\x65\x5f\x6c\x61\x79\x6f\x75\x74\x00\x00\x0a\x73\x75\x6e\x72\x69\x73\x65\x5f\x69\x6e\x00\x00\x0c\x73\x75\x6e\x72\x69\x73\x65\x5f\x68\x6f\x6f\x6b\x00\x00\x0a\x04\x01\x02\x00\x0b";
-        std::fs::write(addon.join("mod.wasm"), module).unwrap();
+        let log =
+            mod_surface::call::protocol_name("log", mod_surface::call::SHARED_PROTOCOL).text();
+        let module = wat::parse_str(format!(
+            r#"(module (@custom "dylink.0" "\01\04\00\00\00\00")
+            (import "env" "memory" (memory 1))
+            (import "sunrise" "{log}" (func (param i32 i32 i32 i32) (result i32)))
+            (func (export "sunrise_layout") (result i32) i32.const 0)
+            (func (export "sunrise_in") (param i32) (result i32) i32.const 0)
+            (func (export "sunrise_hook") (param i64) (result i64) i64.const 0))"#
+        ))
+        .unwrap();
+        std::fs::write(addon.join("mod.wasm"), &module).unwrap();
         std::fs::write(
             addon.join("sunrise-mod.toml"),
             format!(
                 "{}[dependencies]\nlib='*'\n[wasm]\nsha512='{}'\ntoolchain='t'\nbuilt_with='t'\n",
                 header("addon"),
-                sunrise_mod_package::manifest::sha512_of(module)
+                sunrise_mod_package::manifest::sha512_of(&module)
             ),
         )
         .unwrap();
