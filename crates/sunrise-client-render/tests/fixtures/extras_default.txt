@@ -26,10 +26,6 @@ uiSoundReserve:false
 ownNameTag:false
 skipModdedSplashesIfVanillaModified:true
 hideBlockParticles:false
-mouseTweaks:false
-mouseTweaksWheel:true
-sort:false
-sortKey:key.keyboard.unknown
 chatAnimation:false
 chatIndicator:true
 noAi:false

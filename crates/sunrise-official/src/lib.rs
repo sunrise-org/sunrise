@@ -12,7 +12,7 @@ use sunrise_platform::hooks::{self, ClientIdentity, GetTheGame, Hooks};
 use sunrise_platform::{lang, mod_rows, pages, release, settings};
 
 /// Every Sunrise part in the game, in the order its hooks run.
-const PARTS: [&dyn Hooks; 6] = [
+const PARTS: [&dyn Hooks; 7] = [
     // The anonymous "I'm playing" ping.
     &sunrise_heartbeat::HOOKS,
     // Play with Friends: `friend:` addresses join through its tunnel.
@@ -25,6 +25,8 @@ const PARTS: [&dyn Hooks; 6] = [
     &sunrise_perf_share::HOOKS,
     // The client identity the official Horizon server requires.
     &HORIZON_IDENTITY,
+    // Mouse Tweaks-style controls and sorting on menu screens.
+    &sunrise_inventory::HOOKS,
 ];
 /// The game started by hand without its prepared files: start it from the launcher, downloaded
 /// from Sunrise's website.
@@ -95,9 +97,9 @@ static SUNRISE_ROW: mod_rows::Row = mod_rows::Row {
 };
 
 /// Their settings, in the player's settings files.
-const STORES: [&dyn settings::Store; 1] = [&sunrise_discord::SETTING];
+const STORES: [&dyn settings::Store; 2] = [&sunrise_discord::SETTING, &sunrise_inventory::SETTING];
 /// Their rows and pages in the options screens.
-const PAGES: [&dyn pages::Page; 1] = [&sunrise_discord::SECTION];
+const PAGES: [&dyn pages::Page; 2] = [&sunrise_discord::SECTION, &sunrise_inventory::SECTION];
 
 /// The text of Sunrise's own rows, loaded with the game's.
 static LANG: &lang::Files = &[("en_us", include_str!("../assets/lang/en_us.json"))];

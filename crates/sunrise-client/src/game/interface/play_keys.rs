@@ -29,9 +29,8 @@ impl Game<'_> {
             }
             return Ok(());
         }
-        if self.sort_key_press(key)
-            || sunrise_client::keybinds::key_name(key)
-                .is_some_and(|name| self.hud_editor_key_press(name))
+        if sunrise_client::keybinds::key_name(key)
+            .is_some_and(|name| self.hud_editor_key_press(name))
         {
             return Ok(());
         }

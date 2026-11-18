@@ -516,7 +516,7 @@ fn draw(&self, c: &dyn Container, canvas: &mut dyn hud::Canvas);                
   hook hears `release` and draws. A press a hook took makes the button's release the hooks' too, so vanilla
   never sees half a click; the latch ends at the physical button-up, whoever cancels the release. A drag or
   a release a hook takes from vanilla's own press ends vanilla's quick craft drag without a click.
-- `drag` is asked only while a button is physically held. `key` is not asked while a text field has the focus
+- `drag` is asked only while the button whose press the hooks heard is still held, so a drag always belongs to the last press they saw. `key` is not asked while a text field has the focus
   (a search box, an anvil's name), nor for a key's repeats. No input is offered while another screen covers
   the menu (a server pack prompt, a dialog).
 - Each `click` is an ordinary slot click: the menu engine's on the player's own world, a `ContainerClick` on a
@@ -534,6 +534,20 @@ fn draw(&self, c: &dyn Container, canvas: &mut dyn hud::Canvas);                
   Without one there is no cost, and vanilla's handling is unchanged.
 - The only text is a stack's shown name. The rest is ids and numbers, so the API names no engine type
   (`ItemStack` stays in the engine).
+
+### Item catalog (`sunrise_platform::items`)
+
+Reads of vanilla's own item catalogs, which any crate may use (an inventory tool, a search, a sorter); the engine
+fills them from the data it loaded, and nothing in them is per feature.
+
+```rust
+fn creative_order(stack: &containers::Stack) -> Option<u32>;  // its place in the creative inventory's search tab
+```
+
+- The place of the same stack (same item and components, by `Stack::kind`), else its item's first place; `None`
+  for an item the creative tabs don't show, or before the game has loaded them.
+- The window's creative inventory publishes the table each time its tabs are built (loading, permissions, the
+  mods' and packs' additions), so a read is two hash lookups, never a scan.
 
 ### Lang files (`sunrise_platform::lang`)
 
@@ -582,7 +596,7 @@ Sunrise's extras are Sunrise-layer code. Each one is a candidate to become an op
 themselves, or stays a cfg-gated module linked into the official build. None moves yet; the list is here so new work doesn't add to them. See [extras.md](extras.md) for each one:
 
 - zoom (OptiFine-style), keystrokes and FPS overlays, own name tag;
-- Mouse Tweaks controls, sorting, scroll-wheel settings, smooth chat;
+- scroll-wheel settings, smooth chat (Mouse Tweaks controls and sorting are crate `sunrise-inventory` now);
 - auto-reconnect, UI-sound channels, the music page;
 - the PvP & HUD presets and widgets, the replay editor (Replay Studio's camera paths and timeline), the AI agent page;
 - the Sunrise Settings menu itself, the advanced menu that hosts them;

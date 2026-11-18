@@ -298,29 +298,29 @@ mod tests {
     fn a_setting_of_a_switch_that_is_off_is_greyed_and_takes_no_press() {
         let mut s = Settings::default();
         let live = |s: &Settings| {
-            let wheel = ExtraRow::Item(Item::MouseTweaksWheel);
-            rows_of(s).iter().find(|r| r.id == wheel).unwrap().live
+            let indicator = ExtraRow::Item(Item::ChatIndicator);
+            rows_of(s).iter().find(|r| r.id == indicator).unwrap().live
         };
-        s.extras.mouse_tweaks = false;
+        s.extras.chat_animation = false;
         assert!(!live(&s));
         let mut shell = Shell::<ExtrasScreen>::default();
-        let row = ExtraRow::Item(Item::MouseTweaksWheel);
+        let row = ExtraRow::Item(Item::ChatIndicator);
         let at = shell.point_at(&s, SIZE, row);
-        let before = s.extras.mouse_tweaks_wheel;
+        let before = s.extras.chat_indicator;
         assert!(
             shell
                 .click(&mut s, at, SIZE, false, false, false)
                 .is_empty()
         );
-        assert_eq!(s.extras.mouse_tweaks_wheel, before);
-        s.extras.mouse_tweaks = true;
+        assert_eq!(s.extras.chat_indicator, before);
+        s.extras.chat_animation = true;
         assert!(live(&s));
         assert!(
             !shell
                 .click(&mut s, at, SIZE, false, false, false)
                 .is_empty()
         );
-        assert_ne!(s.extras.mouse_tweaks_wheel, before);
+        assert_ne!(s.extras.chat_indicator, before);
     }
 
     /// A section with one key row.
@@ -364,37 +364,16 @@ mod tests {
         assert_eq!(ExtrasScreen.wheel_step(&mut s, row, true), None);
     }
 
-    /// The sort key binds instead of cycling; the wheel leaves it be.
-    #[test]
-    fn the_key_row_waits_for_a_key() {
-        use crate::settings_shell::Capture;
-        let mut s = Settings::default();
-        s.extras.sort = true;
-        let mut shell = Shell::<ExtrasScreen>::default();
-        let row = ExtraRow::Item(Item::SortKey);
-        let key = s.extras.sort_key.clone();
-        let at = shell.point_at(&s, SIZE, row);
-        assert_eq!(
-            shell.click(&mut s, at, SIZE, false, false, false),
-            vec![
-                Output::Event(Event::ButtonClick),
-                Output::Bind(Capture::Key(extras::SORT_KEY))
-            ]
-        );
-        ExtrasScreen.wheel_step(&mut s, row, true);
-        assert_eq!(s.extras.sort_key, key);
-    }
-
     #[test]
     fn the_wheel_flips_a_switch_and_leaves_the_mod_to_scroll() {
         let mut s = Settings::default();
         let mut screen = ExtrasScreen;
-        let row = ExtraRow::Item(Item::Sort);
+        let row = ExtraRow::Item(Item::Pregen);
         assert_eq!(
             screen.wheel_step(&mut s, row, true),
             Some(vec![Output::Event(Event::Changed)])
         );
-        assert!(s.extras.sort);
+        assert!(s.extras.pregen);
         assert_eq!(screen.wheel_step(&mut s, ExtraRow::Zoom(0), true), None);
     }
 
@@ -405,13 +384,13 @@ mod tests {
         use winit::keyboard::KeyCode as K;
         let mut s = Settings::default();
         let mut shell = Shell::<ExtrasScreen>::default();
-        let at = shell.point_at(&s, SIZE, ExtraRow::Item(Item::Sort));
+        let at = shell.point_at(&s, SIZE, ExtraRow::Item(Item::Pregen));
         assert!(
             !shell
                 .click(&mut s, at, SIZE, false, false, false)
                 .is_empty()
         );
-        assert!(s.extras.sort && !shell.changed());
+        assert!(s.extras.pregen && !shell.changed());
         let cols = Columns::of(SIZE.0, SIZE.1).with_note_lines(NOTE_LINES);
         let [x, y, ..] = cols.button(1);
         assert!(
@@ -419,7 +398,7 @@ mod tests {
                 .click(&mut s, (x + 2.0, y + 2.0), SIZE, false, false, false)
                 .is_empty()
         );
-        assert!(s.extras.sort);
+        assert!(s.extras.pregen);
         let reached = (0..100).any(|_| {
             shell.key(&mut s, K::Tab, None, false, SIZE);
             shell.focused() == Some(Target::Undo)

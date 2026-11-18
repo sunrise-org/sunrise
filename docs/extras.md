@@ -16,8 +16,7 @@ again restores vanilla's behaviour completely.
 | Minimap colours, tiles and image (for the Minimap native mod) | `crates/sunrise-client-render/src/minimap.rs` |
 | Reconnect policy and backoff | `crates/sunrise-client/src/reconnect.rs`; its game glue (connect, join, leave, the countdown) in `game/interface/extras/reconnect.rs` |
 | Game glue (input hooks, per-frame update) | `crates/sunrise-client/src/game/interface/extras.rs`; each extra's own glue in a child module, `game/interface/extras/` |
-| Mouse Tweaks-style controls, sort buttons | `crates/sunrise-client/src/game/interface/extras/mouse_tweaks.rs`, `game/interface/extras/sorting.rs` |
-| Sort order and its clicks | `crates/sunrise-client/src/inv_sort.rs` (pure, unit tested) |
+| Mouse Tweaks-style controls, sort buttons, the sort order and its clicks | crate `sunrise-inventory` (`tweaks.rs`, `sorting.rs`, `plan.rs` (pure, unit tested), `settings.rs`), on the platform's container hook ([layers.md](layers.md), "Container screens"); only the official executable registers it |
 | The music page's rows, and the pools it filters | `options_ui.rs` (`Page::Music`), `crates/sunrise-client/src/music.rs` (`track_groups`, `MusicManager::set_off`), `sound_events.rs` (`sound_except`) |
 | The settings page | `options_ui.rs` (`Page::Extras`): **Options → Sunrise Settings... → Extras...**; fullbright, dynamic lights and hiding block-break particles are on the graphics screen's Quality page instead (`graphics_ui.rs`, **Options → Video Settings...**) |
 
@@ -138,7 +137,7 @@ The game still draws the minimap, for the native mod (`native_minimap` in `nativ
   (`sound_engine.rs`, `listener_reserve`). Client-only.
 
 ### Mouse Tweaks controls (`mouseTweaks`, default off; `mouseTweaksWheel`, default on)
-In the player inventory, chest-like containers (chests, barrels, ender chests,
+Crate `sunrise-inventory`, in the official executable. In the player inventory, chest-like containers (chests, barrels, ender chests,
 shulker boxes, hoppers, dispensers and droppers), furnaces (also blast furnaces
 and smokers) and crafting tables, in singleplayer and on servers. Anvils,
 enchanting tables, merchants, beacons, brewing stands, crafters and the other
@@ -163,24 +162,24 @@ workstations keep vanilla's controls:
   vanilla's.
 
 Every action is ordinary slot clicks (`ContainerClick` on a server), so a
-vanilla server sees nothing unusual. With the extra off, the hooks return at
-once and the screens click exactly as vanilla's (`tools/test_menu_click_parity.py`
+vanilla server sees nothing unusual. With the extra off, the hooks take nothing
+and the screens click exactly as vanilla's (`tools/test_menu_click_parity.py`
 and the container screen tests are unchanged).
 
 ### Sorting (`sort`, default off; `sortKey`, unbound)
-- On every menu screen, by its slots' roles (`native_slot_roles`): a small
-  button over the top right of its storage slots (chests, barrels, ender
-  chests, shulker boxes, hoppers, dispensers, a mount's chest, a mod menu
-  type's linked slots) and one right of the "Inventory" line (the main
-  inventory; the hotbar is left alone), crafting tables and workstations
-  included. The key, when bound on the Extras page, sorts the part under the
-  cursor (the storage when over no slot).
+- Crate `sunrise-inventory`, in the official executable. On the player
+  inventory and the chest-like menus (chests, barrels, ender chests: `generic_9xN`;
+  shulker boxes): a small button by the container's title over its storage slots,
+  and one right of the "Inventory" line (the main inventory; the hotbar is left
+  alone). The key, when bound on the Extras page, sorts the part under the
+  cursor (the storage when over no slot); a mouse button can be the key too.
 - Partial stacks of one item merge, then the stacks go in creative tab order
-  (the search tab's), then by name; full stacks before the partial one,
-  empty slots last. It needs an empty hand.
-- Done with ordinary left clicks planned by `inv_sort::plan`, so a vanilla
-  server accepts it; a unit test replays the planned clicks through the menu
-  engine on random chests.
+  (the search tab's, read through `sunrise_platform::items::creative_order`),
+  then by name; full stacks before the partial one, empty slots last. It needs
+  an empty hand.
+- Done with ordinary left clicks planned by `plan::plan`, so a vanilla server
+  accepts it; a daily test sorts an inventory through the container hook on the
+  real menu engine.
 
 ### Smooth chat (`chatAnimation`, default off; `chatIndicator`, default on)
 - A new chat line slides in from the left while it fades in over a quarter of

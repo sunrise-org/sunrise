@@ -183,6 +183,7 @@ sunrise-threads = { path = "../sunrise-threads", features = ["test-allocation-co
 mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["testing"] }
 mod_api = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab", features = ["testing"] }
 sunrise-client-render = { path = "../sunrise-client-render", features = ["test-support"] }
+sunrise-inventory = { path = "../sunrise-inventory" }
 sunrise-items = { path = "../sunrise-items", features = ["test-support"] }
 sunrise-perf = { path = "../sunrise-perf" }
 # Every WGSL shader translated as wgpu's DirectX 12 backend does (gfx.rs tests).

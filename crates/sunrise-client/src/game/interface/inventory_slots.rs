@@ -606,7 +606,6 @@ impl Game<'_> {
         self.draw_hovered_slot_highlight(batch, false, ox, oy);
         self.draw_inventory_slots(batch, ox, oy);
         self.draw_hovered_slot_highlight(batch, true, ox, oy);
-        self.draw_sort_buttons(batch, ox, oy);
         let book_tip = self.draw_recipe_book(batch);
         let effect_tip = if self.container.is_none() && self.craft_size == 2 && !self.mount_active()
         {

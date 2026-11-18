@@ -10,6 +10,7 @@ members = [
     "crates/sunrise-mod-host",
     "crates/sunrise-game",
     "crates/sunrise-official",
+    "crates/sunrise-inventory",
     "crates/sunrise-heartbeat",
 
     "crates/sunrise-core",

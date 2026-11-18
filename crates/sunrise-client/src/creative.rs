@@ -84,6 +84,8 @@ pub struct Creative {
     pub search: EditBox,
     /// The search tab's stacks, in its display order.
     search_items: Vec<ItemStack>,
+    /// The window's own creative inventory: each rebuild publishes its order to the item catalog.
+    publishes: bool,
     search_index: Vec<SearchEntry>,
     /// The session's enchantment registry, shared with the hover tooltips.
     enchantments: Arc<Enchantments>,
@@ -417,6 +419,7 @@ impl Creative {
                 search
             },
             search_items: Vec::new(),
+            publishes: false,
             search_index: Vec::new(),
             enchantments: Arc::default(),
             exported,
@@ -490,6 +493,21 @@ impl Creative {
             }
         }
         self.forget_items();
+        self.publish();
+    }
+    /// This is the window's creative inventory: publish its order now and after every rebuild.
+    pub fn publish_order(&mut self) {
+        self.publishes = true;
+        self.publish();
+    }
+    fn publish(&self) {
+        if self.publishes {
+            let stacks = self.search_items.iter();
+            let order = stacks.map(|s| (s.item.as_ref(), s.merge_kind()));
+            sunrise_hooks::items::engine::set_creative_order(
+                sunrise_hooks::items::engine::CreativeOrder::new(order),
+            );
+        }
     }
     /// The packs' Polytone creative tab modifiers (wiki "Creative Tab Modifiers"): the tabs are
     /// built again with them.
@@ -1591,6 +1609,30 @@ mod tests {
         assert_eq!(c.search_items().len(), 1);
         assert!(c.search_results("command", &names).is_empty());
         assert_eq!(c.search_results("", &names), [0]);
+    }
+
+    #[test]
+    fn the_window_publishes_its_order_and_every_rebuild_updates_it() {
+        use sunrise_hooks::{containers::Stack, items::creative_order};
+        let order = |id: &str| {
+            let stack = ItemStack::new(id, 1);
+            creative_order(&Stack::new(id.into(), 1, 64, stack.merge_kind(), 0))
+        };
+        let mut c = with_operator_tab();
+        let names = Names::default();
+        c.publish_order();
+        assert!(refresh(&mut c, false, &names));
+        assert_eq!(order("minecraft:stone"), Some(0));
+        assert_eq!(
+            order("minecraft:barrier"),
+            None,
+            "an operator item, no permissions"
+        );
+        assert!(refresh(&mut c, true, &names));
+        assert_eq!(order("minecraft:barrier"), Some(2));
+        // The same as the screen's own order.
+        let barrier = ItemStack::new("minecraft:barrier", 1);
+        assert_eq!(c.order_of(&barrier), Some(2));
     }
 
     #[test]

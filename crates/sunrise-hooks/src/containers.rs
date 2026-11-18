@@ -173,7 +173,7 @@ pub trait ContainerHooks: Sync {
         false
     }
 
-    /// The cursor moved with `button` held (`ScreenEvent.MouseDragged.Pre`).
+    /// `ScreenEvent.MouseDragged.Pre`, asked only while the last press the hooks heard is held.
     fn drag(&self, _c: &mut dyn Container, _slot: Option<SlotId>, _button: Button) -> bool {
         false
     }

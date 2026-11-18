@@ -116,9 +116,6 @@ impl Game<'_> {
         if self.mod_browser_press(right) {
             return;
         }
-        if !right && self.sort_press() {
-            return;
-        }
         // AbstractRecipeBookScreen lets the book handle its buttons before
         // AbstractContainerScreen starts a drag or chooses an outside slot.
         // Toggling it can move the inventory under the pointer before release.
@@ -159,9 +156,6 @@ impl Game<'_> {
                 }
                 None => {}
             }
-            return;
-        }
-        if self.tweak_press(slot, right, shift) {
             return;
         }
         if let Some(slot) = slot
@@ -263,9 +257,6 @@ impl Game<'_> {
     }
     /// Mouse movement while a quick craft drag is running.
     pub(super) fn inventory_drag_move(&mut self) {
-        if self.tweaks_on() && self.tweak_drag_move(self.inventory_target().0) {
-            return;
-        }
         let Some((ty, slots)) = self.inv_drag.clone() else {
             return;
         };
@@ -448,7 +439,6 @@ impl Game<'_> {
     /// cancels the drag, drops a stack released outside, or clicks.
     pub(super) fn inventory_mouse_release(&mut self, right: bool) {
         use sunrise_client::container_screen::{Release, Target};
-        self.tweak_release();
         let (slot, outside) = self.inventory_target();
         let dragged = self.inv_drag.as_ref().is_some_and(|(_, s)| !s.is_empty());
         let release = self.inv_clicks.release(

@@ -20,6 +20,7 @@ sunrise-heartbeat = { path = "../sunrise-heartbeat" }
 sunrise-friends = { path = "../sunrise-friends", features = ["game"] }
 sunrise-addresses = { path = "../sunrise-addresses" }
 sunrise-discord = { path = "../sunrise-discord" }
+sunrise-inventory = { path = "../sunrise-inventory" }
 sunrise-perf-share = { path = "../sunrise-perf-share" }
 log = "0.4"
 

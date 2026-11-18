@@ -1049,12 +1049,12 @@ struct Game<'a> {
     container_buttons: HashSet<MouseButton>,
     /// This mouse event's button-up ended a container hook's press latch (`container_button_up`).
     container_owned_up: bool,
+    /// `physical_presses` at the last press the container hooks heard: a drag is theirs only then.
+    container_heard_press: Option<u64>,
     /// Physical mouse presses so far: a drag knows whether its press is still the latest.
     physical_presses: u64,
     /// `AbstractContainerScreen`'s quick craft and skip-release state.
     inv_clicks: sunrise_client::container_screen::Clicks,
-    /// The Mouse Tweaks extra's drag and wheel (`tweaks`).
-    tweaks: extras::mouse_tweaks::Tweaks,
     /// The wheel and hovered slot of `BundleMouseActions`.
     bundle_mouse: bundles::BundleMouse,
     /// The last inventory click, for the double click that gathers a stack.
@@ -9710,11 +9710,7 @@ impl Game<'_> {
                     if self.screen == Screen::Creative && d != 0.0 && !bundle {
                         self.creative_screen.wheel(f64::from(d), &self.pack.names);
                     }
-                    if self.screen == Screen::Inventory
-                        && d != 0.0
-                        && !bundle
-                        && !self.tweak_scroll(d, self.inventory_target().0)
-                    {
+                    if self.screen == Screen::Inventory && d != 0.0 && !bundle {
                         self.station_scroll(d);
                     }
                     if self.screen == Screen::Stats && d != 0.0 {
@@ -9878,10 +9874,7 @@ impl Game<'_> {
                         return Ok(());
                     }
                     if pressed
-                        && (self.sort_mouse_press(button)
-                            || self.hud_editor_key_press(&sunrise_client::keybinds::mouse_name(
-                                button,
-                            )))
+                        && self.hud_editor_key_press(&sunrise_client::keybinds::mouse_name(button))
                     {
                         return Ok(());
                     }
@@ -10749,8 +10742,8 @@ impl<'a> Game<'a> {
             inv_drag: None,
             container_buttons: HashSet::new(),
             container_owned_up: false,
+            container_heard_press: None,
             physical_presses: 0,
-            tweaks: Default::default(),
             bundle_mouse: Default::default(),
             inv_clicks: Default::default(),
             last_inv_click: None,
@@ -11296,6 +11289,10 @@ impl<'a> Game<'a> {
             player_model: None,
         };
         game.reset_entity_residency();
+        // The window's creative inventory is the one the item catalog reads.
+        if game.options.execution_role.is_client() {
+            game.creative_screen.publish_order();
+        }
         Ok(game)
     }
 }

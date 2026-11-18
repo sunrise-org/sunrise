@@ -4504,6 +4504,7 @@ dependencies = [
  "sunrise-guest-stack",
  "sunrise-hdr",
  "sunrise-hooks",
+ "sunrise-inventory",
  "sunrise-items",
  "sunrise-java-properties",
  "sunrise-mod-api",
@@ -4844,6 +4845,13 @@ dependencies = [
 [[package]]
 name = "sunrise-internals"
 version = "0.1.0"
+
+[[package]]
+name = "sunrise-inventory"
+version = "0.1.0"
+dependencies = [
+ "sunrise-platform",
+]
 
 [[package]]
 name = "sunrise-items"
@@ -5223,6 +5231,7 @@ dependencies = [
  "sunrise-friends",
  "sunrise-game",
  "sunrise-heartbeat",
+ "sunrise-inventory",
  "sunrise-perf-share",
  "sunrise-platform",
  "winresource",

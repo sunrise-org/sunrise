@@ -128,7 +128,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
              server hands the rest back when the table closes (#4166).
 - modifier-release: a Shift tap or the control socket's release command leaves the next real
              inventory click as a normal pickup, rather than a stuck Shift transfer (#4166).
-- wheel:     with the Mouse Tweaks extra on, real wheel events and a right-drag in a furnace, a
+- wheel:     on the official executable, with the Mouse Tweaks extra on, real wheel events and a right-drag in a furnace, a
              crafting table, a hopper and a dropper: fuel and smeltables go to their slots, nothing
              into a result slot, and down over a result takes it. The server has each.
 - sleep:     at night the guest lies down in its own bed (not the host); alone it stays night, it
@@ -7379,6 +7379,9 @@ def run(ctl, out, resources, checks):
         launch.append('--offscreen')
     if headless:
         launch.append('--no-pause')
+    # Mouse Tweaks is a Sunrise extra: only the official executable registers it.
+    if 'wheel' in checks:
+        launch += ['--game', str(Path(ctl).parent / 'sunrise-official')]
     results = {}
     try:
         if 'recipes-smod' in checks:
@@ -7449,7 +7452,7 @@ def main():
         bins = Path(args.bin_dir).resolve()
     else:
         subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'sunrise-game', '-p', 'sunrise-client-lib',
-                        '--bin', 'sunrise-client', '--bin', 'sunrise-ctl'],
+                        '-p', 'sunrise-official', '--bin', 'sunrise-client', '--bin', 'sunrise-ctl', '--bin', 'sunrise-official'],
                        cwd=ROOT, check=True)
         meta = json.loads(subprocess.run(['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=ROOT,
                                          capture_output=True, text=True, check=True).stdout)

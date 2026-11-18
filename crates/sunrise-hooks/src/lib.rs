@@ -15,11 +15,13 @@
 //! The platform registries (docs/layers.md, "Platform registries") have the same shape:
 //! [`settings`] for the settings each crate keeps in its own lines, [`pages`] for its settings
 //! pages, [`hud`] for what it draws on the HUD, [`lang`] for the lang files with its text,
-//! [`mod_rows`] for the rows it adds to the Mods screen.
+//! [`mod_rows`] for the rows it adds to the Mods screen. [`items`] holds reads of vanilla's own
+//! item catalogs.
 #![forbid(unsafe_code)]
 
 pub mod containers;
 pub mod hud;
+pub mod items;
 pub mod lang;
 pub mod look;
 pub mod mod_rows;

@@ -100,7 +100,6 @@ pub mod gui_layers;
 pub mod health;
 pub mod hotbar;
 pub mod hunger;
-pub mod inv_sort;
 pub mod item_activation;
 pub mod item_attributes;
 pub mod item_render;
