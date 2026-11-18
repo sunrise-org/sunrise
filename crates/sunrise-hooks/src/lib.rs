@@ -19,6 +19,7 @@
 
 pub mod hud;
 pub mod lang;
+pub mod packs;
 pub mod pages;
 pub mod perf;
 pub mod players;
@@ -249,6 +250,7 @@ pub mod engine {
         crate::settings::all();
         crate::pages::engine::all();
         crate::hud::engine::all();
+        crate::packs::engine::all();
         crate::lang::all();
     }
 

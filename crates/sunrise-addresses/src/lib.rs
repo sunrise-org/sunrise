@@ -38,6 +38,10 @@ pub const PERF_VIEWER: &str = "https://playsunrise.net/perf";
 /// The capture upload API behind Share (`SUNRISE_PERF_CAPTURES` overrides it).
 pub const PERF_CAPTURES: &str = "https://playsunrise.net/api/perf/captures";
 
+/// Modrinth's API, which the in-game resource pack browser (`sunrise-pack-browser`) searches and
+/// downloads from.
+pub const MODRINTH_API: &str = "https://api.modrinth.com/v2";
+
 /// Public STUN servers for Play with Friends' NAT discovery: two independent operators, so one
 /// outage doesn't break discovery (`SUNRISE_STUN_SERVERS` overrides them).
 pub const STUN_SERVERS: &[&str] = &["stun.cloudflare.com:3478", "stun.l.google.com:19302"];

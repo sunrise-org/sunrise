@@ -519,6 +519,21 @@ fn container_draw(&self, c: &dyn Container, canvas: &mut dyn hud::Canvas);    //
 - `order` is the only text: Sorting ranks by it. The rest is ids and numbers, so the API names no engine type
   (`ItemStack` stays in the engine).
 
+### Pack sources (`sunrise_platform::packs`)
+
+Where the Select Resource Packs screen's Add button browses. A crate registers a `Source`: whether it is on for
+the player whose turn it is, its filters and its labels (translation keys), and the work, each returning at once:
+`open`, `search`, `fetch_icons`, `download` into the packs folder, `poll` for what finished, and `close(seat)`.
+
+- The first enabled source gives the screen its Add button; with none there is no button, and the screen is
+  vanilla's. Only a screen whose owner polls the source (the game, not the pre-game menu) and only Select Resource
+  Packs (downloads land in `resourcepacks/`) shows it.
+- The engine draws the browse screen (search box, filters, results, icons, install state) from the source's data
+  alone, with the source's labels. It names no site.
+- A browse screen keeps the source and the seat it opened on until it closes or is dropped, so one dropped while
+  another seat's turn runs still closes its own session.
+- `sunrise-pack-browser` is the one source today: Modrinth, with its `packBrowser` switch in Extras' Menus group.
+
 ### Lang files (`sunrise_platform::lang`)
 
 A crate keeps the text for its keys in its own folder, `crates/<name>/assets/lang/<code>.json`, with the same
@@ -631,7 +646,7 @@ Sunrise's own and third-party addresses (Sunrise layer):
 | `stun.cloudflare.com`, `stun.l.google.com` | Play with Friends NAT discovery | `sunrise-addresses` (#12993) |
 | `sunrise-org.github.io/sunrise-mods`, `github.com/sunrise-org/sunrise-mods`, `playsunrise.net/mods` | Sunrise's mod registry: the launcher's index, icons and screenshots, report form and project pages (`SUNRISE_MOD_INDEX` overrides the index) | `sunrise-addresses`, used by `launcher/src/browser/` |
 | `horizon-rust.github.io/horizon-mods`, `github.com/horizon-rust/horizon-mods` | Horizon's mod registry, index and files: the registry tool's defaults and the submission service's | `sunrise-mods/src/index*.rs`, `cargo-sunrise-mod`, `sunrise-mod-registry` |
-| `api.modrinth.com`, `cdn.modrinth.com` | the in-game resource pack browser, modpack porting | `pack_browser.rs`, `sunrise-port-pack` |
+| `api.modrinth.com`, `cdn.modrinth.com` | the in-game resource pack browser, modpack porting | `sunrise-addresses` (`MODRINTH_API`), used by `sunrise-pack-browser`; `sunrise-port-pack` |
 | `github.com`, `raw.githubusercontent.com`, `gitlab.com`, `maven.neoforged.net` | modpack porting's sources | `sunrise-port-pack` |
 | `playsunrise.net` | the download link shown with no resources | `no_resources.rs` |
 | `api.github.com`, `discord.com` | hosting: updates, Discord webhooks | `sunrise-server` |

@@ -15,12 +15,13 @@ use sunrise_client::{
     datapack::DataPack,
     gfx::PreparedTextures,
     hud::HudAtlas,
-    lang, pack_browser,
+    lang,
     pack_screen::{self, Compat, PackInfo, Source as PackSource},
     packs::{self, Pack, Position},
     streaming::WorkerContext,
     text::{Style, Text},
 };
+use sunrise_hooks::packs::Message;
 
 /// Where overlay roots are built (beside options.txt).
 pub fn cache_dir() -> PathBuf {
@@ -252,9 +253,8 @@ impl Game<'_> {
     pub(super) fn refresh_pack_lists(&mut self) {
         let infos = self.resource_pack_infos();
         let configs = pack_configs(&self.vanilla_root());
-        let browsing = self.settings.extras.pack_browser;
         let o = &mut self.ui.options;
-        o.pack_browser = browsing;
+        o.pack_source_polled = true;
         o.pack_infos = infos;
         o.pack_configs = configs;
         o.pack_selection = self.settings.resource_packs.clone();
@@ -275,17 +275,19 @@ impl Game<'_> {
         let Some(screen) = &mut self.ui.options.pack_screen else {
             return;
         };
-        let Some(browser) = &mut screen.browser else {
+        let Some(view) = &mut screen.browser else {
             return;
         };
-        let Some(message) = browser.poll() else {
+        let source = view.session.source();
+        let Some(message) = source.poll() else {
             return;
         };
-        if let pack_browser::Message::Results(_) = &message {
+        view.apply(&message);
+        if let Message::Results(_) = &message {
             // The rows draw their icons as they land.
-            browser.fetch_icons();
+            source.fetch_icons();
         }
-        if let pack_browser::Message::Icon(id, png) = &message {
+        if let Message::Icon(id, png) = &message {
             let key = pack_screen::icon_texture(id);
             if let Some(icon) = pack_screen::load_fetched_icon(png) {
                 // Tracked, so closing the browser frees it again.
@@ -293,7 +295,7 @@ impl Game<'_> {
             }
             return;
         }
-        if let pack_browser::Message::Downloaded(name) = message {
+        if let Message::Downloaded(name) = message {
             log::info!("Sunrise: added the resource pack {name}");
             // Rebuilding the screen would shut the list; keep it and only
             // refresh what the lists read.

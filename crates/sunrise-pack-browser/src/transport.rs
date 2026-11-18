@@ -1,5 +1,4 @@
-//! Browsing Modrinth for resource packs from the Select Resource Packs
-//! screen, so a pack can be added without leaving the game.
+//! The Modrinth client behind the source: search, icons and download.
 //!
 //! The launcher has its own browser (`launcher/src/browser/`), but the
 //! launcher is a separate workspace: nothing there is reachable from the
@@ -17,35 +16,12 @@ const AGENT: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (in-game resource pack browser)"
 );
-const API: &str = "https://api.modrinth.com/v2";
+use sunrise_addresses::MODRINTH_API as API;
 /// Hits one search asks for. The list shows them all; Modrinth's own cap is
 /// 100.
 pub const LIMIT: usize = 20;
 
-/// One search hit, as much of it as the list draws.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Hit {
-    pub id: String,
-    pub title: String,
-    pub author: String,
-    pub description: String,
-    pub downloads: u64,
-    /// Modrinth's icon for the project, empty when it has none.
-    pub icon_url: String,
-}
-
-/// What the worker sends back.
-#[derive(Debug)]
-pub enum Message {
-    Results(Vec<Hit>),
-    /// A project's icon, as the PNG bytes Modrinth served.
-    Icon(String, Vec<u8>),
-    /// A pack landed in the packs folder under this file name.
-    Downloaded(String),
-    /// A technical reason in English: the screen shows it inside
-    /// `sunrise.pack.addFailed`.
-    Failed(String),
-}
+pub use sunrise_platform::packs::{Hit, Message};
 
 /// The filters the sidebar offers: the label's translation key, and the
 /// Modrinth facet it adds. Facets of one group are OR-ed, groups AND-ed, so
@@ -232,55 +208,14 @@ pub fn free_path(dir: &Path, name: &str) -> Option<PathBuf> {
         .find(|candidate| !candidate.exists())
 }
 
-/// The browser's state, owned by the pack screen.
+/// The transport behind the source: the worker channel, the last hits and the one-at-a-time
+/// guard. What the screen shows lives in the engine's browse screen.
 pub struct Browser {
-    pub query: String,
-    pub hits: Vec<Hit>,
-    pub selected: Option<usize>,
-    pub scroll: f64,
+    hits: Vec<Hit>,
     /// Set while a search or a download is in flight.
-    pub busy: bool,
-    /// Already-translated text, shown in place of the list.
-    pub status: Option<String>,
-    /// The hit an install is running for.
-    pub installing: Option<usize>,
-    /// Hits already installed this visit, by index.
-    pub installed: std::collections::BTreeSet<usize>,
-    /// The sidebar filters that are on, as indices into [`FILTERS`].
-    pub filters: std::collections::BTreeSet<usize>,
+    pub(crate) busy: bool,
     sender: Sender<Message>,
     receiver: Receiver<Message>,
-}
-
-impl std::fmt::Debug for Browser {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Browser")
-            .field("query", &self.query)
-            .field("hits", &self.hits.len())
-            .field("busy", &self.busy)
-            .finish()
-    }
-}
-
-impl Clone for Browser {
-    /// The screen is cloned for drawing; a clone carries the state, not the
-    /// worker's channel, and starts its own.
-    fn clone(&self) -> Self {
-        let (sender, receiver) = channel();
-        Self {
-            query: self.query.clone(),
-            hits: self.hits.clone(),
-            selected: self.selected,
-            scroll: self.scroll,
-            busy: self.busy,
-            status: self.status.clone(),
-            installing: self.installing,
-            installed: self.installed.clone(),
-            filters: self.filters.clone(),
-            sender,
-            receiver,
-        }
-    }
 }
 
 impl Default for Browser {
@@ -293,57 +228,35 @@ impl Browser {
     pub fn new() -> Self {
         let (sender, receiver) = channel();
         Self {
-            query: String::new(),
             hits: Vec::new(),
-            selected: None,
-            scroll: 0.0,
             busy: false,
-            status: None,
-            installing: None,
-            installed: Default::default(),
-            filters: Default::default(),
             sender,
             receiver,
         }
     }
 
-    /// Anything the worker has finished since the last call. The caller
-    /// refreshes its pack list when a [`Message::Downloaded`] comes back.
+    /// Anything the worker has finished since the last call.
     pub fn poll(&mut self) -> Option<Message> {
         let message = self.receiver.try_recv().ok()?;
-        let was_busy = self.busy;
-        self.busy = false;
         match &message {
             Message::Results(hits) => {
                 self.hits = hits.clone();
-                self.selected = None;
-                self.scroll = 0.0;
-                self.status = None;
+                self.busy = false;
             }
-            Message::Downloaded(_) => {
-                self.status = None;
-                if let Some(i) = self.installing.take() {
-                    self.installed.insert(i);
-                }
-            }
-            // An icon is the screen's to keep; it does not end a search.
-            Message::Icon(..) => self.busy = was_busy,
-            Message::Failed(reason) => {
-                self.status = Some(reason.clone());
-                self.installing = None;
-            }
+            // An icon does not end a search.
+            Message::Icon(..) => {}
+            _ => self.busy = false,
         }
         Some(message)
     }
 
-    /// Searches for the current query on a worker thread.
-    pub fn search(&mut self) {
+    /// Searches for `query` with the chosen filters (indices into [`FILTERS`]) on a worker thread.
+    pub fn search(&mut self, query: &str, chosen: &[usize]) {
         if self.busy {
             return;
         }
         self.busy = true;
-        self.status = None;
-        let url = search_url(&self.query, &self.filters);
+        let url = search_url(query, &chosen.iter().copied().collect());
         let sender = self.sender.clone();
         spawn("pack-browser-search", move || {
             let message = match get_text(&url) {
@@ -385,7 +298,7 @@ impl Browser {
         });
     }
 
-    /// Downloads the selected pack into `dir` on a worker thread.
+    /// Downloads result `index` into `dir` on a worker thread.
     pub fn download(&mut self, index: usize, dir: &Path, game_version: &str) {
         if self.busy {
             return;
@@ -393,9 +306,7 @@ impl Browser {
         let Some(hit) = self.hits.get(index) else {
             return;
         };
-        self.installing = Some(index);
         self.busy = true;
-        self.status = None;
         let url = versions_url(&hit.id, game_version);
         let dir = dir.to_path_buf();
         let sender = self.sender.clone();
@@ -498,9 +409,10 @@ fn get_bytes(url: &str, max: usize) -> Result<Vec<u8>, String> {
 }
 
 /// SHA-1 of `bytes` as lowercase hex, for the checksum Modrinth states beside
-/// each file (the `sha1` crate the skins already use).
+/// each file.
 fn sha1_hex(bytes: &[u8]) -> String {
-    crate::skins::sha1(bytes)
+    use sha1::{Digest, Sha1};
+    Sha1::digest(bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()

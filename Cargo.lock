@@ -5216,6 +5216,7 @@ dependencies = [
  "sunrise-friends",
  "sunrise-game",
  "sunrise-heartbeat",
+ "sunrise-pack-browser",
  "sunrise-perf-share",
  "sunrise-platform",
  "winresource",
@@ -5231,6 +5232,18 @@ dependencies = [
  "sunrise-core",
  "sunrise-system",
  "zip",
+]
+
+[[package]]
+name = "sunrise-pack-browser"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde_json",
+ "sha1",
+ "sunrise-addresses",
+ "sunrise-platform",
+ "ureq",
 ]
 
 [[package]]

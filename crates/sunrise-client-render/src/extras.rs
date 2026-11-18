@@ -20,10 +20,6 @@ pub use mod_api::client::extras::Corner;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Extras {
-    /// The Select Resource Packs screen's Add button, which browses
-    /// Modrinth. Off by default: it is Sunrise's own and the screen is
-    /// otherwise vanilla's (tools/test_pack_screen_parity.py).
-    pub pack_browser: bool,
     /// Make /pregen available in single-player and hosted LAN worlds.
     pub pregen: bool,
     pub fullbright: bool,
@@ -121,7 +117,6 @@ pub struct Extras {
 impl Default for Extras {
     fn default() -> Self {
         Self {
-            pack_browser: false,
             pregen: false,
             fullbright: false,
             dynamic_lights: false,
@@ -188,7 +183,6 @@ impl Extras {
                 _ => d,
             };
             match key.trim() {
-                "packBrowser" => e.pack_browser = flag(e.pack_browser),
                 "pregen" => e.pregen = flag(e.pregen),
                 "fullbright" => e.fullbright = flag(e.fullbright),
                 "dynamicLights" => e.dynamic_lights = flag(e.dynamic_lights),
@@ -273,8 +267,7 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         let mut text = format!(
-            "packBrowser:{}\npregen:{}\nfullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nlodZoomDetail:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nmovedToMods:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nuiSoundReserve:{}\nownNameTag:{}\nskipModdedSplashesIfVanillaModified:{}\nhideBlockParticles:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\nchatAnimation:{}\nchatIndicator:{}\n{}:{}\nagentControl:{}\nreproKeys:{}\nwheelCyclesListSettings:{}\nmusicOff:{}\nmusicPage:{}\n{}:{}\n",
-            bool_text(self.pack_browser),
+            "pregen:{}\nfullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nlodZoomDetail:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nmovedToMods:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nuiSoundReserve:{}\nownNameTag:{}\nskipModdedSplashesIfVanillaModified:{}\nhideBlockParticles:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\nchatAnimation:{}\nchatIndicator:{}\n{}:{}\nagentControl:{}\nreproKeys:{}\nwheelCyclesListSettings:{}\nmusicOff:{}\nmusicPage:{}\n{}:{}\n",
             bool_text(self.pregen),
             bool_text(self.fullbright),
             bool_text(self.dynamic_lights),
@@ -483,8 +476,6 @@ pub enum Item {
     /// On the AI Agent page, next to Agent Control: the F3 recording shortcuts.
     ReproKeys,
     WheelCyclesSettings,
-    /// The Select Resource Packs screen's Add button (Modrinth).
-    PackBrowser,
     Pregen,
     /// On the PvP & HUD page (`pvp::rows`).
     Pvp(crate::pvp::Opt),
@@ -514,7 +505,6 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(MusicPage),
         Err("sunrise.extras.header.menus"),
         Ok(WheelCyclesSettings),
-        Ok(PackBrowser),
     ]
 }
 impl Item {
@@ -538,7 +528,6 @@ impl Item {
             Item::ChatAnimation => "sunrise.extras.chat_animation",
             Item::ChatIndicator => "sunrise.extras.chat_indicator",
             Item::WheelCyclesSettings => "sunrise.extras.wheel_cycles_settings",
-            Item::PackBrowser => "sunrise.extras.pack_browser",
             Item::Pregen => "sunrise.extras.pregen",
             Item::Pvp(o) => o.caption_key(),
         }
@@ -563,7 +552,6 @@ impl Item {
             Item::ChatAnimation => "sunrise.extras.chat_animation.tooltip",
             Item::ChatIndicator => "sunrise.extras.chat_indicator.tooltip",
             Item::WheelCyclesSettings => "sunrise.extras.wheel_cycles_list_settings.tooltip",
-            Item::PackBrowser => "sunrise.extras.pack_browser.tooltip",
             Item::Pregen => "sunrise.extras.pregen.tooltip",
             Item::Pvp(o) => o.description_key(),
         }
@@ -597,7 +585,6 @@ impl Item {
             Item::AgentControl => "Agent Control",
             Item::ReproKeys => "Recording shortcuts",
             Item::WheelCyclesSettings => "Scroll wheel changes settings",
-            Item::PackBrowser => "Resource pack browser",
             Item::Pregen => "Chunk pregeneration",
             Item::Pvp(o) => o.caption(),
         }
@@ -613,7 +600,7 @@ impl Item {
             Pvp(o) => return o.parent().map(Pvp),
             Fullbright | DynamicLights | OwnNameTag | HideBlockParticles | MouseTweaks | Sort
             | AutoReconnect | NoAi | AgentControl | ReproKeys | ChatAnimation
-            | WheelCyclesSettings | MusicPage | PackBrowser | Pregen => {
+            | WheelCyclesSettings | MusicPage | Pregen => {
                 return None;
             }
         })
@@ -672,9 +659,6 @@ impl Item {
             Item::WheelCyclesSettings => {
                 "The scroll wheel over a button in the settings changes its value, as in vanilla. Off, the wheel only scrolls the list."
             }
-            Item::PackBrowser => {
-                "Select Resource Packs gets an Add button that searches Modrinth and installs a pack into your packs folder. Off, the game never contacts Modrinth."
-            }
         }
     }
     /// The frame-time cost the main switch of an extra shows.
@@ -691,8 +675,7 @@ impl Item {
             | Item::AutoReconnect
             | Item::MouseTweaks
             | Item::Sort
-            | Item::WheelCyclesSettings
-            | Item::PackBrowser => Some(Cost::None),
+            | Item::WheelCyclesSettings => Some(Cost::None),
             _ => None,
         }
     }
@@ -715,7 +698,6 @@ impl Item {
             Item::AgentControl => e.agent_control,
             Item::ReproKeys => e.repro_keys,
             Item::WheelCyclesSettings => e.wheel_cycles_settings,
-            Item::PackBrowser => e.pack_browser,
             Item::Pregen => e.pregen,
             Item::Pvp(o) => return o.switch(&e.pvp),
             _ => return None,
@@ -752,7 +734,6 @@ impl Item {
             Item::AgentControl => e.agent_control = !e.agent_control,
             Item::ReproKeys => e.repro_keys = !e.repro_keys,
             Item::WheelCyclesSettings => e.wheel_cycles_settings = !e.wheel_cycles_settings,
-            Item::PackBrowser => e.pack_browser = !e.pack_browser,
             Item::Pregen => e.pregen = !e.pregen,
             Item::Pvp(o) => o.cycle(&mut e.pvp, back),
             Item::SortKey => {}

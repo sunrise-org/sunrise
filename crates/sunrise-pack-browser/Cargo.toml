@@ -1,0 +1,18 @@
+[package]
+name = "sunrise-pack-browser"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The resource pack screen's Add button: browse Modrinth and install a pack, and its Extras switch (docs/layers.md)"
+
+[dependencies]
+sunrise-addresses = { path = "../sunrise-addresses" }
+sunrise-platform = { path = "../sunrise-platform" }
+log = "0.4"
+serde_json = "1.0.151"
+sha1 = "0.10"
+ureq = { version = "2", default-features = false, features = ["tls"] }
+
+[lints]
+workspace = true

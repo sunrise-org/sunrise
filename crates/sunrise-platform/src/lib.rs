@@ -82,6 +82,11 @@ pub mod pages {
     pub use sunrise_hooks::pages::{Act, Label, Page, Place, Row, connect, register};
 }
 
+/// Where the pack screen's online browser gets its packs (docs/layers.md, "Platform registries").
+pub mod packs {
+    pub use sunrise_hooks::packs::{Hit, Labels, Message, Source, register};
+}
+
 /// The lang files with a crate's text, loaded with the game's own (docs/layers.md, "Platform
 /// registries").
 pub mod lang {

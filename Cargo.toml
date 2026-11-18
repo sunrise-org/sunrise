@@ -53,6 +53,7 @@ members = [
     "crates/sunrise-perf-format",
     "crates/sunrise-perf",
     "crates/sunrise-perf-share",
+    "crates/sunrise-pack-browser",
     "crates/sunrise-friends",
     "crates/sunrise-relay",
     "crates/sunrise-mod-package",

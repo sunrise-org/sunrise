@@ -21,6 +21,7 @@ sunrise-friends = { path = "../sunrise-friends", features = ["game"] }
 sunrise-addresses = { path = "../sunrise-addresses" }
 sunrise-discord = { path = "../sunrise-discord" }
 sunrise-perf-share = { path = "../sunrise-perf-share" }
+sunrise-pack-browser = { path = "../sunrise-pack-browser" }
 log = "0.4"
 
 [build-dependencies]

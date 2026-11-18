@@ -103,7 +103,7 @@ impl PackInfo {
 pub fn load_icon(png: &[u8]) -> Option<Arc<[u8]>> {
     scale_icon(crate::hud::decode_bytes(png).ok()?)
 }
-/// A project icon Modrinth served (PNG, WebP or JPEG,
+/// A hit's icon a pack source fetched (PNG, WebP or JPEG,
 /// [`crate::hud::decode_image_bytes`]), scaled as [`load_icon`] scales a pack's.
 pub fn load_fetched_icon(bytes: &[u8]) -> Option<Arc<[u8]>> {
     scale_icon(crate::hud::decode_image_bytes(bytes).ok()?)
@@ -367,13 +367,13 @@ pub enum Action {
     Done,
     /// Sunrise's own: the options button on the card of this pack, which has Polytone options.
     Options(String),
-    /// Sunrise's own: a Modrinth hit the player picked, to download into the
-    /// packs folder. The screen does not know where that is.
+    /// A pack source's hit the player picked, to download into the packs
+    /// folder. The screen does not know where that is.
     BrowsePick(usize),
 }
 
 /// The pack screen and its state.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PackScreen {
     /// `resourcePack.title`, or `dataPack.title` from Create World.
     pub title: Text,
@@ -389,30 +389,18 @@ pub struct PackScreen {
     confirm: Option<Confirm>,
     /// The selection changed since the screen opened.
     pub changed: bool,
-    /// The packs' icons by their [`icon_texture`], and the browser's.
+    /// The packs' icons by their [`icon_texture`], and the browse screen's.
     pub icons: HashMap<String, Arc<[u8]>>,
-    /// Sunrise's own Add button and its Modrinth list, when the player has
-    /// turned `packBrowser` on. Off, the screen stays vanilla's exactly
-    /// (tools/test_pack_screen_parity.py).
-    pub browser: Option<crate::pack_browser::Browser>,
+    /// The browse screen the Add button opened. Without a source the screen
+    /// stays vanilla's exactly (tools/test_pack_screen_parity.py).
+    pub browser: Option<crate::pack_source_ui::View>,
     /// Which backdrop this screen wants drawn behind it this frame
     /// ([`Backdrop`]). Vanilla's own pack screen never asks for one.
     pub backdrop: Backdrop,
-    /// The `icons` keys that came from the browser rather than from an
-    /// installed pack. Each decoded icon is `PACK_ICON_SIZE` squared in RGBA
-    /// (64 KiB), and a search brings twenty, so without this they piled up in
-    /// `icons` for the rest of the session: every search added twenty more
-    /// and none were ever freed.
-    browser_icons: Vec<String>,
-    /// Whether that button is drawn at all.
-    pub browsing_allowed: bool,
+    /// The source the Add button browses; `None`, no Add button.
+    pub browsing: Option<crate::pack_source_ui::Browsing>,
     /// The packs with Polytone options (#11486): their cards carry an options button.
     pub with_options: std::collections::BTreeSet<String>,
-    /// The browser's own search box, separate from the one that filters the
-    /// player's installed packs.
-    browser_search: TextField,
-    /// The browser's search box has the keyboard.
-    browser_focus: bool,
     /// Which atlas slot holds which icon, kept from one frame to the next
     /// ([`PackScreen::bind_icons`]).
     icon_slots: std::cell::RefCell<IconSlots>,
@@ -476,36 +464,6 @@ fn tr(key: &str) -> Text {
 const ADD_SIZE: i32 = 20;
 /// The options button on a pack's card.
 const OPTIONS_SIZE: i32 = 16;
-/// A card in the grid: its icon beside its name, author and description.
-const ROW_H: i32 = 74;
-/// The air around a card's contents.
-const CARD_PAD: i32 = 6;
-/// The sidebar of filters down the left.
-const SIDEBAR_W: i32 = 108;
-/// The bar across the top holding Back and the search box.
-const TOPBAR_H: i32 = 30;
-/// A filter row in the sidebar.
-const FILTER_H: i32 = 15;
-/// The panels' colours, dark over whatever is behind them.
-const PANEL: i32 = 0xF0_14_17_22u32 as i32;
-const CARD: i32 = 0xFF_1E_22_30u32 as i32;
-const CARD_HOVER: i32 = 0xFF_2A_30_42u32 as i32;
-const SIDEBAR_BG: i32 = 0xFF_10_12_1Bu32 as i32;
-/// The Install button: Modrinth's green, dimmed once a pack is in.
-const GREEN: i32 = 0xFF_1B_D9_6Au32 as i32;
-const GREEN_HOVER: i32 = 0xFF_3B_E8_85u32 as i32;
-const INSTALLED_GREEN: i32 = 0xFF_2A_5E_3Fu32 as i32;
-const GREEN_EDGE: i32 = 0xFF_0E_7A_3Cu32 as i32;
-/// The icon drawn at the left of a row.
-const ICON: i32 = 34;
-/// The browser's search box and the button beside it.
-const BROWSER_SEARCH_W: i32 = 200;
-const SEARCH_BTN_W: i32 = 56;
-/// The Back and Install buttons.
-const BACK_W: i32 = 60;
-const BACK_H: i32 = 20;
-const INSTALL_W: i32 = 70;
-
 impl PackScreen {
     /// `PackSelectionScreen.init`: the lists filled, the search box focused.
     pub fn new(
@@ -541,20 +499,9 @@ impl PackScreen {
             lists: [List::new(false, height - 66), List::new(true, height - 66)],
             confirm: None,
             browser: None,
-            browsing_allowed: false,
+            browsing: None,
             with_options: Default::default(),
             backdrop: Backdrop::None,
-            browser_icons: Vec::new(),
-            browser_search: {
-                let mut field = TextField::new(0, 0, BROWSER_SEARCH_W, 18);
-                field.hint = Some(tr("sunrise.pack.searchHint").with_style(&Style {
-                    color: Some(d::GRAY),
-                    italic: Some(true),
-                    ..Style::default()
-                }));
-                field
-            },
-            browser_focus: false,
             icon_slots: Default::default(),
             changed: false,
         };
@@ -994,8 +941,8 @@ impl PackScreen {
     }
     /// Typed text, when the search box has the focus.
     pub fn type_text(&mut self, m: &Measure, s: &str) {
-        if self.browser.is_some() {
-            self.browser_search.insert_text(m, s);
+        if let Some(view) = &mut self.browser {
+            view.field.insert_text(m, s);
             return;
         }
         if self.confirm.is_none() && self.focus == Focus::Search && self.search.insert_text(m, s) {
@@ -1019,8 +966,8 @@ impl PackScreen {
     }
     /// Backspace in the search box.
     pub fn erase(&mut self, m: &Measure, count: isize) {
-        if self.browser.is_some() {
-            self.browser_search.delete_chars(m, -count);
+        if let Some(view) = &mut self.browser {
+            view.field.delete_chars(m, -count);
             return;
         }
         if self.confirm.is_none()
@@ -1030,28 +977,10 @@ impl PackScreen {
             self.filter(None);
         }
     }
-    /// Keeps a browser icon, remembering it so [`Self::release_browser_icons`]
-    /// can free it again. The installed packs' own icons are not touched.
+    /// Keeps a browse-screen icon, remembered so closing the screen frees it.
     pub fn keep_browser_icon(&mut self, key: String, icon: Arc<[u8]>) {
-        if self.icons.insert(key.clone(), icon).is_none() {
-            self.browser_icons.push(key);
-        }
-    }
-    /// Frees every icon the browser downloaded. Called when it closes: the
-    /// pack lists behind it never drew these.
-    pub fn release_browser_icons(&mut self) {
-        for key in self.browser_icons.drain(..) {
-            self.icons.remove(&key);
-        }
-        self.icons.shrink_to_fit();
-    }
-    /// Runs the browser's search on what is typed in its box. The screen
-    /// calls this for the Search button and for Enter.
-    pub fn browser_submit(&mut self) {
-        let query = self.browser_search.value.clone();
-        if let Some(browser) = &mut self.browser {
-            browser.query = query;
-            browser.search();
+        if let Some(view) = &mut self.browser {
+            view.keep_icon(&mut self.icons, key, icon);
         }
     }
     /// Whether the browser's own search box has the keyboard, so the game
@@ -1163,374 +1092,69 @@ impl PackScreen {
         self.draw_browser(&mut out, m, mouse, now_ms);
         out
     }
+    fn geom(&self) -> crate::pack_source_ui::Geom {
+        crate::pack_source_ui::Geom {
+            width: self.width,
+            height: self.height,
+        }
+    }
     /// The Add button and the screen it opens. `None` leaves the click to
     /// the vanilla screen beneath.
     fn browser_click(&mut self, m: &Measure, x: f64, y: f64) -> Option<Action> {
-        if !self.browsing_allowed {
-            return None;
-        }
-        let point = (x as i32, y as i32);
-        if self.browser.is_some() {
-            let (bx, by) = self.back_button();
-            if d::inside(point, bx, by, BACK_W, BACK_H) {
-                self.browser = None;
-                self.browser_focus = false;
-                // Back to the vanilla pack screen, which wants no backdrop.
-                self.backdrop = Backdrop::None;
-                self.release_browser_icons();
-                return Some(Action::None);
-            }
-            let (qx, qy) = self.browser_search_box();
-            if d::inside(point, qx, qy, BROWSER_SEARCH_W, 18) {
-                self.browser_search.x = qx;
-                self.browser_search.y = qy;
-                self.browser_search.click(m, x, false, false);
-                self.browser_focus = true;
-                return Some(Action::None);
-            }
-            let (sx2, sy2) = self.browser_search_button();
-            if d::inside(point, sx2, sy2, SEARCH_BTN_W, 18) {
-                self.browser_submit();
-                return Some(Action::None);
-            }
-            for i in 0..crate::pack_browser::FILTERS.len() as i32 {
-                let (fx, fy, fw, fh) = self.filter_box(i);
-                if d::inside(point, fx, fy, fw, fh) {
-                    let query = self.browser_search.value.clone();
-                    if let Some(browser) = &mut self.browser {
-                        if !browser.filters.insert(i as usize) {
-                            browser.filters.remove(&(i as usize));
-                        }
-                        // A filter is only meaningful once it is searched on.
-                        browser.query = query;
-                        browser.search();
+        use crate::pack_source_ui::Click;
+        let browsing = self.browsing?;
+        let g = self.geom();
+        if let Some(view) = &mut self.browser {
+            return Some(match view.click(m, g, x, y) {
+                Click::Pick(i) => Action::BrowsePick(i),
+                Click::Close => {
+                    if let Some(view) = self.browser.take() {
+                        view.close(&mut self.icons);
                     }
-                    return Some(Action::None);
+                    // Back to the vanilla pack screen, which wants no backdrop.
+                    self.backdrop = Backdrop::None;
+                    Action::None
                 }
-            }
-            let fits = self.browser_row_count();
-            let busy = self.browser.as_ref().is_some_and(|b| b.busy);
-            let hits = self.browser.as_ref().map_or(0, |b| b.hits.len() as i32);
-            for i in 0..hits.min(fits) {
-                let (ix, iy) = self.install_button(i);
-                if d::inside(point, ix, iy, INSTALL_W, BACK_H) {
-                    if busy {
-                        return Some(Action::None);
-                    }
-                    return Some(Action::BrowsePick(i as usize));
-                }
-            }
-            // The screen is modal: nothing beneath it takes the click.
-            return Some(Action::None);
+                Click::Handled => Action::None,
+            });
         }
         let (bx, by) = self.add_button(m);
-        if d::inside(point, bx, by, ADD_SIZE, ADD_SIZE) {
-            let mut browser = crate::pack_browser::Browser::new();
-            // Opens on the text already in the search box, so a player who
-            // searched their own packs first keeps the term; it is then the
-            // browser's box that carries it.
-            browser.query = self.search.value.clone();
-            browser.search();
-            self.browser_search.set_value(m, &self.search.value);
-            self.browser_focus = true;
-            self.browser = Some(browser);
+        if d::inside((x as i32, y as i32), bx, by, ADD_SIZE, ADD_SIZE) {
+            // Opens on the text already in the search box, which the browse screen's own box
+            // then carries.
+            self.browser = Some(browsing.open(m, &self.search.value));
             // Sunrise's own screen, so it may ask for the menu panorama.
             self.backdrop = Backdrop::Panorama;
             return Some(Action::None);
         }
         None
     }
-    /// The Back button, top left of the browser.
-    fn back_button(&self) -> (i32, i32) {
-        (8, 8)
-    }
-    /// The browser's search box and the button beside it.
-    fn browser_search_box(&self) -> (i32, i32) {
-        let total = BROWSER_SEARCH_W + 4 + SEARCH_BTN_W;
-        let left = BACK_W + 16;
-        let centred = (self.width - total) / 2;
-        (centred.max(left), 5)
-    }
-    fn browser_search_button(&self) -> (i32, i32) {
-        let (x, y) = self.browser_search_box();
-        (x + BROWSER_SEARCH_W + 4, y)
-    }
-    /// The Install button of row `i`.
-    fn install_button(&self, i: i32) -> (i32, i32) {
-        // Top right, beside the name. It used to sit bottom right, where the
-        // description ran under it.
-        let (cx, cy, cw, _) = self.card_box(i);
-        (cx + cw - INSTALL_W - CARD_PAD, cy + CARD_PAD)
-    }
-    /// The browser's content column: centred, and never wider than it reads
-    /// comfortably.
-    fn browser_area(&self) -> (i32, i32, i32, i32) {
-        let x = SIDEBAR_W + 6;
-        let top = TOPBAR_H + 6;
-        let w = (self.width - x - 6).max(120);
-        let h = (self.height - top - 6).max(ROW_H);
-        (x, top, w, h)
-    }
-    /// Two columns where there is room for them, otherwise one.
-    fn browser_columns(&self) -> i32 {
-        let (_, _, w, _) = self.browser_area();
-        if w >= 360 { 2 } else { 1 }
-    }
-    /// The card at `i`: its box in the grid.
-    fn card_box(&self, i: i32) -> (i32, i32, i32, i32) {
-        let (px, py, pw, _) = self.browser_area();
-        let cols = self.browser_columns();
-        let cw = (pw - 6 * (cols - 1)) / cols;
-        let (cx, cy) = (i % cols, i / cols);
-        (px + cx * (cw + 6), py + cy * (ROW_H + 6), cw, ROW_H)
-    }
-    /// The filter row `i` in the sidebar.
-    fn filter_box(&self, i: i32) -> (i32, i32, i32, i32) {
-        (6, TOPBAR_H + 18 + i * FILTER_H, SIDEBAR_W - 12, FILTER_H)
-    }
-    /// How many rows fit the column.
-    fn browser_row_count(&self) -> i32 {
-        let (_, _, _, ph) = self.browser_area();
-        (((ph + 6) / (ROW_H + 6)) * self.browser_columns()).max(0)
-    }
-    /// Sunrise's Add button, and the screen it opens. Nothing is drawn
-    /// unless the player turned `packBrowser` on, so the screen's vanilla
-    /// parity is untouched by default.
+    /// The Add button, and the screen it opens. Nothing is drawn without a
+    /// source, so the screen's vanilla parity is untouched.
     fn draw_browser(&self, out: &mut Vec<Draw>, m: &Measure, mouse: (i32, i32), now_ms: i64) {
-        if !self.browsing_allowed {
-            return;
-        }
-        let Some(browser) = &self.browser else {
-            let (bx, by) = self.add_button(m);
-            let hover = d::inside(mouse, bx, by, ADD_SIZE, ADD_SIZE);
-            d::button(
-                out,
-                m,
-                &tr("sunrise.pack.add"),
-                bx,
-                by,
-                ADD_SIZE,
-                ADD_SIZE,
-                true,
-                hover,
-                now_ms,
-            );
-            if hover {
-                d::tooltip(out, m, &tr("sunrise.pack.addInfo"), mouse);
-            }
+        let Some(browsing) = self.browsing else {
             return;
         };
-        // Modal and opaque: vanilla's own menu background tiled over the
-        // whole screen, then a wash, so none of the pack lists shows through.
-        d::sprite(out, "gui/menu_background", 0, 0, self.width, self.height);
-        d::fill(out, 0, 0, self.width, self.height, PANEL);
-        // The sidebar of filters, and the bar across the top.
-        d::fill(out, 0, 0, SIDEBAR_W, self.height, SIDEBAR_BG);
-        d::fill(out, 0, 0, self.width, TOPBAR_H, SIDEBAR_BG);
-        let (bx, by) = self.back_button();
-        let back_hover = d::inside(mouse, bx, by, BACK_W, BACK_H);
-        crate::widgets::declare_action(
-            crate::widgets::Action::Back,
-            [bx as f32, by as f32, BACK_W as f32, BACK_H as f32],
-            true,
-        );
+        if let Some(view) = &self.browser {
+            view.draw(out, m, self.geom(), mouse, now_ms, &self.icons);
+            return;
+        }
+        let (bx, by) = self.add_button(m);
+        let hover = d::inside(mouse, bx, by, ADD_SIZE, ADD_SIZE);
         d::button(
             out,
             m,
-            &tr("gui.back"),
+            &tr("sunrise.pack.add"),
             bx,
             by,
-            BACK_W,
-            BACK_H,
+            ADD_SIZE,
+            ADD_SIZE,
             true,
-            back_hover,
+            hover,
             now_ms,
         );
-        // The search row: its box and the button that runs it.
-        let (qx, qy) = self.browser_search_box();
-        let mut field = self.browser_search.clone();
-        field.x = qx;
-        field.y = qy;
-        field.draw(out, m, 0, None);
-        if field.contains(f64::from(mouse.0), f64::from(mouse.1)) {
-            crate::widgets::text_cursor(true, true);
-        }
-        let (sbx, sby) = self.browser_search_button();
-        d::button(
-            out,
-            m,
-            &tr("sunrise.pack.search"),
-            sbx,
-            sby,
-            SEARCH_BTN_W,
-            18,
-            !browser.busy,
-            d::inside(mouse, sbx, sby, SEARCH_BTN_W, 18),
-            now_ms,
-        );
-        // The sidebar's heading and its filters.
-        let heading = tr("sunrise.pack.filters").with_style(&Style {
-            bold: Some(true),
-            ..Style::default()
-        });
-        d::string_widget(out, m, &heading, 6, TOPBAR_H + 5, 0);
-        for (i, (key, _, _)) in crate::pack_browser::FILTERS.iter().enumerate() {
-            let i = i as i32;
-            let (fx, fy, fw, fh) = self.filter_box(i);
-            let on = browser.filters.contains(&(i as usize));
-            let hover = d::inside(mouse, fx, fy, fw, fh);
-            if hover {
-                d::fill(out, fx - 2, fy - 1, fx + fw + 2, fy + fh - 1, CARD_HOVER);
-            }
-            // A small box, filled when the filter is on.
-            d::fill(out, fx, fy, fx + 7, fy + 7, 0xFF_44_4C_63u32 as i32);
-            if on {
-                d::fill(out, fx + 1, fy + 1, fx + 6, fy + 6, 0xFF_6C_C6_4Bu32 as i32);
-            }
-            let label = tr(key).with_color(if on { d::WHITE as u32 } else { d::GRAY });
-            d::string_widget(out, m, &label, fx + 11, fy - 1, 0);
-        }
-        let (px, py, pw, ph) = self.browser_area();
-        let message = if browser.busy && browser.installing.is_none() {
-            Some(tr("sunrise.pack.addWorking"))
-        } else if let Some(status) = &browser.status {
-            Some(Text::translate(
-                "sunrise.pack.addFailed",
-                &[Text::literal(status.clone())],
-            ))
-        } else if browser.hits.is_empty() {
-            Some(tr("sunrise.pack.addNone"))
-        } else {
-            None
-        };
-        if let Some(message) = message {
-            let lines = d::label_lines(
-                m,
-                &message.with_color(d::GRAY),
-                pw - 8,
-                6,
-                &Style::default(),
-            );
-            d::label(out, &lines, px + 4, py + 20, pw - 8, true);
-            return;
-        }
-        let fits = self.browser_row_count();
-        for (i, hit) in browser.hits.iter().enumerate() {
-            let i = i as i32;
-            if i >= fits {
-                break;
-            }
-            let (cx, cy, cw, ch) = self.card_box(i);
-            if cy + ch > py + ph {
-                break;
-            }
-            let over = d::inside(mouse, cx, cy, cw, ch);
-            d::fill(
-                out,
-                cx,
-                cy,
-                cx + cw,
-                cy + ch,
-                if over { CARD_HOVER } else { CARD },
-            );
-            // The icon, once one has arrived: `bind_icons` swaps the texture
-            // for the atlas slot it patched the PNG into.
-            let texture = icon_texture(&hit.id);
-            if self.icons.contains_key(&texture) {
-                out.push(Draw::Blit {
-                    texture,
-                    x: cx + CARD_PAD,
-                    y: cy + CARD_PAD,
-                    w: ICON,
-                    h: ICON,
-                    u: 0.0,
-                    v: 0.0,
-                    src: [PACK_ICON_SIZE as i32, PACK_ICON_SIZE as i32],
-                    tex: [PACK_ICON_SIZE as i32, PACK_ICON_SIZE as i32],
-                    color: d::WHITE,
-                });
-            }
-            // The name and author sit in the column between the icon and
-            // the Install button; the description runs the card's full width
-            // under both, so no two of them can overlap.
-            let text_x = cx + CARD_PAD + ICON + CARD_PAD;
-            let text_w = (cx + cw - CARD_PAD - INSTALL_W - CARD_PAD - text_x).max(20);
-            let name = d::label_lines(
-                m,
-                &Text::literal(hit.title.clone()).with_style(&Style {
-                    bold: Some(true),
-                    ..Style::default()
-                }),
-                text_w,
-                1,
-                &Style::default(),
-            );
-            d::label(out, &name, text_x, cy + CARD_PAD + 1, text_w, false);
-            if !hit.author.is_empty() {
-                let author = d::label_lines(
-                    m,
-                    &Text::literal(hit.author.clone()).with_color(d::GRAY),
-                    text_w,
-                    1,
-                    &Style::default(),
-                );
-                d::label(out, &author, text_x, cy + CARD_PAD + 12, text_w, false);
-            }
-            let body_w = (cw - 2 * CARD_PAD).max(20);
-            let lines = d::label_lines(
-                m,
-                &Text::literal(hit.description.clone()).with_color(d::GRAY),
-                body_w,
-                2,
-                &Style::default(),
-            );
-            // Below the icon, which is the tallest thing in the top row.
-            d::label(
-                out,
-                &lines,
-                cx + CARD_PAD,
-                cy + CARD_PAD + ICON + 5,
-                body_w,
-                false,
-            );
-            let (ix, iy) = self.install_button(i);
-            let done = browser.installed.contains(&(i as usize));
-            let running = browser.installing == Some(i as usize);
-            let label = if done {
-                tr("sunrise.pack.installed")
-            } else if running {
-                tr("sunrise.pack.installing")
-            } else {
-                tr("sunrise.pack.install")
-            };
-            // Drawn rather than the vanilla button sprite, so it can be the
-            // green the design asks for.
-            let hovered = d::inside(mouse, ix, iy, INSTALL_W, BACK_H);
-            let face = if done {
-                INSTALLED_GREEN
-            } else if hovered && !browser.busy {
-                GREEN_HOVER
-            } else {
-                GREEN
-            };
-            d::fill(out, ix, iy, ix + INSTALL_W, iy + BACK_H, GREEN_EDGE);
-            d::fill(
-                out,
-                ix + 1,
-                iy + 1,
-                ix + INSTALL_W - 1,
-                iy + BACK_H - 1,
-                face,
-            );
-            let lw = m.width(&label);
-            d::string_widget(
-                out,
-                m,
-                &label,
-                ix + (INSTALL_W - lw) / 2,
-                iy + (BACK_H - 8) / 2,
-                0,
-            );
+        if hover {
+            d::tooltip(out, m, &browsing.add_label(), mouse);
         }
     }
     /// The options button on the card of row `i` of list `side`, when its pack has
@@ -2100,50 +1724,6 @@ mod click_sound_tests {
     use super::*;
 
     #[test]
-    fn a_cards_parts_do_not_overlap_each_other() {
-        let atlas = crate::hud::HudAtlas::build(
-            &sunrise_assets::resource_source::ResourceSource::directory(
-                (std::path::Path::new("/nonexistent/sunrise-test-assets")).to_owned(),
-            ),
-        )
-        .unwrap();
-        let m = Measure(&atlas.font);
-        // Both a wide window (two columns) and a narrow one (one column).
-        for (w, h) in [(480, 320), (260, 320)] {
-            let mut screen =
-                PackScreen::new(&m, tr("resourcePack.title"), w, h, false, Vec::new(), &[]);
-            screen.browsing_allowed = true;
-            let (cx, cy, cw, ch) = screen.card_box(0);
-            let (ix, iy) = screen.install_button(0);
-            // Install stays inside its card.
-            assert!(
-                ix >= cx && ix + INSTALL_W <= cx + cw,
-                "install escapes the card"
-            );
-            assert!(
-                iy >= cy && iy + BACK_H <= cy + ch,
-                "install escapes the card"
-            );
-            // The name column ends before Install begins, so the two cannot
-            // be drawn over one another.
-            let text_x = cx + CARD_PAD + ICON + CARD_PAD;
-            let text_w = (cx + cw - CARD_PAD - INSTALL_W - CARD_PAD - text_x).max(20);
-            assert!(
-                text_x + text_w <= ix || text_w == 20,
-                "the name column runs under Install"
-            );
-            // The description starts below the icon rather than across it.
-            let description_top = cy + CARD_PAD + ICON + 5;
-            assert!(
-                description_top >= cy + CARD_PAD + ICON,
-                "text over the icon"
-            );
-            // And it still fits in the card with both its lines.
-            assert!(description_top + 18 <= cy + ch, "the description overflows");
-        }
-    }
-
-    #[test]
     #[ignore = "daily"]
     fn the_browsers_search_button_submits_what_was_typed() {
         let atlas = crate::hud::HudAtlas::build(
@@ -2162,17 +1742,45 @@ mod click_sound_tests {
             Vec::new(),
             &[],
         );
-        screen.browsing_allowed = true;
+        struct Quiet;
+        impl sunrise_hooks::packs::Source for Quiet {
+            fn enabled(&self) -> bool {
+                true
+            }
+            fn filters(&self) -> &'static [&'static str] {
+                &[]
+            }
+            fn labels(&self) -> sunrise_hooks::packs::Labels {
+                sunrise_hooks::packs::Labels {
+                    add: "test.add",
+                    search_hint: "test.hint",
+                    working: "test.working",
+                }
+            }
+            fn open(&self) {}
+            fn search(&self, _: &str, _: &[usize]) {}
+            fn fetch_icons(&self) {}
+            fn download(&self, _: usize, _: &std::path::Path, _: &str) {}
+            fn poll(&self) -> Option<sunrise_hooks::packs::Message> {
+                None
+            }
+            fn close(&self, _: usize) {}
+        }
+        static QUIET: Quiet = Quiet;
+        screen.browsing = Some(crate::pack_source_ui::Browsing(&QUIET));
         // The Add button opens the browser.
         let (ax, ay) = screen.add_button(&m);
         screen.click(&m, f64::from(ax) + 2.0, f64::from(ay) + 2.0);
         assert!(screen.browser.is_some(), "the Add button opens the browser");
         // Typing reaches the browser's own box, not the pack filter.
         screen.type_text(&m, "blue");
-        assert_eq!(screen.browser_search.value, "blue");
+        assert_eq!(
+            screen.browser.as_ref().map(|b| b.field.value.as_str()),
+            Some("blue")
+        );
         assert_eq!(screen.search.value, "", "the pack filter is left alone");
         // The Search button sends it to the browser.
-        let (sx, sy) = screen.browser_search_button();
+        let (sx, sy) = screen.geom().search_button();
         screen.click(&m, f64::from(sx) + 2.0, f64::from(sy) + 2.0);
         assert_eq!(
             screen.browser.as_ref().map(|b| b.query.as_str()),
@@ -2181,8 +1789,11 @@ mod click_sound_tests {
         );
         // The box and the button must not overlap, or one eats the other's
         // clicks.
-        let (qx, _) = screen.browser_search_box();
-        assert!(sx >= qx + BROWSER_SEARCH_W, "{sx} overlaps the box at {qx}");
+        let (qx, _) = screen.geom().search_box();
+        assert!(
+            sx >= qx + crate::pack_source_ui::SEARCH_W,
+            "{sx} overlaps the box at {qx}"
+        );
     }
 
     #[test]

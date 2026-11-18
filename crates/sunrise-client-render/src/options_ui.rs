@@ -1671,8 +1671,8 @@ pub enum Event {
     },
     /// An accepted button press or the release of a slider.
     ButtonClick,
-    /// Sunrise's own: download the Modrinth hit at this index of the pack
-    /// screen's browser. The game owns the packs folder, not this screen.
+    /// Download the pack source's hit at this index of the pack screen's
+    /// browser. The game owns the packs folder, not this screen.
     DownloadPack(usize),
     /// Close the options screens (back to the pause menu or title).
     Close,
@@ -1805,8 +1805,8 @@ pub struct OptionsUi {
     pub mods_note: Option<String>,
     /// The Mods screen (`Page::Mods`), made when the page opens.
     pub mods_screen: Option<crate::mods_screen::ModsScreen>,
-    /// Sunrise's `packBrowser` extra: the pack screen's Add button.
-    pub pack_browser: bool,
+    /// The owner polls the pack source (`Game` does, the startup menu doesn't): without it no Add button.
+    pub pack_source_polled: bool,
     /// Packs: the packs found and the selection the screen opens with.
     pub pack_infos: Vec<crate::pack_screen::PackInfo>,
     pub pack_selection: Vec<String>,
@@ -1922,7 +1922,7 @@ impl Default for OptionsUi {
             mod_project: String::new(),
             mods_note: None,
             mods_screen: None,
-            pack_browser: false,
+            pack_source_polled: false,
             pack_infos: Vec::new(),
             pack_selection: Vec::new(),
             pack_screen: None,
@@ -3761,6 +3761,14 @@ impl OptionsUi {
         }
         screen
     }
+    /// What the pack screen's Add button browses: `source`, on a resource pack screen whose
+    /// browse results someone polls. Downloads always land in the resource packs folder.
+    fn pack_browsing(
+        &self,
+        source: Option<crate::pack_source_ui::Browsing>,
+    ) -> Option<crate::pack_source_ui::Browsing> {
+        source.filter(|_| self.pack_source_polled && self.data_pack_dir.is_none())
+    }
     /// The pack screen at this GUI size, made on first use.
     fn packs(&mut self, atlas: &HudAtlas, size: (f32, f32)) -> &mut crate::pack_screen::PackScreen {
         let m = crate::screen_draw::Measure(&atlas.font);
@@ -3787,7 +3795,7 @@ impl OptionsUi {
                     self.pack_infos.clone(),
                     &self.pack_selection,
                 );
-                screen.browsing_allowed = self.pack_browser;
+                screen.browsing = self.pack_browsing(crate::pack_source_ui::Browsing::registered());
                 screen.changed = std::mem::take(&mut self.pack_reselected);
                 self.pack_screen = Some(screen);
             }
@@ -4532,6 +4540,53 @@ mod tests {
     use super::*;
     use crate::extras_ui::ExtraRow;
     use crate::gfx::EffectiveOutput;
+
+    #[test]
+    fn add_shows_only_on_a_polled_resource_pack_screen_with_a_source() {
+        struct Any;
+        impl sunrise_hooks::packs::Source for Any {
+            fn enabled(&self) -> bool {
+                true
+            }
+            fn filters(&self) -> &'static [&'static str] {
+                &[]
+            }
+            fn labels(&self) -> sunrise_hooks::packs::Labels {
+                sunrise_hooks::packs::Labels {
+                    add: "a",
+                    search_hint: "s",
+                    working: "w",
+                }
+            }
+            fn open(&self) {}
+            fn search(&self, _: &str, _: &[usize]) {}
+            fn fetch_icons(&self) {}
+            fn download(&self, _: usize, _: &std::path::Path, _: &str) {}
+            fn poll(&self) -> Option<sunrise_hooks::packs::Message> {
+                None
+            }
+            fn close(&self, _: usize) {}
+        }
+        static ANY: Any = Any;
+        let source = Some(crate::pack_source_ui::Browsing(&ANY));
+        let mut ui = OptionsUi {
+            pack_source_polled: true,
+            ..OptionsUi::default()
+        };
+        assert!(ui.pack_browsing(None).is_none(), "no source to browse");
+        assert!(ui.pack_browsing(source).is_some());
+        ui.data_pack_dir = Some("datapacks".into());
+        assert!(
+            ui.pack_browsing(source).is_none(),
+            "downloads land in resourcepacks/"
+        );
+        ui.data_pack_dir = None;
+        ui.pack_source_polled = false;
+        assert!(
+            ui.pack_browsing(source).is_none(),
+            "the startup menu never polls the source"
+        );
+    }
 
     /// A renderer whose destination offers nothing and whose display reports nothing.
     const NONE: EffectiveOutput = EffectiveOutput::NONE;

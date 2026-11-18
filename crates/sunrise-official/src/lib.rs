@@ -9,7 +9,7 @@
 #![forbid(unsafe_code)]
 
 use sunrise_platform::hooks::{self, GetTheGame, Hooks};
-use sunrise_platform::{pages, settings};
+use sunrise_platform::{packs, pages, settings};
 
 /// Every Sunrise part in the game, in the order its hooks run.
 const PARTS: [&dyn Hooks; 5] = [
@@ -46,15 +46,19 @@ impl Hooks for LauncherPage {
 }
 
 /// Their settings, in the player's settings files.
-const STORES: [&dyn settings::Store; 1] = [&sunrise_discord::SETTING];
+const STORES: [&dyn settings::Store; 2] =
+    [&sunrise_discord::SETTING, &sunrise_pack_browser::SETTING];
 /// Their rows and pages in the options screens.
-const PAGES: [&dyn pages::Page; 1] = [&sunrise_discord::SECTION];
+const PAGES: [&dyn pages::Page; 2] = [&sunrise_discord::SECTION, &sunrise_pack_browser::SECTION];
+/// Where the resource pack screen's Add button browses.
+const SOURCES: [&dyn packs::Source; 1] = [&sunrise_pack_browser::SOURCE];
 
 /// Registers Sunrise's in-game parts with the game. The executable calls it before it runs the
 /// game, and so does the launcher's generated executable for native mods.
 pub fn register() {
     let late = PARTS.into_iter().map(hooks::register);
     let late = late.chain(STORES.into_iter().map(settings::register));
+    let late = late.chain(SOURCES.into_iter().map(packs::register));
     for result in late.chain(PAGES.into_iter().map(pages::register)) {
         if let Err(e) = result {
             // The executable registered after starting the game: a bug, not a player's problem.

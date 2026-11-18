@@ -1597,7 +1597,7 @@ EXTRAS_ABOUT = 'Optional additions, all off by default'
 AUTO_RECONNECT = 'Auto-reconnect'
 AUTO_RECONNECT_ABOUT = 'Rejoins a server after a lost connection or a restart'
 FIRST_EXTRA = 'Own name tag'
-LAST_MENU_EXTRA = 'Resource pack browser'
+LAST_MENU_EXTRA = 'Scroll wheel changes settings'
 GREYED_EXTRA = 'Sort key'
 ROW_WALK = 40
 

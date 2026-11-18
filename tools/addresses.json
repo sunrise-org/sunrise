@@ -48,7 +48,6 @@
   },
   "allowed": [
     "crates/cargo-sunrise-mod/src/registry.rs horizon-rust.github.io",
-    "crates/sunrise-client-render/src/pack_browser.rs api.modrinth.com",
     "crates/sunrise-client/src/mod_registry.rs horizon-rust.github.io",
     "crates/sunrise-client/src/mod_registry.rs playsunrise.net",
     "crates/sunrise-mod-registry/src/github.rs api.github.com",
