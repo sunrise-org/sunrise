@@ -1,0 +1,15 @@
+name: pool-admission-probe
+on:
+  push:
+    branches: [probe/pool-admission]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  probe:
+    if: github.head_ref == 'probe/pool-admission' || github.ref == 'refs/heads/probe/pool-admission'
+    runs-on: pool-admission-probe
+    timeout-minutes: 5
+    steps:
+      - run: echo "ADMITTED $GITHUB_EVENT_NAME at $GITHUB_REF (workflow $GITHUB_WORKFLOW_REF) on $(hostname)"
