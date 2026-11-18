@@ -762,29 +762,6 @@ pub fn extend(base: u64, mask: u64, dispatch: Extension) {
     });
 }
 
-type HeldLoader = fn(crate::wire::Id) -> Box<dyn std::any::Any>;
-thread_local! {
-    static HELD_LOADERS: std::cell::RefCell<std::collections::BTreeMap<std::any::TypeId, HeldLoader>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
-}
-
-#[doc(hidden)]
-pub fn register_held_loader(view: std::any::TypeId, loader: HeldLoader) {
-    HELD_LOADERS.with(|l| l.borrow_mut().insert(view, loader));
-}
-
-#[doc(hidden)]
-pub fn load_held(
-    id: crate::wire::Id,
-    view: std::any::TypeId,
-) -> Result<Box<dyn std::any::Any>, crate::wire::WireError> {
-    HELD_LOADERS.with(|l| {
-        l.borrow()
-            .get(&view)
-            .map(|loader| loader(id))
-            .ok_or(crate::wire::WireError::Invalid("unknown held view"))
-    })
-}
-
 fn dispatch(id: u64, input: &mut Reader<'_>, out: &mut Writer) -> Result<(), WireError> {
     #[cfg(target_arch = "wasm32")]
     if __sunrise_mod_dispatch(id, input, out)? {

@@ -309,7 +309,8 @@ fn member_export(name: &str) -> bool {
     !matches!(
         name,
         "__sunrise_mod_hooks" | "__sunrise_mod_dispatch" | "__dso_handle" | "__tls_base"
-    ) && !rustc_demangle::try_demangle(name)
+    ) && !name.starts_with("__sunrise_guest_")
+      && !rustc_demangle::try_demangle(name)
         .is_ok_and(|symbol| format!("{symbol:#}").starts_with("__rustc::"))
 }
 
@@ -446,7 +447,7 @@ pub fn link(role: &str, args: Vec<String>) -> Result<(), String> {
         ]
         .map(str::to_owned),
     );
-    if role == "std" {
+    if role == "std" || std::env::var_os("SUNRISE_GROUP_PACKAGE").is_some() {
         out.push("--export-all".to_owned());
     }
     if role != "std" {

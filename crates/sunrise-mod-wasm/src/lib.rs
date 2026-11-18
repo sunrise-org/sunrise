@@ -749,9 +749,6 @@ fn load_with_cache(
     let packages: Vec<WasmPackage> = packages
         .into_iter()
         .filter(|package| {
-            if package.module.is_empty() {
-                return true;
-            }
             let member = link::Member {
                 name: &package.manifest.id,
                 module: &package.module,

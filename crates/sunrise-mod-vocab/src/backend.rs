@@ -1,6 +1,4 @@
 //! Host backends: what the game answers the API with.
-#[allow(unused_imports)]
-use crate::host::prelude::*;
 use crate::*;
 
 /// Why a fake player's `perform_action` did nothing at all: it was refused before any of the
@@ -87,7 +85,7 @@ pub enum ActionOutcome {
 #[doc(hidden)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct BackendRef<'a> {
-    pub(crate) inner: Option<&'a dyn Backend>,
+    pub(crate) inner: &'a dyn Backend,
 }
 
 // no wire: borrowed host or registrar backend; access stays scoped to the owning call.
@@ -103,7 +101,7 @@ pub struct BackendRef<'a> {
 #[doc(hidden)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct BackendMutRef<'a> {
-    pub(crate) inner: Option<&'a mut dyn BackendMut>,
+    pub(crate) inner: &'a mut dyn BackendMut,
 }
 
 // no wire: borrowed host or registrar backend; access stays scoped to the owning call.
@@ -114,21 +112,16 @@ pub struct BackendMutRef<'a> {
 #[doc(hidden)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct ClientBackendMutRef<'a> {
-    pub(crate) inner: Option<&'a mut dyn ClientBackendMut>,
+    pub(crate) inner: &'a mut dyn ClientBackendMut,
 }
 
 impl<'a> ClientBackendMutRef<'a> {
     pub(crate) fn of(inner: &'a mut dyn ClientBackendMut) -> Self {
-        Self { inner: Some(inner) }
-    }
-
-    #[doc(hidden)]
-    pub fn guest() -> Self {
-        Self { inner: None }
+        Self { inner }
     }
 
     pub(crate) fn open(self) -> &'a mut dyn ClientBackendMut {
-        self.inner.expect("client backend opened on guest")
+        self.inner
     }
 }
 
@@ -136,18 +129,13 @@ impl<'a> BackendRef<'a> {
     /// Wraps a read backend; only the generated game impl and this module's
     /// test doubles build a wrapper, always around themselves.
     pub(crate) fn of(inner: &'a dyn Backend) -> Self {
-        Self { inner: Some(inner) }
-    }
-
-    #[doc(hidden)]
-    pub fn guest() -> Self {
-        Self { inner: None }
+        Self { inner }
     }
 
     /// The backend inside; visible only inside `mod_api`, which the
     /// generated handle code and the capability tables are part of.
     pub(crate) fn open(self) -> &'a dyn Backend {
-        self.inner.expect("backend opened on guest")
+        self.inner
     }
 }
 
@@ -155,17 +143,12 @@ impl<'a> BackendMutRef<'a> {
     /// Wraps a write backend; only the generated game impl and this module's
     /// test doubles build a wrapper, always around themselves.
     pub(crate) fn of(inner: &'a mut dyn BackendMut) -> Self {
-        Self { inner: Some(inner) }
-    }
-
-    #[doc(hidden)]
-    pub fn guest() -> Self {
-        Self { inner: None }
+        Self { inner }
     }
 
     /// The backend inside; visible only inside `mod_api`.
     pub(crate) fn open(self) -> &'a mut dyn BackendMut {
-        self.inner.expect("backend mut opened on guest")
+        self.inner
     }
 }
 

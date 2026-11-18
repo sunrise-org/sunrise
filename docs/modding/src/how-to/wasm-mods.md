@@ -176,10 +176,10 @@ unchanged. Each host call, hook, Part method and point is hashed on its own: the
 item's signature and the shapes of the types it carries, so adding a method refuses nothing. A mod is refused, by name, when an item it uses changed or is gone
 ("or a type it carries changed"). The refusal reads "built for an older Sunrise, rebuild with SDK
 `sdk-<build id>`", with the first eight mismatched items and the count of the rest; the log lists
-them all. A hook hands a mod `&mut dyn ServerHost`, whose vtable keeps every host method, so a built mod
-imports every host call whether it calls it or not: changing or removing any host call refuses every
-built wasm mod (a new method refuses none), while a changed hook, Part method or point refuses only
-the mods that implement it (a point's hash covers its own signature, not every type reachable from it). One exception: the shared resource codec keeps one Part marker (`part:BlockCapabilityProvider<dyn ItemStorage>::provide`), so a mod that implements no Part still imports it, and a game build that changes that one method refuses it (#2517). Rebuilding against this SDK moves a mod's numbered imports to these names with no source edit: a mod that uses the derive needs only a rebuild, while one that decodes an `EntityWrite` or `InsideEffects` by hand needs a source change to match the derive's bytes. Known gap: a behaviour change under an unchanged signature is not caught; the hook's
+them all. A built wasm mod imports only the host calls its code can reach: an unused host call being
+changed or added refuses nothing, while a changed or removed host call refuses only the mods whose
+code reaches that call (a new host call refuses none). A changed hook, Part method or point refuses
+only the mods that implement it. Known gap: a behaviour change under an unchanged signature is not caught; the hook's
 `hook_version` is how the game says one happened.
 
 Each guest exports:

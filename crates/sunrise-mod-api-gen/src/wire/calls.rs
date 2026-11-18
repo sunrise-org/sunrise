@@ -234,9 +234,9 @@ pub(super) fn guest(
         };
         writeln!(out, "impl {} for {proxy} {{", trait_path(owner)).unwrap();
         out.push_str(match owner {
-            "Host" => "fn backend(&self) -> Option<crate::BackendRef<'_>> { Some(crate::BackendRef::guest()) }\n#[cfg(not(target_arch = \"wasm32\"))]\nfn capability_providers(&self) -> &'static dyn crate::CapabilityProviders { &Guest }\n",
-            "ServerHost" => "fn backend_mut(&mut self) -> Option<crate::BackendMutRef<'_>> { Some(crate::BackendMutRef::guest()) }\n",
-            "ClientHost" => "fn client_backend_mut(&mut self) -> Option<crate::ClientBackendMutRef<'_>> { Some(crate::ClientBackendMutRef::guest()) }\n",
+            "Host" => "fn backend(&self) -> Option<crate::BackendRef<\x27_>> { Some(crate::BackendRef::of(self)) }\n#[cfg(not(target_arch = \"wasm32\"))]\nfn capability_providers(&self) -> &\x27static dyn crate::CapabilityProviders { &Guest }\n",
+            "ServerHost" => "fn backend_mut(&mut self) -> Option<crate::BackendMutRef<\x27_>> { Some(crate::BackendMutRef::of(self)) }\n",
+            "ClientHost" => "fn client_backend_mut(&mut self) -> Option<crate::ClientBackendMutRef<\x27_>> { Some(crate::ClientBackendMutRef::of(self)) }\n",
             _ => "",
         });
         for m in all
@@ -317,15 +317,15 @@ fn wasm_extension_traits(
     let is_excused = |m: &Method| excused.iter().any(|(o, n)| *o == m.owner && *n == m.name);
 
     for (trait_name, target_dyn, filter_owner) in [
-        ("WasmHostExt", "dyn crate::Host + '_", &["Host"][..]),
+        ("WasmHostExt", "crate::Host", &["Host"][..]),
         (
             "WasmServerHostExt",
-            "dyn crate::ServerHost + '_",
+            "crate::ServerHost",
             &["ServerHost", "Host"][..],
         ),
         (
             "WasmClientHostExt",
-            "dyn crate::ClientHost + '_",
+            "crate::ClientHost",
             &["ClientHost", "Host"][..],
         ),
     ] {
@@ -363,25 +363,47 @@ fn wasm_extension_traits(
             trait_methods.push_str(&format!("    {sig};\n"));
 
             let target_trait = trait_path(m.via.as_deref().unwrap_or(m.owner));
-            let receiver = match m.receiver {
-                Some(true) => "&mut *::std::boxed::Box::leak(::std::boxed::Box::new(Guest))",
-                _ => "&Guest",
-            };
             let args: Vec<String> = (0..m.params.len()).map(|i| format!("p{i}")).collect();
-            let call_args = if args.is_empty() {
-                receiver.to_string()
-            } else {
-                format!("{receiver}, {}", args.join(", "))
+            let call_stmt = match m.receiver {
+                Some(true) => {
+                    if args.is_empty() {
+                        format!("let mut guest = Guest; <Guest as {target_trait}>::{}(&mut guest)", m.name)
+                    } else {
+                        format!("let mut guest = Guest; <Guest as {target_trait}>::{}(&mut guest, {})", m.name, args.join(", "))
+                    }
+                }
+                Some(false) => {
+                    if args.is_empty() {
+                        format!("<Guest as {target_trait}>::{}(&Guest)", m.name)
+                    } else {
+                        format!("<Guest as {target_trait}>::{}(&Guest, {})", m.name, args.join(", "))
+                    }
+                }
+                None => {
+                    format!("<Guest as {target_trait}>::{}({})", m.name, args.join(", "))
+                }
+            };
+
+            let backend_check = match m.receiver {
+                Some(true) => "self.backend_mut()",
+                _ => "self.backend()",
+            };
+
+            let refusal = match &m.ret {
+                Ty::Unit => "()".to_string(),
+                Ty::Option(_) => "None".to_string(),
+                Ty::Prim("bool") => "false".to_string(),
+                Ty::Result(_, _) => "Err(crate::NoBackend::no_backend())".to_string(),
+                _ => format!("panic!(\"{{}} requires a game host\", stringify!({}))", m.name),
             };
 
             impl_methods.push_str(&format!(
-                "    #[inline]\n    {sig} {{\n        <Guest as {target_trait}>::{}({call_args})\n    }}\n",
-                m.name
+                "    #[inline]\n    {sig} {{\n        if {backend_check}.map_or(false, |b| b.is_guest()) {{\n            {call_stmt}\n        }} else {{\n            {refusal}\n        }}\n    }}\n"
             ));
         }
 
         out.push_str(&format!(
-            "    pub trait {trait_name} {{\n{trait_methods}    }}\n    impl {trait_name} for {target_dyn} {{\n{impl_methods}    }}\n"
+            "    pub trait {trait_name} {{\n{trait_methods}    }}\n    impl<H: {target_dyn} + ?Sized> {trait_name} for H {{\n{impl_methods}    }}\n"
         ));
     }
 
@@ -430,7 +452,7 @@ fn resource_codec(types: &Types<'_>, names: &super::Names) -> String {
         }
     }
     format!(
-        "struct GuestCodec; impl crate::wire::ResourceCodec for GuestCodec {{ fn store(&self,value:Box<dyn std::any::Any>)->Result<crate::wire::Id,crate::wire::WireError> {{ {store} Err(crate::wire::WireError::Invalid(\"unknown handler type\")) }} fn load(&self,id:crate::wire::Id,view:std::any::TypeId)->Result<Box<dyn std::any::Any>,crate::wire::WireError> {{ #[cfg(not(target_arch = \"wasm32\"))] {{ {load} }} #[cfg(target_arch = \"wasm32\")] {{ if view==std::any::TypeId::of::<std::sync::Arc<dyn std::any::Any + Send + Sync>>() {{ let value=if id==crate::wire::Unsupported::ID {{crate::wire::Unsupported::shared()}} else {{crate::wire::guest::handler::<dyn std::any::Any + Send + Sync>(id)?}}; return Ok(Box::new(value)); }} return crate::wire::guest::load_held(id, view); }} Err(crate::wire::WireError::Invalid(\"unknown held view\")) }} }} thread_local! {{ static CODEC:std::rc::Rc<dyn crate::wire::ResourceCodec> = std::rc::Rc::new(GuestCodec); }} pub fn resource_scope()->crate::wire::ResourceScope {{ CODEC.with(|codec| crate::wire::ResourceScope::new(codec.clone())) }}\n"
+        "struct GuestCodec; impl crate::wire::ResourceCodec for GuestCodec {{ fn store(&self,value:Box<dyn std::any::Any>)->Result<crate::wire::Id,crate::wire::WireError> {{ {store} Err(crate::wire::WireError::Invalid(\"unknown handler type\")) }} fn load(&self,id:crate::wire::Id,view:std::any::TypeId)->Result<Box<dyn std::any::Any>,crate::wire::WireError> {{ {load} Err(crate::wire::WireError::Invalid(\"unknown held view\")) }} }} thread_local! {{ static CODEC:std::rc::Rc<dyn crate::wire::ResourceCodec> = std::rc::Rc::new(GuestCodec); }} pub fn resource_scope()->crate::wire::ResourceScope {{ CODEC.with(|codec| crate::wire::ResourceScope::new(codec.clone())) }}\n"
     )
 }
 

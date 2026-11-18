@@ -57,7 +57,7 @@ pub(super) const REACHED: &[(&str, &str, &str)] = &[
     (
         "Backend",
         "host",
-        "h.backend().map(crate::BackendRef::open).ok_or_else(|| missing(\"game backend\"))",
+        "crate::backend_of(h).ok_or_else(|| missing(\"game backend\"))",
     ),
     (
         "BackendMut",
