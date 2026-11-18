@@ -478,8 +478,100 @@ pub fn decode_transfer_reply(data: &[u8]) -> sunrise_protocol::Result<Option<(i3
 /// payload advertises it. A request is the menu id, a tag the client picks and
 /// the recipe's id; the reply is the menu id, the tag, the result as
 /// `TRANSFER_CHANNEL` sends it (`result_byte`) and, for `Missing`, the count
-/// of the recipe's cells nothing fills then each cell as a byte.
+/// of the recipe's cells nothing fills then each cell as a byte. A reply that
+/// says more than that (a mod menu's `menu_transfer` cells) goes on with, for
+/// a result other than `Missing`, the missing cells as `Missing` gives them,
+/// then the count of the craftable cells and each as a byte
+/// (`encode_check_reply`); one with no such cells ends as before.
 pub const CHECK_CHANNEL: &str = "sunrise:recipe_check";
+
+/// The cells a check can name: one byte each on `CHECK_CHANNEL`, so a
+/// recipe's cell count when the game can't place the recipe (a mod's own
+/// type) and the most a reply carries.
+pub const MAX_CHECK_CELLS: usize = 256;
+
+/// The recipe cells a `menu_transfer` part named, as a check keeps them: the
+/// ones below `count` (the recipe's cells, at most `MAX_CHECK_CELLS`), each
+/// once, in ascending order.
+pub fn clamp_cells(cells: &[u32], count: usize) -> Vec<u32> {
+    let count = count.min(MAX_CHECK_CELLS);
+    let mut kept: Vec<u32> = (cells.iter().copied())
+        .filter(|&cell| (cell as usize) < count)
+        .collect();
+    kept.sort_unstable();
+    kept.dedup();
+    kept
+}
+
+/// A `CHECK_CHANNEL` reply: window `container`, the request's `tag` and the
+/// check. Cells past a byte are left out.
+pub fn encode_check_reply(
+    container: i32,
+    tag: i32,
+    check: &mod_api::RecipeTransferCheck,
+) -> Vec<u8> {
+    fn cells(w: &mut Writer, cells: &[u32]) {
+        let bytes: Vec<u8> = (cells.iter())
+            .filter_map(|&c| u8::try_from(c).ok())
+            .collect();
+        w.varint(bytes.len() as i32);
+        for c in bytes {
+            w.u8(c);
+        }
+    }
+    let missing = check.result == mod_api::RecipeTransferResult::Missing;
+    let mut w = Writer::new();
+    w.varint(container);
+    w.varint(tag);
+    w.u8(result_byte(check.result));
+    if missing {
+        cells(&mut w, &check.missing_cells);
+    }
+    // The rest only when it says something, so the game's own answers keep their old form.
+    if !check.craftable_cells.is_empty() || (!missing && !check.missing_cells.is_empty()) {
+        if !missing {
+            cells(&mut w, &check.missing_cells);
+        }
+        cells(&mut w, &check.craftable_cells);
+    }
+    w.data
+}
+
+/// A `CHECK_CHANNEL` reply as `encode_check_reply` writes it: the window,
+/// the tag and the check. None for a reply that doesn't read whole.
+pub fn decode_check_reply(data: &[u8]) -> Option<(i32, i32, mod_api::RecipeTransferCheck)> {
+    fn cells(reader: &mut sunrise_protocol::buf::Reader<'_>) -> Option<Vec<u32>> {
+        let n = reader.varint().ok()?;
+        (0..n.clamp(0, MAX_CHECK_CELLS as i32))
+            .map(|_| reader.u8().ok().map(u32::from))
+            .collect()
+    }
+    let mut reader = sunrise_protocol::buf::Reader::new(data);
+    let (container, tag) = (reader.varint().ok()?, reader.varint().ok()?);
+    let result = byte_result(reader.u8().ok()?)?;
+    let missing = result == mod_api::RecipeTransferResult::Missing;
+    let mut missing_cells = if missing {
+        cells(&mut reader)?
+    } else {
+        Vec::new()
+    };
+    let mut craftable_cells = Vec::new();
+    if reader.remaining() != 0 {
+        if !missing {
+            missing_cells = cells(&mut reader)?;
+        }
+        craftable_cells = cells(&mut reader)?;
+    }
+    (reader.remaining() == 0).then_some((
+        container,
+        tag,
+        mod_api::RecipeTransferCheck {
+            result,
+            missing_cells,
+            craftable_cells,
+        },
+    ))
+}
 
 /// Whether `channel` is one of the recipe viewer's (`TRANSFER_CHANNEL`,
 /// `CHECK_CHANNEL`).
@@ -901,6 +993,78 @@ mod content_tests {
             assert!(last.recipes.is_empty());
             assert_eq!(last.last.map(|t| t.len()), Some(5000));
         });
+    }
+}
+
+#[cfg(test)]
+mod check_reply_tests {
+    use super::*;
+    use mod_api::{RecipeTransferCheck, RecipeTransferResult as R};
+
+    fn check(result: R, missing: &[u32], craftable: &[u32]) -> RecipeTransferCheck {
+        RecipeTransferCheck {
+            result,
+            missing_cells: missing.to_vec(),
+            craftable_cells: craftable.to_vec(),
+        }
+    }
+
+    /// A part's cells are kept below the recipe's count, once each, in order;
+    /// a recipe the game can't place keeps what a reply can carry.
+    #[test]
+    fn cells_are_clamped_to_the_recipe() {
+        assert_eq!(clamp_cells(&[8, 3, 9, 3, 0, 42], 9), [0, 3, 8]);
+        assert_eq!(clamp_cells(&[1, 2], 0), Vec::<u32>::new());
+        assert_eq!(clamp_cells(&[], 9), Vec::<u32>::new());
+        assert_eq!(clamp_cells(&[300, 255, 256, u32::MAX], usize::MAX), [255]);
+    }
+
+    /// The game's own answers keep the reply's old bytes; the cells a part
+    /// adds come back whole, with any result.
+    #[test]
+    fn a_reply_carries_both_cell_lists() {
+        let old = |result: u8, cells: &[u8]| {
+            let mut w = Writer::new();
+            w.varint(7);
+            w.varint(3);
+            w.u8(result);
+            if result == 1 {
+                w.varint(cells.len() as i32);
+                for &c in cells {
+                    w.u8(c);
+                }
+            }
+            w.data
+        };
+        assert_eq!(
+            encode_check_reply(7, 3, &check(R::Moves, &[], &[])),
+            old(0, &[])
+        );
+        assert_eq!(
+            encode_check_reply(7, 3, &check(R::Missing, &[2, 3], &[])),
+            old(1, &[2, 3])
+        );
+        for sent in [
+            check(R::Moves, &[], &[]),
+            check(R::Missing, &[2, 3], &[]),
+            check(R::Missing, &[0, 4], &[1, 5]),
+            check(R::Moves, &[], &[2]),
+            check(R::NoRoom, &[6], &[]),
+            check(R::NotIntoMenu, &[1], &[0, 8]),
+        ] {
+            assert_eq!(
+                decode_check_reply(&encode_check_reply(7, 3, &sent)),
+                Some((7, 3, sent.clone())),
+                "{sent:?}"
+            );
+        }
+        // A cell past a byte is never sent; a reply with bytes left over is refused.
+        let wide = encode_check_reply(1, 1, &check(R::Missing, &[1, 256], &[]));
+        assert_eq!(decode_check_reply(&wide).unwrap().2.missing_cells, [1]);
+        let mut extra = old(1, &[2]);
+        extra.extend([1, 2, 9]);
+        assert_eq!(decode_check_reply(&extra), None);
+        assert_eq!(decode_check_reply(&old(9, &[])), None);
     }
 }
 

@@ -9524,7 +9524,13 @@ impl Game<'_> {
                             self.recipe_book_drag();
                         }
                         if matches!(self.screen, Screen::Inventory | Screen::Creative) {
-                            self.inventory_drag_move();
+                            // A press on the item panel's list is the panel's
+                            // until its release: the slots under it hear no drag.
+                            if self.mod_browser_holding() {
+                                self.mod_browser_drag_move();
+                            } else {
+                                self.inventory_drag_move();
+                            }
                         }
                         if self.title_input_active()
                             && let Some(title) = &mut self.title

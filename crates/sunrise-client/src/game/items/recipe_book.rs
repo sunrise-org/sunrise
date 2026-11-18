@@ -1370,7 +1370,7 @@ impl Game<'_> {
         recipe: &str,
         max: bool,
         dry_run: bool,
-    ) -> Option<RecipeTransferResult> {
+    ) -> Option<RecipeTransferCheck> {
         if !mod_api::__private::has_part_hook(mod_api::HookId::MenuTransfer) {
             return None;
         }
@@ -1378,17 +1378,46 @@ impl Game<'_> {
         if !mod_api::__private::menu_listens(mod_api::HookId::MenuTransfer, menu) {
             return None;
         }
-        let mut result = None;
+        let player = self.own_uuid();
+        self.menu_transfer_answer(player, menu, Some(pos), recipe, max, dry_run)
+    }
+    /// Asks `menu_transfer` of the part of mod menu type `menu` (the caller checked that one
+    /// listens): its answer, and with `dry_run` the cells it named, each kept to the recipe's
+    /// cells (`clamp_cells`: the placement's slots, or `MAX_CHECK_CELLS` for a recipe the game
+    /// can't place). Cells a part names outside a dry run are dropped. None when no part answers.
+    pub(in crate::game) fn menu_transfer_answer(
+        &mut self,
+        player: u128,
+        menu: &str,
+        pos: Option<[i32; 3]>,
+        recipe: &str,
+        max: bool,
+        dry_run: bool,
+    ) -> Option<RecipeTransferCheck> {
+        use sunrise_client::lan::recipes::{MAX_CHECK_CELLS, clamp_cells};
+        let (mut result, mut missing, mut craftable) = (None, Vec::new(), Vec::new());
         self.native_menu_transfer(mod_api::__private::MenuTransferCall {
-            player: self.own_uuid(),
+            player,
             menu,
-            pos: Some(pos),
+            pos,
             recipe,
             max,
             dry_run,
             result: &mut result,
+            missing_cells: &mut missing,
+            craftable_cells: &mut craftable,
         });
-        result
+        let result = result?;
+        let cells = if dry_run {
+            (self.recipes().placement(recipe)).map_or(MAX_CHECK_CELLS, |p| p.slots.len())
+        } else {
+            0
+        };
+        Some(RecipeTransferCheck {
+            result,
+            missing_cells: clamp_cells(&missing, cells),
+            craftable_cells: clamp_cells(&craftable, cells),
+        })
     }
     /// A viewer's transfer of a recipe by id (`transfer_recipe_id`): sent to the server, whose
     /// `menu_transfer` parts on a mod menu answer first, then its grid transfer. Only a server
@@ -1406,7 +1435,7 @@ impl Game<'_> {
             // The game is its own server: the mod menu's part answers first, as on a server,
             // then the grid transfer.
             if let Some(answer) = self.local_menu_transfer(recipe, max, false) {
-                self.show_transfer_result(answer);
+                self.show_transfer_result(answer.result);
                 return;
             }
             self.local_grid_transfer(recipe, max);
@@ -1494,7 +1523,7 @@ impl Game<'_> {
         }
         // The game is its own server: a mod menu's part answers first, as on a server.
         if let Some(answer) = self.local_menu_transfer(&id, false, false) {
-            self.show_transfer_result(answer);
+            self.show_transfer_result(answer.result);
             return;
         }
         self.local_grid_transfer(&id, false);
@@ -1580,14 +1609,11 @@ impl Game<'_> {
         &mut self,
         recipe: &str,
     ) -> Option<RecipeTransferCheck> {
-        // The game is its own server: a mod menu's part answers the dry run, as
-        // `sunrise:recipe_check` asks it on a server; with none the check is as before.
+        // The game is its own server: a mod menu's part answers the dry run, with the
+        // cells it names, as `sunrise:recipe_check` asks it on a server; with none the
+        // check is as before.
         if self.remote.is_none() && self.mod_menu_open() {
-            let result = self.local_menu_transfer(recipe, false, true)?;
-            return Some(RecipeTransferCheck {
-                result,
-                missing_cells: Vec::new(),
-            });
+            return self.local_menu_transfer(recipe, false, true);
         }
         let eligible_menu = self.mod_recipe_screen()
             || (self.screen == Screen::Inventory && !self.spectator() && self.mod_menu_open());
@@ -1639,29 +1665,12 @@ impl Game<'_> {
     /// The server's answer to `sunrise:recipe_check`. Kept only as the answer
     /// to the request out, for the view of the menu it was asked for.
     fn remote_recipe_check(&mut self, data: &[u8]) {
-        let mut reader = sunrise_protocol::buf::Reader::new(data);
-        let (Ok(container), Ok(tag), Ok(byte)) = (reader.varint(), reader.varint(), reader.u8())
+        let Some((container, tag, check)) = sunrise_client::lan::recipes::decode_check_reply(data)
         else {
             return;
         };
-        let Some(result) = sunrise_client::lan::recipes::byte_result(byte) else {
-            return;
-        };
-        let mut missing_cells = Vec::new();
-        if result == RecipeTransferResult::Missing {
-            let Ok(n) = reader.varint() else {
-                return;
-            };
-            for _ in 0..n.clamp(0, 256) {
-                let Ok(cell) = reader.u8() else {
-                    return;
-                };
-                missing_cells.push(u32::from(cell));
-            }
-        }
         let checks = &mut self.recipe_ui.checks;
-        if reader.remaining() != 0
-            || checks.asked.as_ref().map(|(id, _, _)| *id) != Some(tag)
+        if checks.asked.as_ref().map(|(id, _, _)| *id) != Some(tag)
             || checks.seen.as_ref().map(|s| s.0) != Some(container)
         {
             return;
@@ -1678,10 +1687,7 @@ impl Game<'_> {
             recipe,
             at: Instant::now(),
             refreshes,
-            check: RecipeTransferCheck {
-                result,
-                missing_cells,
-            },
+            check,
         });
     }
 

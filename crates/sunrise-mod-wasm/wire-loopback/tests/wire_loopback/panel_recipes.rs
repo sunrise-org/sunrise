@@ -123,3 +123,28 @@ fn a_wasm_mods_panel_recipes_reaches_the_client_with_its_arguments() {
         ]
     );
 }
+
+/// What the panel tells its owner crosses the wire whole, a drop's stack and point included.
+#[test]
+fn panel_events_and_a_drop_round_trip() {
+    use mod_api::PanelEvent;
+    keys();
+    let stone = stack("minecraft:stone", 3, "[minecraft:custom_name=\"F\"]");
+    for event in [
+        PanelEvent::Clicked {
+            index: 7,
+            right: false,
+        },
+        PanelEvent::Search("iron".into()),
+        PanelEvent::Tab(2),
+        PanelEvent::Dropped {
+            stack: stone.clone(),
+            x: 41.5,
+            y: -3.25,
+        },
+    ] {
+        let mut out = Writer::new();
+        out.put(&event);
+        assert_eq!(Reader::decode::<PanelEvent>(out.bytes()).unwrap(), event);
+    }
+}

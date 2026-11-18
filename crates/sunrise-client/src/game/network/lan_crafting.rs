@@ -829,7 +829,8 @@ impl Game<'_> {
 
     /// `menu_transfer` for the guest's open mod menu in window `container`: the part of its
     /// type moves `recipe`'s ingredients itself (or, with `dry_run`, only says what that would
-    /// do). None when no part answers, the window isn't the guest's mod menu, or no mod listens.
+    /// do and which cells are missing or craftable, `menu_transfer_answer`). None when no part
+    /// answers, the window isn't the guest's mod menu, or no mod listens.
     fn guest_menu_transfer(
         &mut self,
         gi: usize,
@@ -837,7 +838,7 @@ impl Game<'_> {
         recipe: &str,
         max: bool,
         dry_run: bool,
-    ) -> Option<mod_api::RecipeTransferResult> {
+    ) -> Option<mod_api::RecipeTransferCheck> {
         if !mod_api::__private::has_part_hook(mod_api::HookId::MenuTransfer) {
             return None;
         }
@@ -851,17 +852,7 @@ impl Game<'_> {
         }
         let (player, menu_id) = (g.uuid, menu.registry_id.to_string());
         let pos = menu.pos.map(|(x, y, z)| [x, y, z]);
-        let mut result = None;
-        self.native_menu_transfer(mod_api::__private::MenuTransferCall {
-            player,
-            menu: &menu_id,
-            pos,
-            recipe,
-            max,
-            dry_run,
-            result: &mut result,
-        });
-        result
+        self.menu_transfer_answer(player, &menu_id, pos, recipe, max, dry_run)
     }
 
     pub(super) fn guest_recipe_transfer(&mut self, conn: u32, data: &[u8]) {
@@ -884,7 +875,7 @@ impl Game<'_> {
         // A mod menu's part moves the ingredients itself; without one the grid transfer runs.
         let answered = self.guest_menu_transfer(gi, container, &id, all, false);
         let result = if let Some(answer) = answered {
-            recipes::transfer_outcome(answer)
+            recipes::transfer_outcome(answer.result)
         } else if blocked {
             Err(TransferError::Unavailable)
         } else {
@@ -913,7 +904,7 @@ impl Game<'_> {
     /// packet but the reply. Ten at once, then one a second
     /// (`GuestPlay::recipe_checks`); more go unanswered.
     pub(super) fn guest_recipe_check(&mut self, conn: u32, data: &[u8]) {
-        use sunrise_protocol::buf::{Reader, Writer};
+        use sunrise_protocol::buf::Reader;
         let Some(host) = self.lan.as_mut() else {
             return;
         };
@@ -939,39 +930,34 @@ impl Game<'_> {
             return;
         }
         play.recipe_checks += RECIPE_CHECK_COST;
+        // A mod menu's part answers with its own cells; the grid's check names the
+        // missing ones with `Missing` and never craftable ones.
         let answered = self.guest_menu_transfer(gi, container, &id, false, true);
-        let check = if let Some(answer) = answered {
-            Some(TransferCheck {
-                result: recipes::transfer_outcome(answer),
-                missing: Vec::new(),
-            })
-        } else if container == 0 && unavailable {
-            None
-        } else {
-            self.lan_check_recipe(gi, container, &id)
-        }
-        .unwrap_or(TransferCheck {
-            result: Err(TransferError::Unavailable),
-            missing: Vec::new(),
-        });
-        let mut reply = Writer::new();
-        reply.varint(container);
-        reply.varint(tag);
-        reply.u8(recipes::result_byte(recipes::transfer_result(check.result)));
-        if check.result == Err(TransferError::Missing) {
-            let cells: Vec<u8> = (check.missing.iter())
-                .filter_map(|&c| u8::try_from(c).ok())
-                .collect();
-            reply.varint(cells.len() as i32);
-            for c in cells {
-                reply.u8(c);
+        let check = answered.unwrap_or_else(|| {
+            let check = if container == 0 && unavailable {
+                None
+            } else {
+                self.lan_check_recipe(gi, container, &id)
             }
-        }
+            .unwrap_or(TransferCheck {
+                result: Err(TransferError::Unavailable),
+                missing: Vec::new(),
+            });
+            let missing = check.result == Err(TransferError::Missing);
+            mod_api::RecipeTransferCheck {
+                result: recipes::transfer_result(check.result),
+                missing_cells: (check.missing.iter())
+                    .filter(|_| missing)
+                    .filter_map(|&c| u32::try_from(c).ok())
+                    .collect(),
+                craftable_cells: Vec::new(),
+            }
+        });
         if let Some(host) = self.lan.as_ref() {
             host.hub.guests[gi].send(&C::CustomPayload(
                 sunrise_protocol::packets::configuration::CustomPayload {
                     channel: recipes::CHECK_CHANNEL.into(),
-                    data: reply.data,
+                    data: recipes::encode_check_reply(container, tag, &check),
                 },
             ));
         }

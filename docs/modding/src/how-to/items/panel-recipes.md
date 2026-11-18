@@ -64,6 +64,48 @@ The page's events come back through `panel_event`, as the items' do:
   None)`.
 - `PanelEvent::Tab(index)`: the player picked a tab.
 
+## Dragging an item onto the screen
+
+The player can drag an item off the panel's item list and drop it on the open screen, as JEI's
+ghost ingredients do, to set a filter or configuration slot to an item they don't hold. A press on
+an item becomes a drag once the pointer moves 4 GUI pixels with the left button held; the item
+follows the pointer until the button comes up. A plain click stays a click: a left click's
+`PanelEvent::Clicked` comes when the button comes up without having dragged (a right click, or a
+left one while the player carries a stack, still comes as the button goes down).
+
+- Let go outside the panel: the owner hears `PanelEvent::Dropped { stack, x, y }`, the item as the
+  mod sent it and the point in GUI pixels from the window's top left (`ScreenView::mouse`'s
+  frame). No slot of the screen hears that release: nothing is picked up, placed or thrown.
+- Let go back on the panel, press Escape, or close the screen: the drag is cancelled and nothing is
+  sent. Escape during a drag leaves the screen open.
+
+The game moves nothing for a drop. The viewer finds what lies under `x, y` (a slot of a menu it
+knows, or a target another mod published), forwards the drop to the mod that owns it, and that mod
+checks the change on its own server; a client never decides a slot's contents.
+
+```rust,ignore
+fn panel_event(&self, host: &mut dyn mod_api::ClientHost, event: &mut mod_api::PanelEventEvent<'_>) {
+    if event.mod_id != "my_viewer" {
+        return;
+    }
+    if let mod_api::PanelEvent::Dropped { stack, x, y } = event.event {
+        // Ask the target under (x, y) to take `stack` as a ghost: the target's mod sends it to
+        // its server, which sets the filter slot if the player may.
+        let _ = (host, stack, x, y);
+    }
+}
+```
+
+## Marking a recipe's cells
+
+A viewer's "+" asks `transfer_recipe_check(recipe)` first. Its `RecipeTransferCheck` names the
+recipe's cells, in the order of the recipe's slots (width by height for a shaped recipe, else its
+ingredients in order): `missing_cells`, which nothing fills (drawn red, as JEI does), and
+`craftable_cells`, which the open menu lacks but could craft (drawn blue: a storage network's
+autocrafting). The game's own grid transfer names missing cells with `Missing` and never craftable
+ones; a mod menu's `menu_transfer` part names both, with any answer (see
+[Menu slots](../../concepts/capabilities/menu-slots.md#recipe-transfer-into-a-mod-menu)).
+
 Looking recipes up stays the viewer's job: it reads them (`recipes_of_type`) and builds the pages.
 A machine mod with its own recipe types supplies its pages through the viewer's published
 integration; the engine has no hook between the two.

@@ -2384,6 +2384,10 @@ impl Game<'_> {
     }
     /// Hovered-slot tooltip on the plain inventory, crafting and container screens.
     pub(super) fn draw_slot_tooltip(&mut self, batch: &mut HudBatch) {
+        // An item dragged off the item panel covers the slot under it.
+        if self.mod_browser_dragging() {
+            return;
+        }
         let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) else {
             return;
         };

@@ -95,7 +95,8 @@ pub trait RecipesClientHost {
     /// Side: client.
     /// Shows the panel beside container screens with these items (at most
     /// 8192), as the game's own slots in pages, with a search box; the
-    /// player's clicks, searches and keys over items come back as
+    /// player's clicks, searches and keys over items, and items dragged off
+    /// the panel onto the screen (`PanelEvent::Dropped`), come back as
     /// `panel_event`. The panel is the last mod's to show one; empty
     /// items and no recipe page take yours away.
     #[access(WorldOnly)]
@@ -155,12 +156,14 @@ pub trait RecipesClientHost {
     /// container a mod lends the grid's recipes (a crafting station's chests,
     /// which the client can't see) counted. Any recipe the server knows,
     /// whether or not the player's recipe book holds it. For a viewer's "+",
-    /// to mark the inputs it lacks. The first call for a recipe asks and
-    /// returns None; the answer comes a moment later and is kept for that
-    /// recipe while the menu, the inventory and the grid stay as they were;
-    /// while it is still wanted it is asked again every two seconds, at most
-    /// fifteen times for one state of the menu. None outside a screen that
-    /// takes `transfer_recipe_id` and on a server that doesn't answer it.
+    /// to mark the inputs it lacks (`missing_cells`) and, for a mod menu whose
+    /// part names them, the ones it could craft (`craftable_cells`). The first
+    /// call for a recipe asks and returns None; the answer comes a moment later
+    /// and is kept for that recipe while the menu, the inventory and the grid
+    /// stay as they were; while it is still wanted it is asked again every two
+    /// seconds, at most fifteen times for one state of the menu. None outside
+    /// a screen that takes `transfer_recipe_id` and on a server that doesn't
+    /// answer it.
     #[access(WorldOnly)]
     fn transfer_recipe_check(&mut self, recipe: &str) -> Option<RecipeTransferCheck>;
     /// Side: client.

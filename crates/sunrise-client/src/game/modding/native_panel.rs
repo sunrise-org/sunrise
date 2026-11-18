@@ -6,8 +6,9 @@
 //! the player clicked, typed, and which keys went down over an item
 //! (`native_panel_event`). The mouse wheel over the panel pages it, items
 //! or recipes, one page per notch and stopping at both ends, and the screen
-//! underneath doesn't hear that notch. With no mod showing a panel, each
-//! hook here returns after one check.
+//! underneath doesn't hear that notch. An item dragged off the list and let
+//! go over the screen comes to the mod as `Dropped` (`Held`). With no mod
+//! showing a panel, each hook here returns after one check.
 use super::{
     Game, Screen, native_hooks::PanelEvent as BrowserEvent, native_panel_recipes::RecipePage,
 };
@@ -34,11 +35,70 @@ const CLASSIC_BUTTON: f32 = 20.0;
 /// Items a panel may hold.
 const ITEMS: usize = 8192;
 
+/// How far, in GUI pixels, the pointer moves with the left button held on
+/// one of the panel's items before the press becomes a drag. Vanilla's
+/// screens have no drag threshold (`AbstractContainerScreen` drags from the
+/// first move); a few pixels keep a click with a shaky hand a click.
+pub(super) const DRAG_THRESHOLD: f32 = 4.0;
+
 /// The browser's overlay selected while painting its contents.
 pub(super) enum BrowserTooltip {
     Text(String),
     Stack(ItemStack),
     Fluid(mod_api::FluidStack),
+    /// An item dragged off the panel (`Held`), drawn under the pointer.
+    Dragged(ItemStack),
+}
+
+/// A left press on one of the panel's items, from the press to its release:
+/// a click until the pointer moves `DRAG_THRESHOLD` away, then a drag of the
+/// item, drawn under the pointer, that its release drops on the screen
+/// (`PanelEvent::Dropped` to the panel's owner) or, back on the panel,
+/// cancels. Escape and closing the screen cancel it too.
+#[derive(Clone, Debug)]
+pub(super) struct Held {
+    /// Whose panel the item is on.
+    pub(super) owner: Owner,
+    /// The item's index in the mod's list, as the mod sent it, and as a stack.
+    pub(super) index: usize,
+    pub(super) sent: BrowserStack,
+    pub(super) stack: ItemStack,
+    /// Where the press went down, in GUI pixels.
+    pub(super) from: (f32, f32),
+    /// Whether it has become a drag.
+    pub(super) dragging: bool,
+}
+
+/// What the release of a `Held` press does.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Release {
+    /// It never became a drag: the item's left click.
+    Click(usize),
+    /// A drag let go off the panel, at this point.
+    Drop(BrowserStack, (f32, f32)),
+    /// A drag let go back on the panel: nothing.
+    Cancel,
+}
+
+impl Held {
+    /// The pointer is at `cursor` with the button still held: true once the
+    /// press is a drag, which it stays until its release.
+    pub(super) fn moved(&mut self, cursor: (f32, f32)) -> bool {
+        let (dx, dy) = (cursor.0 - self.from.0, cursor.1 - self.from.1);
+        self.dragging |= dx * dx + dy * dy >= DRAG_THRESHOLD * DRAG_THRESHOLD;
+        self.dragging
+    }
+    /// The button came up at `cursor`, `on_panel` when that is over the
+    /// panel's area. The release point counts as a last move.
+    pub(super) fn release(mut self, cursor: (f32, f32), on_panel: bool) -> Release {
+        if !self.moved(cursor) {
+            Release::Click(self.index)
+        } else if on_panel {
+            Release::Cancel
+        } else {
+            Release::Drop(self.sent, cursor)
+        }
+    }
 }
 
 /// Whose panel it is: a native mod's id.
@@ -87,9 +147,17 @@ pub(super) struct Panel {
     pub(super) transfer_warning: Option<(&'static str, &'static str)>,
     /// The mods that asked for another look than the recipe book's.
     styles: std::collections::BTreeMap<String, PanelStyle>,
+    /// A left press on an item, until its release: a click or a drag.
+    pub(super) held: Option<Held>,
 }
 
 impl Panel {
+    /// The item being dragged off `owner`'s panel, if a drag is on.
+    pub(super) fn dragged(&self, owner: &Owner) -> Option<&ItemStack> {
+        (self.held.as_ref())
+            .filter(|held| held.dragging && held.owner == *owner)
+            .map(|held| &held.stack)
+    }
     /// `panel_style`.
     pub(super) fn set_style(&mut self, mod_id: &str, style: PanelStyle) {
         match style {
@@ -735,7 +803,12 @@ impl Game<'_> {
                 return Some(BrowserTooltip::Text(label));
             }
         }
-        if self.carried.is_some() {
+        if let Some(stack) =
+            (self.panel.of.as_ref()).and_then(|(owner, _)| self.panel.dragged(owner))
+        {
+            // The dragged item goes over everything, in the tooltip's place.
+            Some(BrowserTooltip::Dragged(stack.clone()))
+        } else if self.carried.is_some() {
             None
         } else if let Some(stack) = self.browser_pointed_stack(&layout) {
             Some(BrowserTooltip::Stack(stack.1))
@@ -760,6 +833,10 @@ impl Game<'_> {
             BrowserTooltip::Fluid(fluid) => {
                 self.draw_fluid_tooltip(batch, &fluid, self.cursor.0, self.cursor.1);
             }
+            BrowserTooltip::Dragged(stack) => {
+                // Under the pointer, as the carried stack is drawn.
+                self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
+            }
         }
     }
 
@@ -767,6 +844,8 @@ impl Game<'_> {
     /// (its search box, page arrows, items or empty space; a click there
     /// never throws the carried stack).
     pub(super) fn mod_browser_press(&mut self, right: bool) -> bool {
+        // A press whose release never came (the pointer left the window) ends here.
+        self.panel.held = None;
         let Some(owner) = self.browser_sync() else {
             return false;
         };
@@ -834,7 +913,24 @@ impl Game<'_> {
                 .play("minecraft:ui.button.click", None, 0.25, 1.0);
             return true;
         }
-        if let Some((index, _)) = self.browser_hovered(&layout) {
+        if let Some((index, stack)) = self.browser_hovered(&layout) {
+            // A left press with nothing carried waits for its release: a
+            // click, or once the pointer moves away a drag of the item.
+            let sent = (self.panel_shown()).and_then(|shown| shown.items.get(index).cloned());
+            if !right
+                && self.carried.is_none()
+                && let Some(sent) = sent
+            {
+                self.panel.held = Some(Held {
+                    owner,
+                    index,
+                    sent,
+                    stack,
+                    from: cursor,
+                    dragging: false,
+                });
+                return true;
+            }
             let event = BrowserEvent::Clicked {
                 index: index as u32,
                 right,
@@ -843,6 +939,69 @@ impl Game<'_> {
             return true;
         }
         inside(cursor, layout.area)
+    }
+
+    /// The pointer moved on a container screen: a press held on a panel item
+    /// becomes a drag once it is `DRAG_THRESHOLD` away.
+    pub(super) fn mod_browser_drag_move(&mut self) {
+        let cursor = self.cursor;
+        if let Some(held) = self.panel.held.as_mut() {
+            held.moved(cursor);
+        }
+    }
+
+    /// A left release on a container screen: true when it ends a press on a
+    /// panel item (`Held`), which then clicks the item, drops it on the
+    /// screen (`PanelEvent::Dropped` to the panel's owner) or cancels the
+    /// drag. The screen underneath never hears that release: no slot click,
+    /// no throw, no quick craft.
+    pub(super) fn mod_browser_release(&mut self, right: bool) -> bool {
+        if right {
+            return false;
+        }
+        let Some(held) = self.panel.held.take() else {
+            return false;
+        };
+        // The panel went away or changed hands under the press: nothing more.
+        if self.browser_sync().as_ref() != Some(&held.owner) {
+            return true;
+        }
+        let Some(layout) = (self.browser_batch()).and_then(|batch| self.browser_layout(&batch))
+        else {
+            return true;
+        };
+        let owner = held.owner.clone();
+        let event = match held.release(self.cursor, inside(self.cursor, layout.area)) {
+            Release::Click(index) => BrowserEvent::Clicked {
+                index: index as u32,
+                right: false,
+            },
+            Release::Drop(stack, (x, y)) => BrowserEvent::Dropped { stack, x, y },
+            Release::Cancel => return true,
+        };
+        self.panel_event(&owner, event);
+        true
+    }
+
+    /// Escape on a container screen: true when it cancelled a drag off the
+    /// panel, and the screen stays open.
+    pub(super) fn mod_browser_drag_escape(&mut self) -> bool {
+        if !self.mod_browser_dragging() {
+            return false;
+        }
+        self.panel.held = None;
+        true
+    }
+
+    /// Whether a left press on a panel item waits for its release.
+    pub(super) fn mod_browser_holding(&self) -> bool {
+        self.panel.held.is_some()
+    }
+
+    /// Whether an item is being dragged off the panel: the screen's slots
+    /// show no tooltip under it.
+    pub(super) fn mod_browser_dragging(&self) -> bool {
+        self.panel.held.as_ref().is_some_and(|held| held.dragging)
     }
 
     /// A wheel notch `d` on a container screen (positive is up): true when
@@ -933,6 +1092,8 @@ impl Game<'_> {
     /// The container screen closed: the search box lets go of the keys.
     pub(super) fn mod_browser_closed(&mut self) {
         self.panel.transfer_warning = None;
+        // Closing the screen cancels a drag off the panel.
+        self.panel.held = None;
         if let Some(search) = self.panel.search.as_mut() {
             search.focused = false;
         }
@@ -1024,7 +1185,7 @@ pub(super) fn browser_stack(
 
 #[cfg(test)]
 mod tests {
-    use super::{BrowserStack, Owner, Panel, RecipePage};
+    use super::{BrowserStack, DRAG_THRESHOLD, Held, Owner, Panel, RecipePage, Release};
     use crate::game::native_hooks::{NativeRecipeLayout, NativeRecipeResult, NativeRecipeView};
     use mod_api::FluidStack;
 
@@ -1072,6 +1233,82 @@ mod tests {
             note: String::new(),
             action: Some(true),
         }
+    }
+
+    fn held(owner: &str, index: usize) -> Held {
+        Held {
+            owner: Owner::Native(owner.into()),
+            index,
+            sent: stack("minecraft:stone"),
+            stack: sunrise_client::items::ItemStack::new("minecraft:stone", 1),
+            from: (100.0, 50.0),
+            dragging: false,
+        }
+    }
+
+    /// A press stays a click until the pointer is `DRAG_THRESHOLD` away, in
+    /// any direction; then it is a drag, even if the pointer comes back.
+    #[test]
+    fn a_press_drags_only_past_the_threshold() {
+        keys();
+        let mut press = held("jei", 3);
+        let short = DRAG_THRESHOLD - 0.5;
+        for to in [(100.0, 50.0), (100.0 + short, 50.0), (100.0, 50.0 - short)] {
+            assert!(!press.moved(to), "{to:?} is still a click");
+        }
+        // 3 right and 3 down is 4.24 away.
+        assert!(!held("jei", 3).moved((102.0, 52.0)));
+        assert!(held("jei", 3).moved((103.0, 53.0)));
+        assert!(press.moved((100.0 - DRAG_THRESHOLD, 50.0)));
+        assert!(press.moved((100.0, 50.0)), "a drag stays a drag");
+    }
+
+    /// The release of a press: a click where it never moved far, a drop at
+    /// the release point off the panel, nothing back on it.
+    #[test]
+    fn a_release_clicks_drops_or_cancels() {
+        keys();
+        // A click, on the panel or (a shaky hand at its edge) just off it.
+        assert_eq!(
+            held("jei", 3).release((101.0, 51.0), true),
+            Release::Click(3)
+        );
+        assert_eq!(
+            held("jei", 3).release((102.0, 50.0), false),
+            Release::Click(3)
+        );
+        // Let go off the panel: the item, where it landed.
+        let mut dragged = held("jei", 3);
+        assert!(dragged.moved((60.0, 50.0)));
+        assert_eq!(
+            dragged.clone().release((40.5, 70.25), false),
+            Release::Drop(stack("minecraft:stone"), (40.5, 70.25))
+        );
+        // Back on the panel: nothing.
+        assert_eq!(dragged.release((100.0, 50.0), true), Release::Cancel);
+        // A release far from the press with no move between is a drag too.
+        assert_eq!(
+            held("jei", 0).release((20.0, 20.0), false),
+            Release::Drop(stack("minecraft:stone"), (20.0, 20.0))
+        );
+    }
+
+    /// Only a drag on the shown panel's own owner draws its item; a press
+    /// that hasn't moved draws nothing.
+    #[test]
+    fn the_dragged_item_is_the_owners() {
+        keys();
+        let mut panel = Panel::default();
+        let jei = Owner::Native("jei".into());
+        assert!(panel.dragged(&jei).is_none());
+        panel.held = Some(held("jei", 1));
+        assert!(panel.dragged(&jei).is_none(), "a press is not a drag yet");
+        panel.held.as_mut().unwrap().moved((0.0, 0.0));
+        assert_eq!(
+            panel.dragged(&jei),
+            Some(&sunrise_client::items::ItemStack::new("minecraft:stone", 1))
+        );
+        assert!(panel.dragged(&Owner::Native("recipes".into())).is_none());
     }
 
     #[test]
