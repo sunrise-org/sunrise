@@ -804,7 +804,7 @@ impl Cx {
             if let Some(level) = &checked.access {
                 let operation = &checked.name;
                 let refusal = match &checked.ret {
-                    Ty::Result(_, error) if matches!(&**error, Ty::Named(d) if matches!(types.defs[*d].rust.rsplit("::").next().map(str::trim), Some("LevelReadError" | "LevelWriteError"))) =>
+                    Ty::Result(_, error) if matches!(&**error, Ty::Named(d) if types.defs[*d].rust.rsplit("::").next().map(str::trim).is_some_and(|name| crate::host::PHASE_REFUSALS.contains(&name))) =>
                     {
                         let result = rust_ty(types, &checked.ret, true);
                         let error = rust_ty(types, error, true);

@@ -161,16 +161,40 @@ host.set_block_extra_models(pos, &parts)?;
 - A list replaces the position's last one; an empty list clears it. The section is meshed again
   only when the list changes, so set it when the data changes, not each frame.
 - At most `BLOCK_EXTRA_MODELS_MAX` (64) models a position. `BlockExtraModelsError` names each
-  refusal: `NotLoaded` (no client column there, or outside the level's height), `TooMany`, and
-  `Model` for a stale or unknown handle. A refused call changes nothing.
+  refusal: `NotLoaded` (no client column there, or outside the level's height), `TooMany`,
+  `Model` for a stale or unknown handle, and `Unavailable` outside the World phase (see below).
+  A refused call changes nothing.
+- A section's extra models share its quad and byte limits with its blocks. The blocks' own
+  geometry is always drawn; past the limits, the section's remaining extra models (in block
+  order, then list order) are not.
 - The list is the client's own, never saved or sent. It is cleared when the block state at
   `pos` changes, when its column unloads (a column the server sends again comes without it) and
   when the player's level changes. Set it again from the block entity's data or the mod's own
   client map, on `client_block_changed`, `client_chunk_load` or a payload. It needs no block
   entity.
 - The mesher reads the lists on its workers and never calls mod code. A handle a resource reload
-  made stale draws nothing: set the lists again from the new handles in
-  `client_resources_reloaded`.
+  made stale draws nothing until you set the lists again from the new handles.
+
+The setter is World-only. `client_resources_reloaded` runs in Reloading, where it answers
+`Unavailable`. Resolve the new handles there, then set the lists again from the next
+World-phase callback, such as the next client tick:
+
+```rust,ignore
+fn client_resources_reloaded(&self, host: &mut dyn ClientHost, _: &mut ClientResourcesReloadedEvent) {
+    let mut parts = self.parts.lock().unwrap();
+    parts.core = host.render_assets().model(&self.core_id).ok();
+    parts.reapply = true;
+}
+
+fn client_tick_pre(&self, host: &mut dyn ClientHost, _: &mut ClientTickPreEvent) {
+    let mut parts = self.parts.lock().unwrap();
+    if std::mem::take(&mut parts.reapply) {
+        for (&pos, cable) in &self.cables.lock().unwrap() {
+            let _ = host.set_block_extra_models(pos, &parts.models_for(cable));
+        }
+    }
+}
+```
 
 ## Persistent groups
 

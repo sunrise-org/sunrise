@@ -138,13 +138,20 @@ pub trait ClientRenderClientHost {
     /// meshed again when the list changes. The list is the client's own, never saved or sent:
     /// it is cleared when the block state at `pos` changes, when its column unloads (a column
     /// the server sends again comes without it) and when the player's level changes. A block
-    /// entity is not needed. The mesher reads the list on its workers and calls no mod code;
-    /// a handle a resource reload made stale draws nothing until it is set again from the new
-    /// handles.
+    /// entity is not needed. The mesher reads the list on its workers and calls no mod code.
+    /// A section's extra models are held to its quad and byte limits, after the blocks' own
+    /// geometry: past them, the rest of the section's extra models, in block order and then list
+    /// order, are not drawn, and the blocks' own always are.
+    ///
+    /// A handle a resource reload made stale draws nothing until the list is set again from the
+    /// new handles. The call is World-only, so not in `client_resources_reloaded` (Reloading):
+    /// resolve the new handles there with [`RenderAssets::model`] and set the lists again from
+    /// the next World-phase callback, such as `client_tick_pre`.
     ///
     /// Refused with nothing changed: `NotLoaded` when the client holds no column at `pos` or it
-    /// is outside the level's height, `TooMany` past [`BLOCK_EXTRA_MODELS_MAX`] models, and
-    /// `Model` for a stale or unknown handle.
+    /// is outside the level's height, `TooMany` past [`BLOCK_EXTRA_MODELS_MAX`] models, `Model`
+    /// for a stale or unknown handle, and `Unavailable` outside the World phase (a resource
+    /// reload, setup, config loading), on native and wasm alike.
     #[access(WorldOnly)]
     fn set_block_extra_models(
         &mut self,

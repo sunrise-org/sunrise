@@ -1,6 +1,7 @@
 //! `ClientRenderClientHost::set_block_extra_models` from a wasm mod reaches the client with the
 //! position and the handles intact, in order, and each named refusal comes back as the native
-//! call returns it (#2763).
+//! call returns it (#2763); outside the World phase the call answers `Unavailable` without
+//! reaching the client.
 use super::*;
 use mod_api::prelude::*;
 use mod_api::{BlockExtraModelsError, ModelError, ModelRef};
@@ -39,13 +40,10 @@ fn model(generation: u64, slot: u32) -> ModelRef {
     mod_api::__private::built::model_ref(generation, slot)
 }
 
-#[test]
-fn a_wasm_mods_extra_models_reach_the_client_and_get_each_refusal_by_name() {
-    mod_api::__private::initialize().unwrap();
-    let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
-    let mut client = Client::default();
+/// Serves the guest's calls from `client` until the transport is taken down.
+fn serve(client: &mut Client) {
     let mut frame = boundary::Frame::default();
-    frame.set_client_host_mut(&mut client);
+    frame.set_client_host_mut(client);
     let mut cx = boundary::Cx::default();
     cx.frames.push(frame);
     let cx = RefCell::new(cx);
@@ -55,6 +53,14 @@ fn a_wasm_mods_extra_models_reach_the_client_and_get_each_refusal_by_name() {
         unsafe { boundary::serve(id, &mut *cx.borrow_mut(), bytes, &mut out) }.unwrap();
         out.into_bytes()
     })));
+}
+
+#[test]
+fn a_wasm_mods_extra_models_reach_the_client_and_get_each_refusal_by_name() {
+    mod_api::__private::initialize().unwrap();
+    let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+    let mut client = Client::default();
+    serve(&mut client);
     let mut guest = guest::Guest;
     let parts = [model(5, 2), model(5, 9), model(5, 2)];
     assert_eq!(guest.set_block_extra_models([3, -60, -7], &parts), Ok(()));
@@ -81,4 +87,30 @@ fn a_wasm_mods_extra_models_reach_the_client_and_get_each_refusal_by_name() {
         ([0, 64, 0], vec![model(4, 2)]),
     ];
     assert_eq!(*client.calls.borrow(), reached);
+}
+
+/// In a resource reload (`client_resources_reloaded`), setup or config loading the call is
+/// refused by name, as a native mod's is, and the client never sees it.
+#[test]
+fn outside_the_world_phase_a_wasm_mod_gets_unavailable() {
+    use mod_api::__private::{ModPhase, PhaseOwner};
+    mod_api::__private::initialize().unwrap();
+    let mut client = Client::default();
+    serve(&mut client);
+    let mut guest = guest::Guest;
+    for phase in [ModPhase::Reloading, ModPhase::Setup, ModPhase::Config] {
+        let _phase = PhaseOwner::scope(phase);
+        assert_eq!(
+            guest.set_block_extra_models([3, -60, -7], &[model(5, 2)]),
+            Err(BlockExtraModelsError::Unavailable),
+            "{phase:?}"
+        );
+    }
+    let _phase = PhaseOwner::scope(ModPhase::World);
+    assert_eq!(
+        guest.set_block_extra_models([3, -60, -7], &[model(5, 2)]),
+        Ok(())
+    );
+    guest::set_transport(None);
+    assert_eq!(*client.calls.borrow(), [([3, -60, -7], vec![model(5, 2)])]);
 }

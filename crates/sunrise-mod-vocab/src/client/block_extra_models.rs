@@ -17,4 +17,7 @@ pub enum BlockExtraModelsError {
     TooMany,
     /// A handle is stale or not a resolved standalone model.
     Model(crate::ModelError),
+    /// Called outside the client's running game (the World phase): in a resource reload
+    /// (`client_resources_reloaded`), setup or config loading. Native and wasm mods both get it.
+    Unavailable,
 }

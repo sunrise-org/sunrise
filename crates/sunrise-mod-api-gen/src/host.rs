@@ -405,6 +405,12 @@ pub(super) fn areas_source(root: &Path) -> Result<String, String> {
     ))
 }
 
+/// The errors whose `Unavailable` names a host method's refusal outside the phases its access
+/// allows: such a method returns it on both targets, where any other panics natively and fails
+/// the call across the wasm boundary.
+pub(crate) const PHASE_REFUSALS: &[&str] =
+    &["LevelReadError", "LevelWriteError", "BlockExtraModelsError"];
+
 /// Generate every area impl explicitly. Full-path calls plus a hard recursion lint
 /// refuse a missing inherent implementation instead of inheriting a trait default.
 pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
@@ -512,7 +518,9 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                     call
                 };
                 let typed_access_error = result_error(&entry.sig.output).filter(|error| {
-                    outer_type(error, "LevelReadError") || outer_type(error, "LevelWriteError")
+                    PHASE_REFUSALS
+                        .iter()
+                        .any(|refusal| outer_type(error, refusal))
                 });
                 let access = if let Some(error) = typed_access_error {
                     let error = error.to_token_stream();
