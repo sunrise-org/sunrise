@@ -447,7 +447,7 @@ pub fn link(role: &str, args: Vec<String>) -> Result<(), String> {
         ]
         .map(str::to_owned),
     );
-    if role == "std" || std::env::var_os("SUNRISE_GROUP_PACKAGE").is_some() {
+    if role == "std" {
         out.push("--export-all".to_owned());
     }
     if role != "std" {

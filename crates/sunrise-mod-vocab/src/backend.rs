@@ -1,5 +1,7 @@
 //! Host backends: what the game answers the API with.
 use crate::*;
+#[allow(unused_imports)]
+use crate::host::prelude::*;
 
 /// Why a fake player's `perform_action` did nothing at all: it was refused before any of the
 /// action ran.

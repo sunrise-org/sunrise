@@ -776,16 +776,7 @@ fn dispatch(id: u64, input: &mut Reader<'_>, out: &mut Writer) -> Result<(), Wir
     });
     match extension {
         Some(call) => call(id, input, out),
-        None => {
-            #[cfg(target_arch = "wasm32")]
-            {
-                Err(WireError::Tag(id as u32))
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                hook(id, input, out)
-            }
-        }
+        None => hook(id, input, out),
     }
 }
 

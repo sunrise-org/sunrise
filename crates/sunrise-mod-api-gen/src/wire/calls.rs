@@ -317,15 +317,15 @@ fn wasm_extension_traits(
     let is_excused = |m: &Method| excused.iter().any(|(o, n)| *o == m.owner && *n == m.name);
 
     for (trait_name, target_dyn, filter_owner) in [
-        ("WasmHostExt", "crate::Host", &["Host"][..]),
+        ("WasmHostExt", "dyn crate::Host + '_", &["Host"][..]),
         (
             "WasmServerHostExt",
-            "crate::ServerHost",
+            "dyn crate::ServerHost + '_",
             &["ServerHost", "Host"][..],
         ),
         (
             "WasmClientHostExt",
-            "crate::ClientHost",
+            "dyn crate::ClientHost + '_",
             &["ClientHost", "Host"][..],
         ),
     ] {
@@ -363,47 +363,33 @@ fn wasm_extension_traits(
             trait_methods.push_str(&format!("    {sig};\n"));
 
             let target_trait = trait_path(m.via.as_deref().unwrap_or(m.owner));
+            let receiver = match m.receiver {
+                Some(true) => "&mut *::std::boxed::Box::leak(::std::boxed::Box::new(Guest))",
+                _ => "&Guest",
+            };
             let args: Vec<String> = (0..m.params.len()).map(|i| format!("p{i}")).collect();
-            let call_stmt = match m.receiver {
-                Some(true) => {
-                    if args.is_empty() {
-                        format!("let mut guest = Guest; <Guest as {target_trait}>::{}(&mut guest)", m.name)
-                    } else {
-                        format!("let mut guest = Guest; <Guest as {target_trait}>::{}(&mut guest, {})", m.name, args.join(", "))
-                    }
-                }
-                Some(false) => {
-                    if args.is_empty() {
-                        format!("<Guest as {target_trait}>::{}(&Guest)", m.name)
-                    } else {
-                        format!("<Guest as {target_trait}>::{}(&Guest, {})", m.name, args.join(", "))
-                    }
-                }
-                None => {
-                    format!("<Guest as {target_trait}>::{}({})", m.name, args.join(", "))
-                }
+            let call_args = if args.is_empty() {
+                receiver.to_string()
+            } else {
+                format!("{receiver}, {}", args.join(", "))
             };
-
-            let backend_check = match m.receiver {
-                Some(true) => "self.backend_mut()",
-                _ => "self.backend()",
-            };
-
-            let refusal = match &m.ret {
-                Ty::Unit => "()".to_string(),
-                Ty::Option(_) => "None".to_string(),
-                Ty::Prim("bool") => "false".to_string(),
-                Ty::Result(_, _) => "Err(crate::NoBackend::no_backend())".to_string(),
-                _ => format!("panic!(\"{{}} requires a game host\", stringify!({}))", m.name),
-            };
+            let call_stmt = format!("<Guest as {target_trait}>::{}({call_args})", m.name);
 
             impl_methods.push_str(&format!(
-                "    #[inline]\n    {sig} {{\n        if {backend_check}.map_or(false, |b| b.is_guest()) {{\n            {call_stmt}\n        }} else {{\n            {refusal}\n        }}\n    }}\n"
+                "    #[inline]
+    {sig} {{
+        {call_stmt}
+    }}
+"
             ));
         }
 
         out.push_str(&format!(
-            "    pub trait {trait_name} {{\n{trait_methods}    }}\n    impl<H: {target_dyn} + ?Sized> {trait_name} for H {{\n{impl_methods}    }}\n"
+            "    pub trait {trait_name} {{
+{trait_methods}    }}
+    impl {trait_name} for {target_dyn} {{
+{impl_methods}    }}
+"
         ));
     }
 
