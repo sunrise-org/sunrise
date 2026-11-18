@@ -137,8 +137,8 @@ class WorkflowTests(unittest.TestCase):
         # The control: the same expressions do reach our runners for a trusted head.
         trusted = {"rust_required": "true", "forced_github": "false", "hosted_label": "",
                    "self_hosted": "true", "trusted": "true", "heavy": "true"}
-        self.assertEqual(self.runs_on("verify", trusted, "all"), "dyna-large")
-        self.assertEqual(self.runs_on("verify-static", trusted, "all"), "dyna-medium")
+        self.assertEqual(self.runs_on("verify", trusted, "all"), "sunrise-pool")
+        self.assertEqual(self.runs_on("verify-static", trusted, "all"), "sunrise-pool")
 
     def test_a_pull_request_outside_the_gate_gets_githubs_runner_for_verify_static(self):
         # Our own branch, Rust changed, every switch pointing at our runners or boat: still GitHub's runner.

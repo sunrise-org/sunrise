@@ -59,6 +59,14 @@ class Watch(unittest.TestCase):
         code, cancelled, sleeps, _ = self.sweep(runs, jobs)
         self.assertEqual((code, cancelled, sleeps), (1, [1, 2], [watch.QUIET_RECHECK]))
 
+    def test_jobs_on_the_shared_sunrise_pool_label_count_as_the_pool(self):
+        runs = [run(1, "queued", 45), run(2, "completed", 30, updated=1)]
+        stranded = {1: [job("queued", "sunrise-pool")], 2: [job("completed", "ubuntu-latest", 15, 1, "GitHub Actions 1")]}
+        self.assertEqual(self.sweep(runs, stranded)[:2], (1, [1]))
+        alive = {1: [job("queued", "sunrise-pool")],
+                 2: [job("completed", "sunrise-pool", 15, 1, "sunrise-pool-sunrise-runner-x7k2p")]}
+        self.assertEqual(self.sweep(runs, alive)[:2], (0, []))
+
     def test_a_pool_that_just_finished_a_whole_run_is_alive(self):
         # Run 2 ended on a Dyna runner a minute ago: only the finished runs show that.
         runs = [run(1, "queued", 45), run(2, "completed", 30, updated=1), run(4, "completed", 40, updated=30)]

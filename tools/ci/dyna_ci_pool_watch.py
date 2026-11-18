@@ -23,7 +23,7 @@ import subprocess
 import sys
 import time
 
-LABEL = "dyna-"
+LABEL = ("dyna-", "sunrise-pool")
 # A pool that lost its last job can be between jobs, so one quiet look proves nothing.
 QUIET_RECHECK = 180
 
@@ -34,7 +34,7 @@ def seconds(stamp):
 
 
 def on_pool(job, label):
-    """Whether the job asks for a Dyna runner: any label that starts with the prefix (dyna-small, dyna-medium, ...)."""
+    """Whether the job asks for the pool: any label that starts with a prefix (dyna-small, ..., sunrise-pool)."""
     return any(name.startswith(label) for name in job.get("labels", []))
 
 
