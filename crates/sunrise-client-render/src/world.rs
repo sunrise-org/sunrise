@@ -9,6 +9,7 @@ use std::sync::{Arc, OnceLock};
 use sunrise_core::random::{LegacyRandom, LevelRandom};
 use sunrise_world::registry::BlockStateId;
 
+mod extra_models;
 mod path_type_cache;
 mod pending_entity;
 pub use pending_entity::{EntityLoadReason, PendingEntity};

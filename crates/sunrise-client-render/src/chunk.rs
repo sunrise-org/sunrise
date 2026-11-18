@@ -689,6 +689,11 @@ pub struct Chunk {
     /// The chunk came in holding a `dynamic_light` state and its cells are not asked yet: no light
     /// job reads it until they are (`streaming::light_region_ready`).
     pub dynamic_pending: bool,
+    /// The standalone models a client mod draws as part of a cell's block
+    /// (`ClientRenderClientHost::set_block_extra_models`), by [`Self::dynamic_cell`]: the mesher
+    /// draws them after the block's own models. A change of the cell's state drops its list;
+    /// dropped with the chunk, never saved or sent.
+    pub extra_models: crate::fast_hash::FxHashMap<u32, Arc<[mod_api::ModelRef]>>,
 }
 impl Chunk {
     /// An all-air chunk in the current `layout`.
@@ -720,6 +725,7 @@ impl Chunk {
             entities: Vec::new(),
             dynamic_emission: Default::default(),
             dynamic_pending: false,
+            extra_models: Default::default(),
         }
     }
     /// The [`Self::dynamic_emission`] key of the cell at `y` (chunk-local `x`, `z`):
@@ -817,9 +823,13 @@ impl Chunk {
         // move it. Any other change rebuilds that map on the next read.
         if previous != v {
             // A part's answer was for the state the cell held.
+            let cell = (s as u32) << 12 | index(x, y, z) as u32;
             if !self.dynamic_emission.is_empty() {
-                self.dynamic_emission
-                    .remove(&((s as u32) << 12 | index(x, y, z) as u32));
+                self.dynamic_emission.remove(&cell);
+            }
+            // So are the models a mod drew with it.
+            if !self.extra_models.is_empty() {
+                self.extra_models.remove(&cell);
             }
             for map in [&mut self.surface, &mut self.motion_blocking] {
                 map.write(column(x, z), y);
@@ -830,12 +840,14 @@ impl Chunk {
     /// Section `s`'s block states replaced whole (a bulk edit): its storage
     /// compacted, and the heightmaps built again on their next read.
     pub fn replace_blocks(&mut self, s: usize, values: &[u32; 4096]) {
-        // The parts' answers of the cells whose state changes go with it.
+        // The parts' answers and the mods' models of the cells whose state changes go with it.
         let old = &self.sections[s];
-        self.dynamic_emission.retain(|&cell, _| {
+        let kept = |&cell: &u32| {
             let i = (cell & 4095) as usize;
             cell >> 12 != s as u32 || old.get(i) == values[i]
-        });
+        };
+        self.dynamic_emission.retain(|cell, _| kept(cell));
+        self.extra_models.retain(|cell, _| kept(cell));
         let section = Arc::make_mut(&mut self.sections[s]);
         section.blocks = Section::from_blocks(values);
         section.compact();

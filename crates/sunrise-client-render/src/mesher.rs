@@ -689,6 +689,8 @@ fn visibility_rows(open: &[u16; 256]) -> u64 {
     result
 }
 #[cfg(test)]
+mod extra_models_tests;
+#[cfg(test)]
 mod mod_geometry_tests;
 #[cfg(test)]
 mod mod_tint_tests;
@@ -2205,6 +2207,7 @@ impl Mesher<'_> {
         let full_faces = &self.tables.full_faces;
         let catalog = &self.render.model_catalog;
         let mut models = Vec::new();
+        let extra_models = (!center.extra_models.is_empty()).then_some(&center.extra_models);
         for y in 0..16 {
             for z in 0..16 {
                 // The padded index of the row's x = 0 cell: `pi(x, y, z)` is
@@ -2253,15 +2256,26 @@ impl Mesher<'_> {
                             );
                         }
                     }
-                    if !state.model {
+                    // The models a client mod draws as part of this block, after its own.
+                    let extra = extra_models.and_then(|extra| {
+                        extra.get(&((sy as u32) << 12 | crate::chunk::index(x, y, z) as u32))
+                    });
+                    if !state.model && extra.is_none() {
                         continue;
                     }
                     let world = BlockPos::new(center.x * 16 + x, base_y + y, center.z * 16 + z);
-                    if catalog
-                        .models_at(BlockStateId(id), world, &mut models)
-                        .is_err()
+                    if !state.model
+                        || catalog
+                            .models_at(BlockStateId(id), world, &mut models)
+                            .is_err()
                     {
-                        continue;
+                        models.clear();
+                    }
+                    // A handle a resource reload made stale draws nothing.
+                    for &model in extra.into_iter().flat_map(|extra| extra.iter()) {
+                        if let Ok(model) = self.render.resolve_model(model) {
+                            models.push(model);
+                        }
                     }
                     // ModelBlockRenderer: the first part decides smooth lighting
                     // for all; light-emitting blocks are always lit flat.

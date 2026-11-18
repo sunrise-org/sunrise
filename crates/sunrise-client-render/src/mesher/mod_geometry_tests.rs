@@ -197,16 +197,17 @@ fn an_invalid_quad_refuses_the_batch_and_its_earlier_quads() {
     assert_eq!(budget, full_budget());
 }
 
-struct World {
-    assets: Assets,
-    render: RenderAssets,
+/// Prepared resources and the mesher over them.
+pub(super) struct World {
+    pub(super) assets: Assets,
+    pub(super) render: RenderAssets,
     facts: BlockFacts,
     biomes: Biomes,
     root: std::path::PathBuf,
 }
 
 impl World {
-    fn load() -> Option<Self> {
+    pub(super) fn load() -> Option<Self> {
         let root = resources()?;
         let assets = Assets::load(&root).unwrap();
         let facts = BlockFacts::load(&root, assets.registry).unwrap();
@@ -228,7 +229,7 @@ impl World {
     }
 
     /// Mesh tables whose section geometry is `renderers`.
-    fn tables(&self, renderers: Vec<Arc<dyn SectionGeometry>>) -> MeshTables {
+    pub(super) fn tables(&self, renderers: Vec<Arc<dyn SectionGeometry>>) -> MeshTables {
         let mut tables = MeshTables::new(
             &self.assets,
             &self.render,
@@ -242,7 +243,7 @@ impl World {
         tables
     }
 
-    fn mesher<'a>(&'a self, tables: &'a MeshTables) -> Mesher<'a> {
+    pub(super) fn mesher<'a>(&'a self, tables: &'a MeshTables) -> Mesher<'a> {
         Mesher {
             nether_shading: false,
             shader_pack_lighting: false,
@@ -266,7 +267,7 @@ impl World {
     }
 
     /// A chunk with one stone block in section 0 and section 1 empty.
-    fn cube(&self) -> Chunk {
+    pub(super) fn cube(&self) -> Chunk {
         let stone = self
             .assets
             .registry
@@ -278,7 +279,7 @@ impl World {
     }
 }
 
-fn quads(vertices: &[TerrainVertex]) -> usize {
+pub(super) fn quads(vertices: &[TerrainVertex]) -> usize {
     vertices.len() / 4
 }
 
