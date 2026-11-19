@@ -608,6 +608,8 @@ pub(super) fn load_resources_for_mods(
         if headless {
             UiResources::server(source)
         } else {
+            // The GUI sprites' metadata from the same resource generation as the atlas.
+            sunrise_client::ui::load_metadata(source);
             UiResources::load(source, vanilla_root).map(|ui| {
                 ui.with_splashes(
                     source,
@@ -762,7 +764,6 @@ pub(super) fn load_resources_for_mods(
     progress.set(4);
     if !menu {
         use sunrise_client::lang::{self, Language};
-        sunrise_client::ui::load_metadata(resolved.source());
         // An integrated server shares the client's loaded resources and
         // language; it doesn't run this loader in production.
         lang::set(if role.is_dedicated_server() {

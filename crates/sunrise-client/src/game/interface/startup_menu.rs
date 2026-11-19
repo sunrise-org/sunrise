@@ -100,9 +100,6 @@ impl StartupMenu {
         additional_data: Arc<[Arc<sunrise_client::datapack::DataPack>]>,
         splashes: &str,
     ) {
-        sunrise_client::ui::load_metadata(
-            &sunrise_assets::resource_source::ResourceSource::directory(root.to_path_buf()),
-        );
         sunrise_client::lang::set(sunrise_client::lang::Language::load(
             &[&sunrise_assets::resource_source::ResourceSource::directory(
                 root.clone(),

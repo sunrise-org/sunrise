@@ -55,7 +55,7 @@ harness named checks that loader against vanilla).
 | Atlases and sprite sources: `directory`, `single`, `filter`, `unstitch`, `paletted_permutations` | `atlases/` | works | `test_resource_pack_parity` (merged source lists), `atlas_sources.rs` tests |
 | GUI sprites | `textures/gui/sprites/` | works | `test_hud_parity`, `test_screen_layout_parity` |
 | GUI sprite scaling: `nine_slice` border | `*.png.mcmeta` `gui` | works | `ui.rs` reads the border; vanilla's buttons, sliders and frames use it |
-| GUI sprite scaling: `width`/`height`, `stretch_inner`, `tile`, `stretch` | `*.png.mcmeta` `gui` | partly | `ui.rs` reads a `nine_slice` sprite's size in GUI pixels and its `stretch_inner` (vanilla's tooltip frame); the `tile` and `stretch` scaling types aren't read |
+| GUI sprite scaling: `width`/`height`, `stretch_inner`, `tile`, `stretch`, and metadata that doesn't decode (the sprite draws as the missing one) | `*.png.mcmeta` `gui` | works | `test_gui_sprite_scaling_parity` (the codec and the tiled copies, against the client); `ui.rs` draws every whole GUI sprite through it, but the sub-region `blitSprite` overload still draws its region stretched |
 | Fonts: `bitmap`, `space`, `unihex`, `reference` | `font/*.json`, `textures/font/` | works | `test_resource_pack_parity` (merged provider lists) |
 | Fonts: `ttf` | `font/*.json` | works | `font.rs` rasterises them with `ab_glyph` (`TrueTypeGlyphProvider`) |
 | Fonts picked by text components (`"font": "..."`, custom fonts) | `font/` | works | `component.rs` reads the `font` key and `font.rs` (`glyph_styled`) draws with the font it names |
@@ -84,9 +84,9 @@ harness named checks that loader against vanilla).
 | OptiFine / CIT Resewn custom item textures (`type=item`: `texture`, `model`, `texture.<name>`, `model.<name>`; `type=armor`: `texture`, `texture.<layer>` with the pre-1.21.2 layer names such as `diamond_layer_1`, `leather_layer_2_overlay`; `type=elytra`: `texture`; `type=enchantment` layers on GUI items; `useGlint=false` in `cit.properties`, which removes vanilla's glint from items) | `optifine/cit/`, `mcpatcher/cit/`, `citresewn/cit/` | partly | `item_render/cit.rs`, `cit_armor.rs`, `cit_glint.rs` and `hud/cit_glint.rs` tests; enchantment layers on held, dropped, framed and worn items, and `anim/` glints, come later; special renderers (heads, shields, banners) keep their vanilla look; only players and armour stands wear CIT armour and elytra, other mobs keep vanilla's; worn trims are unchanged; armour textures above 1024x512 (16 times vanilla's 64x32) draw vanilla |
 | GPU warn list, regional compliance | `gpu_warnlist.json`, `regional_compliancies.json` | n/a | OpenGL driver warnings and play-time notices for some regions; not used |
 
-Summary: 50 rows; 42 work, 7 partly (OptiFine/EMF entity models, random entity textures, connected textures,
-emissive textures, CIT, GUI sprite scaling, core shaders), 1 doesn't apply. Every vanilla loader in the list above
-reads the pack; what is left is the GUI scaling types and the core shaders, plus the OptiFine-format extras.
+Summary: 50 rows; 43 work, 6 partly (OptiFine/EMF entity models, random entity textures, connected textures,
+emissive textures, CIT, core shaders), 1 doesn't apply. Every vanilla loader in the list above reads the pack; what
+is left is the core shaders, plus the OptiFine-format extras.
 
 ### Polytone expression uniforms on core shaders
 
@@ -120,7 +120,6 @@ doesn't yet:
 
 | Gap | Size | Where |
 | --- | --- | --- |
-| GUI scaling `tile`, `stretch` | small | `ui.rs` |
 | Core shaders but GUI text, the block outline, the sky and the stars | large | [#13218](https://github.com/horizon-rust/horizon/issues/13218) |
 
 ## Testing a pack
