@@ -117,8 +117,10 @@ sunrise-client-lib mobs::ai::hurt_teleport_contact_tests::two_hurts_in_a_tick_ea
 sunrise-client-lib mobs::ai::inside_walk_tests::a_parts_add_effect_write_merges_into_one_instance lib daily resources
 sunrise-client-lib mobs::ai::iron_golem_push_tests::a_held_weapon_adds_its_attack_damage_to_the_melee_hit lib daily resources
 sunrise-client-lib mobs::ai::iron_golem_push_tests::an_iron_golem_targets_the_monster_that_bumps_it lib daily resources
-sunrise-client-lib mobs::ai::nautilus_noai_air_tests::noai_nautilus_keeps_superclass_refill_in_both_media lib daily resources
-sunrise-client-lib mobs::ai::nautilus_noai_air_tests::normal_nautilus_keeps_its_custom_handler lib daily resources
+sunrise-client-lib mobs::ai::noai_breather_air_tests::noai_breathers_keep_air_above_their_maximum lib daily resources
+sunrise-client-lib mobs::ai::noai_breather_air_tests::noai_breathers_match_the_pinned_oracle lib daily resources
+sunrise-client-lib mobs::ai::noai_breather_air_tests::noai_nautilus_keeps_superclass_refill_in_both_media lib daily resources
+sunrise-client-lib mobs::ai::noai_breather_air_tests::normal_nautilus_keeps_its_custom_handler lib daily resources
 sunrise-client-lib mobs::ai::ravager_noai_tests::ravager_counters_tick_without_ai_and_stun_starts_a_full_roar lib daily resources
 sunrise-client-lib mobs::ai::ridden_tests::the_server_leaves_a_horse_to_its_riders_client lib daily resources
 sunrise-client-lib mobs::ai::same_vehicle_push_tests::a_camel_and_its_rider_never_push_each_other lib daily resources

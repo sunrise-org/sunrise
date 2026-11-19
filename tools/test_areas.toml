@@ -111,7 +111,7 @@ cargo = [
 harnesses = [
   "mob_*", "allay_*", "animal_love_cause", "armadillo_save_reload", "baby_pig_attachment", "breeze_hook",
   "camel_*", "chicken_egg", "conversion_*", "dragon_*", "server_dragon", "forced_end", "elder_curse", "equine_temper",
-  "finalize_spawn", "natural_spawn", "spawn_*", "spawner", "trial_spawner", "glow_squid_noai", "goat_voices",
+  "finalize_spawn", "natural_spawn", "spawn_*", "spawner", "trial_spawner", "glow_squid_noai", "noai_breather_air", "goat_voices",
   "golem_defense_guest", "happy_ghast_leash", "hoglin_repeat_attack", "piglin_anger_memory", "pufferfish_*",
   "raid*", "raider_celebration", "sheep_dye", "shulker_*", "squid_*", "tropical_fish_variant", "villager_*",
   "trading", "trade_components", "merchant_*", "warden_owned_memories", "wolf_anger_writes", "zombie_cure_sound",
