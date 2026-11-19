@@ -169,6 +169,40 @@ impl Hub {
         owner: &str,
         areas: Vec<ChunkArea>,
     ) -> Result<(), ChunkAreaRefusal> {
+        let (i, counts) = self.checked_viewed_areas(uuid, owner, &areas)?;
+        let active = self.viewed.active.clone();
+        self.guests.update(i, |g| {
+            let v = &mut g.viewed;
+            if areas.is_empty() {
+                v.areas.remove(owner);
+            } else {
+                v.areas.insert(owner.to_owned(), areas);
+            }
+            v.counts = counts;
+            for view in v.views.values_mut() {
+                view.dirty = true;
+            }
+            v.recount(&active);
+        });
+        Ok(())
+    }
+
+    /// Check the existing viewed-area admission without publishing any tickets or packets.
+    pub fn can_set_viewed_areas(
+        &self,
+        uuid: u128,
+        owner: &str,
+        areas: &[ChunkArea],
+    ) -> Result<(), ChunkAreaRefusal> {
+        self.checked_viewed_areas(uuid, owner, areas).map(|_| ())
+    }
+
+    fn checked_viewed_areas(
+        &self,
+        uuid: u128,
+        owner: &str,
+        areas: &[ChunkArea],
+    ) -> Result<(usize, BTreeMap<String, (u32, u32)>), ChunkAreaRefusal> {
         let Some(i) = self
             .guests
             .iter()
@@ -188,27 +222,13 @@ impl Hub {
         let counts = areas::check(
             &g.viewed.areas,
             owner,
-            &areas,
+            areas,
             &g.dimension,
             g.sender.viewed_levels.max_levels,
             &self.viewed.caps.for_client(g.sender.viewed_levels),
             others,
         )?;
-        let active = self.viewed.active.clone();
-        self.guests.update(i, |g| {
-            let v = &mut g.viewed;
-            if areas.is_empty() {
-                v.areas.remove(owner);
-            } else {
-                v.areas.insert(owner.to_owned(), areas);
-            }
-            v.counts = counts;
-            for view in v.views.values_mut() {
-                view.dirty = true;
-            }
-            v.recount(&active);
-        });
-        Ok(())
+        Ok((i, counts))
     }
 
     /// What `owner` asked for the player `uuid`; none for no such player.

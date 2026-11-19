@@ -2443,6 +2443,7 @@ impl Game<'_> {
         )
     }
     fn eye_position(&self) -> Option<[f64; 3]> {
+        if let Some(eye) = self.live_world_action_eye() { return Some(eye); }
         let p = self.player.as_ref()?;
         Some([
             p.position.x,
@@ -4284,7 +4285,7 @@ impl Game<'_> {
         let mut canceled = false;
         let mut exp_to_drop = None;
         self.native_break_block(pos, state, &mut canceled, &mut exp_to_drop);
-        if canceled {
+        if canceled || !self.projection_break_fresh(pos) {
             return Ok(false);
         }
         self.input_feedback(sunrise_client::input_source::Feedback::BlockBroken);

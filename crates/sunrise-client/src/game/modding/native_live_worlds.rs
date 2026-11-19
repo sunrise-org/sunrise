@@ -2,17 +2,24 @@
 //! Blocks, inventories, schedules and attachments stay in the real source level.
 //! This table contains only membership, pose samples and derived collision geometry.
 use super::{Game, api_values::TryIntoApi as _};
+#[path = "native_live_worlds/actions.rs"]
+mod actions;
+#[path = "native_live_worlds/placement.rs"]
+mod placement;
+#[path = "native_live_worlds/sync.rs"]
+mod sync;
 use mod_api::{
     ColliderBox, LevelRef, LiveWorldCell, LiveWorldCheckpoint, LiveWorldError as Error,
     LiveWorldHit, LiveWorldLimits, LiveWorldPose, LiveWorldRef, LiveWorldSample,
 };
+use sha2::{Digest as _, Sha256};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
     sync::Arc,
 };
-use sunrise_client::{collisions::SceneCollisions, mesher::Vertex, world::World};
+use sunrise_client::{mesher::Vertex, world::World};
 use sunrise_client_render::moving_colliders::{Placed, Prepared};
 use sunrise_core::{
     geometry::{
@@ -21,11 +28,8 @@ use sunrise_core::{
     },
     position::BlockPos,
 };
-use sunrise_world::{
-    carrier::contact::{
-        CarrierCell, CarrierGeometry, ContactBudget, Obstacle, RigidTransform, Rotation,
-    },
-    collision_context::CollisionContext,
+use sunrise_world::carrier::contact::{
+    CarrierCell, CarrierGeometry, ContactBudget, Obstacle, RigidTransform, Rotation,
 };
 
 /// No binding exists until a mod explicitly asks for one.
@@ -35,6 +39,8 @@ pub(in crate::game) struct LiveWorlds {
     sequence: u64,
     entries: BTreeMap<u64, Entry>,
     quotas: Quotas,
+    sync: sync::Sync,
+    action: Option<actions::ProjectedAction>,
 }
 
 struct Quotas {
@@ -59,6 +65,8 @@ impl Default for Quotas {
 impl LiveWorlds {
     pub(in crate::game) fn clear(&mut self) {
         self.entries.clear();
+        self.sync.clear();
+        self.action = None;
     }
 }
 
@@ -67,6 +75,8 @@ struct Entry {
     owner: &'static str,
     destination: LevelRef,
     cells: Vec<[i32; 3]>,
+    membership: u64,
+    stream_areas: Vec<sunrise_client::lan::viewed_levels::areas::ChunkArea>,
     limits: LiveWorldLimits,
     sample: LiveWorldSample,
     /// An engine-allocated collision identity, never a disguised vanilla entity.
@@ -74,12 +84,16 @@ struct Entry {
     accepted_tick: Option<u64>,
     tick_start: LiveWorldPose,
     carrying: bool,
+    /// A client keeps its last coherent caches while real view updates are incomplete.
+    frozen: bool,
     geometry: RefCell<Option<Rc<Geometry>>>,
     mesh: RefCell<Option<Rc<Mesh>>>,
 }
 
 struct Geometry {
     source_revision: u64,
+    resources: u64,
+    state_hash: [u8; 32],
 
     contact: CarrierGeometry,
     boxes: Arc<ColliderBoxes>,
@@ -94,6 +108,18 @@ struct MeshCell {
     pos: [i32; 3],
     state: sunrise_world::registry::BlockStateId,
     faces: Vec<super::minecarts::PreparedModelFace>,
+}
+
+/// Only membership and canonical block states affect this witness; inventory ticks do not.
+fn state_hash(world: &World, cells: &[[i32; 3]]) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    for &cell in cells {
+        for axis in cell {
+            hash.update(axis.to_le_bytes());
+        }
+        hash.update(world.block(cell[0], cell[1], cell[2]).0.to_le_bytes());
+    }
+    hash.finalize().into()
 }
 
 fn vector(v: [f64; 3]) -> Vec3 {
@@ -126,14 +152,7 @@ fn checked_pose(pose: LiveWorldPose) -> Result<RigidTransform, Error> {
 }
 
 fn frame(pose: LiveWorldPose) -> Frame {
-    let rotation = Frame::from_quaternion(Vec3::ZERO, pose.rotation);
-    let pivot = vector(pose.pivot);
-    Frame::from_quaternion(
-        vector(pose.translation)
-            .add_vector(pivot)
-            .subtract(rotation.to_world(pivot)),
-        pose.rotation,
-    )
+    Frame::from_quaternion_about(vector(pose.translation), vector(pose.pivot), pose.rotation)
 }
 
 fn checked_cells(cells: &[[i32; 3]], limits: LiveWorldLimits) -> Result<Vec<[i32; 3]>, Error> {
@@ -161,7 +180,7 @@ fn checked_cells(cells: &[[i32; 3]], limits: LiveWorldLimits) -> Result<Vec<[i32
     {
         return Err(Error::Invalid);
     }
-    if cells.is_empty() || cells.len() > limits.cells as usize {
+    if cells.len() > limits.cells as usize {
         return Err(Error::Budget);
     }
     let mut ordered = cells.to_vec();
@@ -186,29 +205,31 @@ fn shape(game: &Game<'_>, world: &World, pos: [i32; 3]) -> Result<VoxelShape, Er
         return Err(Error::NotResident);
     }
     let state = world.block(pos[0], pos[1], pos[2]);
-    if game.collision.has_context_rule(state)
-        || game.collision.has_positioned_collision(state)
-        || game
-            .collision
-            .static_shape(state)
-            .map_err(|_| Error::Unsupported)?
-            .is_none()
+    state_shape(game, state)
+}
+
+/// Context-free source shapes are admitted before an ordinary placement can consume a stack.
+fn state_shape(
+    game: &Game<'_>,
+    state: sunrise_world::registry::BlockStateId,
+) -> Result<VoxelShape, Error> {
+    let name = &game.res.facts().get(state).name;
+    if super::text_displays::has_special_model(name)
+        && !matches!(
+            &**name,
+            "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:ender_chest"
+        )
     {
         return Err(Error::Unsupported);
     }
-    let mut scene = SceneCollisions {
-        world,
-        binding: game.collision,
-        subject: None,
-    };
+    if game.collision.has_context_rule(state) || game.collision.has_positioned_collision(state) {
+        return Err(Error::Unsupported);
+    }
     game.collision
-        .collision_shape_with_context(
-            &mut scene,
-            world.block(pos[0], pos[1], pos[2]),
-            position(pos),
-            &CollisionContext::empty(false),
-        )
-        .map_err(|_| Error::Unsupported)
+        .static_shape(state)
+        .map_err(|_| Error::Unsupported)?
+        .cloned()
+        .ok_or(Error::Unsupported)
 }
 
 impl Game<'_> {
@@ -275,10 +296,12 @@ impl Game<'_> {
 
     fn projection_geometry(&self, entry: &Entry) -> Result<Rc<Geometry>, Error> {
         let world = self
-            .native_level_world(entry.handle.level())
+            .native_level_view_world(entry.handle.level())
             .ok_or(Error::Stale)?;
         if let Some(geometry) = entry.geometry.borrow().as_ref()
-            && geometry.source_revision == world.revision
+            && (entry.frozen
+                || (geometry.source_revision == world.revision
+                    && geometry.resources == self.standalone_geometry.generation()))
         {
             return Ok(geometry.clone());
         }
@@ -299,6 +322,8 @@ impl Game<'_> {
         }
         let geometry = Rc::new(Geometry {
             source_revision: world.revision,
+            resources: self.standalone_geometry.generation(),
+            state_hash: state_hash(world, &entry.cells),
             contact: CarrierGeometry::new(u128::from(entry.collider), cells)
                 .map_err(|_| Error::Invalid)?,
             boxes: Arc::new(ColliderBoxes::new(boxes)),
@@ -390,6 +415,8 @@ impl Game<'_> {
                     entry.sample.revision,
                     geometry.source_revision,
                     hit.location.components(),
+                    hit.local_direction,
+                    hit.local_location.components(),
                 )
             }))
     }
@@ -410,13 +437,39 @@ impl Game<'_> {
         {
             return Err(Error::Revision);
         }
-        if !hit.point.iter().all(|v| v.is_finite()) {
+        if !hit
+            .point
+            .iter()
+            .chain(&hit.local_point)
+            .all(|v| v.is_finite())
+        {
             return Err(Error::Invalid);
         }
         let local = checked_pose(entry.sample.current)?
             .to_local(vector(hit.point))
             .subtract(vector(hit.cell.map(f64::from)));
+        if vector(hit.local_point)
+            .distance_squared(local.add_vector(vector(hit.cell.map(f64::from))))
+            > 1.0e-12
+        {
+            return Err(Error::Revision);
+        }
         let shape = shape(self, world, hit.cell)?;
+        let normal = vector(hit.face.normal().map(f64::from));
+        let point = vector(hit.local_point);
+        // VoxelShape::clip refuses rays whose squared length is below COLLISION_EPSILON.
+        // Use a real surface probe above that existing threshold, without changing it.
+        let probe = sunrise_core::geometry::COLLISION_EPSILON.sqrt();
+        let clipped = shape.clip(
+            point.add_vector(normal.scale(probe)),
+            point.subtract(normal.scale(probe)),
+            position(hit.cell),
+        );
+        if clipped.is_none_or(|actual| {
+            actual.direction != hit.face || actual.location.distance_squared(point) > 1.0e-12
+        }) {
+            return Err(Error::Revision);
+        }
         // A copied token cannot redirect an action to a different cell or empty gap.
         if !shape.boxes().iter().any(|bounds| {
             Axis::ALL.iter().all(|&axis| {
@@ -446,6 +499,8 @@ impl Game<'_> {
         }
         self.native_level_world(destination).ok_or(Error::Stale)?;
         let cells = checked_cells(cells, limits)?;
+        let stream_areas = sync::stream_areas(level, &cells)?;
+        self.check_projection_views(destination, &stream_areas)?;
         checked_pose(pose)?;
         {
             let table = self.live_worlds.borrow();
@@ -496,12 +551,15 @@ impl Game<'_> {
             owner,
             destination,
             cells,
+            membership: 0,
+            stream_areas,
             limits,
             sample: LiveWorldSample::new(pose, pose, 0),
             collider: self.next_entity + 1,
             accepted_tick: None,
             tick_start: pose,
             carrying: false,
+            frozen: false,
             geometry: RefCell::new(None),
             mesh: RefCell::new(None),
         };
@@ -538,6 +596,9 @@ impl Game<'_> {
         expected_revision: u64,
         pose: LiveWorldPose,
     ) -> Result<LiveWorldSample, Error> {
+        if self.live_worlds.borrow().action.is_some() {
+            return Err(Error::Busy);
+        }
         let result = {
             let entry = self.projection_entry(handle)?;
             if entry.sample.revision != expected_revision
@@ -554,10 +615,22 @@ impl Game<'_> {
                 return Err(Error::NotResident);
             }
             let before = checked_pose(entry.sample.current)?;
-            let after = checked_pose(pose)?;
-            if pose.pivot != entry.sample.current.pivot {
-                return Err(Error::Invalid);
-            }
+            let requested = checked_pose(pose)?;
+            // Preserve this binding's fixed pivot. Reparameterizing a caller pose changes
+            // no physical point, and cannot change collision/render/history interpolation.
+            let pivot = before.pivot();
+            let after = RigidTransform::new(
+                requested.to_world(pivot).subtract(pivot),
+                pivot,
+                requested.rotation(),
+            )
+            .map_err(|_| Error::Invalid)?;
+            let q = after.rotation().components();
+            let pose = LiveWorldPose {
+                translation: after.translation().components(),
+                pivot: pivot.components(),
+                rotation: [q[1], q[2], q[3], q[0]],
+            };
             let delta = after.translation().subtract(before.translation());
             let a = before.rotation().components();
             let b = after.rotation().components();
@@ -575,9 +648,6 @@ impl Game<'_> {
                 return Err(Error::Invalid);
             }
             let turning = a != b;
-            if turning && delta != Vec3::ZERO {
-                return Err(Error::Unsupported);
-            }
             let geometry = self.projection_geometry(&entry)?;
             let obstacles = self.projection_obstacles(
                 &entry,
@@ -586,17 +656,18 @@ impl Game<'_> {
                 delta,
                 if turning { angle } else { 0.0 },
             )?;
-            let intervals = if turning {
-                (angle / sunrise_world::carrier::contact::MAX_ROTATION_RADIANS).ceil() as u32
-            } else {
-                delta
-                    .components()
-                    .iter()
-                    .map(|v| v.abs().ceil() as u32)
-                    .max()
-                    .unwrap_or(1)
-            }
-            .max(1);
+            let intervals =
+                (angle / sunrise_world::carrier::contact::MAX_ROTATION_RADIANS).ceil() as u32;
+            let intervals = intervals
+                .max(
+                    delta
+                        .components()
+                        .iter()
+                        .map(|v| v.abs().ceil() as u32)
+                        .max()
+                        .unwrap_or(1),
+                )
+                .max(1);
             if intervals > entry.limits.motion_steps {
                 return Err(Error::Budget);
             }
@@ -607,36 +678,33 @@ impl Game<'_> {
             };
             let mut intermediate = before;
             for _ in 0..intervals {
-                let checked = if turning && sine > 0.0 {
-                    geometry.contact.rotate_step(
+                let axis = if sine > 0.0 {
+                    vector([relative[1], relative[2], relative[3]])
+                } else {
+                    Vec3::new(0.0, 1.0, 0.0)
+                };
+                let checked = geometry
+                    .contact
+                    .rigid_step(
                         &intermediate,
-                        vector([relative[1], relative[2], relative[3]]),
+                        delta.scale(1.0 / f64::from(intervals)),
+                        axis,
                         angle / f64::from(intervals),
                         &obstacles,
                         &budget,
                     )
-                } else {
-                    geometry.contact.translate_step(
-                        &intermediate,
-                        delta.scale(1.0 / f64::from(intervals)),
-                        &obstacles,
-                        &budget,
-                    )
-                }
-                .map_err(|_| Error::Budget)?;
+                    .map_err(|_| Error::Budget)?;
                 if checked.fraction < 1.0 {
                     return Err(Error::Obstructed);
                 }
-                intermediate = if turning && sine > 0.0 {
+                intermediate = if angle == 0.0 {
                     intermediate
-                        .rotated(
-                            vector([relative[1], relative[2], relative[3]]),
-                            angle / f64::from(intervals),
-                        )
-                        .map_err(|_| Error::Invalid)?
                 } else {
-                    intermediate.translated(delta.scale(1.0 / f64::from(intervals)))
-                };
+                    intermediate
+                        .rotated(axis, angle / f64::from(intervals))
+                        .map_err(|_| Error::Invalid)?
+                }
+                .translated(delta.scale(1.0 / f64::from(intervals)));
             }
             LiveWorldSample::new(
                 entry.tick_start,
@@ -663,9 +731,7 @@ impl Game<'_> {
                 return Err(Error::Storage);
             }
             Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::create_dir(&data).map_err(|_| Error::Storage)?;
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => return Err(Error::Storage),
         }
         let path = data.join("sunrise_live_world_projection.json");
@@ -727,6 +793,9 @@ impl Game<'_> {
             }
         }
         let path = self.projection_metadata_path(handle.level())?;
+        // Reads never create directories: only the completed real save barrier may publish metadata.
+        std::fs::create_dir_all(path.parent().ok_or(Error::Storage)?)
+            .map_err(|_| Error::Storage)?;
         sunrise_server_files::durable::write(&path, &encoded).map_err(|_| Error::Storage)?;
         Ok(LiveWorldCheckpoint::new(
             handle.level().dimension_id().to_owned(),
@@ -863,8 +932,7 @@ impl Game<'_> {
         area = area.union_bounds(area.move_by(delta));
         if angle != 0.0 {
             // Every corner moves by at most radius * angle during this small angular sweep.
-            let pivot = vector(entry.sample.current.translation)
-                .add_vector(vector(entry.sample.current.pivot));
+            let pivot = pose.translation().add_vector(pose.pivot());
             let radius = Axis::ALL
                 .iter()
                 .map(|&axis| {
@@ -973,6 +1041,9 @@ impl Game<'_> {
 
     /// Engine lookup, without mod authority: the same frame the carry pass reads.
     pub(in crate::game) fn live_world_frame(&self, id: u32) -> Option<Frame> {
+        if !self.is_logical_server() {
+            return self.client_projection_frame(id);
+        }
         self.live_worlds
             .borrow()
             .entries
@@ -987,6 +1058,9 @@ impl Game<'_> {
     }
 
     pub(in crate::game) fn live_world_colliders(&self, base: Prepared) -> Prepared {
+        if !self.is_logical_server() {
+            return self.client_projection_colliders(base);
+        }
         let table = self.live_worlds.borrow();
         if table.entries.is_empty() {
             return base;
@@ -1032,8 +1106,8 @@ impl Game<'_> {
     fn projection_mesh(&self, entry: &Entry, world: &World) -> Rc<Mesh> {
         let resources = self.standalone_geometry.generation();
         if let Some(mesh) = entry.mesh.borrow().as_ref()
-            && mesh.source_revision == world.revision
-            && mesh.resources == resources
+            && (entry.frozen
+                || (mesh.source_revision == world.revision && mesh.resources == resources))
         {
             return mesh.clone();
         }
@@ -1078,68 +1152,149 @@ impl Game<'_> {
         mesh
     }
 
-    /// Uses the existing transformed block model drawing. Reads the actual local level.
+    /// Uses the existing transformed block model drawing on the server fixture or real client replicas.
     pub(in crate::game) fn live_world_geometry(
         &self,
         camera: glam::DVec3,
         partial: f64,
         out: &mut Vec<Vertex>,
     ) {
+        if !self.is_logical_server() {
+            self.client_projection_geometry(camera, partial, out);
+            return;
+        }
         let table = self.live_worlds.borrow();
         for entry in table
             .entries
             .values()
             .filter(|entry| entry.destination.dimension() == self.dim.key())
         {
-            let Some(world) = self.native_level_view_world(entry.handle.level()) else {
-                continue;
-            };
-            let previous = frame(entry.sample.previous);
-            let current = frame(entry.sample.current);
-            let pose = previous.interpolate(&current, partial);
-            let origin = pose.to_world(Vec3::ZERO);
-            let axes = [
-                Vec3::new(1.0, 0.0, 0.0),
-                Vec3::new(0.0, 1.0, 0.0),
-                Vec3::new(0.0, 0.0, 1.0),
-            ]
-            .map(|v| pose.to_world(v).subtract(origin));
-            let matrix = glam::DMat4::from_cols(
-                glam::DVec4::new(axes[0].x, axes[0].y, axes[0].z, 0.0),
-                glam::DVec4::new(axes[1].x, axes[1].y, axes[1].z, 0.0),
-                glam::DVec4::new(axes[2].x, axes[2].y, axes[2].z, 0.0),
-                (glam::DVec3::from_array(origin.components()) - camera).extend(1.0),
+            self.draw_projection(entry, camera, partial, out);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn projection_block_entity_model(
+        &self,
+        entry: &Entry,
+        world: &World,
+        pos: [i32; 3],
+        state: sunrise_world::registry::BlockStateId,
+        matrix: glam::Mat4,
+        light: u8,
+        partial: f64,
+        out: &mut Vec<Vertex>,
+    ) {
+        let level = entry.handle.level();
+        let anims = if self.is_logical_server() {
+            if level.dimension() == self.dim.key() {
+                Some(&self.be_anims)
+            } else {
+                self.levels
+                    .parked_anims(super::Dim::from_id(level.dimension_id()))
+            }
+        } else {
+            self.remote
+                .as_ref()
+                .and_then(|r| r.viewed.anims_of(level.dimension()))
+        };
+        let Some(anims) = anims else {
+            return;
+        };
+        let lid = |p| anims.lid(p, partial as f32);
+        let anim = |p| anims.block_anim(p, world.game_time, partial as f32, Default::default());
+        let scene = sunrise_client::block_entity_render::Scene {
+            camera: glam::DVec3::ZERO,
+            orientation: glam::Quat::IDENTITY,
+            anim: &anim,
+            texts: None,
+            partial: partial as f32,
+            game_time: world.game_time,
+            max_y: world.shape.max_y() - 1,
+            world,
+            sprites: &self.gui.atlas.sprites,
+            emissive: &self.gui.atlas.emissive,
+            translucent_sprites: &self.gui.atlas.translucent,
+            atlas_revision: self.gui.atlas.revision,
+            nether: self.nether_lighting(),
+            lid: &lid,
+            sign: &|_| None,
+            banner: &|_| Vec::new(),
+            skull: &|_| None,
+            glyph: &|c| self.gui.atlas.glyph_cell(c),
+            glyphs: self.gui.atlas.font.epoch(),
+            font: Some(&self.gui.atlas.font),
+            dynamic_visible: None,
+        };
+        self.res
+            .block_entity_render()
+            .render_block(&scene, pos, state.0, matrix, light, out);
+    }
+
+    fn draw_projection(
+        &self,
+        entry: &Entry,
+        camera: glam::DVec3,
+        partial: f64,
+        out: &mut Vec<Vertex>,
+    ) {
+        let Some(world) = self.native_level_view_world(entry.handle.level()) else {
+            return;
+        };
+        let previous = frame(entry.sample.previous);
+        let current = frame(entry.sample.current);
+        let pose = previous.interpolate(&current, partial);
+        let origin = pose.to_world(Vec3::ZERO);
+        let axes = [
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ]
+        .map(|v| pose.to_world(v).subtract(origin));
+        let matrix = glam::DMat4::from_cols(
+            glam::DVec4::new(axes[0].x, axes[0].y, axes[0].z, 0.0),
+            glam::DVec4::new(axes[1].x, axes[1].y, axes[1].z, 0.0),
+            glam::DVec4::new(axes[2].x, axes[2].y, axes[2].z, 0.0),
+            (glam::DVec3::from_array(origin.components()) - camera).extend(1.0),
+        );
+        let mesh = self.projection_mesh(entry, world);
+        for cell in &mesh.cells {
+            let pos = cell.pos;
+            let at = pose.to_world(vector(pos.map(f64::from)));
+            let packed = self.world.light(
+                at.x.floor() as i32,
+                at.y.floor() as i32,
+                at.z.floor() as i32,
             );
-            let mesh = self.projection_mesh(entry, world);
-            for cell in &mesh.cells {
-                let pos = cell.pos;
-                let at = pose.to_world(vector(pos.map(f64::from)));
-                let packed = self.world.light(
-                    at.x.floor() as i32,
-                    at.y.floor() as i32,
-                    at.z.floor() as i32,
-                );
-                let light = sunrise_client::block_entity_render::vertex_light(packed);
-                let cell_matrix = (matrix
-                    * glam::DMat4::from_translation(glam::DVec3::from_array(pos.map(f64::from))))
-                .as_mat4();
-                super::minecarts::emit_model_faces(
-                    cell.faces.iter().copied().map(|face| (face, light)),
+            let light = sunrise_client::block_entity_render::vertex_light(packed);
+            let cell_matrix = (matrix
+                * glam::DMat4::from_translation(glam::DVec3::from_array(pos.map(f64::from))))
+            .as_mat4();
+            super::minecarts::emit_model_faces(
+                cell.faces.iter().copied().map(|face| (face, light)),
+                cell_matrix,
+                true,
+                |_| None,
+                out,
+            );
+            if self
+                .res
+                .facts()
+                .get(cell.state)
+                .name
+                .strip_prefix("minecraft:")
+                .is_some_and(super::text_displays::has_special_model)
+            {
+                self.projection_block_entity_model(
+                    entry,
+                    world,
+                    pos,
+                    cell.state,
                     cell_matrix,
-                    true,
-                    |_| None,
+                    packed,
+                    partial,
                     out,
                 );
-                if self
-                    .res
-                    .facts()
-                    .get(cell.state)
-                    .name
-                    .strip_prefix("minecraft:")
-                    .is_some_and(super::text_displays::has_special_model)
-                {
-                    self.special_block_model(cell.state, cell_matrix, packed, out);
-                }
             }
         }
     }

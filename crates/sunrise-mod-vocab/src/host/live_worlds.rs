@@ -69,7 +69,9 @@ pub trait LiveWorldsBackendMut {
     /// Publish an externally simulated pose with optimistic revision validation.
     /// The caller supplies finite bounded translation/rotation/work budgets. The
     /// engine checks the swept real shapes and commits only a completely clear step.
-    /// A combined translation and turn is refused until a simultaneous-sweep route lands.
+    /// Linear motion of the binding's fixed local pivot and shortest angular motion are checked
+    /// continuously together. Equivalent caller pivot representations are reanchored without
+    /// moving any physical point; returned samples use the binding's pivot.
     /// No rigid-body integrator, block reconstruction or player teleport runs here.
     #[access(WorldOnly)]
     fn live_world_publish_pose(
@@ -78,6 +80,32 @@ pub trait LiveWorldsBackendMut {
         expected_revision: u64,
         pose: LiveWorldPose,
     ) -> Result<LiveWorldSample, LiveWorldError>;
+    /// Side: server.
+    /// Break the transformed hit as this real player, using ordinary protection, game mode,
+    /// tools, hooks, drops, experience and inventory routes. The host re-clips from the actual
+    /// player eye, checks reach and static occlusion, then lends the real source context.
+    /// This explicit mod action has the same immediate destroy semantics as PlayerRef::destroy_block.
+    #[access(WorldOnly)]
+    fn live_world_destroy_block(
+        &mut self,
+        live_world: LiveWorldRef,
+        player: PlayerRef,
+        hit: LiveWorldHit,
+        into_inventory: bool,
+    ) -> Result<bool, LiveWorldError>;
+    /// Side: server.
+    /// Use the transformed source hit through the ordinary block/item/menu pipeline. A source
+    /// chest or furnace and block items are supported; other item-only effects refuse before
+    /// mutation. The physical player body is never moved. Placement admission is exact,
+    /// transactional and revalidated, and successful writes update sparse membership.
+    #[access(WorldOnly)]
+    fn live_world_use_block(
+        &mut self,
+        live_world: LiveWorldRef,
+        player: PlayerRef,
+        hit: LiveWorldHit,
+        hand: Hand,
+    ) -> Result<bool, LiveWorldError>;
     /// Side: server.
     /// Save the actual source/destination levels through their existing disk barriers, then
     /// durably publish this projection's metadata. Refuses inside lifted save/transaction

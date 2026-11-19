@@ -1367,6 +1367,7 @@ impl Game<'_> {
         {
             let _ = self.enter_level(first);
         }
+        self.flush_live_world_sync();
         self.level_pass = Pass::default();
         if result.is_err() {
             self.native_lifecycle.cancel_server_tick();

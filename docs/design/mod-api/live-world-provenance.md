@@ -67,3 +67,47 @@ the locked packages. Public issue/tool results were read only.
 - The real server fixture is being corrected to exercise actual source ticker,
   inventory and close/reopen persistence. Separate-client/window proof is required
   for drawing. Unintegrated sync drafts are excluded from the foundation commit.
+
+## Continuation inputs and validation
+
+The coordinator reported public main `4f80f416ae19fc60cc2125b54ec4ff0fde713a1e`
+as observed on 2026-11-19. This experiment remains on its recorded `d4be683` base;
+no rebase, newer source compatibility claim or inspection of the reported newer
+implementation was made. The local base has no `.claude/skills/sunrise-mods/SKILL.md`;
+that missing-path probe supplied no input.
+
+The dependent contact-kernel commit adds continuous simultaneous linear/angular
+sweeps using the existing conservative advancement machinery. Its actual
+`carrier::contact` test run passed, including the prior pure-motion regressions,
+closing/sliding floor contacts, a thin mid-interval obstacle and budget refusal.
+This is geometry evidence, not a window, player-action or transfer milestone.
+
+The public-tree pre-commit hook could not complete its whole-index fingerprint
+scan: Git tried to fetch missing promisor blob
+`e959a076e9fa4b8c1fcf990b2253a935da5bb5f4` and sandbox DNS failed. The dependent
+local commit records a staged-path-only audit with the checker’s existing path
+rules and disabled hook execution for that commit. No full fingerprint pass is
+claimed. The coordinator offered an independent authorized network audit; its
+outcome remains separate from this record until reported.
+
+The coordinator subsequently completed the exact public-tree checker with authorized
+network access to the existing promisor remote, then repeated it offline successfully
+at `f687661`. No source contents from those missing blobs were supplied as inputs here.
+The next dependent commit `9da9109` ran the ordinary pre-commit checker successfully.
+The earlier failed-hook receipt remains part of the history.
+
+Actual isolated Game action evidence is retained in the run named
+`sunrise-live-world-proof-38nr4tfp`: owner admission cancellation, callback inventory
+rollback, real placement/consumption/membership, another owner's nearer wall occlusion,
+break callback mutation/retirement refusal and ordinary break passed. In that same run,
+the runtime fixture passed live chest/furnace and saved close/reopen content assertions
+but refused final projection restoration while the source awaited its real entity
+residency tick. It was not recorded as a complete fixture pass.
+
+The subsequent isolated run `sunrise-live-world-proof-yo231dzu` passed the complete
+current Game fixture selection. The runtime child completed the ordinary frozen
+entity residency pass and restored a new projection generation after reopening
+its real source. Its structured evidence reports the actual chest and furnace
+values; it explicitly labels client drawing as a separate pending route. The
+run receipt records the test executable SHA-256, arguments and prepared resources.
+This is not full process-restart, menu-lifetime, window or transfer-journal evidence.

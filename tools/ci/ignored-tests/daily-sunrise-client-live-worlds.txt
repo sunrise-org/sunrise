@@ -1,1 +1,2 @@
 sunrise-client game::native_live_worlds_tests::runtime_projection_keeps_real_multichunk_inventory_ticker_and_sparse_shapes lib daily resources
+sunrise-client game::native_live_worlds_tests::native_live_world_ordinary_actions_admit_revalidate_and_update_real_membership lib daily resources

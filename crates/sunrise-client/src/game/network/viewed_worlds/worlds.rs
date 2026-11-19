@@ -13,6 +13,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use sunrise_client::{
+    block_entity_anim::{BlockEntityAnims, Ticker},
     chunk::known_block_state,
     fast_hash::{FxHashMap, FxHashSet},
     streaming::ViewedMeshing,
@@ -43,6 +44,8 @@ pub(in crate::game) struct ViewedWorld {
     /// (`ClientClockManager`).
     clock: Option<ClockState>,
     pub(in crate::game) world: World,
+    /// The real client level owns its animation state, including projected chest lids.
+    pub(in crate::game) anims: BlockEntityAnims,
     pub(in crate::game) entities: ViewedEntities,
     /// The block entities of each column as its chunk packet carried them, with the data sent
     /// since: what a travel into the level loads (`switch`). A world that was the player's keeps
@@ -73,6 +76,7 @@ impl ViewedWorld {
             default_clock,
             clock: None,
             world,
+            anims: BlockEntityAnims::default(),
             entities: ViewedEntities::default(),
             block_entities: FxHashMap::default(),
         }
@@ -164,6 +168,20 @@ impl ViewedWorld {
                 }
             }
             C::GameEvent(p) => self.world.weather.game_event(p.event, p.param),
+            C::BlockEvent(p) => {
+                // Lid events are bounded by an already loaded real chest. Other contextual
+                // renderers are not admitted by the live-world projection service yet.
+                let [x, y, z] = p.pos;
+                if self.world.is_loaded_at(x, y, z)
+                    && self.anims.ticker(self.world.block(x, y, z).0) == Some(Ticker::Lid)
+                {
+                    self.anims
+                        .chests
+                        .entry(p.pos)
+                        .or_default()
+                        .trigger_event(i32::from(p.b0), i32::from(p.b1));
+                }
+            }
             other => self.entities.apply(other)?,
         }
         Ok(())
@@ -185,11 +203,13 @@ impl ViewedWorld {
             infos.retain(|info| (info.packed_xz, i32::from(info.y)) != (packed_xz, y));
         }
         self.world.block_entities.remove(&(x, y, z));
+        self.anims.remove_position([x, y, z]);
     }
 
     /// The column `key` goes, or is sent again: so do its block entities.
     fn unload_block_entities(&mut self, key: (i32, i32)) {
         self.block_entities.remove(&key);
+        self.anims.retain(|p| (p[0] >> 4, p[2] >> 4) != key);
         if !self.world.block_entities.is_empty() {
             self.world
                 .block_entities
@@ -310,6 +330,23 @@ impl ViewedWorlds {
             .values()
             .find(|(_, w)| w.key == key)
             .map(|(_, w)| &w.world)
+    }
+    pub(in crate::game) fn anims_of(
+        &self,
+        key: mod_api::DimensionKey,
+    ) -> Option<&BlockEntityAnims> {
+        self.worlds
+            .values()
+            .find(|(_, w)| w.key == key)
+            .map(|(_, w)| &w.anims)
+    }
+    /// ClientLevel's chest animation ticks once even when the pose publisher is idle.
+    pub(in crate::game) fn tick_projection_animations(&mut self) {
+        for (_, world) in self.worlds.values_mut() {
+            for lid in world.anims.chests.values_mut() {
+                lid.tick();
+            }
+        }
     }
     /// The slot of the level named `level`, if the client views it.
     pub(in crate::game) fn slot_of(&self, level: &str) -> Option<i32> {

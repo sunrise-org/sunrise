@@ -3340,6 +3340,10 @@ impl Game<'_> {
             C::CustomPayload(p) if p.channel == sunrise_protocol::general_entity::CHANNEL => {
                 self.remote_general_entity(&p.data);
             }
+            // Sparse projections of real viewed local worlds; no client authority over their state.
+            C::CustomPayload(p) if p.channel == sunrise_protocol::live_world_sync::CHANNEL => {
+                self.remote_live_world_sync(&p.data)?;
+            }
             // The collider boxes of an entity the server shows the window.
             C::CustomPayload(p) if p.channel == sunrise_protocol::collider_sync::CHANNEL => {
                 self.remote_collider_sync(&p.data);

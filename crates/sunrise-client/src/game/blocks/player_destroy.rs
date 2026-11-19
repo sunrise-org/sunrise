@@ -46,6 +46,9 @@ impl Game<'_> {
                 &mut destroyed,
             );
         }
+        if !self.projection_break_fresh(pos) {
+            return (false, state, false);
+        }
         if let Some(removed) = destroyed {
             if removed {
                 self.native_player_destroyed_block(pos, state, block_entity);

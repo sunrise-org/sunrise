@@ -107,6 +107,10 @@ pub struct LiveWorldHit {
     pub cell_revision: u64,
     /// Authoritative world-space hit point.
     pub point: [f64; 3],
+    /// Exact source-cell face from the ordinary voxel-shape clip, before rotation.
+    pub face: crate::Direction,
+    /// Exact hit point in source-level coordinates, before rotation and translation.
+    pub local_point: [f64; 3],
 }
 
 impl LiveWorldHit {
@@ -118,6 +122,8 @@ impl LiveWorldHit {
         pose_revision: u64,
         cell_revision: u64,
         point: [f64; 3],
+        face: crate::Direction,
+        local_point: [f64; 3],
     ) -> Self {
         Self {
             world,
@@ -125,6 +131,8 @@ impl LiveWorldHit {
             pose_revision,
             cell_revision,
             point,
+            face,
+            local_point,
         }
     }
 }
@@ -165,6 +173,33 @@ impl LiveWorldCell {
     }
 }
 
+/// One exact prospective ordinary placement write, before mutation or item consumption.
+#[derive(Clone, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct LiveWorldPlacementCell {
+    /// Source-level coordinate in the prospective ownership set.
+    pub pos: [i32; 3],
+    /// Canonical state selected by the ordinary placement decision.
+    pub state: crate::BlockState,
+    /// Checked local collision boxes for this state.
+    pub collision: Vec<crate::ColliderBox>,
+}
+impl LiveWorldPlacementCell {
+    /// Engine constructor; hook inputs are a fixed decision, never another state selection.
+    #[doc(hidden)]
+    pub fn new(
+        pos: [i32; 3],
+        state: crate::BlockState,
+        collision: Vec<crate::ColliderBox>,
+    ) -> Self {
+        Self {
+            pos,
+            state,
+            collision,
+        }
+    }
+}
+
 /// Receipt returned only after the real level save barrier and durable projection metadata.
 #[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
 #[non_exhaustive]
@@ -198,6 +233,12 @@ impl LiveWorldCheckpoint {
 pub enum LiveWorldError {
     /// Wrong side, no world or no enabled mod context.
     Unavailable,
+    /// The ordinary host protection or permission check denied this action.
+    Denied,
+    /// The transformed hit is outside the real player's current interaction range.
+    OutOfReach,
+    /// A scoped action already holds this projection context.
+    Busy,
     /// Old world/binding generation, retired binding or another owner.
     Stale,
     /// The local level is not an open Void runtime level owned by this mod.

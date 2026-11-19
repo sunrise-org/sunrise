@@ -78,6 +78,7 @@ fn uses_registered_payload_codec(channel: &str, play: bool, clientbound: bool) -
         "sunrise:lod" => play || clientbound,
         crate::attachment_sync::CHANNEL
         | crate::collider_sync::CHANNEL
+        | crate::live_world_sync::CHANNEL
         | crate::general_entity::CHANNEL
         | crate::anvil_cost::CHANNEL
         | crate::passage_sync::CHANNEL

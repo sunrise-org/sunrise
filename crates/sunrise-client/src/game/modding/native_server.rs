@@ -1925,6 +1925,7 @@ impl Game<'_> {
     /// in the world at a player (a thrown stack, an overflow drop, a sound, a broken block) is
     /// left out for a player in another level, whose inventory and data writes still hold.
     pub(in crate::game) fn acting_in_level_in_place(&self) -> bool {
+        if self.live_world_action_in_level() { return true; }
         let Some(conn) = self.lan_acting else {
             return true;
         };

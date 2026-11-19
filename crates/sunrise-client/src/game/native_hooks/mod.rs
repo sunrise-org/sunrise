@@ -14,7 +14,9 @@ pub(in crate::game) use fire::{
     BlockDropsCall, BlockScreenEffectDrawCall, ConnectsToCall, EntityChangeBlockPreCall,
     ItemAfterVerticalCollisionCall, PreRemoveSideEffectsCall, UpdateShapeCall,
 };
-use mod_api::{BlockEntityDataSource, BlockEntityRef, ClockAdjustment};
+use mod_api::{
+    BlockEntityDataSource, BlockEntityRef, ClockAdjustment, LiveWorldPlacementCell, LiveWorldRef,
+};
 
 use super::native_data_maps::DataMapType;
 use super::{

@@ -21,15 +21,21 @@ Source inputs and pending upstream coordination are recorded in
 `live-world-provenance.md`. This is not an upstream spec-approval or clean-room
 claim. The complete issue acceptance scene has not passed.
 
-Validation: `cargo check --profile fast --locked --offline -p sunrise-client
---no-default-features` passed for the initial foundation. Actual Game fixture binary compiled and listed the three intended tests. Its first
-isolated run passed both unit tests and reached real runtime ownership, sparse
-clip and pose/hit checks, then failed an incorrectly server-routed drawing
-assertion: server-only resource loading does not populate a client model catalog.
-The server fixture now scopes itself to real inventory/ticking/save/reopen and
-awaits its next run. Client tracking, window rendering, actions and durable
-cross-owner transfer validation remain pending. Do not replace their status with
-a compile-only claim.
+Validation: the existing contact-kernel regressions and added coupled-motion tests
+passed. Shared core geometry tests passed, including a stationary nonzero pivot
+and independent midpoint direction. The actual Game fixture target compiled and
+listed the intended cases, and the isolated `native_live_world` selection passed:
+real multi-chunk source ownership, chest/furnace ticking, metadata checkpoint,
+real source close/reopen and projection regeneration, typed placement admission,
+callback inventory rollback, other-owner occlusion and ordinary break membership.
+Earlier failed attempts and their causes remain recorded in the provenance log.
+The protocol codec's bounded synthetic-input test is a separate gate.
+
+This dependent slice includes negotiated client metadata over actual viewed worlds
+and the generated explicit owner action methods. It does not yet establish
+continuing vanilla container menus or ordinary client mining/use input. Full
+process restart, window rendering, native/wasm independent fixture loading,
+ordinary-save journal and prepared cross-owner transfer/return remain required.
 
 Tried in game: pending actual local runtime evidence.
 
