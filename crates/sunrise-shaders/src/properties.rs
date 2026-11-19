@@ -9,6 +9,7 @@
 
 use crate::Macros;
 use crate::condition::{Conditionals, split_directive};
+use crate::macros::MAX_EXPANSION_BYTES;
 
 /// One `key=value`, with the line it starts on (from 1).
 #[derive(Clone, Debug, PartialEq)]
@@ -135,7 +136,7 @@ impl Properties {
         conditionals: &mut Conditionals,
         macros: &mut Macros,
     ) {
-        match conditionals.apply(word, rest, macros) {
+        match conditionals.apply(word, rest, macros, MAX_EXPANSION_BYTES) {
             Err(e) => self.note(number, &e),
             Ok(true) => {}
             Ok(false) if conditionals.active() => match word {

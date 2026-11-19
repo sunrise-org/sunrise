@@ -5,16 +5,26 @@
 //! pack would then lose a whole section of its settings over one unknown name.
 
 use crate::Macros;
-use crate::macros::{is_ident, is_ident_start};
+use crate::macros::{Bound, MAX_EXPANSION, MAX_EXPANSION_BYTES, is_ident, is_ident_start};
+
+/// How deep a condition's brackets and unary operators may nest: each level is a recursion of the
+/// evaluator.
+const MAX_NESTING: usize = 64;
 
 /// The value of a condition; `Err` says what is wrong with it.
 pub fn eval_condition(expr: &str, macros: &Macros) -> Result<i64, String> {
-    let (tokens, real) = tokens(&resolve_defined(expr, macros)?, macros)?;
+    eval_within(expr, macros, MAX_EXPANSION_BYTES)
+}
+
+/// [`eval_condition`] with its macros' expansion held to `max_bytes`.
+fn eval_within(expr: &str, macros: &Macros, max_bytes: usize) -> Result<i64, String> {
+    let (tokens, real) = tokens(&resolve_defined(expr, macros)?, macros, max_bytes)?;
     let mut parser = Parser {
         tokens: &tokens,
         at: 0,
         real,
         quiet: false,
+        depth: 0,
     };
     let value = parser.binary(0)?;
     match parser.tokens.get(parser.at) {
@@ -65,18 +75,20 @@ impl Conditionals {
     }
 
     /// Applies `#word rest` when it is a conditional directive (`Ok(false)` when it is not). A
-    /// condition that can't be evaluated reads as false and returns why.
+    /// condition that can't be evaluated reads as false and returns why; its macros' expansion
+    /// is held to `max_bytes`.
     pub(crate) fn apply(
         &mut self,
         word: &str,
         rest: &str,
         macros: &Macros,
+        max_bytes: usize,
     ) -> Result<bool, String> {
         let on = self.active();
         match word {
             "if" | "ifdef" | "ifndef" => {
                 let value = if on {
-                    test(word, rest, macros)
+                    test(word, rest, macros, max_bytes)
                 } else {
                     Ok(false)
                 };
@@ -101,7 +113,7 @@ impl Conditionals {
                 let take = b.outer && !b.taken;
                 let value = match word {
                     "else" => Ok(take),
-                    _ if take => test("if", rest, macros),
+                    _ if take => test("if", rest, macros, max_bytes),
                     _ => Ok(false),
                 };
                 b.on = *value.as_ref().unwrap_or(&false);
@@ -118,12 +130,12 @@ impl Conditionals {
     }
 }
 
-fn test(word: &str, rest: &str, macros: &Macros) -> Result<bool, String> {
+fn test(word: &str, rest: &str, macros: &Macros, max_bytes: usize) -> Result<bool, String> {
     let name = rest.split_whitespace().next().unwrap_or("");
     match word {
         "ifdef" => Ok(macros.is_defined(name)),
         "ifndef" => Ok(!macros.is_defined(name)),
-        _ => eval_condition(rest, macros)
+        _ => eval_within(rest, macros, max_bytes)
             .map(|v| v != 0)
             .map_err(|e| format!("`#{word} {rest}`: {e}; read as false")),
     }
@@ -194,8 +206,13 @@ const OPS: [&str; 22] = [
     "<", ">", "&", "^", "|",
 ];
 
-fn tokens(expr: &str, macros: &Macros) -> Result<(Vec<Token>, bool), String> {
-    let expanded = macros.expand(expr);
+fn tokens(expr: &str, macros: &Macros, max_bytes: usize) -> Result<(Vec<Token>, bool), String> {
+    let expanded = macros
+        .expand_bounded(expr, max_bytes)
+        .map_err(|bound| match bound {
+            Bound::Tokens => format!("its macros make more than {MAX_EXPANSION} tokens"),
+            Bound::Bytes => format!("its macros make more than {max_bytes} bytes"),
+        })?;
     let mut out = Vec::new();
     let mut real = false;
     let mut rest = expanded.trim_start();
@@ -265,6 +282,8 @@ struct Parser<'a> {
     real: bool,
     /// Inside a side that `&&` / `||` skips: a division by zero is not an error.
     quiet: bool,
+    /// The operands being read, one inside another for each bracket and unary operator.
+    depth: usize,
 }
 
 /// Binary operators from the loosest to the tightest (GLSL §5.1 / §3.3).
@@ -311,6 +330,18 @@ impl Parser<'_> {
     }
 
     fn unary(&mut self) -> Result<f64, String> {
+        self.depth += 1;
+        if self.depth > MAX_NESTING {
+            return Err(format!(
+                "brackets and unary operators nest more than {MAX_NESTING} deep"
+            ));
+        }
+        let value = self.operand();
+        self.depth -= 1;
+        value
+    }
+
+    fn operand(&mut self) -> Result<f64, String> {
         match self.next() {
             Some(Token::Num(n)) => Ok(n),
             Some(Token::Op("(")) => {
@@ -331,8 +362,13 @@ impl Parser<'_> {
 }
 
 fn apply(op: &str, a: f64, b: f64, real: bool, quiet: bool) -> Result<f64, String> {
+    if !(a.is_finite() && b.is_finite()) {
+        return Err("a value is past what a number holds".into());
+    }
     let truth = |v: bool| f64::from(u8::from(v));
     let (i, j) = (a as i64, b as i64);
+    // Integer division divides by the converted divisor.
+    let by_zero = b == 0.0 || (!real && j == 0);
     Ok(match op {
         "||" => truth(a != 0.0 || b != 0.0),
         "&&" => truth(a != 0.0 && b != 0.0),
@@ -350,8 +386,8 @@ fn apply(op: &str, a: f64, b: f64, real: bool, quiet: bool) -> Result<f64, Strin
         "+" => a + b,
         "-" => a - b,
         "*" => a * b,
-        "/" | "%" if b == 0.0 && quiet => 0.0,
-        "/" | "%" if b == 0.0 => return Err("division by zero".into()),
+        "/" | "%" if by_zero && quiet => 0.0,
+        "/" | "%" if by_zero => return Err("division by zero".into()),
         "/" if real => a / b,
         "%" if real => a % b,
         "/" => i.wrapping_div(j) as f64,
@@ -455,5 +491,15 @@ mod tests {
         assert!(eval("").is_err());
         assert!(eval("defined").is_err());
         assert!(eval("1 @ 2").is_err());
+    }
+
+    /// A value past what a number holds (the difference of two infinities, which converts to the
+    /// integer 0) is an error, not a division that panics.
+    #[test]
+    fn values_past_a_number_are_errors() {
+        let huge = ["9223372036854775807"; 18].join(" * ");
+        for op in ["/", "%"] {
+            assert!(eval(&format!("1 {op} ({huge} - {huge})")).is_err(), "{op}");
+        }
     }
 }

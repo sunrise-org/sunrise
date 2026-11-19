@@ -7,15 +7,23 @@
 //! is not read, so it can't fail (OQ-14). Ten levels deep at most, which also stops a file that
 //! includes itself. `#version` and `#extension` are taken out of the code and kept apart: the
 //! translation writes its own header.
+//!
+//! A stage's code stops at [`MAX_STAGE_BYTES`] as it is read, and a line's macros (also a
+//! condition's, and those of a call's next lines looked for) at [`MAX_EXPANSION`] tokens and the
+//! bytes the stage has left: what includes and macros multiply is bounded before it is held.
 
 use std::collections::HashMap;
 
+use crate::Bound;
 use crate::Macros;
 use crate::Pack;
 use crate::condition::{Conditionals, split_directive};
+use crate::macros::MAX_EXPANSION;
 use crate::pack::normalize;
 
 const MAX_DEPTH: usize = 10;
+/// The most bytes of code a stage may grow to: what naga may read of it.
+const MAX_STAGE_BYTES: usize = sunrise_shader_api::guard::MAX_GLSL_BYTES;
 /// How many lines one macro call may span.
 const MAX_CALL_LINES: usize = 64;
 
@@ -62,13 +70,30 @@ impl Preprocessed {
 
 /// Runs the preprocessor on the stage file `path` of `pack` with `macros` defined.
 pub fn preprocess(pack: &Pack, path: &str, macros: &Macros) -> Preprocessed {
+    run(Some(pack), path, macros, HashMap::new())
+}
+
+/// [`preprocess`] for one file's `text`, outside a pack (its `#include`s are not found): a
+/// resource pack's shader with its own includes already pasted. Its code keeps `text`'s lines.
+pub fn preprocess_text(text: &str, macros: &Macros) -> Preprocessed {
+    let texts = HashMap::from([(String::new(), Some(text.to_owned()))]);
+    run(None, "", macros, texts)
+}
+
+fn run(
+    pack: Option<&Pack>,
+    path: &str,
+    macros: &Macros,
+    texts: HashMap<String, Option<String>>,
+) -> Preprocessed {
     let mut run = Run {
         pack,
         macros: macros.clone(),
         conditionals: Conditionals::default(),
         out: Preprocessed::default(),
         code: Vec::new(),
-        texts: HashMap::new(),
+        bytes: 0,
+        texts,
     };
     run.file(path, 0, Origin::default());
     // Iris 1.11.7 draws a program whose `#if` stays open to its end: a warning, as there.
@@ -83,11 +108,13 @@ pub fn preprocess(pack: &Pack, path: &str, macros: &Macros) -> Preprocessed {
 }
 
 struct Run<'p> {
-    pack: &'p Pack,
+    pack: Option<&'p Pack>,
     macros: Macros,
     conditionals: Conditionals,
     out: Preprocessed,
     code: Vec<String>,
+    /// The bytes of `code` with its line breaks; past [`MAX_STAGE_BYTES`] the run stops.
+    bytes: usize,
     /// Files already read: a guarded header is included many times.
     texts: HashMap<String, Option<String>>,
 }
@@ -97,7 +124,7 @@ impl Run<'_> {
         let cached = self
             .texts
             .entry(path.to_owned())
-            .or_insert_with(|| self.pack.read_text(path));
+            .or_insert_with(|| self.pack.and_then(|pack| pack.read_text(path)));
         let Some(text) = cached.clone() else {
             return self.diagnose(from, &format!("can't find `{path}`"));
         };
@@ -112,7 +139,7 @@ impl Run<'_> {
         let lines: Vec<&str> = text.split('\n').map(|l| l.trim_end_matches('\r')).collect();
         let mut comments = comments.into_iter().peekable();
         let mut n = 0;
-        while n < lines.len() {
+        while n < lines.len() && self.bytes <= MAX_STAGE_BYTES {
             let first = n;
             let mut line = lines[n].to_owned();
             while line.ends_with('\\') && n + 1 < lines.len() {
@@ -126,7 +153,7 @@ impl Run<'_> {
                 while n < lines.len()
                     && n - first < MAX_CALL_LINES
                     && !lines[n].trim_start().starts_with('#')
-                    && self.macros.unfinished_call(&line, &lines[n..])
+                    && self.macros.unfinished_call(&line, &lines[n..], self.room())
                 {
                     line.push(' ');
                     line.push_str(lines[n]);
@@ -159,7 +186,16 @@ impl Run<'_> {
         let Some(after) = line.trim_start().strip_prefix('#') else {
             let code = if self.conditionals.active() {
                 self.macros.define("__LINE__", origin.line.to_string());
-                self.macros.expand(line)
+                match self.macros.expand_bounded(line, self.room()) {
+                    Ok(code) => code,
+                    // The stage can't hold the line, refused before it is made.
+                    Err(Bound::Bytes) => return self.overflow(origin),
+                    Err(Bound::Tokens) => {
+                        let message = format!("its macros make more than {MAX_EXPANSION} tokens");
+                        self.diagnose(origin, &message);
+                        String::new()
+                    }
+                }
             } else {
                 String::new()
             };
@@ -169,7 +205,8 @@ impl Run<'_> {
         let Some((word, rest)) = split_directive(after) else {
             return self.diagnose(origin, &format!("unknown directive `#{}`", after.trim()));
         };
-        match self.conditionals.apply(word, rest, &self.macros) {
+        let room = self.room();
+        match self.conditionals.apply(word, rest, &self.macros, room) {
             // As Iris loads such a pack: the branch is skipped, the program kept.
             Err(e) if e.ends_with("read as false") => {
                 return self.out.warnings.push(Diagnostic { origin, message: e });
@@ -221,9 +258,31 @@ impl Run<'_> {
         }
     }
 
+    /// The bytes a line may still make: what the stage has left, less the line's break.
+    fn room(&self) -> usize {
+        MAX_STAGE_BYTES.saturating_sub(self.bytes + 1)
+    }
+
+    /// Adds a line of code; past [`MAX_STAGE_BYTES`] it is diagnosed instead, once, and the run
+    /// reads no further.
     fn emit(&mut self, code: String, origin: Origin) {
+        if self.bytes > MAX_STAGE_BYTES {
+            return;
+        }
+        if self.bytes + code.len() + 1 > MAX_STAGE_BYTES {
+            return self.overflow(origin);
+        }
+        self.bytes += code.len() + 1;
         self.code.push(code);
         self.out.lines.push(origin);
+    }
+
+    /// The line at `origin` would take the stage past [`MAX_STAGE_BYTES`]: diagnosed, and the
+    /// run reads no further.
+    fn overflow(&mut self, origin: Origin) {
+        self.bytes = MAX_STAGE_BYTES + 1;
+        let message = format!("the stage grows past {MAX_STAGE_BYTES} bytes here");
+        self.diagnose(origin, &message);
     }
 
     fn diagnose(&mut self, origin: Origin, message: &str) {
@@ -482,5 +541,77 @@ mod tests {
         assert_eq!(p.warnings.len(), 1);
         let code: Vec<&str> = code_lines(&p).iter().map(|(c, _)| *c).collect();
         assert_eq!(code, ["float b;", "float c;"]);
+    }
+
+    /// Includes that fan out (64 of a file that includes 64 of another, three deep: 30 MB) stop
+    /// at the stage's byte budget as they are read, with one diagnostic, not after.
+    #[test]
+    fn a_stage_is_bounded_as_its_includes_are_read() {
+        let fan = |next: &str| format!("#include \"{next}\"\n").repeat(64);
+        let code = format!("float d = 1.0;{}\n", " ".repeat(100));
+        let p = run(&[
+            ("program/final.fsh", &fan("a.glsl")),
+            ("program/a.glsl", &fan("b.glsl")),
+            ("program/b.glsl", &fan("c.glsl")),
+            ("program/c.glsl", &code),
+        ]);
+        assert_eq!(p.diagnostics.len(), 1);
+        assert!(p.code.len() <= MAX_STAGE_BYTES, "{}", p.code.len());
+        assert_eq!(p.code.split('\n').count(), p.lines.len());
+    }
+
+    /// Macros that each use the next twice double the text at every level: the line is
+    /// diagnosed once its expansion passes the bound, before the text is held.
+    #[test]
+    fn macros_that_multiply_are_diagnosed_on_their_line() {
+        let defines: String = (0..14)
+            .map(|k| format!("#define M{k} M{} M{}\n", k + 1, k + 1))
+            .collect();
+        let p = run(&[("program/final.fsh", &format!("{defines}float x = M0;\n"))]);
+        let at: Vec<u32> = p.diagnostics.iter().map(|d| d.origin.line).collect();
+        assert_eq!(at, [15]);
+    }
+
+    /// A call in a call's argument is expanded by recursion, a level a call: a line nesting them
+    /// past the bound is diagnosed, on a 2 MiB thread, never a stack overflow.
+    #[test]
+    fn calls_nested_in_arguments_are_diagnosed_on_their_line() {
+        let p = std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(|| {
+                let deep = format!("{}1{}", "F(".repeat(2_000), ")".repeat(2_000));
+                let fsh = format!("#define F(x) x\nfloat x = {deep};\n");
+                run(&[("program/final.fsh", &fsh)])
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        let at: Vec<u32> = p.diagnostics.iter().map(|d| d.origin.line).collect();
+        assert_eq!(at, [2]);
+    }
+
+    /// A condition nested deeper than the evaluator goes is a warning and reads as false, as
+    /// another bad condition does, on a 2 MiB thread: never a stack overflow.
+    #[test]
+    fn a_condition_nested_too_deep_reads_as_false() {
+        let p = std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(|| {
+                let deep = format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000));
+                run(&[(
+                    "program/final.fsh",
+                    &format!(
+                        "#if {deep}\nfloat a;\n#endif\n#if {}1\nfloat b;\n#endif\n",
+                        "!".repeat(100_000)
+                    ),
+                )])
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(p.diagnostics.is_empty(), "{:?}", p.diagnostics);
+        let at: Vec<u32> = p.warnings.iter().map(|d| d.origin.line).collect();
+        assert_eq!(at, [1, 4]);
+        assert!(code_lines(&p).is_empty());
     }
 }

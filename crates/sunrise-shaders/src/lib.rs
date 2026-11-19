@@ -44,7 +44,7 @@ pub use config::{
 pub use custom::{Custom, Val};
 pub use discover::{Found, discover};
 pub use lang::Lang;
-pub use macros::{MC_VERSION, Macros, RENDER_STAGES, render_stage};
+pub use macros::{Bound, MC_VERSION, Macros, RENDER_STAGES, render_stage};
 pub use options::{
     PackOption, apply as apply_options, chosen_file, chosen_text, options, parse_chosen,
     properties_macros, read_properties, switches_on, value_options, with_options,
@@ -55,7 +55,7 @@ pub use post::{
     ImageSize, Post, PostProgram, STARS_BLEND, ShadowCulling, TRANSLUCENT_BLEND, dimension_folder,
     dimension_folder_named, load_post,
 };
-pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
+pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess, preprocess_text};
 pub use properties::{Entry, Note, Properties};
 pub use screens::{Item as ScreenItem, Screens};
 pub use textures::{

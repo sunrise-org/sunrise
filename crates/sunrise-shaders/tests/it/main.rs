@@ -9,6 +9,7 @@ mod global_constant_division;
 mod legacy_texture_size;
 mod length_array_sizes;
 mod local_constants;
+mod macro_expansion_budget;
 mod naga_glsl_atomics;
 mod naga_glsl_overloads;
 mod naga_hlsl_offsets;

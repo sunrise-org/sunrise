@@ -17,6 +17,7 @@ use naga::ShaderStage;
 use naga::front::glsl::{Frontend, Options};
 use naga::valid::{Capabilities, ValidationFlags, Validator};
 use sunrise_assets::resource_source::ResourceSource;
+use sunrise_shader_api::guard;
 
 /// One program, ready for wgpu.
 pub struct Program {
@@ -69,14 +70,22 @@ fn read_source(root: &ResourceSource, id: &str, ext: &str) -> Result<String, Str
         .map_err(|e| format!("{file}: {e}"))
 }
 
-fn include(root: &ResourceSource, src: &str, depth: u32) -> Result<String, String> {
+/// `src`, the file `id`, with its includes pasted into `out`, which stays within the stage's
+/// byte budget ([`guard::MAX_GLSL_BYTES`]): a line that would pass it is refused before it is
+/// added, naming its file and line.
+fn include(
+    root: &ResourceSource,
+    src: &str,
+    id: &str,
+    depth: u32,
+    out: &mut String,
+) -> Result<(), String> {
     if depth > 8 {
         return Err("#include nested too deep".into());
     }
-    let mut out = String::new();
-    for line in src.lines() {
+    for (n, line) in src.lines().enumerate() {
         let t = line.trim_start();
-        if let Some(rest) = t.strip_prefix("#include") {
+        let kept = if let Some(rest) = t.strip_prefix("#include") {
             let name = rest
                 .trim()
                 .trim_start_matches(['<', '"'])
@@ -87,16 +96,30 @@ fn include(root: &ResourceSource, src: &str, depth: u32) -> Result<String, Strin
             let text = root
                 .read_to_string(&file)
                 .map_err(|e| format!("#include <{name}>: {file}: {e}"))?;
-            out.push_str(&include(root, &text, depth + 1)?);
+            include(root, &text, name, depth + 1, out)?;
+            ""
         } else if t.starts_with("#version") || t.starts_with("#extension") {
-            // Re-added below, for the translator.
-            out.push('\n');
-            continue;
+            // Those two are written again below, for the translator.
+            ""
         } else {
-            out.push_str(line);
+            line
+        };
+        if out.len() + kept.len() + 1 > guard::MAX_GLSL_BYTES {
+            let (line, max) = (n + 1, guard::MAX_GLSL_BYTES);
+            return Err(format!(
+                "{id}: line {line}: the stage grows past {max} bytes here"
+            ));
         }
+        out.push_str(kept);
         out.push('\n');
     }
+    Ok(())
+}
+
+/// The shader `id`'s `ext` file (`vsh` or `fsh`) with its includes pasted.
+fn pasted(root: &ResourceSource, id: &str, ext: &str) -> Result<String, String> {
+    let mut out = String::new();
+    include(root, &read_source(root, id, ext)?, id, 0, &mut out)?;
     Ok(out)
 }
 
@@ -205,9 +228,11 @@ fn wrap_main(src: &str) -> Result<String, String> {
     Err("no main".into())
 }
 
+/// Parses and validates one stage, preprocessed and checked first as a core shader is
+/// ([`crate::core_shader::preprocessed`]): refusals name its line.
 fn parse(stage: ShaderStage, text: &str) -> Result<naga::Module, String> {
-    let module = Frontend::default()
-        .parse(&Options::from(stage), text)
+    let text = &crate::core_shader::preprocessed(text, &[])?;
+    let module = guard::guarded(|| Frontend::default().parse(&Options::from(stage), text))?
         .map_err(|e| {
             e.errors
                 .iter()
@@ -215,16 +240,18 @@ fn parse(stage: ShaderStage, text: &str) -> Result<naga::Module, String> {
                 .collect::<Vec<_>>()
                 .join("; ")
         })?;
-    Validator::new(ValidationFlags::all(), Capabilities::empty())
-        .validate(&module)
-        .map_err(|e| format!("{:?}", e.into_inner()))?;
+    guard::guarded(|| {
+        Validator::new(ValidationFlags::all(), Capabilities::empty())
+            .validate(&module)
+            .map_err(|e| format!("{:?}", e.into_inner()))
+    })??;
     Ok(module)
 }
 
 /// Translates the vertex and fragment shader a pass names (`minecraft:post/invert`).
 pub fn translate(root: &ResourceSource, vertex: &str, fragment: &str) -> Result<Program, String> {
-    let vs = include(root, &read_source(root, vertex, "vsh")?, 0)?;
-    let fs = include(root, &read_source(root, fragment, "fsh")?, 0)?;
+    let vs = pasted(root, vertex, "vsh")?;
+    let fs = pasted(root, fragment, "fsh")?;
     // Blocks and samplers are shared by name across the stages, so both agree on a binding.
     let mut blocks: Vec<(String, u32)> = Vec::new();
     let mut names: Vec<String> = Vec::new();
@@ -280,6 +307,89 @@ mod tests {
         ]));
         translate(&source, "custom:post/test", "custom:post/test").unwrap();
         assert!(translate(&source, "custom:missing", "custom:post/test").is_err());
+    }
+
+    /// A post shader too deep for naga's GLSL front end is refused before naga parses it, as a
+    /// core shader is (`core_shader`'s test), also when a `#define` makes it so (#2546), at the
+    /// line naga reads it on (under the `#version` the translation writes). On a 2 MiB thread, so
+    /// one let through fails at once.
+    #[test]
+    fn a_shader_too_deep_for_naga_is_refused() {
+        use sunrise_assets::resource_source::Resource;
+        let deep = [
+            (format!("fragColor = vec4(a{});", "+a".repeat(10_000)), 6),
+            (
+                format!(
+                    "#define T a{}\nfragColor = vec4(T{});",
+                    "+a".repeat(198),
+                    "+T".repeat(198)
+                ),
+                7,
+            ),
+        ];
+        for (statement, line) in deep {
+            let error = std::thread::Builder::new()
+                .stack_size(2 << 20)
+                .spawn(move || {
+                    let fsh = format!(
+                        "#version 330\nlayout(location=0) out vec4 fragColor;\n\
+                         void main() {{\nfloat a = 0.5;\n{statement}\n}}"
+                    );
+                    let source = ResourceSource::indexed(std::collections::BTreeMap::from([
+                        ("assets/custom/shaders/post/test.vsh".into(), Resource::bytes(b"#version 330\nvoid main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }".to_vec())),
+                        ("assets/custom/shaders/post/test.fsh".into(), Resource::bytes(fsh.into_bytes())),
+                    ]));
+                    translate(&source, "custom:post/test", "custom:post/test").err()
+                })
+                .unwrap()
+                .join()
+                .unwrap()
+                .unwrap();
+            let at = format!("custom:post/test: line {line}: ");
+            assert!(error.starts_with(&at), "{error}");
+        }
+    }
+
+    /// Includes that fan out (64 of a file that includes 64 of another, three deep: 64 MB) stop
+    /// at the stage's byte budget before passing it, naming the file and line being pasted.
+    #[test]
+    fn includes_that_fan_out_stop_at_the_budget() {
+        use sunrise_assets::resource_source::Resource;
+        let fan = |next: &str| {
+            format!("#include <custom:{next}>\n")
+                .repeat(64)
+                .into_bytes()
+        };
+        let code = format!("float d = 1.0;{}\n", " ".repeat(241)).into_bytes();
+        let source = ResourceSource::indexed(std::collections::BTreeMap::from([
+            (
+                "assets/custom/shaders/post/test.vsh".into(),
+                Resource::bytes(
+                    b"#version 330\nvoid main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }"
+                        .to_vec(),
+                ),
+            ),
+            (
+                "assets/custom/shaders/post/test.fsh".into(),
+                Resource::bytes(fan("a.glsl")),
+            ),
+            (
+                "assets/custom/shaders/include/a.glsl".into(),
+                Resource::bytes(fan("b.glsl")),
+            ),
+            (
+                "assets/custom/shaders/include/b.glsl".into(),
+                Resource::bytes(fan("c.glsl")),
+            ),
+            (
+                "assets/custom/shaders/include/c.glsl".into(),
+                Resource::bytes(code),
+            ),
+        ]));
+        let Err(error) = translate(&source, "custom:post/test", "custom:post/test") else {
+            panic!("translated");
+        };
+        assert!(error.starts_with("custom:c.glsl: line 1: "), "{error}");
     }
 
     #[test]
