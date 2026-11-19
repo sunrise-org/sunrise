@@ -54,7 +54,7 @@ pub trait Layer: Sync {
     }
 }
 
-static LAYERS: Registry<dyn Layer> = Registry::new();
+static LAYERS: Registry<&'static dyn Layer> = Registry::new();
 
 /// Adds `layer` to the HUD, after the layers registered before it in the same stage. Before the game starts, as
 /// [`crate::register`].

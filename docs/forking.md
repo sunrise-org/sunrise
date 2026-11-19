@@ -21,12 +21,14 @@ features; disabling audio or controllers does not hide mod management.
 
 ## Build features
 
-The client's default features are `audio`, `controllers` and `friends`.
-Play with Friends remains independently selectable. For example, a client without
-audio or controllers can be built with:
+The game's default features are `audio`, `controllers`, `friends` and `extension-points`, the
+engine's generic extension points (#2510). The engine names no Sunrise feature: `sunrise-extras`
+is only `sunrise-official`'s feature, on by default, and it turns on `extension-points` and `friends`.
+The vanilla build has none of them, and CI's `verify-static` checks that with
+`tools/check_vanilla_features.py`:
 
 ```sh
-cargo build --release -p sunrise-game --no-default-features --features friends
+cargo build --release -p sunrise-game --no-default-features --features audio
 ```
 
 The dedicated server uses `--no-default-features`. Neither build mode introduces
@@ -37,7 +39,7 @@ a telemetry placeholder or an official-build promotion in the options screen.
 | Extra | Where it lives | The gate |
 |---|---|---|
 | The "Start Sunrise from the launcher" screen of a game without its prepared files, with its Download button (`get_the_game` hook) | crate `sunrise-official` | registered only by the official executable (`sunrise-official`); sunrise-client's own executable has none |
-| Sunrise Settings (Extras, PvP & HUD, Studio, AI Agent) and Mods (with the registry browser) | `options_ui.rs` (`Page::Sunrise` and below), `extras_ui.rs`, `extras.rs`, `pvp.rs`, `game/extras.rs` and `game/extras/`, `extras_hud.rs` | the Options screen shows vanilla's greyed Telemetry Data instead (`options_ui::SUNRISE_EXTRAS`, set in `entry.rs`) |
+| Sunrise Settings (Extras, PvP & HUD, Studio, AI Agent) and Mods (with the registry browser) | `options_ui.rs` (`Page::Sunrise` and below), `extras_ui.rs`, `extras.rs`, `pvp.rs`, `game/extras.rs` and `game/extras/`, `extras_hud.rs` | offered only while a crate registers a page at Sunrise Settings or Extras (sunrise-official does); otherwise the Options screen shows vanilla's greyed Telemetry Data instead (`options_ui::sunrise_settings`) |
 | The Mods screen's Sunrise row (name, version, authors, licence, links) (`sunrise_platform::mod_rows`) | crate `sunrise-official` | registered only by the official executable (`sunrise-official`); sunrise-client's own executable lists Minecraft and the mods only |
 | Auto-reconnect ([extras.md](extras.md)) | crate `sunrise-reconnect` | registered only by the official executable (`sunrise-official`); sunrise-client's own executable has none |
 | Discord Rich Presence and its switch | crate `sunrise-discord` | registered only by the official executable (`sunrise-official`); sunrise-client's own executable has none |
@@ -47,9 +49,8 @@ a telemetry placeholder or an official-build promotion in the options screen.
 
 Credits & Attribution then says where the official build is (`sunrise.plain.official`).
 
-`grep -rn sunrise-extras crates/` lists every gate. Apart from the `friends` feature above, the gates
-are `cfg!(feature = "sunrise-extras")`: both sides compile in every build, so no stub has to follow
-the code it replaces. To remove an extra for good, delete its files from the table and the lines its
+`grep -rn 'feature = "extension-points"' crates/` lists every gate. Apart from the `friends` feature above, the
+gates are `cfg!` or `#[cfg]` on `extension-points`. To remove an extra for good, delete its files from the table and the lines its
 gate guards.
 
 ## Not behind the feature

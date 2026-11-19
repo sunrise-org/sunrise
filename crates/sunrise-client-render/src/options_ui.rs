@@ -40,12 +40,16 @@ fn tr(key: &str) -> Text {
     Text::translate(key, &[])
 }
 
-/// False only in a game built without the `sunrise-extras` feature (docs/forking.md), which says
-/// so once at startup: the Options screen then has vanilla's Telemetry Data slot instead of
-/// Sunrise Settings and Mods, and Credits & Attribution names the official build.
-pub static SUNRISE_EXTRAS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-fn sunrise_extras() -> bool {
-    SUNRISE_EXTRAS.load(std::sync::atomic::Ordering::Relaxed)
+/// Sunrise Settings and Mods on Options: only while a crate registered a page at their places.
+fn sunrise_settings() -> bool {
+    #[cfg(test)]
+    return tests::SUNRISE_SETTINGS.get();
+    #[cfg(not(test))]
+    offers_sunrise_settings(sunrise_hooks::pages::engine::all())
+}
+fn offers_sunrise_settings(pages: &[&dyn sunrise_hooks::pages::Page]) -> bool {
+    use sunrise_hooks::pages::Place;
+    (pages.iter()).any(|p| matches!(p.place(), Place::SunriseSettings | Place::Extras))
 }
 /// `text` cut into lines of at most `width` characters, at spaces where it has them.
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -4514,6 +4518,10 @@ impl OptionsUi {
 
 #[cfg(test)]
 mod tests {
+    thread_local! {
+        /// Whether Options offers Sunrise Settings in a test (the official build's, unless it says otherwise).
+        pub(super) static SUNRISE_SETTINGS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    }
     use super::*;
     use crate::extras_ui::ExtraRow;
     use crate::gfx::EffectiveOutput;
@@ -7591,6 +7599,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn options_offers_sunrise_settings_only_for_a_page_registered_there() {
+        use sunrise_hooks::pages::{self, Place};
+        struct At(Place);
+        impl pages::Page for At {
+            fn id(&self) -> &'static str {
+                "test.at"
+            }
+            fn title(&self) -> &'static str {
+                "test.at"
+            }
+            fn place(&self) -> Place {
+                self.0
+            }
+            fn rows(&self, _: &mut Vec<pages::Row>) {}
+            fn act(&self, _: usize, _: pages::Act) {}
+        }
+        assert!(!offers_sunrise_settings(&[]));
+        assert!(!offers_sunrise_settings(&[&At(Place::Title)]));
+        assert!(offers_sunrise_settings(&[
+            &At(Place::Title),
+            &At(Place::Extras)
+        ]));
+        assert!(offers_sunrise_settings(&[&At(Place::SunriseSettings)]));
+        // With none, vanilla's last row: Telemetry Data (greyed), then Credits & Attribution.
+        SUNRISE_SETTINGS.set(false);
+        let (widgets, _, _, _) = OptionsUi::default().layout(&Settings::default(), 427.0, 240.0);
+        let pushes: Vec<Page> = (widgets.iter())
+            .filter_map(|w| match &w.kind {
+                WKind::Button {
+                    act: Act::Push(page),
+                    active: true,
+                    ..
+                } => Some(*page),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pushes.last(), Some(&Page::Credits));
+        assert!(!pushes.contains(&Page::Sunrise) && !pushes.contains(&Page::Mods));
     }
 
     #[test]

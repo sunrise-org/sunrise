@@ -15,7 +15,8 @@ test = false
 
 [features]
 default = ["sunrise-extras"]
-sunrise-extras = ["dep:sunrise-reconnect", "dep:sunrise-perf-overlay", "sunrise-game/sunrise-extras"]
+# Sunrise Extras: the extension points, Play with Friends' hosting and the Extras crates; the vanilla build is `sunrise-game --no-default-features --features audio`.
+sunrise-extras = ["dep:sunrise-reconnect", "dep:sunrise-perf-overlay", "sunrise-game/extension-points", "sunrise-game/friends"]
 
 [dependencies]
 sunrise-game = { path = "../sunrise-game", default-features = false, features = ["audio", "controllers"] }

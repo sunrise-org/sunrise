@@ -80,6 +80,8 @@ wgpu = { version = "30.0.1", default-features = false, features = ["dx12"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 
 [features]
+# The engine's extension points (sunrise-client's `extension-points`): the frame hooks' registry and call sites.
+extension-points = ["sunrise-hooks/extension-points"]
 # Sound output: sunrise-client's `audio` feature.
 audio = ["dep:cpal"]
 # Helpers sunrise-client's tests build their fixtures with.

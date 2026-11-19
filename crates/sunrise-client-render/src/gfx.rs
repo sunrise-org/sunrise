@@ -190,6 +190,8 @@ pub mod expression_blocks;
 pub mod external;
 mod flat;
 mod frame_gen;
+#[cfg(feature = "extension-points")]
+pub mod frame_hooks;
 mod frustum;
 mod gpu_culling;
 mod hdr;
@@ -660,6 +662,9 @@ pub struct Renderer {
     shadow_visible: Vec<resident::Visible>,
     /// The external shader pipeline world frames call (`external`); `None` draws vanilla's way.
     external: Option<Box<dyn external::ExternalPipeline>>,
+    /// The registered frame hooks (`frame_hooks`) this renderer calls.
+    #[cfg(feature = "extension-points")]
+    frame_hooks: frame_hooks::FrameHooks,
     translucent_draws: Vec<(u64, usize, [u32; 5], (u32, Option<u32>))>,
     /// Per visible section: the occlusion test that also sees its translucent quads
     /// (`NO_TEST` without one): the section is left to phase 2.

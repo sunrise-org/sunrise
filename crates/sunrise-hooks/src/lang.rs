@@ -9,7 +9,7 @@ use crate::{TooLate, registry::Registry};
 /// One crate's lang files: a language code (`en_us`, `fr_fr`) and that file's JSON text.
 pub type Files = [(&'static str, &'static str)];
 
-static FILES: Registry<Files> = Registry::new();
+static FILES: Registry<&'static Files> = Registry::new();
 
 /// Adds a crate's lang files. Before the game starts, as [`crate::register`]; a later call is
 /// refused.

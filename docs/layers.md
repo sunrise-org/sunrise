@@ -157,8 +157,8 @@ Sunrise's own extras and its product, and every built-in address of an outside s
   `game/extras.rs` and `game/extras/`, `extras_ui.rs`, `pvp.rs`.
 - **Rules:**
   - It uses the platform's public API only, never the engine.
-  - Until it moves, every Sunrise feature in the game sits behind the `sunrise-extras` feature
-    ([forking.md](forking.md)), so [sunrise-plain](https://github.com/horizon-rust/horizon-plain) builds without it.
+  - Until it moves, every Sunrise feature in the game sits behind the engine's `extension-points` feature,
+    which `sunrise-official`'s `sunrise-extras` turns on ([forking.md](forking.md)), so the vanilla build has none of it.
 
 ## Tools
 

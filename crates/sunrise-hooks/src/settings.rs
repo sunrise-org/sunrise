@@ -30,7 +30,7 @@ pub trait Store: Sync {
     fn is_default(&self) -> bool;
 }
 
-static STORES: Registry<dyn Store> = Registry::new();
+static STORES: Registry<&'static dyn Store> = Registry::new();
 
 /// Adds `store` to those the game loads and saves. Before the game starts, as
 /// [`crate::register`].

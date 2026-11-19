@@ -8,6 +8,8 @@ description = "The game's extension points for crates above the engine: hooks an
 
 [features]
 test-support = []
+# Registries whose registrants an Extras toggle switches ([`points`]): the engine's `extension-points`.
+extension-points = []
 
 [lints]
 workspace = true

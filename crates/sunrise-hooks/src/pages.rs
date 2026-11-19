@@ -249,7 +249,7 @@ pub fn connect(address: impl Into<String>) {
     *CONNECT.lock().unwrap_or_else(|e| e.into_inner()) = Some(address.into());
 }
 
-static PAGES: Registry<dyn Page> = Registry::new();
+static PAGES: Registry<&'static dyn Page> = Registry::new();
 
 /// Adds `page` to the game's options screens. Before the game starts, as [`crate::register`];
 /// entries keep the order pages registered in.

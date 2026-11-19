@@ -143,10 +143,9 @@ impl OptionsUi {
                     ("sunrise.pages.open.mods", Some(Page::Mods)),
                     ("options.credits_and_attribution", Some(Page::Credits)),
                 ];
-                // sunrise-extras: without it, vanilla's last row instead of Sunrise Settings and
-                // Mods: Telemetry Data (greyed: nothing is sent) and Credits & Attribution.
+                // Without Sunrise Settings, vanilla's last row: Telemetry Data (greyed) and Credits.
                 let plain;
-                let entries: &[_] = if sunrise_extras() {
+                let entries: &[_] = if sunrise_settings() {
                     &entries
                 } else {
                     plain = [
@@ -208,8 +207,8 @@ impl OptionsUi {
                     let y = y + 28.0 * (i + 1) as f32;
                     out.push(inactive(button(x, y, 210.0, tr(key), Act::None)));
                 }
-                // sunrise-extras: a build without them says where the official one is.
-                if !sunrise_extras() {
+                // A build without Sunrise Settings says where the official one is.
+                if !sunrise_settings() {
                     out.push(Widget {
                         x: 0.0,
                         y: (y + 92.0).min(h - 42.0),

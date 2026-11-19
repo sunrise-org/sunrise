@@ -929,6 +929,11 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: python3 tools/check_layers.py ${BASE_SHA:+--base "$BASE_SHA" --pull-request-merge}
+      # #2510 Q-L: `-p sunrise-game --no-default-features --features audio` turns on no extension-points, friends or sunrise-extras.
+      - name: The vanilla build turns on no Extras feature
+        id: vanilla_build_turns_on_no_extras_feature
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && (needs.changes.outputs.rust_required != 'false') }}
+        run: python3 tools/check_vanilla_features.py
       # The prebuilt game's second dylib, the wasm runtime, holds no C library: one there is hidden from the game's
       # library, whose link then fails (#1596's mimalloc). Reads `cargo metadata` only, compiles nothing.
       - name: The wasm runtime links no native library

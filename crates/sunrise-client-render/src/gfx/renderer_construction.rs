@@ -2410,6 +2410,8 @@ impl Renderer {
             phase2_runs: page_runs::PageRuns::default(),
             shadow_runs: page_runs::PageRuns::default(),
             external: None,
+            #[cfg(feature = "extension-points")]
+            frame_hooks: Default::default(),
             block_entities: Default::default(),
             block_entity_section_revisions: Default::default(),
             block_entity_membership_revisions: Default::default(),

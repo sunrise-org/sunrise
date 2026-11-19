@@ -109,11 +109,6 @@ pub fn start<G>(
     sunrise_look::give();
     // OptiFine's and Polytone's pack formats (platform, docs/layers.md), before any pack loads.
     sunrise_client::pack_formats::install();
-    // sunrise-extras (docs/forking.md): without the feature, no Sunrise Settings or Mods page.
-    if !cfg!(feature = "sunrise-extras") {
-        sunrise_client::options_ui::SUNRISE_EXTRAS
-            .store(false, std::sync::atomic::Ordering::Relaxed);
-    }
     sunrise_client::telemetry::mark_start();
     // Opt-in telemetry keeps each crash report (docs/telemetry.md), whatever the mode.
     crash::on_report(sunrise_client::telemetry::keep_crash);

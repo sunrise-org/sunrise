@@ -22,10 +22,9 @@ pub(super) struct Studio {
     pub(super) camera_track_dirty: bool,
 }
 
-/// Studio's editor runs. It is a Sunrise extra (docs/layers.md: the replay editor), so a build
-/// without `sunrise-extras` (sunrise-plain) plays replays without it: no free camera, path,
-/// timeline or top bar, and no editor commands or keys.
-pub(super) const EDITOR: bool = cfg!(feature = "sunrise-extras");
+/// Studio's editor, a Sunrise extra, runs: the vanilla build has no extension points and plays replays without it.
+/// Temporary: this gate leaves the engine with the editor when Replay Studio moves to its own mod (#619).
+pub(super) const EDITOR: bool = cfg!(feature = "extension-points");
 
 impl Studio {
     /// The free camera flies, apart from the player.

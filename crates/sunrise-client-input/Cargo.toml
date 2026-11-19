@@ -22,6 +22,8 @@ sunrise-theme = { path = "../sunrise-theme" }
 
 [features]
 controllers = []
+# The engine's extension points (sunrise-client's `extension-points`).
+extension-points = []
 
 [lints]
 workspace = true

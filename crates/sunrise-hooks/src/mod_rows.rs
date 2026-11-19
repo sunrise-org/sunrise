@@ -19,7 +19,7 @@ pub struct Row {
     pub description: &'static str,
 }
 
-static ROWS: Registry<Row> = Registry::new();
+static ROWS: Registry<&'static Row> = Registry::new();
 
 /// Lists `row` on the Mods screen; rows are kept in registration order, and the screen sorts what
 /// it shows. Before the game starts, as [`crate::register`].

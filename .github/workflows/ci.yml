@@ -79,6 +79,9 @@ jobs:
       # docs/layers.md: a crate depends only on its own layer or a lower one; today's exceptions only shrink.
       - name: Crates follow the layers
         run: python3 tools/check_layers.py
+      # #2510 Q-L: `-p sunrise-game --no-default-features --features audio` turns on no extension-points, friends or sunrise-extras.
+      - name: The vanilla build turns on no Extras feature
+        run: python3 tools/check_vanilla_features.py
       # docs/layers.md#built-in-addresses: every built-in outside address in the Sunrise layer's home; the rest only shrinks.
       - name: Built-in addresses stay in their home
         run: python3 tools/check_addresses.py

@@ -28,10 +28,10 @@ test = false
 # `sunrise-client-lib/default` adds no code (it is that crate's `audio` and `controllers`), but Cargo hashes feature
 # names: without it, `-p sunrise-game` and `-p sunrise-game -p sunrise-client-lib` (which turns on the library's
 # default) built the library and sunrise-client twice into one target folder.
-default = ["audio", "controllers", "sunrise-extras", "sunrise-client-lib/default"]
+default = ["audio", "controllers", "friends", "extension-points", "sunrise-client-lib/default"]
 audio = ["sunrise-client/audio"]
 controllers = ["sunrise-client/controllers"]
-sunrise-extras = ["sunrise-client/sunrise-extras"]
+extension-points = ["sunrise-client/extension-points"]
 testing = ["sunrise-client/testing"]
 friends = ["sunrise-client/friends"]
 rng-trace = ["sunrise-client/rng-trace"]

@@ -54,6 +54,13 @@ impl Renderer {
         if !frame.title {
             self.follow_translucent_layout();
             self.follow_packed_layout();
+            #[cfg(feature = "extension-points")]
+            if self.frame_hooks.poll(sunrise_hooks::seat()) {
+                log::debug!(
+                    "frame hooks: {} active, their frame changed",
+                    self.frame_hooks.len()
+                );
+            }
         }
         let released = self.arena.trim();
         self.graveyard.add(released);

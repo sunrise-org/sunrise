@@ -121,7 +121,7 @@ wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 libc = { version = "0.2", features = ["extra_traits"] }
 
 [features]
-default = ["audio", "controllers", "sunrise-extras"]
+default = ["audio", "controllers", "friends", "extension-points"]
 # Scoped trait-mod installation for a mod's own tests.
 testing = []
 # Per-level-tick state digest for determinism checks (game/world/state_digest.rs).
@@ -131,12 +131,8 @@ state-digest = []
 audio = ["sunrise-client-render/audio", "sunrise-client-lib/audio"]
 # Controllers: gilrs, and the DualSense's own output. Without it only `sunrise-ctl pad`'s virtual pad.
 controllers = ["sunrise-client-lib/controllers", "dep:gilrs", "dep:sunrise-dualsense", "sunrise-client-input/controllers"]
-# Sunrise's own extras over the vanilla game, for a fork that wants them out (docs/forking.md):
-# the Sunrise Settings and Mods pages and Play with Friends. Players always get
-# them; there is no switch. `grep -rn sunrise-extras crates/` lists
-# every place it gates. Without it (`--no-default-features --features audio,controllers`) the
-# client is best effort: CI builds only the default.
-sunrise-extras = ["friends"]
+# The engine's extension points (#2510); the vanilla build (`--no-default-features --features audio`) compiles none.
+extension-points = ["sunrise-client-render/extension-points", "sunrise-client-input/extension-points", "sunrise-hooks/extension-points"]
 # Play with Friends: sharing a world behind an invite code (game/friends.rs). Joining one is
 # sunrise-friends' `game` side, which sunrise-official registers (`sunrise_hooks::tunnel`).
 friends = ["dep:sunrise-friends"]

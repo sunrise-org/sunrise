@@ -56,8 +56,8 @@ sunrise-friends' `game` side offers it, and the official executable (`sunrise-of
 sunrise-client's own executable has none, so there a `friend:` address is refused and the title screen's
 Friends icon, which opens Join a Friend, is inactive (`net::joins_friends`). Hosting needs no hook: the
 host end connects to the world's LAN port over loopback, so tunnelled guests are LAN guests. It still lives in
-sunrise-client (`game/friends.rs`, `game/friends/screen.rs`, the `friends` feature, which comes with
-`sunrise-extras`) until the pause menu and `sunrise-ctl` offer entries to crates above the engine.
+sunrise-client (`game/friends.rs`, `game/friends/screen.rs`, the `friends` feature, which `sunrise-official`'s
+`sunrise-extras` turns on) until the pause menu and `sunrise-ctl` offer entries to crates above the engine.
 
 **Codes.** Crockford base32 (`0-9 A-Z` without `I L O U`; input ignores case, spaces and dashes and reads
 `O` as `0`, `I`/`L` as `1`) in groups of five, with a 16-bit checksum so a typo is caught before
