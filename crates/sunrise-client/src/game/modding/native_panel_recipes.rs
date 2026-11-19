@@ -132,34 +132,7 @@ impl Pages {
     ) -> Self {
         let (title, list, tab) = (&shown.title, &shown.recipes, shown.tab as usize);
         let kept = old.filter(|o| o.title == *title && o.tab == tab);
-        let cycle = |stacks: &[BrowserStack]| -> Vec<(BrowserStack, ItemStack)> {
-            stacks
-                .iter()
-                .filter_map(|s| Some((s.clone(), browser_stack(items, s)?)))
-                .collect()
-        };
-        let recipes = list
-            .iter()
-            .map(|r| {
-                let mut slots: Vec<_> = r.slots.iter().map(|s| cycle(s)).collect();
-                slots.extend(r.results.iter().map(|res| cycle(&res.stacks)));
-                Shown {
-                    layout: r.layout,
-                    width: r.width as usize,
-                    height: r.height as usize,
-                    slots,
-                    chances: r
-                        .results
-                        .iter()
-                        .map(|res| res.chance.map(chance_text))
-                        .collect(),
-                    fluid_inputs: r.fluid_inputs.iter().map(Well::new).collect(),
-                    fluid_outputs: r.fluid_outputs.iter().map(Well::new).collect(),
-                    note: r.note.clone(),
-                    action: r.action,
-                }
-            })
-            .collect();
+        let recipes = list.iter().map(|r| Shown::new(items, r)).collect();
         Self {
             title: title.clone(),
             tabs: shown
@@ -176,6 +149,56 @@ impl Pages {
 }
 
 impl Shown {
+    /// A recipe as the game draws it, its stacks made once: the panel's, and a guide page's recipes
+    /// (`guide_viewer`).
+    pub(super) fn new(items: &sunrise_client::items::Items, r: &BrowserRecipe) -> Shown {
+        let cycle = |stacks: &[BrowserStack]| -> Vec<(BrowserStack, ItemStack)> {
+            stacks
+                .iter()
+                .filter_map(|s| Some((s.clone(), browser_stack(items, s)?)))
+                .collect()
+        };
+        let mut slots: Vec<_> = r.slots.iter().map(|s| cycle(s)).collect();
+        slots.extend(r.results.iter().map(|res| cycle(&res.stacks)));
+        Shown {
+            layout: r.layout,
+            width: r.width as usize,
+            height: r.height as usize,
+            slots,
+            chances: r
+                .results
+                .iter()
+                .map(|res| res.chance.map(chance_text))
+                .collect(),
+            fluid_inputs: r.fluid_inputs.iter().map(Well::new).collect(),
+            fluid_outputs: r.fluid_outputs.iter().map(Well::new).collect(),
+            note: r.note.clone(),
+            action: r.action,
+        }
+    }
+    /// Its width and height `room` wide, without the gap under it.
+    pub(super) fn size(&self, room: f32) -> (f32, f32) {
+        let (at, arrow, action) = self.places(room);
+        let mut w = at
+            .iter()
+            .filter(|p| p.0.is_finite())
+            .map(|p| p.0 + SLOT)
+            .fold(arrow.0 + 24.0, f32::max);
+        if self.action.is_some() {
+            w = w.max(action.0 + 12.0);
+        }
+        let (wells_in, wells_out, _) = self.fluid_places(room);
+        for p in wells_in.iter().chain(&wells_out) {
+            w = w.max(p.0 + FLUID_WELL);
+        }
+        (w, self.height(room) - GAP)
+    }
+    /// What slot `k` holds now: its stacks cycle once a second from `since`.
+    fn slot_now(&self, since: Instant, k: usize) -> Option<&(BrowserStack, ItemStack)> {
+        let stacks = self.slots.get(k)?;
+        let n = since.elapsed().as_secs() as usize;
+        stacks.get(n % stacks.len().max(1))
+    }
     /// The inputs' block: its size and each input slot's place in it.
     fn inputs(&self) -> ((f32, f32), Vec<(f32, f32)>) {
         let row = |n: usize| (0..n).map(|i| (i as f32 * SLOT, 0.0)).collect();
@@ -401,9 +424,24 @@ impl Game<'_> {
     /// What a slot of a shown recipe holds now: its stacks cycle once a second.
     fn recipe_slot_now(&self, recipe: usize, slot: usize) -> Option<&(BrowserStack, ItemStack)> {
         let pages = self.panel.recipes.as_ref()?;
-        let stacks = pages.recipes.get(recipe)?.slots.get(slot)?;
-        let n = pages.since.elapsed().as_secs() as usize;
-        stacks.get(n % stacks.len().max(1))
+        pages.recipes.get(recipe)?.slot_now(pages.since, slot)
+    }
+    /// The stack in the slot of recipe `r` (its corner at `x`, `y`, `room` wide) under the pointer now.
+    pub(super) fn shown_slot_at(
+        &self,
+        r: &Shown,
+        since: Instant,
+        x: f32,
+        y: f32,
+        room: f32,
+    ) -> Option<ItemStack> {
+        let (at, _, _) = r.places(room);
+        at.iter().enumerate().find_map(|(k, &(sx, sy))| {
+            if !inside(self.cursor, [x + sx, y + sy, SLOT, SLOT]) {
+                return None;
+            }
+            Some(r.slot_now(since, k)?.1.clone())
+        })
     }
     /// The tab under the pointer: its index and icon.
     pub(super) fn recipe_tab_hovered(
@@ -537,114 +575,16 @@ impl Game<'_> {
             let x = (layout.grid.0 + (layout.width() - w) / 2.0).floor();
             batch.text(atlas, &text, x, layout.arrows_y + 5.0, u32::MAX, true);
         }
+        let since = self
+            .panel
+            .recipes
+            .as_ref()
+            .map_or_else(Instant::now, |p| p.since);
         for (i, (x, y)) in self.recipes_shown(layout) {
             let Some(r) = self.panel.recipes.as_ref().map(|p| &p.recipes[i]) else {
                 break;
             };
-            let (at, arrow, action) = r.places(layout.width());
-            let h = r.block(layout.width());
-            let (cooking, button) = (r.layout == BrowserLayout::Cooking, r.action);
-            let inputs = r.slots.len() - r.chances.len();
-            let staggered = r.result_step(layout.width()).1 > 1.0;
-            let (wells_in, wells_out, wells_h) = r.fluid_places(layout.width());
-            let atlas = &self.gui.atlas;
-            for &(sx, sy) in at.iter().filter(|p| p.0.is_finite()) {
-                batch.sprite(atlas, "gui/sprites/container/slot", x + sx, y + sy);
-            }
-            if cooking {
-                batch.sprite(
-                    atlas,
-                    "gui/sprites/container/furnace/lit_progress",
-                    x + 2.0,
-                    y + SLOT + 2.0,
-                );
-            }
-            batch.sprite(
-                atlas,
-                "gui/sprites/container/furnace/burn_progress",
-                x + arrow.0,
-                y + arrow.1,
-            );
-            if self.screen != super::Screen::Creative
-                && let Some(enabled) = button
-            {
-                let rect = [x + action.0, y + action.1, 12.0, 12.0];
-                let sprite = match (enabled, inside(cursor, rect)) {
-                    (false, _) => "gui/sprites/widget/button_disabled",
-                    (true, true) => "gui/sprites/widget/button_highlighted",
-                    (true, false) => "gui/sprites/widget/button",
-                };
-                sunrise_client::ui::nine_slice(
-                    batch,
-                    atlas,
-                    sprite,
-                    rect[0],
-                    rect[1],
-                    12.0,
-                    12.0,
-                    u32::MAX,
-                );
-                let color = if enabled {
-                    u32::MAX
-                } else {
-                    rgba(160, 160, 160, 255)
-                };
-                batch.text(atlas, "+", rect[0] + 3.0, rect[1] + 2.0, color, true);
-                sunrise_client::widgets::record(&format!("+ {i}"), rect, enabled);
-            }
-            if !r.note.is_empty() {
-                batch.text(
-                    atlas,
-                    &r.note,
-                    x,
-                    y + h + wells_h + 2.0,
-                    rgba(224, 224, 224, 255),
-                    true,
-                );
-            }
-            for (k, &(sx, sy)) in at.iter().enumerate().filter(|(_, p)| p.0.is_finite()) {
-                let Some((_, stack)) = self.recipe_slot_now(i, k).cloned() else {
-                    continue;
-                };
-                self.draw_item(batch, &stack, x + sx + 1.0, y + sy + 1.0);
-                let chance = k.checked_sub(inputs).and_then(|j| r.chances[j].as_deref());
-                if let Some(text) = chance {
-                    let atlas = &self.gui.atlas;
-                    let w = HudBatch::text_width(atlas, text);
-                    let line = if staggered && (k - inputs) % 2 == 1 {
-                        CHANCE_TEXT
-                    } else {
-                        0.0
-                    };
-                    let at = (
-                        x + sx + ((SLOT - w) / 2.0).floor(),
-                        y + sy + SLOT + 1.0 + line,
-                    );
-                    batch.text(atlas, text, at.0, at.1, rgba(255, 255, 85, 255), true);
-                }
-                if inside(cursor, [x + sx, y + sy, SLOT, SLOT]) {
-                    batch.fill(
-                        &self.gui.atlas,
-                        x + sx + 1.0,
-                        y + sy + 1.0,
-                        16.0,
-                        16.0,
-                        rgba(255, 255, 255, 128),
-                    );
-                }
-                let name = self.pack.names.display_item(&stack.item);
-                sunrise_client::widgets::record_as(
-                    &format!("{name} {i}:{k}"),
-                    [x + sx + 1.0, y + sy + 1.0, 16.0, 16.0],
-                    true,
-                    sunrise_client::widgets::Kind::Button,
-                );
-            }
-            for (places, wells) in [(wells_in, &r.fluid_inputs), (wells_out, &r.fluid_outputs)] {
-                for (&(sx, sy), well) in places.iter().zip(wells) {
-                    self.draw_fluid_well(batch, well, x + sx, y + sy);
-                }
-            }
+            self.draw_shown_recipe(batch, r, since, x, y, layout.width(), i);
         }
         if let Some((key, fallback)) = self.panel.transfer_warning {
             let warning = sunrise_client::lang::get_or(key, fallback);
@@ -661,6 +601,126 @@ impl Game<'_> {
             );
             sunrise_client::widgets::record(&warning, [x, y, w, h], false);
             self.draw_tooltip_lines(batch, &lines, cursor.0, cursor.1);
+        }
+    }
+
+    /// Draws recipe `r` with its corner at (`x`, `y`), `room` wide: its slots, arrow, flame, note, fluid wells and
+    /// action button, its stacks as they are now (cycling from `since`). `tag` tells its widgets apart.
+    pub(super) fn draw_shown_recipe(
+        &self,
+        batch: &mut HudBatch,
+        r: &Shown,
+        since: Instant,
+        x: f32,
+        y: f32,
+        room: f32,
+        tag: usize,
+    ) {
+        let cursor = self.cursor;
+        let i = tag;
+        let (at, arrow, action) = r.places(room);
+        let h = r.block(room);
+        let (cooking, button) = (r.layout == BrowserLayout::Cooking, r.action);
+        let inputs = r.slots.len() - r.chances.len();
+        let staggered = r.result_step(room).1 > 1.0;
+        let (wells_in, wells_out, wells_h) = r.fluid_places(room);
+        let atlas = &self.gui.atlas;
+        for &(sx, sy) in at.iter().filter(|p| p.0.is_finite()) {
+            batch.sprite(atlas, "gui/sprites/container/slot", x + sx, y + sy);
+        }
+        if cooking {
+            batch.sprite(
+                atlas,
+                "gui/sprites/container/furnace/lit_progress",
+                x + 2.0,
+                y + SLOT + 2.0,
+            );
+        }
+        batch.sprite(
+            atlas,
+            "gui/sprites/container/furnace/burn_progress",
+            x + arrow.0,
+            y + arrow.1,
+        );
+        if self.screen != super::Screen::Creative
+            && let Some(enabled) = button
+        {
+            let rect = [x + action.0, y + action.1, 12.0, 12.0];
+            let sprite = match (enabled, inside(cursor, rect)) {
+                (false, _) => "gui/sprites/widget/button_disabled",
+                (true, true) => "gui/sprites/widget/button_highlighted",
+                (true, false) => "gui/sprites/widget/button",
+            };
+            sunrise_client::ui::nine_slice(
+                batch,
+                atlas,
+                sprite,
+                rect[0],
+                rect[1],
+                12.0,
+                12.0,
+                u32::MAX,
+            );
+            let color = if enabled {
+                u32::MAX
+            } else {
+                rgba(160, 160, 160, 255)
+            };
+            batch.text(atlas, "+", rect[0] + 3.0, rect[1] + 2.0, color, true);
+            sunrise_client::widgets::record(&format!("+ {i}"), rect, enabled);
+        }
+        if !r.note.is_empty() {
+            batch.text(
+                atlas,
+                &r.note,
+                x,
+                y + h + wells_h + 2.0,
+                rgba(224, 224, 224, 255),
+                true,
+            );
+        }
+        for (k, &(sx, sy)) in at.iter().enumerate().filter(|(_, p)| p.0.is_finite()) {
+            let Some((_, stack)) = r.slot_now(since, k).cloned() else {
+                continue;
+            };
+            self.draw_item(batch, &stack, x + sx + 1.0, y + sy + 1.0);
+            let chance = k.checked_sub(inputs).and_then(|j| r.chances[j].as_deref());
+            if let Some(text) = chance {
+                let atlas = &self.gui.atlas;
+                let w = HudBatch::text_width(atlas, text);
+                let line = if staggered && (k - inputs) % 2 == 1 {
+                    CHANCE_TEXT
+                } else {
+                    0.0
+                };
+                let at = (
+                    x + sx + ((SLOT - w) / 2.0).floor(),
+                    y + sy + SLOT + 1.0 + line,
+                );
+                batch.text(atlas, text, at.0, at.1, rgba(255, 255, 85, 255), true);
+            }
+            if inside(cursor, [x + sx, y + sy, SLOT, SLOT]) {
+                batch.fill(
+                    &self.gui.atlas,
+                    x + sx + 1.0,
+                    y + sy + 1.0,
+                    16.0,
+                    16.0,
+                    rgba(255, 255, 255, 128),
+                );
+            }
+            let name = self.pack.names.display_item(&stack.item);
+            sunrise_client::widgets::record_as(
+                &format!("{name} {i}:{k}"),
+                [x + sx + 1.0, y + sy + 1.0, 16.0, 16.0],
+                true,
+                sunrise_client::widgets::Kind::Button,
+            );
+        }
+        for (places, wells) in [(wells_in, &r.fluid_inputs), (wells_out, &r.fluid_outputs)] {
+            for (&(sx, sy), well) in places.iter().zip(wells) {
+                self.draw_fluid_well(batch, well, x + sx, y + sy);
+            }
         }
     }
 

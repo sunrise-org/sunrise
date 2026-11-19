@@ -17,6 +17,7 @@ again restores vanilla's behaviour completely.
 | Game glue (input hooks, per-frame update) | `crates/sunrise-client/src/game/interface/extras.rs`; each extra's own glue in a child module, `game/interface/extras/` |
 | Mouse Tweaks-style controls, sort buttons | `crates/sunrise-client/src/game/interface/extras/mouse_tweaks.rs`, `game/interface/extras/sorting.rs` |
 | Sort order and its clicks | `crates/sunrise-client/src/inv_sort.rs` (pure, unit tested) |
+| Mod guides: pages, layout, search (pure, unit tested); the viewer | `crates/sunrise-client/src/guides.rs` and `guides/`; `crates/sunrise-client/src/game/interface/guide_viewer.rs` |
 | The music page's rows, and the pools it filters | `options_ui.rs` (`Page::Music`), `crates/sunrise-client/src/music.rs` (`track_groups`, `MusicManager::set_off`), `sound_events.rs` (`sound_except`) |
 | The settings page | `options_ui.rs` (`Page::Extras`): **Options → Sunrise Settings... → Extras...**; fullbright, dynamic lights and hiding block-break particles are on the graphics screen's Quality page instead (`graphics_ui.rs`, **Options → Video Settings...**) |
 
@@ -39,6 +40,16 @@ the Extras page, not in vanilla's Key Binds screen: Sunrise has no Sunrise categ
 in Controls, and adding one would put a non-vanilla mapping into `options.txt`.
 
 ## The extras
+
+### Mod guides (no setting)
+- W with the pointer over an item on a container screen (the inventory, the creative inventory, a container, the item
+  panel, a recipe page) opens that item's page in the guide its mod ships (#2664): Markdown pages under
+  `assets/<ns>/guides/` or `assets/<ns>/ae2guide/`, with contents, links, search, recipes as live slots and 3D scenes.
+  How mods ship one: [Ship a guide with your mod](modding/src/how-to/client/mod-guides.md).
+- No setting, and still vanilla by default: without a mod that ships a guide nothing changes, and W over an item on a
+  container screen does nothing in vanilla. A build without `sunrise-extras` has no viewer.
+- Written clean-room from [the guides specification](cleanroom/guides-spec.md); its open questions are decided in
+  [cleanroom/guides-decisions.md](cleanroom/guides-decisions.md).
 
 ### Chunk pregeneration (`pregen`, default off)
 - Makes `/pregen` available in single-player and hosted LAN worlds, with the existing cheat and

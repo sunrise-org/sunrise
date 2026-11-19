@@ -667,6 +667,7 @@ impl Game<'_> {
         self.texture_atlases_stitched();
         self.native_model_baking_completed();
         self.native_client_resources_reloaded();
+        self.guides_reloaded();
         Ok(())
     }
 }

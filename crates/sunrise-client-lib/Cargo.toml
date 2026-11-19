@@ -94,6 +94,8 @@ sunrise-dualsense = { path = "../sunrise-dualsense", optional = true }
 # HTTPS to the Minecraft services (online-mode session join).
 ureq = { version = "2", default-features = false, features = ["tls"] }
 unicode-bidi = "0.3.18"
+# Front matter of mods' guide pages (guides.rs, #2664).
+yaml-rust2 = { version = "0.13", default-features = false }
 # `LevelStorageAccess.estimateDiskSpace`: usable disk space, without unsafe code on Windows.
 fs4 = { version = "1.1.0", default-features = false, features = ["sync"] }
 

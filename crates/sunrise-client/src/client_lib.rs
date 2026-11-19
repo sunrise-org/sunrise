@@ -96,7 +96,9 @@ pub mod game_mode_switcher;
 pub mod game_rules_screen;
 pub mod gizmos;
 pub mod gossip;
+// Built-in mod guides (#2664): the pure part; the viewer is the game's, behind `sunrise-extras`.
 pub mod gui_layers;
+pub mod guides;
 pub mod health;
 pub mod hotbar;
 pub mod hunger;

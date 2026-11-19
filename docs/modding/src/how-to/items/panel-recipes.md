@@ -67,3 +67,10 @@ The page's events come back through `panel_event`, as the items' do:
 Looking recipes up stays the viewer's job: it reads them (`recipes_of_type`) and builds the pages.
 A machine mod with its own recipe types supplies its pages through the viewer's published
 integration; the engine has no hook between the two.
+
+## Guides
+
+Sunrise's built-in guide viewer draws the recipe tags of guide pages (`<RecipeFor>`, `<RecipesFor>`, `<Recipe>`)
+with this same recipe view, as live slots: they cycle, show their tooltips, and W or a click over one opens that
+item's guide page. W also opens the guide page of an item under the pointer on a recipe page or in the item panel.
+See [Ship a guide with your mod](../client/mod-guides.md).
