@@ -226,6 +226,15 @@ impl RuntimeTable {
         self.entries.get(id).map_or("?", |entry| entry.owner)
     }
 
+    /// A live projection may bind only its caller's genuinely open empty-generator level.
+    pub(in crate::game) fn owned_void(&self, id: &str, owner: &str) -> bool {
+        self.entries.get(id).is_some_and(|entry| {
+            entry.state == State::Open
+                && entry.owner == owner
+                && entry.level.generator == RuntimeGenerator::Void
+        })
+    }
+
     /// The requests waiting, in the order made. Later requests wait for the next tick.
     fn take_queue(&mut self) -> Vec<Request> {
         std::mem::take(&mut self.queue)
@@ -577,6 +586,7 @@ impl Game<'_> {
         &mut self,
         property: impl Fn(&str) -> Option<String>,
     ) {
+        self.read_live_world_quotas(&property);
         if let Some(cap) = property("sunrise-max-runtime-levels")
             .and_then(|value| value.trim().parse::<usize>().ok())
         {
@@ -586,7 +596,7 @@ impl Game<'_> {
 
     /// The mod running, if it is one and a server world is open: who a runtime level request
     /// belongs to.
-    fn runtime_caller(&self) -> Result<&'static str, RuntimeLevelError> {
+    pub(in crate::game) fn runtime_caller(&self) -> Result<&'static str, RuntimeLevelError> {
         if !self.is_logical_server() || self.native_lifecycle.epoch().is_none() {
             return Err(RuntimeLevelError::Unavailable);
         }

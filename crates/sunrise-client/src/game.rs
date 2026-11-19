@@ -1775,6 +1775,8 @@ struct Game<'a> {
     /// What changed in entities' colliders this tick, for the players who track them.
     collider_changes: Vec<native_colliders::ColliderChange>,
     collider_placements: native_colliders::Placements,
+    /// Runtime levels projected as sparse moving local worlds.
+    live_worlds: std::cell::RefCell<native_live_worlds::LiveWorlds>,
     collider_histories: native_colliders::Histories,
     entity_initialization: entity_initialization::EntityInitialization,
     /// Typed per-level membership follows dimensions, not the temporary world swap.
@@ -5580,6 +5582,7 @@ impl Game<'_> {
         self.mark_entity(out.len(), "minecraft:evoker_fangs");
         self.fangs_geometry(camera, alpha, &mut out);
         self.block_item_display_geometry(camera, alpha, &mut out);
+        self.live_world_geometry(camera, alpha, &mut out);
         laps.lap("eg_players");
         let mut see_through = std::mem::take(&mut self.see_through_vertices);
         see_through.clear();
@@ -11165,6 +11168,7 @@ impl<'a> Game<'a> {
             entity_attachments: Default::default(),
             collider_changes: Vec::new(),
             collider_placements: Default::default(),
+            live_worlds: Default::default(),
             collider_histories: Default::default(),
             entity_initialization: Default::default(),
             attachment_indexes: Default::default(),

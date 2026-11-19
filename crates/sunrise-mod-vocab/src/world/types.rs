@@ -286,6 +286,32 @@ pub struct PlayerRespawnConfig {
     pub forced: bool,
 }
 
+/// One binding of a mod-owned runtime level to a destination level.
+/// Reads and motion never copy authoritative block entities or inventories.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
+// exhaustive: only the engine constructs handles
+pub struct LiveWorldRef {
+    pub(crate) source: LevelRef,
+    pub(crate) generation: u64,
+}
+
+impl LiveWorldRef {
+    /// Construct an engine handle; the backend validates every field and its owner.
+    #[doc(hidden)]
+    pub fn new(source: LevelRef, generation: u64) -> Self {
+        Self { source, generation }
+    }
+    /// The real local level. Ordinary block/attachment/Part APIs retain their normal context rules.
+    pub fn level(self) -> LevelRef {
+        self.source
+    }
+    /// The generation of this binding, for engine tables.
+    #[doc(hidden)]
+    pub fn generation(self) -> u64 {
+        self.generation
+    }
+}
+
 /// A level of the open world, by its dimension (`minecraft:the_nether`).
 /// `Host::level` makes one, and `entity.level(host)` gives an entity's.
 #[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -517,7 +517,9 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                     call
                 };
                 let typed_access_error = result_error(&entry.sig.output).filter(|error| {
-                    outer_type(error, "LevelReadError") || outer_type(error, "LevelWriteError")
+                    outer_type(error, "LevelReadError")
+                        || outer_type(error, "LevelWriteError")
+                        || outer_type(error, "LiveWorldError")
                 });
                 if typed_access_error.is_none() {
                     unwinding.insert(format!("{}::{name}", area.stem));

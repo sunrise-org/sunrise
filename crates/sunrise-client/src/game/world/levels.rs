@@ -963,6 +963,30 @@ impl Game<'_> {
         self.clear_client_particles();
     }
 
+    /// A projection's source uses the real level's residency and block-ticking tickets.
+    pub(in crate::game) fn live_world_tick_ready(
+        &self,
+        level: mod_api::LevelRef,
+        pos: [i32; 3],
+    ) -> bool {
+        if !self.level_handle_current(level) {
+            return false;
+        }
+        if level.dimension() == self.dim.key() {
+            return self.world.is_loaded_at(pos[0], pos[1], pos[2])
+                && self.block_ticking_at(pos[0], pos[2]);
+        }
+        let Some(parked) = self.levels.parked.get(&Dim::from_id(level.dimension_id())) else {
+            return false;
+        };
+        parked.world.is_loaded_at(pos[0], pos[1], pos[2])
+            && !parked
+                .world
+                .entities_pending
+                .contains(&(pos[0] >> 4, pos[2] >> 4))
+            && parked.tickets.levels().block_ticking_at(pos[0], pos[2])
+    }
+
     /// Put `target`'s level in place, opening it first if it is not loaded.
     /// The level that was in place is kept with the others; the shared
     /// clock and weather go with the swap.
@@ -1222,6 +1246,7 @@ impl Game<'_> {
             let _span = sunrise_client::spans::guard("mod_configs_poll");
             self.native_configs_poll();
         }
+        self.live_world_begin_tick();
         if let Some(running) = running
             && server
         {
@@ -1295,6 +1320,7 @@ impl Game<'_> {
             });
             drop(history);
             // Then the bodies standing on a collider that moved are carried with it.
+            self.live_world_end_level();
             if result.is_ok() && !paused {
                 sunrise_client::block_contact::in_level(
                     self.tick,

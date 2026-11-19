@@ -1,0 +1,3 @@
+ids = ["handle:LevelRef::project", "handle:LevelRef::live_world", "handle:LiveWorldRef::sample", "handle:LiveWorldRef::clip", "handle:LiveWorldRef::validate_hit", "handle:LiveWorldRef::publish_pose", "handle:LiveWorldRef::retire", "type:LiveWorldPose", "type:LiveWorldLimits", "type:LiveWorldRef", "type:LiveWorldSample", "type:LiveWorldHit", "type:LiveWorldError"]
+why = "Local experimental runtime-dimension projection over real level-owned blocks; external poses, sparse shapes and optimistic revision checks. Refs #1022; not approved or feature complete."
+migrate = "Additive experimental surface. Ordinary level/Part context rules still hold. Projected actions, atomic cross-level transfer and client tracking require separate proof before enablement."
