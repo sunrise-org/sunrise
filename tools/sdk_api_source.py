@@ -160,10 +160,24 @@ def feature_value_kept(value: str, crate: str, dependencies: dict, kept: dict, m
 
 def normal_dependencies(manifest: dict) -> dict[str, dict]:
     """`[dependencies]` and every `[target.*.dependencies]`, by the name the crate uses."""
-    tables = [manifest.get("dependencies", {})]
-    tables += [target.get("dependencies", {}) for target in manifest.get("target", {}).values()]
     return {name: spec if isinstance(spec, dict) else {"version": spec}
-            for table in tables for name, spec in table.items()}
+            for _, entries in dependency_tables(manifest) for name, spec in entries.items()}
+
+
+def dependency_tables(manifest: dict):
+    """Normal dependency tables without losing their target conditions or renamed keys."""
+    yield None, manifest.get("dependencies", {})
+    for platform, entries in sorted(manifest.get("target", {}).items()):
+        yield platform, entries.get("dependencies", {})
+
+
+def target_key(platform: str | None) -> str | None:
+    """Match Cargo's displayed predicates to manifest predicates, ignoring only whitespace outside strings.
+    Cargo evaluates them through `metadata --filter-platform`; this does not evaluate cfg expressions."""
+    if platform is None:
+        return None
+    return re.sub(r'"(?:[^"\\]|\\.)*"|\s+',
+                  lambda match: match[0] if match[0].startswith('"') else "", platform)
 
 
 def resolve_workspace(value, inherited: dict, what: str):
@@ -180,11 +194,13 @@ def resolve_workspace(value, inherited: dict, what: str):
 
 
 def normalise_manifest(manifest: dict, workspace: dict, crate: Crate, crates: dict[str, Crate],
-                       features: dict[str, list[str]], resolved: dict[str, tuple[set[str], bool]]) -> str:
+                       features: dict[str, list[str]],
+                       resolved: dict[tuple[str | None, str], tuple[set[str], bool]]) -> str:
     """The crate's manifest as the API source carries it: workspace keys resolved, path dependencies pointing
     inside the API source, no dev- or build-dependencies, no targets but the library. A registry dependency named
-    in `resolved` (its resolved features, and whether its defaults are on) asks for exactly the features the game's
-    build resolves for it, so an author compiles the API as the player's prebuilt game does."""
+    in `resolved` by target table and alias (its resolved features, and whether its defaults are on) asks for
+    exactly the features the game's build resolves for it, so an author compiles the API as the player's prebuilt
+    game does. Inactive tables and optional edges keep their manifest specifications."""
     inherited_package = workspace.get("workspace", {}).get("package", {})
     inherited_dependencies = workspace.get("workspace", {}).get("dependencies", {})
     package = {key: resolve_workspace(manifest["package"][key], inherited_package, key)
@@ -197,13 +213,14 @@ def normalise_manifest(manifest: dict, workspace: dict, crate: Crate, crates: di
         out.append(table("lib", {key: manifest["lib"][key] for key in ("name", "path", "proc-macro")
                                  if key in manifest["lib"]}))
 
-    def dependencies(entries: dict) -> dict:
+    def dependencies(platform: str | None, entries: dict) -> dict:
         written = {}
         for name, spec in entries.items():
             spec = resolve_workspace(spec, inherited_dependencies, name)
-            if name in resolved:
+            key = (target_key(platform), name)
+            if key in resolved:
                 spec = dict(spec) if isinstance(spec, dict) else {"version": spec}
-                game, defaults = resolved[name]
+                game, defaults = resolved[key]
                 if set(spec.get("features", [])) - game or (spec.get("default-features", True) and not defaults):
                     raise Refusal("E_FEATURES", f"{crate.name} asks {name} for more than the game resolves")
                 spec.pop("features", None)
@@ -221,10 +238,10 @@ def normalise_manifest(manifest: dict, workspace: dict, crate: Crate, crates: di
             written[name] = spec
         return written
 
-    out.append(table("dependencies", dependencies(manifest.get("dependencies", {}))))
-    for platform, entries in sorted(manifest.get("target", {}).items()):
-        if entries.get("dependencies"):
-            out.append(table(f"target.{json.dumps(platform)}.dependencies", dependencies(entries["dependencies"])))
+    for platform, entries in dependency_tables(manifest):
+        if platform is None or entries:
+            name = "dependencies" if platform is None else f"target.{json.dumps(platform)}.dependencies"
+            out.append(table(name, dependencies(platform, entries)))
     if features:
         out.append(table("features", features))
     lints = manifest.get("lints", {})
@@ -274,27 +291,76 @@ def target_features(tree: str) -> dict[str, set[str]]:
 
 
 def requested_features(metadata: dict, crate: Crate, manifest: dict,
-                       game: dict[str, set[str]]) -> dict[str, tuple[set[str], bool]]:
+                       game: dict[str, set[str]]) -> dict[tuple[str | None, str], tuple[set[str], bool]]:
     """The game's resolved features for each registry dependency of a library crate, by the manifest's name for
-    it, and whether its defaults are on (always, for a package without a `default` feature). A proc macro's
-    dependencies run on the host and keep what the crate asks."""
+    it and target table, and whether its defaults are on (always, for a package without a `default` feature).
+    `metadata` is filtered by Cargo for the game's target. Inactive target and optional specifications stay as
+    written; a proc macro's dependencies run on the host and keep what the crate asks."""
     packages = {package["id"]: package for package in metadata["packages"]}
     package = next(p for p in metadata["packages"] if p["name"] == crate.name and p["source"] is None)
     if any("proc-macro" in target["kind"] for target in package["targets"]):
         return {}
     node = next(node for node in metadata["resolve"]["nodes"] if node["id"] == package["id"])
-    externs = {dependency["name"]: packages[dependency["pkg"]] for dependency in node["deps"]
-               if any(kind["kind"] is None for kind in dependency["dep_kinds"])}
+    externs = [(target_key(kind["target"]), dependency["name"], packages[dependency["pkg"]])
+               for dependency in node["deps"] for kind in dependency["dep_kinds"] if kind["kind"] is None]
+    declarations = {(target_key(dependency["target"]), dependency["rename"] or dependency["name"]): dependency
+                    for dependency in package["dependencies"] if dependency["kind"] is None}
+    optional = {alias for (_, alias), declaration in declarations.items() if declaration["optional"]}
+    enabled = enabled_optional_dependencies(manifest, game.get(f"{package['name']} {package['version']}", set()),
+                                            optional)
     requested = {}
-    for name in normal_dependencies(manifest):
-        dependency = externs.get(name.replace("-", "_"))
-        if dependency is None or dependency["source"] is None:
-            continue
-        key = f"{dependency['name']} {dependency['version']}"
-        if key not in game:
-            raise Refusal("E_FEATURES", f"the game's build does not resolve {key}, which {crate.name} uses")
-        requested[name] = (game[key], "default" in game[key] or "default" not in dependency["features"])
+    for platform, entries in dependency_tables(manifest):
+        for name in entries:
+            declaration = declarations[target_key(platform), name]
+            if declaration["optional"] and name not in enabled:
+                continue
+            # An unrenamed package can export a differently named library (`md-5` exports `md5`). Cargo's
+            # declaration supplies the package identity; the extern name disambiguates explicit aliases only.
+            dependency = next((package for target, alias, package in externs
+                               if target == target_key(platform) and package["name"] == declaration["name"]
+                               and (declaration["rename"] is None or alias == name.replace("-", "_"))), None)
+            if dependency is None:
+                if platform is None:
+                    raise Refusal("E_FEATURES", f"the game's metadata does not resolve {name}, which {crate.name} uses")
+                continue
+            if dependency["source"] is None:
+                continue
+            if any("proc-macro" in target["kind"] for target in dependency["targets"]):
+                continue
+            key = f"{dependency['name']} {dependency['version']}"
+            if key not in game:
+                raise Refusal("E_FEATURES", f"the game's build does not resolve {key}, which {crate.name} uses")
+            requested[target_key(platform), name] = (game[key],
+                                                   "default" in game[key] or "default" not in dependency["features"])
     return requested
+
+
+def enabled_optional_dependencies(manifest: dict, features: set[str], optional: set[str]) -> set[str]:
+    """Optional aliases enabled by the game's crate features. Weak `alias?/feature` does not enable an alias."""
+    definitions = manifest.get("features", {})
+    pending, seen, enabled = list(features), set(), set()
+    while pending:
+        value = pending.pop()
+        if value in seen:
+            continue
+        seen.add(value)
+        if value.startswith("dep:"):
+            enabled.add(value[4:])
+        elif "/" in value:
+            alias, _ = value.split("/", 1)
+            if not alias.endswith("?"):
+                enabled.add(alias)
+        elif value in definitions:
+            pending.extend(definitions[value])
+        elif value in optional:
+            enabled.add(value)
+    return enabled
+
+
+def target_metadata(folder: Path, environment: dict | None = None, *, offline: bool = False) -> dict:
+    return json.loads(run(["cargo", "metadata", "--locked", *(["--offline"] if offline else []),
+                          "--format-version", "1", "--filter-platform", prebuilt_game.rustc_host()],
+                         cwd=folder, env=environment))
 
 
 def tree(folder: Path, package: str, environment: dict | None = None) -> str:
@@ -447,6 +513,7 @@ def build(out: Path) -> dict[str, bytes]:
     if out.exists() and any(out.iterdir()):
         raise Refusal("E_OUT_NOT_EMPTY", f"{out} is not empty")
     metadata = json.loads(run(["cargo", "metadata", "--locked", "--format-version", "1"], cwd=ROOT))
+    host_metadata = target_metadata(ROOT)
     workspace_root = Path(metadata["workspace_root"])
     crates = closure(metadata, (API, WASMTIME))
     by_name = {crate.name: crate for crate in crates}
@@ -465,7 +532,7 @@ def build(out: Path) -> dict[str, bytes]:
     for crate in crates:
         files[f"{crate.directory}/Cargo.toml"] = normalise_manifest(
             manifests[crate.name], workspace, crate, by_name, features[crate.name],
-            requested_features(metadata, crate, manifests[crate.name], game)).encode()
+            requested_features(host_metadata, crate, manifests[crate.name], game)).encode()
         if crate.generated:
             files[f"{crate.directory}/build.rs"] = BUILD_SCRIPT.encode()
     resolver = workspace.get("workspace", {}).get("resolver", "2")
@@ -617,9 +684,8 @@ def check(api: Path, scratch: Path) -> None:
         started = time.monotonic()
         run(command, cwd=folder, env=environment)
         timings[label] = time.monotonic() - started
-    game = json.loads(run(["cargo", "metadata", "--locked", "--format-version", "1"], cwd=ROOT))
-    ours = json.loads(run(["cargo", "metadata", "--locked", "--offline", "--format-version", "1"],
-                          cwd=mod / MOD_PATH, env=environment))
+    game = target_metadata(ROOT)
+    ours = target_metadata(mod / MOD_PATH, environment, offline=True)
 
     game_tree = tree(ROOT, prebuilt_game.GAME)
     sizes = {root: check_root(game, ours, root, game_tree, tree(folder, name, environment), name, exact)

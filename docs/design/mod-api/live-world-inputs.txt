@@ -7,6 +7,7 @@
 AGENTS.md
 CONTRIBUTING.md
 Cargo.lock
+Cargo.toml
 LICENSING.md
 crates/cargo-sunrise-mod/template/native/api.toml
 crates/cargo-sunrise-mod/template/native/lib.rs
@@ -111,6 +112,7 @@ crates/sunrise-client/src/raw_payloads/engine.rs
 crates/sunrise-client/src/save.rs
 crates/sunrise-client/src/save/block_entity_encode.rs
 crates/sunrise-client/src/ticket_levels.rs
+crates/sunrise-core/Cargo.toml
 crates/sunrise-core/src/crc32.rs
 crates/sunrise-core/src/geometry/carried.rs
 crates/sunrise-core/src/geometry/mod.rs
@@ -125,7 +127,12 @@ crates/sunrise-mod-api-gen/src/game_modules.rs
 crates/sunrise-mod-api-gen/src/host.rs
 crates/sunrise-mod-api-gen/src/lib.rs
 crates/sunrise-mod-api-gen/src/wire/ty.rs
+crates/sunrise-mod-api-macros/Cargo.toml
 crates/sunrise-mod-api-macros/src/lib.rs
+crates/sunrise-mod-api/Cargo.toml
+crates/sunrise-mod-point-shape/Cargo.toml
+crates/sunrise-mod-runtime/Cargo.toml
+crates/sunrise-mod-vocab/Cargo.toml
 crates/sunrise-mod-vocab/build.rs
 crates/sunrise-mod-vocab/changes/world-mutation.toml
 crates/sunrise-mod-vocab/src/client/model_instance.rs
@@ -171,6 +178,7 @@ crates/sunrise-protocol/src/lib.rs
 crates/sunrise-protocol/src/live_world_sync.rs
 crates/sunrise-protocol/src/packets/custom_payload.rs
 crates/sunrise-server-files/src/durable.rs
+crates/sunrise-wasmtime/Cargo.toml
 crates/sunrise-world/src/block_collision.rs
 crates/sunrise-world/src/carrier/contact.rs
 crates/sunrise-world/src/carrier/model.rs
@@ -190,6 +198,11 @@ docs/modding/src/how-to/native-mods/01-the-mods-crate.md
 docs/modding/src/how-to/native-mods/02-the-package.md
 docs/modding/src/how-to/native-mods/07-local-developer-builds.md
 docs/modding/src/how-to/wasm-mods.md
+tests/test_ci_concurrency.py
+tests/test_prebuilt_game.py
+tests/test_sdk_api_source.py
 tools/check_public_tree.py
 tools/ci/ignored-tests/README.md
 tools/ci/ignored-tests/daily-sunrise-client-live-worlds.txt
+tools/prebuilt_game.py
+tools/sdk_api_source.py

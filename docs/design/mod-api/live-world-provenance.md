@@ -111,3 +111,26 @@ its real source. Its structured evidence reports the actual chest and furnace
 values; it explicitly labels client drawing as a separate pending route. The
 run receipt records the test executable SHA-256, arguments and prepared resources.
 This is not full process-restart, menu-lifetime, window or transfer-journal evidence.
+
+## SDK exporter dependency inputs
+
+The normal SDK export exposed an inactive-architecture dependency refusal in the
+base's `tools/sdk_api_source.py`. The focused tool correction reads Cargo's own
+host-filtered dependency graph and preserves each target table and manifest alias;
+it adds no dependency, pin, source bypass or architecture-specific exception.
+The unfiltered graph remains the source packing closure for all supported targets.
+
+The diagnostic used this worktree's exporter, prebuilt helper, their Python tests
+and Cargo manifests/lockfile. Cargo metadata and tree output are build inputs, not
+foreign implementation research. The current official-head status was reported
+by the coordinator only; this worker did not inspect that newer implementation.
+The focused unit command is `python3 -m unittest tests.test_sdk_api_source` with
+a Python supporting `tomllib`. A separate no-compilation replay normalizes the
+actual exported manifests against Cargo's host graph and game feature tree.
+
+The broader prebuilt test selection was also executed with the immutable prior
+exporter bytes loaded into a temporary module. It reproduced the same failures
+and environment refusals observed with the correction. These failed runs remain
+failed receipts; no broad-suite success is claimed. Exact logs, commands and
+source hashes live in `.local/live-world-evidence/sdk-target-fix/` for the
+coordinator to preserve outside this worktree.

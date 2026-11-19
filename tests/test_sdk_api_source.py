@@ -14,6 +14,7 @@ def package(name, directory=None, kinds=("lib",), dependencies=(), source=None):
         "id": name, "name": name, "version": "0.1.0", "source": source,
         "manifest_path": f"/w/{directory or 'crates/' + name}/Cargo.toml",
         "targets": [{"kind": list(kinds), "name": name}],
+        "features": {},
         "dependencies": [{"name": dependency, "kind": kind, "path": path} for dependency, kind, path in dependencies],
     }
 
@@ -120,8 +121,8 @@ class ManifestTests(unittest.TestCase):
         crates = {"sunrise-mod-api": crate, "vocab": Crate("vocab", "crates/nested/vocab", False)}
         # The game resolves glam with its defaults and three features, log with its defaults and `std`, and libm
         # with `arch` and no defaults.
-        resolved = {"glam": ({"default", "std", "bytemuck", "serde"}, True), "log": ({"default", "std"}, True),
-                    "libm": ({"arch"}, False)}
+        resolved = {(None, "glam"): ({"default", "std", "bytemuck", "serde"}, True),
+                    (None, "log"): ({"default", "std"}, True), (None, "libm"): ({"arch"}, False)}
         written = api_source.normalise_manifest(self.API, self.WORKSPACE, crate, crates,
                                                 {"testing": ["vocab/testing"]}, resolved)
         self.assertEqual(tomllib.loads(written), {
@@ -153,8 +154,127 @@ class ManifestTests(unittest.TestCase):
             manifest = {"package": {"name": "vocab", "version": "0.1.0"}, "dependencies": {"serde": spec}}
             with self.subTest(spec), self.assertRaises(Refusal) as refused:
                 api_source.normalise_manifest(manifest, self.WORKSPACE, crate, {"vocab": crate}, {},
-                                              {"serde": resolved})
+                                              {(None, "serde"): resolved})
             self.assertEqual(refused.exception.code, "E_FEATURES")
+
+
+class RequestedFeatureTests(unittest.TestCase):
+    REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
+    CRATE = Crate("core", "crates/core", False)
+    ARM = 'cfg(target_arch = "aarch64")'
+    X86 = 'cfg(target_arch = "x86_64")'
+
+    def metadata(self, *edges, optional=False):
+        """Cargo's target-filtered graph. Inactive registry packages can still be in `packages`."""
+        packages = [package("core")]
+        dependencies = []
+        for alias, name, platform in edges:
+            if name not in {item["name"] for item in packages}:
+                dependency = package(name, source=self.REGISTRY)
+                dependency["features"] = {"default": [], "std": []}
+                packages.append(dependency)
+            dependencies.append({"name": alias.replace("-", "_"), "pkg": name,
+                                 "dep_kinds": [{"kind": None, "target": platform}]})
+            packages[0]["dependencies"].append({"name": name, "rename": alias if alias != name else None,
+                                                "target": platform, "kind": None, "optional": optional})
+        return {"packages": packages, "resolve": {"nodes": [{"id": "core", "deps": dependencies}]}}
+
+    def written(self, manifest, metadata, game):
+        manifest = {"package": {"name": "core", "version": "0.1.0"}, **manifest}
+        resolved = api_source.requested_features(metadata, self.CRATE, manifest, game)
+        return tomllib.loads(api_source.normalise_manifest(manifest, {}, self.CRATE, {"core": self.CRATE},
+                                                           manifest.get("features", {}), resolved))
+
+    def test_inactive_architecture_is_not_required_or_rewritten(self):
+        manifest = {"target": {
+            self.ARM: {"dependencies": {"math-kernel": {"package": "portable-math", "version": "0.1"}}},
+            self.X86: {"dependencies": {"math-kernel": {"package": "x86-math", "version": "0.1",
+                                                        "features": ["sse2"]}, "safe_arch": "=1.2.0"}},
+        }}
+        # The same renamed alias can resolve a different package on another architecture. Cargo formats cfg
+        # whitespace; it has already decided that the x86 table is inactive for this ARM build.
+        data = self.metadata(("math-kernel", "portable-math", 'cfg(target_arch="aarch64")'))
+        data["packages"].extend([package("x86-math", source=self.REGISTRY),
+                                 package("safe_arch", source=self.REGISTRY)])
+        data["packages"][0]["dependencies"].extend([
+            {"name": name, "rename": alias, "target": self.X86, "kind": None, "optional": False}
+            for alias, name in (("math-kernel", "x86-math"), (None, "safe_arch"))])
+        written = self.written(manifest, data, {"core 0.1.0": set(), "portable-math 0.1.0": {"default", "std"}})
+        self.assertEqual(written["target"][self.ARM]["dependencies"]["math-kernel"],
+                         {"package": "portable-math", "version": "0.1", "features": ["std"]})
+        self.assertEqual(written["target"][self.X86], manifest["target"][self.X86])
+
+    def test_unconditional_renamed_dependency_uses_its_package_features(self):
+        manifest = {"dependencies": {"json-codec": {"package": "serde_json", "version": "0.1",
+                                                     "default-features": False}}}
+        written = self.written(manifest, self.metadata(("json-codec", "serde_json", None)),
+                               {"core 0.1.0": set(), "serde_json 0.1.0": {"std", "raw_value"}})
+        self.assertEqual(written["dependencies"]["json-codec"],
+                         {"package": "serde_json", "version": "0.1", "default-features": False,
+                          "features": ["raw_value", "std"]})
+
+    def test_package_and_exported_library_names_can_differ(self):
+        manifest = {"dependencies": {"md-5": {"version": "0.1", "default-features": False}}}
+        data = self.metadata(("md-5", "md-5", None))
+        data["resolve"]["nodes"][0]["deps"][0]["name"] = "md5"
+        written = self.written(manifest, data, {"core 0.1.0": set(), "md-5 0.1.0": {"std"}})
+        self.assertEqual(written["dependencies"]["md-5"],
+                         {"version": "0.1", "default-features": False, "features": ["std"]})
+
+    def test_only_activated_optional_edges_receive_game_features(self):
+        spec = {"package": "optional-codec", "version": "0.1", "optional": True, "default-features": False}
+        cases = [({}, set(), False), ({"weak": ["codec?/std"]}, {"weak"}, False),
+                 ({"codec": []}, {"codec"}, False), ({}, {"codec"}, True),
+                 ({"enabled": ["dep:codec"]}, {"enabled"}, True),
+                 ({"strong": ["codec/std"]}, {"strong"}, True),
+                 ({"default": ["enabled"], "enabled": ["dep:codec"]}, {"default"}, True)]
+        for definitions, enabled, active in cases:
+            with self.subTest(definitions=definitions, enabled=enabled):
+                manifest = {"dependencies": {"codec": spec}, "features": definitions}
+                # Workspace metadata can include an edge enabled by another package. Presence there, or even
+                # somewhere else in the game, does not enable this crate's optional edge.
+                data = self.metadata(("codec", "optional-codec", None), optional=True)
+                written = self.written(manifest, data,
+                                       {"core 0.1.0": enabled, "optional-codec 0.1.0": {"std"}})
+                self.assertEqual(written["dependencies"]["codec"],
+                                 {**spec, "features": ["std"]} if active else spec)
+
+    def test_missing_active_registry_dependencies_still_refuse(self):
+        for platform, optional in ((None, False), (self.ARM, False), (None, True)):
+            with self.subTest(platform=platform, optional=optional):
+                dependencies = {"codec": {"package": "real-codec", "version": "0.1", "optional": optional}}
+                manifest = ({"dependencies": dependencies} if platform is None
+                            else {"target": {platform: {"dependencies": dependencies}}})
+                manifest["features"] = {"enabled": ["dep:codec"]} if optional else {}
+                with self.assertRaises(Refusal) as refused:
+                    self.written(manifest, self.metadata(("codec", "real-codec", platform), optional=optional),
+                                 {"core 0.1.0": {"enabled"} if optional else set()})
+                self.assertEqual(refused.exception.code, "E_FEATURES")
+                self.assertIn("real-codec 0.1.0", str(refused.exception))
+
+    def test_missing_unconditional_metadata_edge_is_not_treated_as_inactive(self):
+        manifest = {"dependencies": {"codec": "0.1"}}
+        data = self.metadata(("codec", "codec", None))
+        data["resolve"]["nodes"][0]["deps"].clear()
+        with self.assertRaises(Refusal) as refused:
+            self.written(manifest, data, {"core 0.1.0": set(), "codec 0.1.0": {"std"}})
+        self.assertEqual(refused.exception.code, "E_FEATURES")
+
+    def test_host_proc_macro_features_are_not_requested_from_the_target_tree(self):
+        manifest = {"dependencies": {"derive-codec": "0.1"}}
+        data = self.metadata(("derive-codec", "derive-codec", None))
+        data["packages"][1]["targets"][0]["kind"] = ["proc-macro"]
+        written = self.written(manifest, data, {"core 0.1.0": set()})
+        self.assertEqual(written["dependencies"], manifest["dependencies"])
+
+    def test_cargo_filters_target_predicates_for_metadata(self):
+        with (patch.object(api_source.prebuilt_game, "rustc_host", return_value="aarch64-apple-darwin"),
+              patch.object(api_source, "run", return_value='{"packages": []}') as run):
+            self.assertEqual(api_source.target_metadata(Path("/api"), {"TEST": "yes"}, offline=True),
+                             {"packages": []})
+        run.assert_called_once_with(["cargo", "metadata", "--locked", "--offline", "--format-version", "1",
+                                     "--filter-platform", "aarch64-apple-darwin"],
+                                    cwd=Path("/api"), env={"TEST": "yes"})
 
 
 class RootTests(unittest.TestCase):
