@@ -218,6 +218,20 @@ jobs:
     uses: ./.github/workflows/parity.yml
     with:
       commit: ${{ needs.resolve.outputs.commit }}
+  # Exploratory and corpus fuzz are report-only. Run after parity even if parity found gaps; no release job needs this.
+  fuzz:
+    needs: [resolve, parity]
+    if: >-
+      !cancelled() && github.repository == 'sunrise-org/sunrise' && github.ref == 'refs/heads/main' &&
+      needs.resolve.result == 'success' && needs.resolve.outputs.skip == 'false' &&
+      needs.resolve.outputs.dry_run == 'false' && needs.resolve.outputs.commit == github.sha
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/parity-fuzz.yml
+    with:
+      commit: ${{ needs.resolve.outputs.commit }}
+      dry_run: ${{ needs.resolve.outputs.dry_run }}
   # Reads every leg's result and verdict file (never a log) and moves `daily-green` or files the issues.
   summary:
     # The resolved commit names the job: what a scheduled run's lookup (daily_summary.py --seen) matches.

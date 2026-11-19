@@ -155,6 +155,8 @@ summary (`tools/ci/daily_summary.py`) reads each leg's result and its sanitised 
   sample is no break: its one issue, `Daily: update the machine sample for the mod API change`, asks for the sample
   to follow the API change and its pin to move.
 
+The [parity fuzz report](parity-workflow.md#fuzzing-scenarios) runs separately after parity on writing runs of main's head. Corpus regressions and exploratory divergences can file issues, but the summary, SDK and Nightly never wait for fuzz.
+
 The SDK publishes on its own legs (`sdk`, `machine-sample`, `fn-replace-check`: the summary's `sdk_green`) until a runner with prepared data exists (umceko, 2026-11-16). A red linkage probe fails its `sdk / build linux` or `sdk / build windows` job and blocks publication.
 
 Only a run on `main` with `dry_run` false moves the tag, files issues or publishes; any other run prints what it

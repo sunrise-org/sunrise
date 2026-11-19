@@ -1189,12 +1189,12 @@ class DailyWorkflowTests(unittest.TestCase):
                     self.assertIn(f"parity_required={required}", out.read_text().splitlines())
 
     def test_every_leg_is_a_called_workflow_with_the_commit(self):
-        # The summary's needs are the legs (daily_summary.daily_legs): each a called workflow given the resolved
-        # commit, and every called workflow is one of them.
+        # The summary's needs are the legs it judges (daily_summary.daily_legs): each a called workflow given
+        # the resolved commit. Publishing and the independent fuzz report are not legs it judges.
         jobs = self.workflow["jobs"]
         needs = jobs["summary"]["needs"]
         self.assertEqual(set(needs), {"resolve"} | {name for name, job in jobs.items() if "uses" in job
-                                                     and name not in ("sdk-publish", "nightly")})
+                                                     and name not in ("sdk-publish", "nightly", "fuzz")})
         for leg in needs:
             if leg == "resolve":
                 continue

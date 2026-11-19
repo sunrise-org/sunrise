@@ -148,6 +148,7 @@ MOVABLE = {'item': {'Item': '{id:"minecraft:stone",count:1}', 'PickupDelay': '10
            'experience_orb': {'Value': '3s'}, 'arrow': {'pickup': '0b'}, 'snowball': {}, 'villager': {'NoAI': '1b'},
            'slime': {'Size': '1', 'NoAI': '1b'}}
 DROPPED = ['dirt', 'oak_log', 'gravel', 'oak_leaves', 'glass', 'potted_dandelion', 'chest', 'sand']
+BREAK_BLOCK = '/setblock {0} minecraft:air destroy'
 FACINGS = ['north', 'south', 'east', 'west', 'up', 'down']
 
 
@@ -173,7 +174,7 @@ def spawn(rng, seed):
         nbt = {'Items': '[{Slot:0b,id:"minecraft:stone",count:4},{Slot:3b,id:"minecraft:egg",count:16}]'} \
             if block == 'chest' else None
         steps += [{'k': 'block', 'block': block, 'at': c, 'nbt': nbt},
-                  {'k': 'cmd', 'cmd': '/setblock {0} minecraft:air destroy', 'at': [c]}]
+                  {'k': 'cmd', 'cmd': BREAK_BLOCK, 'at': [c]}]
     elif mechanism == 'explode':
         kind = rng.choice(['item', 'armor_stand', 'tnt'])
         steps += [{'k': 'block', 'block': rng.choice(['dirt', 'oak_planks', 'sand']), 'at': [7 + dx, 0, 7 + dz]}
