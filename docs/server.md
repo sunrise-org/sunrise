@@ -470,8 +470,9 @@ comes out of the headless-engine work.
   `curl -fsSL https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.sh | sh`
   The script picks the release archive for the OS and architecture (on Linux x86_64 the server archive,
   on macOS arm64 the game's), downloads it from GitHub Releases, and checks it against the release's signed
-  `SHA256SUMS` when OpenSSL 3 is installed, else against the SHA-256 GitHub publishes for each asset
-  (docs/security.md). It never asks for sudo. Options: `--version vX.Y.Z`, `--dir` (default
+  `SHA256SUMS` with `sunrise-verify`, which it downloads and accepts only with the SHA-256 pinned in the script;
+  it refuses the install on any failure (docs/security.md, "The first install"). It never asks for sudo.
+  Options: `--version vX.Y.Z`, `--dir` (default
   `~/.local/share/sunrise`), `--bin` (default `~/.local/bin`), and `--archive FILE` to install an archive
   already on the machine (a build of your own; no download and no checksum).
   A Linux release from before the server archive installs the full game, which links ALSA's and udev's
@@ -482,8 +483,8 @@ comes out of the headless-engine work.
 - Windows:
   `irm https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.ps1 | iex`
   The script does the same into `%LOCALAPPDATA%\Sunrise` (`-Version`, `-Dir`), with junctions instead of
-  links (no admin rights), and adds `bin` to the user's PATH. It finds OpenSSL 3 on the PATH or in Git for
-  Windows to check the signature.
+  links (no admin rights), and adds `bin` to the user's PATH. It checks the signature with the pinned
+  `sunrise-verify` the same way.
 - **Layout.** Each release goes to `<dir>/releases/<tag>` and `<dir>/current` points at the one in use, so an
   update or a rollback is one link. `<bin>/sunrise-server` and `<bin>/sunrise-prepare` are two-line launchers
   that run `current`. The prepared game files live in `<dir>/game-files/sunrise-client` and each release's
