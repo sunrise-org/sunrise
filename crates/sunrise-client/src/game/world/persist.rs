@@ -1208,9 +1208,10 @@ impl Game<'_> {
         add_passengers(tag, riders);
     }
 
-    /// Read an unsimulated entity without assigning it a new identity.
+    /// Read an unsimulated entity without assigning it a new identity; an eye
+    /// of ender's `Item` is normalised in `tag`, which is what it saves.
     pub(super) fn other_from_nbt(
-        tag: &Tag,
+        tag: &mut Tag,
         id: u32,
         kind: &str,
     ) -> Option<super::commands::OtherEntity> {
@@ -1239,8 +1240,7 @@ impl Game<'_> {
             item_transformation,
             interaction,
             knot_check,
-            eye: (kind == "minecraft:eye_of_ender")
-                .then(|| super::end::SummonedEye::load(&mut tag.clone())),
+            eye: (kind == "minecraft:eye_of_ender").then(|| super::end::SummonedEye::load(tag)),
         })
     }
 
@@ -1258,7 +1258,7 @@ impl Game<'_> {
         let quarantined = super::general::quarantined_kind(kind).then(|| tag.clone());
         strip_finalize(&mut tag);
         let id = self.next_entity + 1;
-        let other = Self::other_from_nbt(&tag, id, kind)?;
+        let other = Self::other_from_nbt(&mut tag, id, kind)?;
         self.next_entity = id;
         let uuid = with_constructor_uuid(entity_nbt::uuid(&tag));
         if let Some(state) = transferred {

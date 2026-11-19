@@ -1,0 +1,2 @@
+# #2357: a summoned or reloaded eye of ender saves its normalised Item.
+sunrise-client game::commands::data::eye_item_tests::a_summoned_eye_saves_its_normalised_item_live_and_after_a_reload lib daily resources
