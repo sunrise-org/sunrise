@@ -134,3 +134,28 @@ and environment refusals observed with the correction. These failed runs remain
 failed receipts; no broad-suite success is claimed. Exact logs, commands and
 source hashes live in `.local/live-world-evidence/sdk-target-fix/` for the
 coordinator to preserve outside this worktree.
+
+The continuation's earlier phrase about an ordinary pre-commit run does not
+establish persistent hook configuration. The retained checker result is the
+asserted evidence. At `a944343`, `core.hooksPath` was observed unset; the full
+indexed public-tree checker was executed explicitly and passed. Later local
+commits invoke `.githooks` explicitly rather than assuming that configuration.
+
+A separate generic dependency-identity regression covers an unrenamed package
+beside a renamed version of that same package, in both extern orders and with a
+library name different from its package. The exporter must use Cargo's actual
+library target and refuse ambiguous identities. The correction is a separate
+tool-only continuation, preserving the tested `a944343` history.
+
+The normal `a944343` SDK build, packing and index succeeded. Its exported-source
+consumer gate completed the compile commands but failed the final strict API
+closure comparison. Authorized generated SDK logs and Cargo metadata identify
+transitive game feature unification absent from the exported API workspace;
+this is not a fidelity pass. Investigation uses Sunrise's own release matrix,
+manifests, tool code and Cargo's dependency metadata, without opening dependency
+implementation source. Native target differences and wasm must remain separate
+ordinary Cargo conditions in the one portable API-source archive.
+
+All local Git signoffs remain local authorship records. Human DCO eligibility,
+review and upstream claim/spec approval remain pending; the experiment and its
+offline PR drafts do not assert those approvals.

@@ -315,10 +315,23 @@ def requested_features(metadata: dict, crate: Crate, manifest: dict,
             if declaration["optional"] and name not in enabled:
                 continue
             # An unrenamed package can export a differently named library (`md-5` exports `md5`). Cargo's
-            # declaration supplies the package identity; the extern name disambiguates explicit aliases only.
-            dependency = next((package for target, alias, package in externs
-                               if target == target_key(platform) and package["name"] == declaration["name"]
-                               and (declaration["rename"] is None or alias == name.replace("-", "_"))), None)
+            # declaration supplies the package identity; its library target distinguishes an unrenamed edge
+            # from an explicitly renamed version of the same package.
+            def matches_extern(alias: str, package: dict) -> bool:
+                if declaration["rename"] is not None:
+                    return alias == name.replace("-", "_")
+                # Cargo names an unrenamed edge after the library target, which need not be the package
+                # name. A renamed edge of another version of this same package must not capture it.
+                libraries = {target["name"].replace("-", "_") for target in package["targets"]
+                             if any(kind in ("lib", "rlib", "dylib", "proc-macro") for kind in target["kind"])}
+                return alias in libraries
+
+            matches = [package for target, alias, package in externs
+                       if target == target_key(platform) and package["name"] == declaration["name"]
+                       and matches_extern(alias, package)]
+            if len(matches) > 1:
+                raise Refusal("E_FEATURES", f"ambiguous library identity for {crate.name}'s {name}")
+            dependency = matches[0] if matches else None
             if dependency is None:
                 if platform is None:
                     raise Refusal("E_FEATURES", f"the game's metadata does not resolve {name}, which {crate.name} uses")

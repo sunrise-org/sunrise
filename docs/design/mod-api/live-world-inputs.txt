@@ -3,7 +3,10 @@
 # These files were read fully, in excerpts, or as symbol-search matches.
 # Navigation searches were limited to crates/, docs/, tools/ and the root instruction files.
 # Missing-path probes returned no content; no neighboring/reference folders were opened.
+# Authorized generated SDK inputs (no personal code): ../sdk-export/logs/api-source-check-a944.stdout.log
+# Authorized generated SDK inputs (no personal code): ../sdk-export/logs/api-source-check-a944.stderr.log
 .githooks/pre-commit
+.github/workflows/prebuilt-game-build.yml
 AGENTS.md
 CONTRIBUTING.md
 Cargo.lock
@@ -120,6 +123,7 @@ crates/sunrise-core/src/geometry/oriented.rs
 crates/sunrise-core/src/geometry/shape.rs
 crates/sunrise-core/src/geometry/shape/create.rs
 crates/sunrise-core/src/ticks/mod.rs
+crates/sunrise-game/Cargo.toml
 crates/sunrise-mod-api-gen/src/build.rs
 crates/sunrise-mod-api-gen/src/catalog.rs
 crates/sunrise-mod-api-gen/src/exports.rs
@@ -130,6 +134,7 @@ crates/sunrise-mod-api-gen/src/wire/ty.rs
 crates/sunrise-mod-api-macros/Cargo.toml
 crates/sunrise-mod-api-macros/src/lib.rs
 crates/sunrise-mod-api/Cargo.toml
+crates/sunrise-mod-host/Cargo.toml
 crates/sunrise-mod-point-shape/Cargo.toml
 crates/sunrise-mod-runtime/Cargo.toml
 crates/sunrise-mod-vocab/Cargo.toml
@@ -171,6 +176,7 @@ crates/sunrise-mod-vocab/src/world/phase_refusal.rs
 crates/sunrise-mod-vocab/src/world/runtime_levels.rs
 crates/sunrise-mod-vocab/src/world/ticket_controller.rs
 crates/sunrise-mod-vocab/src/world/types.rs
+crates/sunrise-official/Cargo.toml
 crates/sunrise-protocol/Cargo.toml
 crates/sunrise-protocol/src/buf.rs
 crates/sunrise-protocol/src/collider_sync.rs
@@ -198,11 +204,20 @@ docs/modding/src/how-to/native-mods/01-the-mods-crate.md
 docs/modding/src/how-to/native-mods/02-the-package.md
 docs/modding/src/how-to/native-mods/07-local-developer-builds.md
 docs/modding/src/how-to/wasm-mods.md
+docs/modding/src/reference/sdk/01-release.md
+docs/modding/src/reference/sdk/03-in-a-project.md
+docs/modding/src/reference/sdk/04-fit.md
+docs/modding/src/reference/sdk/05-commands.md
+docs/modding/src/reference/sdk/06-hosts.md
+docs/modding/src/reference/sdk/07-retention.md
+docs/modding/src/reference/sdk/08-native-build.md
 tests/test_ci_concurrency.py
 tests/test_prebuilt_game.py
 tests/test_sdk_api_source.py
 tools/check_public_tree.py
 tools/ci/ignored-tests/README.md
 tools/ci/ignored-tests/daily-sunrise-client-live-worlds.txt
+tools/ci/nightly.py
+tools/modding_sdk_tables.py
 tools/prebuilt_game.py
 tools/sdk_api_source.py

@@ -217,6 +217,7 @@ class RequestedFeatureTests(unittest.TestCase):
         manifest = {"dependencies": {"md-5": {"version": "0.1", "default-features": False}}}
         data = self.metadata(("md-5", "md-5", None))
         data["resolve"]["nodes"][0]["deps"][0]["name"] = "md5"
+        data["packages"][1]["targets"][0]["name"] = "md5"
         written = self.written(manifest, data, {"core 0.1.0": set(), "md-5 0.1.0": {"std"}})
         self.assertEqual(written["dependencies"]["md-5"],
                          {"version": "0.1", "default-features": False, "features": ["std"]})
@@ -266,6 +267,39 @@ class RequestedFeatureTests(unittest.TestCase):
         data["packages"][1]["targets"][0]["kind"] = ["proc-macro"]
         written = self.written(manifest, data, {"core 0.1.0": set()})
         self.assertEqual(written["dependencies"], manifest["dependencies"])
+
+    def test_unrenamed_and_renamed_versions_use_their_actual_library_edges(self):
+        manifest = {"dependencies": {"codec-bundle": "2", "legacy": {"package": "codec-bundle", "version": "1"}}}
+        root = package("core")
+        root["dependencies"] = [
+            {"name": "codec-bundle", "rename": rename, "target": None, "kind": None, "optional": False}
+            for rename in (None, "legacy")]
+        versions = []
+        for version in ("1", "2"):
+            item = package("codec-bundle", source=self.REGISTRY)
+            item.update(id="codec" + version, version=version + ".0.0", features={"default": [], "old": [], "modern": []})
+            item["targets"][0]["name"] = "codec_core"
+            if version == "2":
+                item["targets"][0]["kind"] = ["rlib"]
+            versions.append(item)
+        edges = [{"name": alias, "pkg": identity, "dep_kinds": [{"kind": None, "target": None}]}
+                 for alias, identity in (("legacy", "codec1"), ("codec_core", "codec2"))]
+        game = {"core 0.1.0": set(), "codec-bundle 1.0.0": {"default", "old"},
+                "codec-bundle 2.0.0": {"default", "modern"}}
+        for order in (edges, list(reversed(edges))):
+            with self.subTest(order=[edge["name"] for edge in order]):
+                data = {"packages": [root, *versions], "resolve": {"nodes": [{"id": "core", "deps": order}]}}
+                written = self.written(manifest, data, game)
+                self.assertEqual(written["dependencies"]["codec-bundle"], {"version": "2", "features": ["modern"]})
+                self.assertEqual(written["dependencies"]["legacy"],
+                                 {"package": "codec-bundle", "version": "1", "features": ["old"]})
+        # An invalid/ambiguous resolver graph is refused, never resolved by node ordering.
+        ambiguous = [dict(edge, name="codec_core") for edge in edges]
+        data = {"packages": [root, *versions], "resolve": {"nodes": [{"id": "core", "deps": ambiguous}]}}
+        with self.assertRaises(Refusal) as refused:
+            self.written(manifest, data, game)
+        self.assertEqual(refused.exception.code, "E_FEATURES")
+        self.assertIn("ambiguous", str(refused.exception))
 
     def test_cargo_filters_target_predicates_for_metadata(self):
         with (patch.object(api_source.prebuilt_game, "rustc_host", return_value="aarch64-apple-darwin"),
