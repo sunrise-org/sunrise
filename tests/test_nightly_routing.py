@@ -157,11 +157,16 @@ console.log(JSON.stringify(Boolean(eval(s.expression))));
 
     def test_every_shipped_glibc_program_is_checked_by_workflow_owned_tools(self):
         text = GAME.read_text()
-        commands = re.findall(r"check_glibc.py ([^\n]+)", text.replace("\\\n", " "))
-        checked = [{Path(argument).name for argument in shlex.split(command)} for command in commands]
         # Every program each release folder takes (the SDK's input list), and the game program itself.
         routes = json.loads((ROOT / "crates/sunrise-mod-package/src/sdk/inputs.json").read_text())["routes"]
         programs = {route: {name for name in routes[route]["program"] if "." not in name} for route in ["package", "package-server"]}
+        # The client's checks loop over $PROGRAMS, which a step reads from the checked-out package route.
+        listed = re.search(r"\.get\('routes', \{\}\)\.get\('package', \{\}\)\.get\('program'\)", text)
+        self.assertTrue(listed and 'PROGRAMS=sunrise-client $programs' in text)
+        loop = '$(for binary in $PROGRAMS; do echo "$BIN/$binary"; done)'
+        text = text.replace(loop, " ".join(sorted(programs["package"] | {"sunrise-client"})))
+        commands = re.findall(r"check_glibc.py ([^\n]+)", text.replace("\\\n", " "))
+        checked = [{Path(argument).name for argument in shlex.split(command)} for command in commands]
         self.assertEqual(checked, [programs["package"] | {"sunrise-client"},
                                    programs["package-server"] | {"sunrise-engine"}])
         tools = [step for step in text.split("\n      - ") if "path: .workflow-tools" in step]

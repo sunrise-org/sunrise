@@ -15,14 +15,13 @@ target=x86_64-unknown-linux-musl
 bin="target/$target/release"
 cargo build --release --locked --target "$target" \
   -p sunrise-official --bin sunrise-official -p sunrise-client-lib --bin sunrise-ctl \
-  -p sunrise-perf --bin sunrise-perf \
   -p sunrise-prepare --bin sunrise-prepare -p sunrise-server --bin sunrise-server \
   -p sunrise-port-pack --bin sunrise-port-pack
 # The official game (sunrise-client's with Sunrise's own parts, docs/layers.md) is what players
 # get, under the game's name.
 cp -f "$bin/sunrise-official" "$bin/sunrise-client"
 
-set -- "$bin/sunrise-client" "$bin/sunrise-ctl" "$bin/sunrise-perf" "$bin/sunrise-prepare" "$bin/sunrise-server" "$bin/sunrise-port-pack"
+set -- "$bin/sunrise-client" "$bin/sunrise-ctl" "$bin/sunrise-prepare" "$bin/sunrise-server" "$bin/sunrise-port-pack"
 python3 tools/check_imports.py --musl "$@"
 python3 tools/check_cpu_baseline.py "$@"
 
@@ -35,8 +34,6 @@ export SUNRISE_LAUNCHER_NO_SELF_UPDATE=1 SUNRISE_NO_AUDIO=1
 "$bin/sunrise-client" --help > "$SUNRISE_HOME/client-help"
 grep -q -- '--resources' "$SUNRISE_HOME/client-help"
 "$bin/sunrise-ctl" --help > /dev/null
-"$bin/sunrise-perf" --help > "$SUNRISE_HOME/perf-help"
-grep -q -- 'sunrise-perf summary' "$SUNRISE_HOME/perf-help"
 "$bin/sunrise-prepare" --help > "$SUNRISE_HOME/prepare-help"
 grep -q -- '--minecraft-dir' "$SUNRISE_HOME/prepare-help"
 for binary in sunrise-prepare sunrise-server sunrise-port-pack; do

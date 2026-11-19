@@ -254,9 +254,32 @@ jobs:
       - name: ALSA and udev headers
         if: runner.os == 'Linux' && !matrix.musl
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
-      - name: Build the official game, sunrise-ctl, sunrise-perf, sunrise-prepare, sunrise-server and sunrise-port-pack
+      - name: The programs this commit's release folder takes
+        # From the checked-out commit's own list, so a nightly or snapshot of an older commit builds what its packager wants.
         if: ${{ !matrix.musl }}
-        run: cargo build --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }} -p sunrise-official --bin sunrise-official -p sunrise-client-lib --bin sunrise-ctl -p sunrise-perf --bin sunrise-perf -p sunrise-prepare --bin sunrise-prepare -p sunrise-server --bin sunrise-server -p sunrise-port-pack --bin sunrise-port-pack
+        run: |
+          set -euo pipefail
+          list=crates/sunrise-mod-package/src/sdk/inputs.json
+          programs="-"
+          if [[ -f "$list" ]]; then
+            programs=$(${{ runner.os == 'Windows' && 'python' || 'python3' }} -c "import json, sys; listed = json.load(open(sys.argv[1])).get('routes', {}).get('package', {}).get('program'); print('-' if listed is None else ' '.join(p for p in listed if not p.endswith('.wasm')))" "$list" | tr -d '\r')
+          fi
+          # No list or no package route: the programs every release folder took before the list existed.
+          if [[ "$programs" == "-" ]]; then
+            programs="sunrise-ctl sunrise-perf sunrise-prepare sunrise-server sunrise-port-pack"
+          fi
+          build=""
+          for program in $programs; do
+            case "$program" in
+              sunrise-ctl) build="$build -p sunrise-client-lib --bin sunrise-ctl" ;;
+              *) build="$build -p $program --bin $program" ;;
+            esac
+          done
+          echo "PROGRAMS=sunrise-client $programs" >> "$GITHUB_ENV"
+          echo "BUILD_PROGRAMS=$build" >> "$GITHUB_ENV"
+      - name: Build the official game and the programs its release folder takes
+        if: ${{ !matrix.musl }}
+        run: cargo build --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }} -p sunrise-official --bin sunrise-official $BUILD_PROGRAMS
       - name: The official game is the game players get, under its name
         # sunrise-official: sunrise-client's game with Sunrise's own parts plugged in (docs/layers.md, "How a
         # Sunrise crate plugs in"). Everything below, the launcher and players know it as sunrise-client.
@@ -265,16 +288,14 @@ jobs:
       - name: Every program the release folder takes was built
         if: ${{ !matrix.musl }}
         run: |
-          for binary in sunrise-client sunrise-ctl sunrise-perf sunrise-prepare sunrise-server sunrise-port-pack; do
+          for binary in $PROGRAMS; do
             test -f "$BIN/$binary${{ matrix.exe }}" || { echo "::error::$BIN/$binary${{ matrix.exe }} is missing"; exit 1; }
           done
       - name: Verify Windows executable architecture
         if: runner.os == 'Windows'
         run: |
           python tools/check_pe_arch.py "${{ matrix.pe_arch }}" \
-            "$BIN/sunrise-client${{ matrix.exe }}" "$BIN/sunrise-ctl${{ matrix.exe }}" "$BIN/sunrise-perf${{ matrix.exe }}" \
-            "$BIN/sunrise-prepare${{ matrix.exe }}" "$BIN/sunrise-server${{ matrix.exe }}" \
-            "$BIN/sunrise-port-pack${{ matrix.exe }}"
+            $(for binary in $PROGRAMS; do echo "$BIN/$binary${{ matrix.exe }}"; done)
       - name: Rosetta for the Intel build on Apple Silicon
         if: runner.os == 'macOS' && matrix.target == 'x86_64-apple-darwin'
         run: |
@@ -286,7 +307,7 @@ jobs:
         env:
           EXPECTED_ARCH: ${{ matrix.target == 'x86_64-apple-darwin' && 'x86_64' || 'arm64' }}
         run: |
-          for binary in sunrise-client sunrise-ctl sunrise-perf sunrise-prepare sunrise-server sunrise-port-pack; do
+          for binary in $PROGRAMS; do
             actual=$(lipo -archs "$BIN/$binary")
             [[ "$actual" == "$EXPECTED_ARCH" ]] || { echo "::error::$binary is $actual, expected $EXPECTED_ARCH"; exit 1; }
           done
@@ -301,7 +322,7 @@ jobs:
         env:
           MACOS_SIGN_IDENTITY: ${{ vars.MACOS_SIGN_IDENTITY }}
         run: |
-          for binary in sunrise-client sunrise-ctl sunrise-perf sunrise-prepare sunrise-server sunrise-port-pack; do
+          for binary in $PROGRAMS; do
             codesign --force --options runtime --timestamp --keychain "$MACOS_SIGN_KEYCHAIN" \
               --identifier "dev.sunrise.${binary#sunrise-}" --sign "$MACOS_SIGN_IDENTITY" "$BIN/$binary"
             codesign --verify --strict --verbose=2 "$BIN/$binary"
@@ -311,7 +332,7 @@ jobs:
         # Windows: no non-system DLL (a "DLL not found" dialog on some players' machines). Linux: the standard
         # loader and libraries every desktop distribution has. macOS: only the system's own libraries.
         run: |
-          for binary in sunrise-client sunrise-ctl sunrise-perf sunrise-prepare sunrise-server sunrise-port-pack; do
+          for binary in $PROGRAMS; do
             file="$BIN/$binary${{ matrix.exe }}"
             if [[ "$RUNNER_OS" == macOS ]]; then
               others=$(otool -L "$file" | tail -n +2 | awk '{print $1}' | grep -v -E '^(/usr/lib/|/System/Library/)' || true)
@@ -328,12 +349,12 @@ jobs:
           set -euo pipefail
           rustup component add llvm-tools
           ${{ runner.os == 'Windows' && 'python' || 'python3' }} tools/check_cpu_baseline.py \
-            $(for binary in sunrise-client sunrise-ctl sunrise-perf sunrise-prepare sunrise-server sunrise-port-pack; do echo "$BIN/$binary${{ matrix.exe }}"; done)
+            $(for binary in $PROGRAMS; do echo "$BIN/$binary${{ matrix.exe }}"; done)
       - name: Linux glibc baseline (Ubuntu 22.04)
         if: runner.os == 'Linux' && !matrix.musl
         run: |
           python3 .workflow-tools/tools/check_glibc.py \
-            "$BIN/sunrise-client" "$BIN/sunrise-ctl" "$BIN/sunrise-perf" "$BIN/sunrise-prepare" "$BIN/sunrise-server" "$BIN/sunrise-port-pack"
+            $(for binary in $PROGRAMS; do echo "$BIN/$binary"; done)
       - name: macOS main-stack diagnostics
         if: runner.os == 'macOS'
         run: |
@@ -357,12 +378,14 @@ jobs:
         run: |
           set -euo pipefail
           bin=$BIN
+          # Only the programs this commit's release folder takes (`PROGRAMS`).
+          takes() { [[ " $PROGRAMS " == *" $1 "* ]]; }
           "$bin/sunrise-client${{ matrix.exe }}" --help | grep -q -- '--resources'
-          "$bin/sunrise-ctl${{ matrix.exe }}" --help > /dev/null
-          "$bin/sunrise-perf${{ matrix.exe }}" --help | grep -q -- 'sunrise-perf summary'
-          "$bin/sunrise-prepare${{ matrix.exe }}" --help | grep -q -- '--minecraft-dir'
+          if takes sunrise-ctl; then "$bin/sunrise-ctl${{ matrix.exe }}" --help > /dev/null; fi
+          if takes sunrise-prepare; then "$bin/sunrise-prepare${{ matrix.exe }}" --help | grep -q -- '--minecraft-dir'; fi
           # The version is the release's.
           for binary in sunrise-prepare sunrise-server sunrise-port-pack; do
+            takes "$binary" || continue
             out=$("$bin/$binary${{ matrix.exe }}" --version | tr -d '\r')
             echo "$out"
             [[ "$out" == "$binary $SUNRISE_VERSION" ]] || { echo "::error::expected $binary $SUNRISE_VERSION"; exit 1; }
@@ -414,7 +437,7 @@ jobs:
         # A zip of programs can't be stapled: Gatekeeper asks Apple the first time each one runs.
         if: runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != '' && inputs.developer_id
         run: |
-          for binary in sunrise-client sunrise-ctl sunrise-perf sunrise-prepare sunrise-server sunrise-port-pack; do
+          for binary in $PROGRAMS; do
             codesign --verify --strict "dist/${{ matrix.dir }}/$binary"
           done
           packaging/macos/notarize.sh "dist/${{ matrix.asset }}"
@@ -504,11 +527,12 @@ jobs:
           [[ "$(uname -m)" == x86_64 && "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" == 0 ]] \
             || { echo "::error::not a native Intel runner"; exit 1; }
           "$BIN/sunrise-client" --help | grep -q -- '--resources'
-          "$BIN/sunrise-ctl" --help > /dev/null
-          "$BIN/sunrise-perf" --help | grep -q -- 'sunrise-perf summary'
-          "$BIN/sunrise-prepare" --help | grep -q -- '--minecraft-dir'
+          # The other programs the archive holds: its build leg chose them from the commit's own list.
+          if [[ -f "$BIN/sunrise-ctl" ]]; then "$BIN/sunrise-ctl" --help > /dev/null; fi
+          if [[ -f "$BIN/sunrise-prepare" ]]; then "$BIN/sunrise-prepare" --help | grep -q -- '--minecraft-dir'; fi
           # The version is the release's.
           for binary in sunrise-prepare sunrise-server; do
+            [[ -f "$BIN/$binary" ]] || continue
             out=$("$BIN/$binary" --version | tr -d '\r')
             echo "$out"
             [[ "$out" == "$binary $SUNRISE_VERSION" ]] || { echo "::error::expected $binary $SUNRISE_VERSION"; exit 1; }

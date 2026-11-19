@@ -41,7 +41,7 @@ Releases are signed with Ludovic's **Developer ID** ("Developer ID Application: 
   launcher updates itself from and the .dmg both hold it stapled; then the .dmg is signed,
   notarized and stapled. The script ends with what Gatekeeper says of each, which must read
   `accepted` and `source=Notarized Developer ID`.
-- the game (`.github/workflows/game-build.yml`): `sunrise-client`, `sunrise-ctl`, `sunrise-perf`,
+- the game (`.github/workflows/game-build.yml`): `sunrise-client`, `sunrise-ctl`,
   `sunrise-prepare` and `sunrise-server` are signed right after they are built (so the checks and the 1500-frame smoke
   run use them as players will), and the zip is notarized. Programs outside a bundle can't hold a
   ticket: Gatekeeper asks Apple online the first time each one runs.

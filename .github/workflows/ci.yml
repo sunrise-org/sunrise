@@ -212,11 +212,11 @@ jobs:
           Write-Output "Using $($clang.Source)"
           & $clang.Source --version
       - name: Build the game for native Windows ARM64 (the official game, as game-build.yml ships it)
-        run: cargo build --release --locked --target aarch64-pc-windows-msvc -p sunrise-official --bin sunrise-official -p sunrise-client-lib --bin sunrise-ctl -p sunrise-perf --bin sunrise-perf -p sunrise-prepare --bin sunrise-prepare -p sunrise-server --bin sunrise-server -p sunrise-port-pack --bin sunrise-port-pack
+        run: cargo build --release --locked --target aarch64-pc-windows-msvc -p sunrise-official --bin sunrise-official -p sunrise-client-lib --bin sunrise-ctl -p sunrise-prepare --bin sunrise-prepare -p sunrise-server --bin sunrise-server -p sunrise-port-pack --bin sunrise-port-pack
       - name: Check the game's PE machine
-        run: python tools/check_pe_arch.py arm64 target/aarch64-pc-windows-msvc/release/sunrise-official.exe target/aarch64-pc-windows-msvc/release/sunrise-ctl.exe target/aarch64-pc-windows-msvc/release/sunrise-perf.exe target/aarch64-pc-windows-msvc/release/sunrise-prepare.exe target/aarch64-pc-windows-msvc/release/sunrise-server.exe target/aarch64-pc-windows-msvc/release/sunrise-port-pack.exe
+        run: python tools/check_pe_arch.py arm64 target/aarch64-pc-windows-msvc/release/sunrise-official.exe target/aarch64-pc-windows-msvc/release/sunrise-ctl.exe target/aarch64-pc-windows-msvc/release/sunrise-prepare.exe target/aarch64-pc-windows-msvc/release/sunrise-server.exe target/aarch64-pc-windows-msvc/release/sunrise-port-pack.exe
       - name: Check game DLL imports
-        run: python tools/check_imports.py target/aarch64-pc-windows-msvc/release/sunrise-official.exe target/aarch64-pc-windows-msvc/release/sunrise-ctl.exe target/aarch64-pc-windows-msvc/release/sunrise-perf.exe target/aarch64-pc-windows-msvc/release/sunrise-prepare.exe target/aarch64-pc-windows-msvc/release/sunrise-server.exe target/aarch64-pc-windows-msvc/release/sunrise-port-pack.exe
+        run: python tools/check_imports.py target/aarch64-pc-windows-msvc/release/sunrise-official.exe target/aarch64-pc-windows-msvc/release/sunrise-ctl.exe target/aarch64-pc-windows-msvc/release/sunrise-prepare.exe target/aarch64-pc-windows-msvc/release/sunrise-server.exe target/aarch64-pc-windows-msvc/release/sunrise-port-pack.exe
       - name: Start every game executable
         shell: pwsh
         run: |
@@ -224,7 +224,7 @@ jobs:
           $client = 'target/aarch64-pc-windows-msvc/release/sunrise-official.exe'
           $output = & $client --help 2>&1
           if ($LASTEXITCODE -ne 0 -or ($output -join "`n") -notmatch '--resources') { throw 'sunrise-client --help failed' }
-          foreach ($binary in @('sunrise-ctl.exe', 'sunrise-perf.exe', 'sunrise-prepare.exe', 'sunrise-server.exe', 'sunrise-port-pack.exe')) {
+          foreach ($binary in @('sunrise-ctl.exe', 'sunrise-prepare.exe', 'sunrise-server.exe', 'sunrise-port-pack.exe')) {
             $path = "target/aarch64-pc-windows-msvc/release/$binary"
             $output = & $path --help 2>&1
             if ($LASTEXITCODE -ne 0 -or -not $output) { throw "$binary --help failed" }

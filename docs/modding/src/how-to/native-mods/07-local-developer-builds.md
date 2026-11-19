@@ -17,6 +17,10 @@ cargo run --locked -p cargo-sunrise-mod -- wasm-std CHECKOUT/target/debug/sunris
 sunrise-launcher developer-install CHECKOUT --program CHECKOUT/target/debug/sunrise-client --trust-unsigned
 ```
 
+The released `sunrise-launcher` 1.0.1 still checks for `sunrise-perf` beside the game program before it runs the
+checkout's packager, which no longer needs it. With 1.0.1, also build it (`cargo build -p sunrise-perf --bin
+sunrise-perf`), or use a launcher built from newer source.
+
 The install needs these files. The checkout's packager (`cargo run -p xtask -- package`, and
 `package-server` for a server folder) checks them all before it writes anything, and names every
 missing one in one message with the command that makes it. Its list is
@@ -29,7 +33,6 @@ programs end in `.exe`:
 | File | Where | Needed by | How to make it |
 |---|---|---|---|
 | `sunrise-ctl` | beside the game program | `package` | cargo build PROFILE -p sunrise-client-lib --bin sunrise-ctl |
-| `sunrise-perf` | beside the game program | `package` | cargo build PROFILE -p sunrise-perf --bin sunrise-perf |
 | `sunrise-prepare` | beside the game program | `package`, `package-server` | cargo build PROFILE -p sunrise-prepare |
 | `sunrise-server` | beside the game program | `package`, `package-server` | cargo build PROFILE -p sunrise-server |
 | `sunrise-port-pack` | beside the game program | `package` | cargo build PROFILE -p sunrise-port-pack |
