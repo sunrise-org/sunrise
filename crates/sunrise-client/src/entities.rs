@@ -1785,6 +1785,15 @@ pub struct ArmorStand {
     pub previous: Vec3,
     pub velocity: Vec3,
     pub on_ground: bool,
+    /// `LivingEntity.hurtTime`, counted down each tick.
+    pub hurt_time: i32,
+    /// `Entity.airSupply`: refilled by 4 a tick up to 300 out of water.
+    pub air: i32,
+    /// Shared flag 7, `FallFlying`: a stand cannot glide, so its first tick
+    /// clears it.
+    pub fall_flying: bool,
+    /// `LivingEntity.currentImpulseContextResetGraceTime`.
+    pub impulse_grace: i32,
     /// `yRot`, which the body follows (`ArmorStand.tickHeadTurn`: `yBodyRot`).
     pub yaw: f32,
     /// `yBodyRotO`: the body's yaw at the start of the tick.
@@ -2066,6 +2075,10 @@ impl ArmorStand {
             health: 20.0,
             id,
             position,
+            hurt_time: 0,
+            air: 300,
+            fall_flying: false,
+            impulse_grace: 0,
             previous: position,
             velocity: Vec3::ZERO,
             on_ground: false,

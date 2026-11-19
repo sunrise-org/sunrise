@@ -2274,12 +2274,13 @@ impl Game<'_> {
         let a = &self.armor_stands[i];
         keys.contains(&chunk_of(a.position)).then(|| {
             let uuid = self.saved_uuid_or_random(a.id);
-            let tag = entity_nbt::armor_stand_to_nbt(
+            let mut tag = entity_nbt::armor_stand_to_nbt(
                 a,
                 uuid,
                 self.persist.raw.get(&a.id),
                 self.res.items(),
             );
+            self.save_portal_cooldown(a.id, &mut tag);
             (chunk_of(a.position), tag)
         })
     }

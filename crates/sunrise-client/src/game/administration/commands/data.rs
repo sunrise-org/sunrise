@@ -165,7 +165,14 @@ impl Game<'_> {
             Target::Stand(id) => {
                 let uuid = self.uuid_for(id);
                 let a = self.armor_stands.iter().find(|a| a.id == id)?;
-                entity_nbt::armor_stand_to_nbt(a, uuid, self.persist.raw.get(&id), self.res.items())
+                let mut tag = entity_nbt::armor_stand_to_nbt(
+                    a,
+                    uuid,
+                    self.persist.raw.get(&id),
+                    self.res.items(),
+                );
+                self.save_portal_cooldown(id, &mut tag);
+                tag
             }
             Target::Frame(id) => {
                 let uuid = self.uuid_for(id);
@@ -561,6 +568,7 @@ impl Game<'_> {
                         slot.extra.anger_stamp = Some((slot.extra.anger, slot.age));
                     }
                 }
+                self.merge_portal_cooldown(id, &tag);
                 if unresolved {
                     self.close_opaque_merchant(id);
                 }
@@ -616,6 +624,7 @@ impl Game<'_> {
                     new.join = slot.join;
                     sunrise_client::join_seq::store_back(slot, new);
                 }
+                self.merge_portal_cooldown(id, &tag);
             }
             Target::Frame(id) => {
                 let mut new = entity_nbt::item_frame_from_nbt(&tag, id).ok_or_else(stale)?;
@@ -2432,10 +2441,18 @@ mod loot_table_tests {
 }
 
 #[cfg(test)]
+#[path = "data/portal_cooldown_tests.rs"]
+mod portal_cooldown_tests;
+
+#[cfg(test)]
 mod compute_tests;
 
 #[cfg(test)]
 mod saved_tag_tests;
+
+#[cfg(test)]
+#[path = "data/stand_living_tests.rs"]
+mod stand_living_tests;
 
 #[cfg(test)]
 mod mod_block_entity_tests;

@@ -3815,6 +3815,14 @@ pub fn armor_stand_to_nbt(
         .map(|((key, rotation), _)| (key, floats(&rotation)))
         .collect();
     put(&mut tag, "Pose", Tag::compound(pose));
+    put(&mut tag, "HurtTime", Tag::Short(a.hurt_time as i16));
+    put(&mut tag, "Air", Tag::Short(a.air as i16));
+    put(&mut tag, "FallFlying", Tag::Byte(i8::from(a.fall_flying)));
+    put(
+        &mut tag,
+        "current_impulse_context_reset_grace_time",
+        Tag::Int(a.impulse_grace),
+    );
     // LivingEntity.addAdditionalSaveData and ArmorStand's own fields.
     if let Tag::Compound(map) = &mut tag {
         for (key, value) in [
@@ -3873,6 +3881,12 @@ pub fn armor_stand_from_nbt(tag: &Tag, id: u32) -> Option<ArmorStand> {
     a.health = float(tag.get("Health")).unwrap_or(20.0) as f32;
     a.fire_ticks = i32::from(number(tag.get("Fire")).unwrap_or(0) as i16);
     a.custom_name = tag.get("CustomName").map(name_text);
+    // Entity.load and LivingEntity.readAdditionalSaveData.
+    a.hurt_time = i32::from(number(tag.get("HurtTime")).unwrap_or(0) as i16);
+    a.air = number(tag.get("Air")).map_or(300, |v| v as i32);
+    a.fall_flying = flag(tag, "FallFlying");
+    a.impulse_grace =
+        number(tag.get("current_impulse_context_reset_grace_time")).map_or(0, |v| v as i32);
     a.name_visible = flag(tag, "CustomNameVisible");
     if let Some(eq) = tag.get("equipment") {
         a.equipment = sunrise_items::equipment::Equipment::read(eq);
