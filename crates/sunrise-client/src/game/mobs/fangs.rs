@@ -14,11 +14,16 @@ pub(super) struct Fangs {
     pub(in crate::game) join: sunrise_client::join_seq::JoinSeq,
     pub id: u32,
     pub pos: [f64; 3],
+    /// `getDeltaMovement`: nothing moves the fangs by it, but a fluid's
+    /// current changes it and the save writes it.
+    pub motion: Vec3,
     pub yaw: f32,
     pub warmup: i32,
     pub life: i32,
     pub owner: u32,
     pub started: bool,
+    /// `Entity.remainingFireTicks`, counted down by `baseTick`.
+    pub fire_ticks: i32,
     /// `Entity.random`. The attack sound's pitch is its first draw.
     random: LegacyRandom,
 }
@@ -67,17 +72,21 @@ impl Game<'_> {
             join: Default::default(),
             id,
             pos: at,
+            motion: Vec3::ZERO,
             yaw,
             warmup: delay,
             life: 22,
             owner,
             started: false,
+            fire_ticks: 0,
             random: sunrise_client::mobs::entity_random(id, Vec3::new(at[0], at[1], at[2])),
         });
     }
     pub(super) fn fangs_to_nbt(&self, f: &Fangs, uuid: [i32; 4]) -> sunrise_core::nbt::Tag {
         sunrise_client::entity_nbt::evoker_fangs_to_nbt(
             Vec3::new(f.pos[0], f.pos[1], f.pos[2]),
+            f.motion,
+            f.fire_ticks,
             f.yaw,
             f.warmup,
             self.persist.uuids.get(&f.owner).copied(),
@@ -153,6 +162,11 @@ impl Game<'_> {
         #[cfg(test)]
         super::entity::taken_pass_tests::after_take(self);
         list.retain_mut(|f| {
+            self.fangs_fluid_step(f);
+            // Entity.baseTick: the fangs burn down; their hurt does nothing.
+            if f.fire_ticks > 0 {
+                f.fire_ticks -= 1;
+            }
             f.warmup = f.warmup.wrapping_sub(1);
             if f.warmup >= 0 {
                 return true;
@@ -177,6 +191,26 @@ impl Game<'_> {
         self.fangs
             .list
             .restore(list, sunrise_client::join_seq::RestoreOrder::SurvivorsFirst);
+    }
+    /// `Entity.baseTick`'s `updateFluidInteraction` for fangs (0.5 x 0.8): the
+    /// currents of the water and lava the box touches add to the motion.
+    fn fangs_fluid_step(&self, f: &mut Fangs) {
+        let at = Vec3::new(f.pos[0], f.pos[1], f.pos[2]);
+        let bounds = sunrise_core::geometry::Aabb::new(
+            Vec3::new(at.x - 0.25, at.y, at.z - 0.25),
+            Vec3::new(at.x + 0.25, at.y + 0.8, at.z + 0.25),
+        );
+        // EntityDimensions.scalable: the eye at 0.85 of the height.
+        let eye = at.y + f64::from(0.8_f32 * 0.85);
+        sunrise_client::entities::update_entity_fluids(
+            bounds,
+            at,
+            eye,
+            &mut f.motion,
+            &self.world,
+            &self.res.motion().fluids,
+            &self.loop_context,
+        );
     }
     /// `dealDamageTo` everything alive in the fangs' box (0.5 x 0.8,
     /// inflated 0.2 sideways) but the evoker's allies.
@@ -389,6 +423,10 @@ fn fangs_allied(owner: Party, other: Party, vex_root: Option<(bool, Party)>) -> 
 fn p_zrot(p: &mut Poses, part: &str, v: f32) {
     p.zrot(part, v);
 }
+#[cfg(test)]
+#[path = "fangs/current_tests.rs"]
+mod current_tests;
+
 #[cfg(test)]
 mod tests {
     use super::{Party, fang_attack_pitch, fang_crit, fangs_allied};

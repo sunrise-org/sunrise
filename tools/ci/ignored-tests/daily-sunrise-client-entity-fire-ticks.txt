@@ -1,0 +1,1 @@
+sunrise-client game::commands::data::fire_tests::fire_changes_on_eyes_fangs_spawners_clouds_and_bullets lib daily resources

@@ -2733,6 +2733,8 @@ pub fn tnt_owner(tag: &Tag) -> Option<[i32; 4]> {
 /// loaded Owner data remains in the raw compound.
 pub fn evoker_fangs_to_nbt(
     position: Vec3,
+    motion: Vec3,
+    fire_ticks: i32,
     yaw: f32,
     warmup: i32,
     owner: Option<[i32; 4]>,
@@ -2743,12 +2745,13 @@ pub fn evoker_fangs_to_nbt(
         id: "minecraft:evoker_fangs",
         uuid,
         position,
-        motion: raw.map(motion).unwrap_or(Vec3::ZERO),
+        motion,
         rotation: [yaw, raw.map(rotation).unwrap_or([0.0; 2])[1]],
         on_ground: raw.is_some_and(|t| flag(t, "OnGround")),
         fall_distance: raw.map_or(0.0, |t| ground_from_nbt(t).1),
     }
     .tag(raw);
+    put(&mut tag, "Fire", Tag::Short(fire_ticks as i16));
     put(&mut tag, "Warmup", Tag::Int(warmup));
     if let Some(owner) = owner {
         put(&mut tag, "Owner", Tag::IntArray(owner.to_vec()));
@@ -2835,6 +2838,7 @@ pub fn ominous_item_spawner_to_nbt(
     item: &crate::items::ItemStack,
     position: Vec3,
     spawn_item_after: i64,
+    fire_ticks: i32,
     uuid: [i32; 4],
     raw: Option<&Tag>,
     items: &crate::items::Items,
@@ -2861,6 +2865,7 @@ pub fn ominous_item_spawner_to_nbt(
         "spawn_item_after_ticks",
         Tag::Long(spawn_item_after),
     );
+    put(&mut tag, "Fire", Tag::Short(fire_ticks as i16));
     tag
 }
 /// `OminousItemSpawner.readAdditionalSaveData`: the item, where it floats
@@ -4277,7 +4282,14 @@ mod tests {
         .0;
         let at = super::Vec3::new(1.0, 200.0, 1.0);
         let fall = |raw: Option<&super::Tag>| match super::evoker_fangs_to_nbt(
-            at, 0.0, 99, None, [1; 4], raw,
+            at,
+            super::Vec3::ZERO,
+            0,
+            0.0,
+            99,
+            None,
+            [1; 4],
+            raw,
         )
         .get("fall_distance")
         {
@@ -5164,6 +5176,7 @@ mod tests {
             &item,
             at,
             97,
+            0,
             [1, 2, 3, 4],
             Some(&raw),
             &Default::default(),
@@ -5189,6 +5202,7 @@ mod tests {
         let empty = ominous_item_spawner_to_nbt(
             &crate::items::ItemStack::new("minecraft:air", 1),
             at,
+            0,
             0,
             [1, 2, 3, 4],
             Some(&tag),

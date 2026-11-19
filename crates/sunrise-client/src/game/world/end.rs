@@ -277,6 +277,8 @@ pub(in crate::game) struct SummonedEye {
     pub(super) motion: Vec3,
     /// `EyeOfEnder.life`: not saved, so a loaded eye starts again at 0.
     life: u32,
+    /// `Entity.remainingFireTicks`, counted down by `baseTick`.
+    pub(super) fire_ticks: i32,
 }
 impl SummonedEye {
     /// `Entity.load`'s motion and `EyeOfEnder.readAdditionalSaveData`'s
@@ -284,6 +286,8 @@ impl SummonedEye {
     pub(super) fn load(tag: &mut sunrise_core::nbt::Tag) -> Self {
         use sunrise_core::nbt::Tag;
         let motion = sunrise_client::entity_nbt::loaded_motion(tag);
+        let fire_ticks =
+            i32::from(sunrise_client::save::number(tag.get("Fire")).unwrap_or(0) as i16);
         if let Tag::Compound(c) = tag {
             let mut item = match c.remove(&"Item".into()) {
                 Some(Tag::Compound(item)) => item,
@@ -304,7 +308,11 @@ impl SummonedEye {
             item.insert("count".into(), Tag::Int(1));
             c.insert("Item".into(), Tag::Compound(item));
         }
-        Self { motion, life: 0 }
+        Self {
+            motion,
+            life: 0,
+            fire_ticks,
+        }
     }
 }
 
@@ -321,6 +329,10 @@ impl Game<'_> {
             // ServerLevel.tick: only entities in entity-ticking chunks tick.
             if !ticking(o.position.x.floor() as i32, o.position.z.floor() as i32) {
                 return true;
+            }
+            // Entity.baseTick: the eye burns down; its hurt does nothing.
+            if eye.fire_ticks > 0 {
+                eye.fire_ticks -= 1;
             }
             let m = eye.motion;
             o.position = Vec3::new(o.position.x + m.x, o.position.y + m.y, o.position.z + m.z);

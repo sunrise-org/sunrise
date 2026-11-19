@@ -841,6 +841,15 @@ impl Game<'_> {
                         delay,
                         owner,
                     );
+                    let last = self.fangs.list.len() - 1;
+                    let motion = entity_nbt::loaded_motion(&tag);
+                    let fire = i32::from(
+                        sunrise_client::save::number(tag.get("Fire")).unwrap_or(0) as i16,
+                    );
+                    self.fangs.list.update(last, |f| {
+                        f.motion = motion;
+                        f.fire_ticks = fire;
+                    });
                     let uuid = with_constructor_uuid(uuid);
                     self.remember(id, uuid, tag);
                 }
@@ -1330,7 +1339,7 @@ impl Game<'_> {
                 "Motion".into(),
                 Tag::List([m.x, m.y, m.z].map(|v| Tag::Double(v.to_bits())).to_vec()),
             );
-            c.entry("Fire".into()).or_insert(Tag::Short(0));
+            c.insert("Fire".into(), Tag::Short(eye.fire_ticks as i16));
         }
         // Marker, LeashFenceKnotEntity and EyeOfEnder still use
         // Entity.saveWithoutId's common fields, which their own saves leave out.
@@ -1729,6 +1738,7 @@ impl Game<'_> {
                     &s.item,
                     at,
                     s.spawn_item_after,
+                    s.fire_ticks,
                     self.persist.uuids.get(&s.id).copied().unwrap_or(s.uuid),
                     s.raw.as_deref(),
                     self.res.items(),

@@ -32,6 +32,8 @@ pub(super) struct OminousItemSpawner {
     pub(super) position: [f64; 3],
     pub(super) spawn_item_after: i64,
     tick_count: i64,
+    /// `Entity.remainingFireTicks`, counted down by `baseTick`.
+    pub(super) fire_ticks: i32,
     /// Its UUID, and the compound it was loaded from (fields Sunrise doesn't
     /// model survive a save).
     pub(super) uuid: [i32; 4],
@@ -83,6 +85,7 @@ impl Game<'_> {
             position,
             spawn_item_after: i64::from(delay),
             tick_count: 0,
+            fire_ticks: 0,
             uuid: sunrise_client::save::random_uuid(),
             raw: None,
         });
@@ -130,6 +133,7 @@ impl Game<'_> {
             position: [at.x, at.y, at.z],
             spawn_item_after,
             tick_count: 0,
+            fire_ticks: i32::from(sunrise_client::save::number(tag.get("Fire")).unwrap_or(0) as i16),
             uuid,
             raw: Some(Box::new(tag)),
         });
@@ -142,6 +146,10 @@ impl Game<'_> {
         #[cfg(test)]
         super::entity::taken_pass_tests::after_take(self);
         spawners.retain_mut(|s| {
+            // Entity.baseTick: the spawner burns down; its hurt does nothing.
+            if s.fire_ticks > 0 {
+                s.fire_ticks -= 1;
+            }
             s.tick_count += 1;
             let at = block(s.position);
             let center = at.map(|v| f64::from(v) + 0.5);
@@ -179,6 +187,7 @@ impl Game<'_> {
             position,
             spawn_item_after: 0,
             tick_count: 0,
+            fire_ticks: 0,
             uuid: [0; 4],
             raw: None,
         });

@@ -356,6 +356,8 @@ mod tests {
                 id: 0,
                 at: [0.0; 3],
                 motion: [0.0; 3],
+                fall_distance: 0.0,
+                fire_ticks: 0,
                 radius: 5.0,
                 age: 0,
                 duration: 200,

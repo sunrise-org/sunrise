@@ -151,6 +151,25 @@ impl Game<'_> {
             Some(self.creatures.projectiles[i].id),
         );
         let sweep = self.sweep_before_hit("minecraft:shulker_bullet", false);
+        let p = self.destroy_shulker_bullet(i);
+        self.vehicle_attack_sounds(p.aabb(), sweep, magic.then_some(p.id as i32));
+        self.reset_attack_strength();
+        self.swing_arm();
+    }
+
+    /// `ShulkerBullet.hurtServer`, whatever hurt it: the hurt sound, fifteen
+    /// crit particles (`sendParticles`, spread 0.2), then `destroy`
+    /// (`discard` and `gameEvent(ENTITY_DAMAGE)` from the bullet).
+    pub(in crate::game) fn destroy_shulker_bullet(&mut self, i: usize) -> Projectile {
+        let (id, owner, owner_uuid) = {
+            let p = &self.creatures.projectiles[i];
+            (p.id, p.owner, p.owner_uuid)
+        };
+        let ctx = sunrise_client::sculk::Context {
+            owner,
+            owner_uuid,
+            ..self.entity_event_context(id, None)
+        };
         let p = self.remove_projectile_at(i);
         let at = [p.position.x, p.position.y, p.position.z];
         self.audio
@@ -161,11 +180,9 @@ impl Game<'_> {
                 .send_particles(&options, at, [0.2, 0.2, 0.2], 0.0, 15);
             self.lan_level_particles(&options, at, [0.2, 0.2, 0.2], 0.0, 15, None);
         }
-        self.vehicle_attack_sounds(p.aabb(), sweep, magic.then_some(p.id as i32));
-        self.reset_attack_strength();
-        self.swing_arm();
+        self.post_game_event("minecraft:entity_damage", at, ctx);
+        p
     }
-
     /// `Player.canInteractWithEntity(box, 3.0)` as the server checks an
     /// attack packet: the projectile's box within the reach plus 3 of the eyes.
     pub(super) fn within_interaction_range(&self, i: usize) -> bool {

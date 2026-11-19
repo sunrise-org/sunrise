@@ -850,7 +850,9 @@ impl Projectile {
             || self.is_fireball()
             || matches!(
                 self.kind,
-                ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+                ProjectileKind::WindCharge
+                    | ProjectileKind::BreezeWindCharge
+                    | ProjectileKind::ShulkerBullet { .. }
             ))
         {
             return;

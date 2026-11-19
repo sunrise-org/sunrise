@@ -4570,6 +4570,29 @@ impl Game<'_> {
         (self.creatures.projectiles.lift(), same)
     }
 
+    /// `ShulkerBullet.tick` opens with `Entity.baseTick`: a burning bullet out
+    /// of lava takes the `onFire` hurt when its fire ticks are a multiple of 20,
+    /// and `ShulkerBullet.hurtServer` destroys it before it moves.
+    fn burn_shulker_bullets(&mut self, ticking: &impl Fn(i32, i32) -> bool, through: u32) {
+        let mut i = 0;
+        while i < self.creatures.projectiles.len() {
+            let p = &self.creatures.projectiles[i];
+            let burns = matches!(p.kind, ProjectileKind::ShulkerBullet { .. })
+                && p.id <= through
+                && ticking(p.position.x.floor() as i32, p.position.z.floor() as i32)
+                && p.fire_ticks > 0
+                && p.fire_ticks % 20 == 0
+                && !self
+                    .mob_world_base(&[])
+                    .fluids(p.aabb(), p.position.y)
+                    .in_lava;
+            if burns {
+                self.destroy_shulker_bullet(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
     pub(super) fn tick_projectiles_now(&mut self) -> Result<()> {
         if self.creatures.projectiles.is_empty() {
             self.flush_lan_explosions();
@@ -4580,6 +4603,7 @@ impl Game<'_> {
         // tick's entity pass (a mob's shot) first ticks on the next one; a
         // player's or a dispenser's, which join before the pass, tick now.
         let through = self.ticked_entities_through;
+        self.burn_shulker_bullets(&ticking, through);
         // EntityTickEvent.Pre for the projectiles about to tick, once for the family before the
         // loop holds them, and the Post once the hits of their ticks have landed. A projectile
         // of a type a mod named is told alone, right before and right after its own tick.
