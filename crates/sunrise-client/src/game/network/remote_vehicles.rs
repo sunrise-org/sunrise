@@ -216,6 +216,23 @@ impl Game<'_> {
         hit
     }
 
+    /// `vehicle.hasIndirectPassenger(player)`: the local player rides `vehicle`, directly or through
+    /// the vehicles under what it rides.
+    fn rides_indirectly(&self, vehicle: u32) -> bool {
+        let Some(r) = self.remote.as_ref() else {
+            return false;
+        };
+        let mut at = self.riding;
+        for _ in 0..=r.passenger_vehicles.len() {
+            match at {
+                Some(v) if v == vehicle => return true,
+                Some(v) => at = r.passenger_vehicles.get(&v).copied(),
+                None => return false,
+            }
+        }
+        false
+    }
+
     /// `ClientPacketListener.handleSetEntityPassengersPacket`: who rides
     /// `vehicle` now. The local player gets in or out; mobs and other
     /// players sit where the server keeps them.
@@ -224,6 +241,8 @@ impl Game<'_> {
             return;
         };
         let vehicle_id = vehicle as u32;
+        // `vehicle.hasIndirectPassenger(player)`, asked before ejectPassengers.
+        let was_mounted = self.rides_indirectly(vehicle_id);
         if let Some(r) = self.remote.as_mut() {
             r.passenger_vehicles
                 .retain(|_, parent| *parent != vehicle_id);
@@ -284,11 +303,43 @@ impl Game<'_> {
             r.first_passenger = passengers.first() == Some(&me);
             r.passenger_index = passengers.iter().position(|&p| p == me).unwrap_or(0);
         }
+        // handleSetEntityPassengersPacket takes every passenger off and puts them back
+        // (ejectPassengers, startRiding), so each list runs AbstractHorse.addPassenger for every
+        // passenger this client has: a horse's, camel's or llama's riders turn to its view
+        // (absSnapRotationTo(getViewYRot(0), getViewXRot(0)); a LivingEntity's view yaw is its
+        // head's, yHeadRotO).
+        if let Some((yaw, pitch)) = self
+            .mobs
+            .iter()
+            .find(|m| m.id == vehicle_id && equine::is_equine(m.species()))
+            .map(|m| {
+                (
+                    m.previous_head_yaw % 360.0,
+                    m.previous_head_pitch.clamp(-90.0, 90.0) % 360.0,
+                )
+            })
+        {
+            for &passenger in passengers {
+                if passenger == me {
+                    (self.yaw, self.pitch) = (yaw, pitch);
+                    self.rope_rot_old = (yaw, pitch);
+                } else if let Some(m) = self.mob_index.get_mut(&mut self.mobs, passenger as u32) {
+                    (m.yaw, m.previous_yaw) = (yaw, yaw);
+                    (m.head_pitch, m.previous_head_pitch) = (pitch, pitch);
+                }
+            }
+        }
         if passengers.contains(&me) {
-            if self.riding != Some(vehicle_id) {
-                self.riding = Some(vehicle_id);
-                // ClientPacketListener.handleSetEntityPassengersPacket: boarding says how to get off,
-                // on the overlay and to the narrator.
+            let boarded = self.riding != Some(vehicle_id);
+            self.riding = Some(vehicle_id);
+            if !was_mounted {
+                // Boarding a boat faces the boat's way. The player's head yaw has no field of its
+                // own here: the player model takes it from `yaw` every tick.
+                if let Some(b) = self.boats.iter().find(|b| b.id == vehicle_id) {
+                    self.yaw = b.yaw;
+                    self.rope_rot_old.0 = b.yaw;
+                }
+                // Boarding says how to get off, on the overlay and to the narrator.
                 let key = if self.cushions.iter().any(|c| c.id == vehicle_id) {
                     "mount.sit"
                 } else {
@@ -300,6 +351,8 @@ impl Game<'_> {
                 );
                 self.say_system_now(&message);
                 self.titles.set_overlay(message, false);
+            }
+            if boarded {
                 if let Some(i) = self.carts.iter().position(|c| c.id == vehicle_id) {
                     self.carts.update(i, |c| c.passenger_yaw_delta = 0.0);
                 }
@@ -972,6 +1025,102 @@ mod tests {
                 }
             }
             assert_eq!(answers, [[1.5, 64.0, 1.5]]);
+        });
+    }
+
+    /// A mount whose yaw, body, head and previous head all differ, so only the view vanilla reads
+    /// (`getViewYRot(0)` = yHeadRotO, `getViewXRot(0)` = xRotO) passes; the previous pitch is past
+    /// 90 so the clamp shows.
+    fn equine_mount(root: &std::path::Path, kind: &str) -> Mob {
+        let types = MobTypes::load(root).unwrap();
+        let t = std::sync::Arc::new(types.types[kind].clone());
+        let mut m = Mob::new(8, t, Vec3::new(0.5, 64.0, 2.5), 0.0);
+        (m.yaw, m.previous_yaw, m.body_yaw) = (10.0, 10.0, 20.0);
+        (m.head_yaw, m.previous_head_yaw) = (30.0, -170.5);
+        (m.head_pitch, m.previous_head_pitch) = (5.0, 95.0);
+        m
+    }
+
+    /// AbstractHorse.addPassenger on this client: a passenger list naming the player snaps it to
+    /// the horse's view (absSnapRotationTo(getViewYRot(0), getViewXRot(0))), whatever way the
+    /// player faced, and the turn's old look with it.
+    #[test]
+    #[ignore = "daily"]
+    fn a_rider_turns_to_its_horses_view_on_the_passenger_list() {
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            use sunrise_client::motion::PlayerMotion;
+            let root =
+                std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+            let (_peer, _writer) = crate::game::remote::tests::connect_menu_test(game);
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+            game.remote.as_mut().unwrap().entity_id = 7;
+            game.mobs.clear();
+            game.mobs.push(equine_mount(&root, "minecraft:horse"));
+            (game.yaw, game.pitch) = (0.0, 25.0);
+            game.remote_set_passengers(8, &[7]);
+            assert_eq!((game.yaw, game.pitch), (-170.5, 90.0));
+            assert_eq!(game.rope_rot_old, (-170.5, 90.0));
+        });
+    }
+
+    /// AbstractHorse.addPassenger runs for every passenger the list puts back: a camel's second
+    /// rider, another player or a mob, turns to the camel's view along with the local player.
+    #[test]
+    #[ignore = "daily"]
+    fn every_rider_on_the_list_turns_to_its_camels_view() {
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            use sunrise_client::motion::PlayerMotion;
+            let root =
+                std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+            let (_peer, _writer) = crate::game::remote::tests::connect_menu_test(game);
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+            game.remote.as_mut().unwrap().entity_id = 7;
+            let types = MobTypes::load(&root).unwrap();
+            let zombie = std::sync::Arc::new(types.types["minecraft:zombie"].clone());
+            let mut rider = Mob::new(9, zombie, Vec3::new(0.5, 65.0, 2.5), 60.0);
+            (rider.head_pitch, rider.previous_head_pitch) = (-40.0, -40.0);
+            game.mobs.clear();
+            game.mobs.push(equine_mount(&root, "minecraft:camel"));
+            game.mobs.push(rider);
+            (game.yaw, game.pitch) = (0.0, 25.0);
+            game.remote_set_passengers(8, &[7, 9]);
+            assert_eq!((game.yaw, game.pitch), (-170.5, 90.0));
+            let rider = game.mobs.iter().find(|m| m.id == 9).unwrap();
+            assert_eq!(
+                (
+                    rider.yaw,
+                    rider.previous_yaw,
+                    rider.head_pitch,
+                    rider.previous_head_pitch
+                ),
+                (-170.5, -170.5, 90.0, 90.0)
+            );
+        });
+    }
+
+    /// handleSetEntityPassengersPacket: the list that puts the player in a boat it wasn't on turns
+    /// it to the boat's yaw; a later list for the same boat leaves the player's view alone.
+    #[test]
+    #[ignore = "daily"]
+    fn boarding_a_boat_faces_its_way_once() {
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            use sunrise_client::motion::PlayerMotion;
+            let (_peer, _writer) = crate::game::remote::tests::connect_menu_test(game);
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+            game.remote.as_mut().unwrap().entity_id = 7;
+            let boat = super::super::boats::Boat::new(
+                8,
+                std::sync::Arc::from("oak"),
+                Vec3::new(0.5, 64.0, 2.5),
+                200.0,
+            );
+            game.boats.push(boat);
+            game.yaw = 40.0;
+            game.remote_set_passengers(8, &[7]);
+            assert_eq!((game.yaw, game.rope_rot_old.0), (200.0, 200.0));
+            game.yaw = 40.0;
+            game.remote_set_passengers(8, &[7]);
+            assert_eq!(game.yaw, 40.0);
         });
     }
 
