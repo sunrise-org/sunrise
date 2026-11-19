@@ -7,23 +7,35 @@ pub mod tests {
     use crate::parts::tests::*;
     use crate::*;
 
-    /// The types mods name to `entity_tick_each` are told one at a time, every type once a mod
-    /// names them all, and a type that is not a namespaced id refuses the registration.
+    /// The types mods name to `entity_tick_each` are told one at a time to the mods that named
+    /// them, every type to a mod that names them all, and a type that is not a namespaced id
+    /// refuses the registration.
     #[test]
-    fn entity_tick_each_names_the_declared_types() {
+    fn entity_tick_each_names_the_declared_types_for_their_mods() {
         let mut registrar = crate::parts::PartRegistrar::new("first");
         registrar.entity_tick_each("minecraft:zombie");
         registrar.mod_id = "second";
+        registrar.mod_index = 1;
         registrar.entity_tick_each("mymod:golem");
         registrar.entity_tick_each("minecraft:zombie");
         registrar.entity_tick_each("Zombie");
         assert_eq!(registrar.refused.len(), 1);
         let each = mod_vocab::__private::EntityTickEach::of(&registrar.entity_tick_each);
-        assert!(each.names("minecraft:zombie") && each.names("mymod:golem"));
-        assert!(!each.names("minecraft:item") && !each.all());
+        let hearing = |each: &mod_vocab::__private::EntityTickEach, kind: &str| {
+            each.hearing(kind)
+                .map(|set| set.indices().collect::<Vec<_>>())
+        };
+        assert_eq!(hearing(&each, "minecraft:zombie"), Some(vec![0, 1]));
+        assert_eq!(hearing(&each, "mymod:golem"), Some(vec![1]));
+        assert_eq!(hearing(&each, "minecraft:item"), None);
+        assert!(!each.all());
+        assert_eq!(each.namers().indices().collect::<Vec<_>>(), [0, 1]);
+        registrar.mod_index = 2;
         registrar.entity_tick_each_entity();
         let every = mod_vocab::__private::EntityTickEach::of(&registrar.entity_tick_each);
-        assert!(every.all() && every.names("minecraft:item"));
+        assert!(every.all());
+        assert_eq!(hearing(&every, "minecraft:item"), Some(vec![2]));
+        assert_eq!(hearing(&every, "mymod:golem"), Some(vec![1, 2]));
         assert!(!mod_vocab::__private::EntityTickEach::of(&[]).any());
     }
 
@@ -232,10 +244,11 @@ impl EntitiesRegistrar for PartRegistrar {
             self.refused.push(message);
             return;
         }
-        self.entity_tick_each.push(Some(entity.to_owned()));
+        self.entity_tick_each
+            .push((self.mod_index, Some(entity.to_owned())));
     }
 
     fn entity_tick_each_entity(&mut self) {
-        self.entity_tick_each.push(None);
+        self.entity_tick_each.push((self.mod_index, None));
     }
 }

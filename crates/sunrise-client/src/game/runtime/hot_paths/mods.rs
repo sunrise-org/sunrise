@@ -37,6 +37,7 @@ impl Game<'_> {
                         std::slice::from_ref(&entities[call % entities.len()]),
                         &["minecraft:cow"],
                         &mut canceled,
+                        mod_api::__private::Listeners::All,
                     );
                     count += canceled.len() as u64;
                     canceled.clear();

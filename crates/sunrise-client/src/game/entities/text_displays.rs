@@ -219,9 +219,9 @@ impl Game<'_> {
             d.move_to(position, rotation);
         }
     }
-    /// The displays' tick on a client. EntityTickEvent: once for the family,
-    /// or each alone of a type a mod named, right before and right after its own
-    /// tick; a canceled one keeps its state.
+    /// The displays' tick on a client. EntityTickEvent: once for the family, or each of a type a
+    /// mod named alone to the mods that named it, right before and right after its own tick (the
+    /// others hear it with the family); a canceled one keeps its state.
     pub(super) fn tick_text_displays(&mut self) {
         let mut round = self.native_tick_round();
         if !round.listening() {
@@ -234,6 +234,10 @@ impl Game<'_> {
         for (&id, display) in &self.text_displays {
             if round.alone_kind(display.shows.kind()) {
                 alone.push((id, display.shows.kind()));
+                round.add_named(
+                    id as u32,
+                    super::native_ticks::TickKind::Fixed(display.shows.kind()),
+                );
             } else {
                 round.add(
                     id as u32,
@@ -248,11 +252,11 @@ impl Game<'_> {
             }
         }
         for (id, kind) in alone {
-            if self.native_tick_pre_one(&mut round, id as u32, kind) {
+            if self.native_tick_pre_named(&mut round, id as u32, kind) {
                 if let Some(display) = self.text_displays.get_mut(&id) {
                     display.tick();
                 }
-                self.native_tick_post_one(&round, id as u32, kind);
+                self.native_tick_post_named(&round, id as u32, kind);
             }
         }
         self.native_tick_post_batch(round);

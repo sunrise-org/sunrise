@@ -91,11 +91,15 @@ impl Game<'_> {
             ) {
                 continue;
             }
+            // Canceled in its family's Pre: it doesn't tick, and hears no Pre of its own.
+            if round.canceled(items[i].id) {
+                continue;
+            }
             if alone {
                 let id = items[i].id;
                 let given =
                     self.give_items_back(items, &mut removed, &mut cells, &mut gone, i, |game| {
-                        if game.native_tick_pre_one(round, id, native_ticks::ITEM)
+                        if game.native_tick_pre_named(round, id, native_ticks::ITEM)
                             && update_hook
                             && let Some(k) =
                                 native_ticks::place(&game.dropped, i, |item| item.id == id)
@@ -313,7 +317,7 @@ impl Game<'_> {
                 let id = items[i].id;
                 let given =
                     self.give_items_back(items, &mut removed, &mut cells, &mut gone, i, |game| {
-                        game.native_tick_post_one(round, id, native_ticks::ITEM);
+                        game.native_tick_post_named(round, id, native_ticks::ITEM);
                     });
                 (items, next) = (given.items, given.next);
             }

@@ -200,6 +200,47 @@ fn entered_with_id(
         (entry.id, hooks)
     })
 }
+/// The game's choice of a selected hook's listeners, as the runtime's `Listeners`.
+#[derive(Clone, Copy)]
+enum Listeners<'a> {
+    All,
+    Only(&'a ModSet),
+    Except(&'a ModSet),
+    One(usize),
+}
+impl Listeners<'_> {
+    fn takes(self, index: usize) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(set) => set.0.contains(&index),
+            Self::Except(set) => !set.0.contains(&index),
+            Self::One(one) => one == index,
+        }
+    }
+}
+/// Some installed mods, by index, as the runtime's `ModSet`.
+struct ModSet(Vec<usize>);
+impl ModSet {
+    fn of(indices: impl IntoIterator<Item = usize>) -> Self {
+        Self(indices.into_iter().collect())
+    }
+}
+fn entered_selected<'a>(
+    hook_id: HookId,
+    hook: &'static str,
+    listeners: Listeners<'a>,
+) -> impl Iterator<Item = &'static dyn Hooks> + 'a {
+    MODS.get()
+        .into_iter()
+        .flat_map(move |installed| {
+            installed
+                .subscribers
+                .subscribers(hook_id as usize)
+                .filter(move |subscriber| listeners.takes(subscriber.index))
+                .map(move |subscriber| &installed.mods[subscriber.index])
+        })
+        .map(move |entry| enter_listener(entry, hook).1)
+}
 fn listening(hook_id: HookId) -> impl Iterator<Item = (bool, &'static ModEntry)> {
     MODS.get().into_iter().flat_map(move |installed| {
         installed

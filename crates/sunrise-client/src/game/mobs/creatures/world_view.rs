@@ -3,6 +3,14 @@ use super::*;
 
 impl Game<'_> {
     pub(in crate::game) fn mob_world_base<'s>(&'s self, others: &'s [Seen]) -> MobWorld<'s> {
+        self.mob_world_base_teams(others, &self.mob_team_slots())
+    }
+    /// [`Self::mob_world_base`] with the teams' scan already made (`mob_team_slots`).
+    pub(in crate::game) fn mob_world_base_teams<'s>(
+        &'s self,
+        others: &'s [Seen],
+        teams: &crate::game::scoreboard::MobTeamSlots,
+    ) -> MobWorld<'s> {
         if self.is_logical_server() {
             self.world.enable_path_type_cache();
         }
@@ -69,7 +77,7 @@ impl Game<'_> {
             dimension_type: self.dimension_type(),
             world_seed: self.level.seed,
             sea_level: self.dim.sea_level(),
-            teams: std::sync::Arc::new(self.mob_teams()),
+            teams: std::sync::Arc::new(self.mob_teams_of(teams)),
             items: Some(self.items()),
             lid_openers: &self.lid_openers,
             mod_effects: if self.remote.is_none() {

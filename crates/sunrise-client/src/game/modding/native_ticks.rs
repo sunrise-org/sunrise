@@ -1,7 +1,8 @@
 //! Entities ticking for native mods (`native_entity_tick_pre`, `native_entity_tick_post`:
 //! NeoForge's `EntityTickEvent.Pre` and `.Post`), on the server and on a client. An entity of a
-//! type a mod named (`entity_tick_each`) is told alone, right before and right after its own
-//! tick. The others are told by family: the loops of the mobs and the items hold their lists out
+//! type a mod named (`entity_tick_each`) is told alone to the mods that named it, right before
+//! and right after its own tick (`Listeners`: the dispatch goes only to them); the other mods
+//! hear it with its family. The others are told by family: the loops of the mobs and the items hold their lists out
 //! of `Game`, so those families hand their ticking entities to a `TickRound` before the loop, hear
 //! one Pre for all of them before it and one Post after it; the minecarts, boats and general
 //! entity rows, whose loops can call the hooks, are told one by one. The mob and item loops tell
@@ -75,6 +76,9 @@ pub(in crate::game) struct TickBuffers {
     ids: Vec<u32>,
     /// Empty between calls: it borrows the round's kinds only while a hook runs.
     kinds: Vec<&'static str>,
+    /// What one Pre's listeners canceled, its own for each call: what a listener does to it
+    /// reaches the round only as the IDs that call was told.
+    canceled: Vec<u32>,
     /// The types of entities whose rows hold them as their own strings, copied out for a call.
     names: KindNames,
 }
@@ -172,9 +176,12 @@ pub(in crate::game) struct TickRound {
     /// Whether `entity_entering_section` is listened to on this server: each entity's position
     /// write is filed and told while its tick is still running.
     sections: bool,
-    /// The entities about to tick with the family, in order; once the family's Pre is told,
-    /// those it let through, for its Post.
-    ticking: Vec<(u32, TickKind)>,
+    /// The entities about to tick with the family, in order, each with whether it is of a type
+    /// a mod named (told alone to the mods that named it, with the family to the others); once
+    /// the family's Pre is told, those it let through, for its Post.
+    ticking: Vec<(u32, TickKind, bool)>,
+    /// Whether `ticking` holds an entity of a named type.
+    named: bool,
     /// The entities a Pre canceled.
     canceled: Vec<u32>,
     /// Scratch output owned by one hook dispatch, never shared with earlier turns.
@@ -217,14 +224,32 @@ impl TickRound {
     /// Posts together (`native_tick_pre_batch`).
     pub(super) fn add(&mut self, id: u32, kind: TickKind) {
         if self.listening() {
-            self.ticking.push((id, kind));
+            self.ticking.push((id, kind, false));
         }
     }
-    /// The `n`th entity, in order, that the family's Pre let through.
-    pub(super) fn let_through(&self, n: usize) -> Option<u32> {
-        self.ticking.get(n).map(|(id, _)| *id)
+    /// The entity `id` of a type a mod named is about to tick, told alone to the mods that named
+    /// it (`native_tick_pre_named`): the mods that didn't hear it with its family.
+    pub(super) fn add_named(&mut self, id: u32, kind: TickKind) {
+        if self.told.listening {
+            self.ticking.push((id, kind, true));
+            self.named = true;
+        }
     }
-    /// Applies the call's output to this batch only, keeping existing cancellations intact.
+    /// The `n`th entity, in order, that the family's Pre let through, of those told with it
+    /// alone (not of a named type).
+    pub(super) fn let_through(&self, n: usize) -> Option<u32> {
+        if !self.named {
+            return self.ticking.get(n).map(|(id, ..)| *id);
+        }
+        self.ticking
+            .iter()
+            .filter(|(_, _, named)| !named)
+            .nth(n)
+            .map(|(id, ..)| *id)
+    }
+    /// Adds to `canceled` the entities of `ticking` the calls of a Pre canceled (`call_canceled`,
+    /// what each call's listeners pushed of what that call was told), each once and in their
+    /// order, and takes them out of `ticking`.
     fn take_canceled(&mut self) {
         if self.call_canceled.is_empty() {
             return;
@@ -242,11 +267,18 @@ impl TickRound {
         self.ticking.truncate(kept);
         self.call_canceled.clear();
     }
+    /// Keeps for the family's Post only the entities whose tick ran (`ran`): one a hook took
+    /// out of the level after the family's Pre, before its turn, never ticked.
+    pub(super) fn keep_ran(&mut self, ran: impl Fn(u32) -> bool) {
+        if self.told.listening {
+            self.ticking.retain(|(id, ..)| ran(*id));
+        }
+    }
     /// The entity `id`, told its Pre, went before it ticked (an item merged into an earlier
     /// one): it hears no Post.
     pub(super) fn not_ticked(&mut self, id: u32) {
         if self.listening() {
-            self.ticking.retain(|(other, _)| *other != id);
+            self.ticking.retain(|(other, ..)| *other != id);
         }
     }
 }
@@ -265,6 +297,7 @@ impl Game<'_> {
             } else {
                 Vec::new()
             },
+            named: false,
             canceled: Vec::new(),
             call_canceled: Vec::new(),
             halted: Vec::new(),
@@ -285,35 +318,107 @@ impl Game<'_> {
     }
 
     /// `native_entity_tick_pre`, once for the family's entities the round holds (`add`): those
-    /// a mod cancels leave it and do not tick.
+    /// a mod cancels leave it and do not tick. With an entity of a named type among them
+    /// (`add_named`), the mods that named nothing it holds hear the whole family, and each mod
+    /// that named a type hears it without what it hears alone; a cancel from any of them stops
+    /// the entity, and then no mod hears it alone. Every call is told the same entities.
     pub(super) fn native_tick_pre_batch(&mut self, round: &mut TickRound) {
         if !round.told.listening || round.ticking.is_empty() {
             return;
         }
-        let buffers = std::mem::take(&mut self.creatures.tick_hooks);
-        let (mut ids, mut kinds): (_, Vec<&str>) = (buffers.ids, buffers.kinds);
-        ids.extend(round.ticking.iter().map(|(id, _)| *id));
-        kinds.extend(round.ticking.iter().map(|(_, kind)| kind.id()));
-        self.native_entity_tick_pre(self.dim.id(), &ids, &kinds, &mut round.call_canceled);
-        self.creatures.tick_hooks = TickBuffers::emptied(ids, kinds, buffers.names);
+        self.native_tell_family(
+            || {
+                round
+                    .ticking
+                    .iter()
+                    .map(|(id, kind, named)| (*id, kind.id(), *named))
+            },
+            round.named,
+            Some(&mut round.call_canceled),
+        );
         round.take_canceled();
     }
 
     /// `native_entity_tick_post`, once for the family's entities the round let through, after
-    /// their position writes have already filed and told their crossings.
+    /// their position writes have already filed and told their crossings, to the same mods as
+    /// its Pre.
     pub(super) fn native_tick_post_batch(&mut self, mut round: TickRound) {
         if round.told.listening && !round.ticking.is_empty() {
-            let buffers = std::mem::take(&mut self.creatures.tick_hooks);
-            let (mut ids, mut kinds): (_, Vec<&str>) = (buffers.ids, buffers.kinds);
-            ids.extend(round.ticking.iter().map(|(id, _)| *id));
-            kinds.extend(round.ticking.iter().map(|(_, kind)| kind.id()));
-            self.native_entity_tick_post(self.dim.id(), &ids, &kinds);
-            self.creatures.tick_hooks = TickBuffers::emptied(ids, kinds, buffers.names);
+            self.native_tick_family(&round, None);
         }
         if round.listening() {
             round.ticking.clear();
             self.creatures.tick_buffer = round.ticking;
         }
+    }
+
+    /// The family's Pre (gathering what each call canceled of what it was told into
+    /// `canceled`) or its Post, to each group of listeners with what it hears of the family.
+    fn native_tick_family(&mut self, round: &TickRound, canceled: Option<&mut Vec<u32>>) {
+        self.native_tell_family(
+            || {
+                round
+                    .ticking
+                    .iter()
+                    .map(|(id, kind, named)| (*id, kind.id(), *named))
+            },
+            round.named,
+            canceled,
+        );
+    }
+
+    /// The Pre (gathering what each call canceled of what it was told into `canceled`) or the
+    /// Post of a family's `entries` (each entity, its type, and whether a mod named it): to every
+    /// listener when `named` is false (none is of a named type); otherwise the whole family to
+    /// the mods that named nothing, and to each mod that named a type the family without what it
+    /// hears alone. Every call is told the same entities, so a cancel in one doesn't hide them
+    /// from the next.
+    fn native_tell_family<'k, I: Iterator<Item = (u32, &'k str, bool)>>(
+        &mut self,
+        entries: impl Fn() -> I,
+        named: bool,
+        mut canceled: Option<&mut Vec<u32>>,
+    ) {
+        use mod_api::__private::Listeners;
+        let each = mod_api::__private::entity_tick_each().filter(|_| named);
+        let buffers = std::mem::take(&mut self.creatures.tick_hooks);
+        let (mut ids, mut kinds): (_, Vec<&str>) = (buffers.ids, buffers.kinds);
+        let mut out = buffers.canceled;
+        let mut call = |game: &mut Self, listeners: Listeners<'_>, without: Option<usize>| {
+            ids.clear();
+            kinds.clear();
+            for (id, kind, named) in entries() {
+                let alone = named
+                    && without.is_some_and(|mod_index| {
+                        each.and_then(|each| each.hearing(kind))
+                            .is_some_and(|set| set.contains(mod_index))
+                    });
+                if !alone {
+                    ids.push(id);
+                    kinds.push(kind);
+                }
+            }
+            if ids.is_empty() {
+                return;
+            }
+            match canceled.as_deref_mut() {
+                Some(canceled) => {
+                    game.native_entity_tick_pre(game.dim.id(), &ids, &kinds, &mut out, listeners);
+                    canceled.extend(out.drain(..).filter(|id| ids.contains(id)));
+                }
+                None => game.native_entity_tick_post(game.dim.id(), &ids, &kinds, listeners),
+            }
+        };
+        match each {
+            None => call(self, Listeners::All, None),
+            Some(each) => {
+                call(self, Listeners::Except(each.namers()), None);
+                for mod_index in each.namers().indices() {
+                    call(self, Listeners::One(mod_index), Some(mod_index));
+                }
+            }
+        }
+        self.creatures.tick_hooks = TickBuffers::emptied(ids, kinds, out, buffers.names);
     }
 
     /// `native_entity_tick_pre` for one entity about to tick, told alone: whether it does.
@@ -326,11 +431,51 @@ impl Game<'_> {
         if !round.told.listening {
             return true;
         }
+        self.native_tick_pre_alone(round, id, kind, mod_api::__private::Listeners::All)
+    }
+
+    /// `native_entity_tick_pre` for an entity of a type a mod named, about to tick, told alone
+    /// to the mods that named it (the others heard it with its family): whether it does. One a
+    /// mod canceled in its family's Pre isn't told.
+    pub(super) fn native_tick_pre_named(
+        &mut self,
+        round: &mut TickRound,
+        id: u32,
+        kind: &str,
+    ) -> bool {
+        if !round.told.listening {
+            return true;
+        }
+        if round.canceled(id) {
+            return false;
+        }
+        let Some(set) = mod_api::__private::entity_tick_each().and_then(|each| each.hearing(kind))
+        else {
+            return true;
+        };
+        let ticks =
+            self.native_tick_pre_alone(round, id, kind, mod_api::__private::Listeners::Only(set));
+        if !ticks {
+            // Canceled in its own Pre: the family's Post doesn't name it either.
+            round.not_ticked(id);
+        }
+        ticks
+    }
+
+    /// One entity's Pre to `listeners`: whether it ticks.
+    fn native_tick_pre_alone(
+        &mut self,
+        round: &mut TickRound,
+        id: u32,
+        kind: &str,
+        listeners: mod_api::__private::Listeners<'_>,
+    ) -> bool {
         self.native_entity_tick_pre(
             self.dim.id(),
             std::slice::from_ref(&id),
             std::slice::from_ref(&kind),
             &mut round.call_canceled,
+            listeners,
         );
         let canceled = round.call_canceled.contains(&id);
         round.call_canceled.clear();
@@ -348,6 +493,25 @@ impl Game<'_> {
                 self.dim.id(),
                 std::slice::from_ref(&id),
                 std::slice::from_ref(&kind),
+                mod_api::__private::Listeners::All,
+            );
+        }
+    }
+
+    /// `native_entity_tick_post` for an entity of a type a mod named, right after its tick, to
+    /// the mods that named it.
+    pub(super) fn native_tick_post_named(&mut self, round: &TickRound, id: u32, kind: &str) {
+        if !round.told.listening {
+            return;
+        }
+        if let Some(set) =
+            mod_api::__private::entity_tick_each().and_then(|each| each.hearing(kind))
+        {
+            self.native_entity_tick_post(
+                self.dim.id(),
+                std::slice::from_ref(&id),
+                std::slice::from_ref(&kind),
+                mod_api::__private::Listeners::Only(set),
             );
         }
     }
@@ -366,61 +530,58 @@ impl Game<'_> {
                 told,
                 ..TickRound::default()
             };
-            if self.native_tick_pre_one(&mut round, id, kind) && self.others.locate(join).is_some()
+            if self.native_tick_pre_named(&mut round, id, kind)
+                && self.others.locate(join).is_some()
             {
-                self.native_tick_post_one(&round, id, kind);
+                self.native_tick_post_named(&round, id, kind);
             }
         }
         buffers.names.clear();
         self.creatures.tick_hooks = buffers;
     }
 
-    /// The server's unsimulated entities (`other_ticks`) of the types no mod named, joined before
-    /// `born` and in entity-ticking chunks: once for the family, the Pre and then the Post of
-    /// those it let through.
+    /// The server's unsimulated entities (`other_ticks`) joined before `born` and in
+    /// entity-ticking chunks, once for the family: the Pre and then the Post of those it let
+    /// through. One of a named type, told alone to the mods that named it at its place in the
+    /// walk (`native_other_tick_alone`), is told here to the others.
     pub(in crate::game) fn native_others_tick_family(&mut self, told: Told, born: JoinSeq) {
         if !told.listening {
             return;
         }
         let ticking = self.entity_ticking_area();
-        let buffers = std::mem::take(&mut self.creatures.tick_hooks);
-        let (mut ids, mut names) = (buffers.ids, buffers.names);
+        let mut names = std::mem::take(&mut self.creatures.tick_hooks.names);
+        let mut rows = std::mem::take(&mut self.creatures.tick_others);
         for o in self.others.iter() {
             if o.join < born
                 && other_ticks(&o.kind)
-                && !told.alone_kind(&o.kind)
                 && ticking(o.position.x.floor() as i32, o.position.z.floor() as i32)
             {
-                ids.push(o.id);
+                rows.push((o.id, told.alone_kind(&o.kind)));
                 names.push(&o.kind);
             }
         }
-        let mut kinds: Vec<&str> = buffers.kinds;
-        if !ids.is_empty() {
-            kinds.extend(names.names());
-            let mut canceled = Vec::new();
-            self.native_entity_tick_pre(self.dim.id(), &ids, &kinds, &mut canceled);
-            if !canceled.is_empty() {
-                let mut kept = 0;
-                for at in 0..ids.len() {
-                    if !canceled.contains(&ids[at]) {
-                        ids.swap(kept, at);
-                        kinds.swap(kept, at);
-                        kept += 1;
-                    }
-                }
-                ids.truncate(kept);
-                kinds.truncate(kept);
-            }
-            if !ids.is_empty() {
-                self.native_entity_tick_post(self.dim.id(), &ids, &kinds);
-            }
+        if !rows.is_empty() {
+            let named = rows.iter().any(|&(_, named)| named);
+            let entries = || {
+                rows.iter()
+                    .zip(names.names())
+                    .map(|(&(id, named), kind)| (id, kind, named))
+            };
+            let mut canceled = std::mem::take(&mut self.creatures.tick_canceled);
+            self.native_tell_family(entries, named, Some(&mut canceled));
+            // Nothing of them moves in between: the Post of those the Pre let through.
+            self.native_tell_family(
+                || entries().filter(|(id, ..)| !canceled.contains(id)),
+                named,
+                None,
+            );
+            canceled.clear();
+            self.creatures.tick_canceled = canceled;
         }
-        // The kinds borrow the names: give them back first.
-        let mut back = TickBuffers::emptied(ids, kinds, KindNames::default());
+        rows.clear();
+        self.creatures.tick_others = rows;
         names.clear();
-        back.names = names;
-        self.creatures.tick_hooks = back;
+        self.creatures.tick_hooks.names = names;
     }
 
     /// `native_entity_tick_pre` for the players about to run `ServerPlayer.tick` (the guests the
@@ -439,15 +600,22 @@ impl Game<'_> {
             return round;
         };
         if round.alone_kind(PLAYER) {
+            // The mods that didn't name players hear them once for the family, first; then each
+            // player its family's Pre let through is told alone to the mods that did.
+            for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
+                round.add_named(g.entity_id as u32, TickKind::Fixed(PLAYER));
+            }
+            self.native_tick_pre_batch(&mut round);
             // Taken one by one by index: a Pre's listener may change the guests.
-            for gi in 0..host.hub.guests.len() {
+            let guests = self.lan.as_ref().map_or(0, |host| host.hub.guests.len());
+            for gi in 0..guests {
                 let Some((conn, id)) = self.lan.as_ref().and_then(|host| {
                     let g = host.hub.guests.get(gi).filter(|g| host.hub.here(g))?;
                     Some((g.conn, g.entity_id as u32))
                 }) else {
                     continue;
                 };
-                if !self.native_tick_pre_one(&mut round, id, PLAYER) {
+                if !self.native_tick_pre_named(&mut round, id, PLAYER) {
                     self.creatures.canceled_players.push(conn);
                 }
             }
@@ -477,7 +645,7 @@ impl Game<'_> {
         told: &mut Option<u32>,
     ) {
         if let Some(id) = told.take() {
-            self.native_tick_post_one(round, id, PLAYER);
+            self.native_tick_post_named(round, id, PLAYER);
         }
     }
 
@@ -492,13 +660,20 @@ impl Game<'_> {
 impl TickBuffers {
     /// The buffers back, emptied: collecting a vector's own iterator into one of the same
     /// layout keeps its allocation, so the kinds' buffer outlives the borrow it held.
-    fn emptied(mut ids: Vec<u32>, mut kinds: Vec<&str>, mut names: KindNames) -> Self {
+    fn emptied(
+        mut ids: Vec<u32>,
+        mut kinds: Vec<&str>,
+        mut canceled: Vec<u32>,
+        mut names: KindNames,
+    ) -> Self {
         ids.clear();
         kinds.clear();
+        canceled.clear();
         names.clear();
         Self {
             ids,
             kinds: kinds.into_iter().map(|_| "").collect(),
+            canceled,
             names,
         }
     }
@@ -523,8 +698,10 @@ mod tests {
     #[test]
     fn a_round_keeps_the_entities_that_tick() {
         let mut r = round();
-        r.ticking.push((1, TickKind::Fixed("minecraft:item")));
-        r.ticking.push((2, TickKind::Fixed("minecraft:item")));
+        r.ticking
+            .push((1, TickKind::Fixed("minecraft:item"), false));
+        r.ticking
+            .push((2, TickKind::Fixed("minecraft:item"), false));
         r.canceled.push(3);
         assert!(r.canceled(3));
         assert!(!r.canceled(1));
@@ -532,7 +709,7 @@ mod tests {
         let left: Vec<_> = r
             .ticking
             .iter()
-            .map(|(id, kind)| (*id, kind.id()))
+            .map(|(id, kind, _)| (*id, kind.id()))
             .collect();
         assert_eq!(left, [(1, "minecraft:item")]);
         let mut quiet = TickRound::default();
@@ -545,7 +722,8 @@ mod tests {
 
     /// A family's Pre cancels only entities it was told about, each once: the others keep
     /// their order and are let through, an ID it was not told about or told twice changes
-    /// nothing, and the cancels a round already held stay.
+    /// nothing, and the cancels a round already held stay whatever the Pre's listeners did with
+    /// their own list.
     #[test]
     fn a_pre_cancels_only_the_entities_it_was_told() {
         let mut r = round();
@@ -559,6 +737,10 @@ mod tests {
         assert_eq!(through, [2, 4]);
         assert_eq!(r.canceled, [9, 1, 3]);
         assert!(r.canceled(1) && r.canceled(3) && !r.canceled(7));
+        // A later Pre whose listeners pushed nothing, or emptied what they were given, leaves
+        // the round's cancels as they were.
+        r.take_canceled();
+        assert_eq!(r.canceled, [9, 1, 3]);
     }
 
     /// With no type named, nothing is told alone; with every type named, everything is, and a

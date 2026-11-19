@@ -28,6 +28,14 @@ impl ClientHost for Game<'_> {
     }
 }
 
+impl Game<'_> {
+    /// A host call that can write ran, from the generated forwarders: a mod may have changed
+    /// the game.
+    pub(in crate::game) fn note_host_write(&mut self) {
+        self.host_writes = self.host_writes.wrapping_add(1);
+    }
+}
+
 impl Backend for Game<'_> {}
 impl BackendMut for Game<'_> {}
 impl ClientBackendMut for Game<'_> {}

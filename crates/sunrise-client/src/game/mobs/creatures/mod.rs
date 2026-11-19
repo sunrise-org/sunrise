@@ -214,7 +214,13 @@ pub(super) struct Creatures {
     pub projectiles: sunrise_client::join_seq::JoinList<Projectile, false>,
     /// The entities a family tells the mods ticked, kept between ticks
     /// (game/modding/native_ticks.rs).
-    pub tick_buffer: Vec<(u32, super::native_ticks::TickKind)>,
+    pub tick_buffer: Vec<(u32, super::native_ticks::TickKind, bool)>,
+    /// What a family's Pre calls canceled of what each was told, kept between ticks
+    /// (game/modding/native_ticks.rs `native_tick_pre_batch`).
+    pub tick_canceled: Vec<u32>,
+    /// The unsimulated entities a family tells, with whether each is of a named type, kept
+    /// between ticks (game/modding/native_ticks.rs `native_others_tick_family`).
+    pub tick_others: Vec<(u32, bool)>,
     /// What a family's Pre and Post are told from, kept between ticks
     /// (game/modding/native_ticks.rs).
     pub tick_hooks: super::native_ticks::TickBuffers,
@@ -1403,14 +1409,16 @@ impl Game<'_> {
             while let Some(m) = self.mobs.get(i) {
                 let (x, z) = (m.position.x.floor() as i32, m.position.z.floor() as i32);
                 if !blocked.contains(&m.id) && self.world.loaded(x, z) && ticking(x, z) {
-                    // A mob told alone is told, and checks its sleep, at its own turn.
-                    if !round.alone_mob(&m.kind) {
-                        if round.listening() {
-                            let kind = super::native_ticks::TickKind::Mob(m.kind.clone());
-                            round.add(m.id, kind);
-                        } else {
-                            self.sync_sleeping_mob(i);
-                        }
+                    // A mob told alone is told, and checks its sleep, at its own turn; the mods
+                    // that didn't name its type hear it with its family.
+                    if round.alone_mob(&m.kind) {
+                        let kind = super::native_ticks::TickKind::Mob(m.kind.clone());
+                        round.add_named(m.id, kind);
+                    } else if round.listening() {
+                        let kind = super::native_ticks::TickKind::Mob(m.kind.clone());
+                        round.add(m.id, kind);
+                    } else {
+                        self.sync_sleeping_mob(i);
                     }
                 }
                 i += 1;
@@ -1571,6 +1579,8 @@ impl Game<'_> {
             // destructor panic may abort. panic=abort cannot recover at all.
             std::panic::resume_unwind(payload);
         }
+        // The family's Post names the mobs that ticked, also one that went in its own tick.
+        round.keep_ran(|id| self.creatures.ticked.contains(&id));
         self.native_tick_post_batch(round);
         // ... and entity event 60 goes out as it is: the poof.
         // 🤖 Agent: the split follows the poof, as `LivingEntity.tickDeath`
@@ -4573,17 +4583,20 @@ impl Game<'_> {
         let through = self.ticked_entities_through;
         // EntityTickEvent.Pre for the projectiles about to tick, once for the family before the
         // loop holds them, and the Post once the hits of their ticks have landed. A projectile
-        // of a type a mod named is told alone, right before and right after its own tick.
+        // of a type a mod named is told alone to the mods that named it, right before and right
+        // after its own tick; the others hear it with the family.
         let mut round = self.native_tick_round();
         let mut alone_any = false;
         if round.listening() {
             for p in self.creatures.projectiles.iter() {
                 let at = p.position;
                 if p.id <= through && ticking(at.x.floor() as i32, at.z.floor() as i32) {
+                    let kind = super::native_ticks::TickKind::Fixed(p.entity_type());
                     if round.alone_kind(p.entity_type()) {
                         alone_any = true;
+                        round.add_named(p.id, kind);
                     } else {
-                        round.add(p.id, super::native_ticks::TickKind::Fixed(p.entity_type()));
+                        round.add(p.id, kind);
                     }
                 }
             }
@@ -4651,7 +4664,7 @@ impl Game<'_> {
                         let same;
                         let read = self.projectile_targets_read();
                         (projectiles, same) = self.projectiles_told(projectiles, |game| {
-                            ticks = game.native_tick_pre_one(&mut round, id, kind);
+                            ticks = game.native_tick_pre_named(&mut round, id, kind);
                         });
                         // A hook that wrote what the hit tests read: the next projectile sees
                         // its writes.
@@ -4895,7 +4908,7 @@ impl Game<'_> {
                 let same;
                 let read = self.projectile_targets_read();
                 (projectiles, same) = self.projectiles_told(projectiles, |game| {
-                    game.native_tick_post_one(&round, id, kind);
+                    game.native_tick_post_named(&round, id, kind);
                 });
                 if self.projectile_targets_changed(&read, &seen) {
                     seen = self.projectile_tick_targets();

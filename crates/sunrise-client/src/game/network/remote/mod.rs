@@ -6952,7 +6952,8 @@ impl Game<'_> {
         }
         // EntityTickEvent.Pre for the mobs and players this client ticks, once for the family
         // before their tick, and the Post after it (below). A canceled one keeps its state. One
-        // of a type a mod named is told alone, right before and right after its own turn below.
+        // of a type a mod named is told alone to the mods that named it, right before and right
+        // after its own turn below; the others hear it with the family.
         let mut round = self.native_tick_round();
         // The mount this client moves ticks in `remote_ride` instead, as its
         // authoritative side (LivingEntity.tick with travelRidden).
@@ -6969,12 +6970,16 @@ impl Game<'_> {
                     } else {
                         round.alone_mob(&m.kind)
                     };
+                    let kind = if player {
+                        TickKind::Fixed(PLAYER)
+                    } else {
+                        TickKind::Mob(m.kind.clone())
+                    };
                     if alone {
                         alone_any = true;
-                    } else if player {
-                        round.add(m.id, TickKind::Fixed(PLAYER));
+                        round.add_named(m.id, kind);
                     } else {
-                        round.add(m.id, TickKind::Mob(m.kind.clone()));
+                        round.add(m.id, kind);
                     }
                 }
             }
@@ -7188,7 +7193,7 @@ impl Game<'_> {
             };
             if let Some(kind) = &alone {
                 let stamp = self.mobs.stamp();
-                let ticks = self.native_tick_pre_one(&mut round, id, kind.id());
+                let ticks = self.native_tick_pre_named(&mut round, id, kind.id());
                 if self.mobs.stamp() != stamp {
                     places = Some(crate::game::native_ticks::places_of(
                         self.mobs.iter().map(|m| m.id),
@@ -7460,7 +7465,7 @@ impl Game<'_> {
             // Its own Post, right after its turn.
             if let Some(kind) = &alone {
                 let stamp = self.mobs.stamp();
-                self.native_tick_post_one(&round, id, kind.id());
+                self.native_tick_post_named(&round, id, kind.id());
                 if self.mobs.stamp() != stamp {
                     places = Some(crate::game::native_ticks::places_of(
                         self.mobs.iter().map(|m| m.id),

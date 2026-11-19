@@ -169,6 +169,13 @@ impl Game<'_> {
         // Whether a mob still in the lifted list has left the pass (`keep` false) since the list
         // was last given back: a told-alone yield then takes it out before the call.
         let mut gone_rows = false;
+        // What the views below take from the game, built once for the pass and again only after
+        // a yield that may have changed it (a mob row, or a mod's host write): the players, the
+        // teams' scan over every saved UUID, and the path changes.
+        let mut players = Vec::new();
+        let mut team_slots = crate::game::scoreboard::MobTeamSlots::default();
+        let mut path_changes = Vec::new();
+        let mut views_current = false;
         loop {
             let mut pause = None;
             let mut retry_rider = None;
@@ -184,15 +191,18 @@ impl Game<'_> {
             {
                 let ticking = self.entity_ticking_area();
                 let listed = self.entity_tick_listed_area();
-                let players = self.level_players();
-                let nearest = super::super::natural_spawning::NearestPlayers::new(&players);
                 // All but the snapshot is the same for every mob of the tick, so
                 // build it once: the player view and the teams scan every UUID.
-                let mut leash_boats = std::mem::take(&mut self.leash_boats);
-                leash_boats.clear();
-                leash_boats.extend(self.boats.iter().map(super::super::boat_leads::boat_state));
-                self.leash_boats = leash_boats;
-                let mut base = self.mob_world_base(&[]);
+                if !views_current {
+                    players = self.level_players();
+                    let mut leash_boats = std::mem::take(&mut self.leash_boats);
+                    leash_boats.clear();
+                    leash_boats.extend(self.boats.iter().map(super::super::boat_leads::boat_state));
+                    self.leash_boats = leash_boats;
+                    team_slots = self.mob_team_slots();
+                }
+                let nearest = super::super::natural_spawning::NearestPlayers::new(&players);
+                let mut base = self.mob_world_base_teams(&[], &team_slots);
                 // Install the shared observer only on the per-mob view below; keeping the
                 // reusable base empty lets its reference fields remain copyable between rows.
                 base.section_writer = None;
@@ -210,7 +220,9 @@ impl Game<'_> {
                     None,
                     in hit_sounds
                 ));
-                let path_changes = sunrise_client::mobs::collision_changes(&base, &path_writes);
+                if !views_current {
+                    path_changes = sunrise_client::mobs::collision_changes(&base, &path_writes);
+                }
                 laps.lap("creature_prepare");
                 let mut cached_difficulty: Option<((i32, i32), spawning::LocalDifficulty)> = None;
                 while cursor < original_len {
@@ -385,16 +397,17 @@ impl Game<'_> {
                                 })
                         })
                         .flatten();
-                    // A mob of a type a mod named: its own Pre, right before its tick.
-                    if !checked && round.alone_mob(&m.kind) {
-                        tell_pre = Some((m.id, std::sync::Arc::clone(&m.kind), i));
-                        break;
-                    }
-                    // A mod canceled its tick: it stays as it is.
+                    // A mod canceled its tick, in its own Pre or its family's: it stays as it is,
+                    // and one of a named type hears no Pre of its own.
                     if !resuming && round.canceled(m.id) {
                         m.despawn = mod_api::Despawn::default();
                         cursor += 1;
                         continue;
+                    }
+                    // A mob of a type a mod named: its own Pre, right before its tick.
+                    if !checked && round.alone_mob(&m.kind) {
+                        tell_pre = Some((m.id, std::sync::Arc::clone(&m.kind), i));
+                        break;
                     }
                     if !resuming
                         && !retried
@@ -757,6 +770,7 @@ impl Game<'_> {
             self.mobs
                 .restore(mobs, sunrise_client::join_seq::RestoreOrder::SpawnsFirst);
             let restored = self.mobs.stamp();
+            let writes = self.host_writes;
             std::mem::swap(&mut self.last_hurt_by_player, &mut player_credit);
             std::mem::swap(&mut self.died, &mut died);
             std::mem::swap(&mut self.creatures.ticked, &mut ticked);
@@ -776,11 +790,11 @@ impl Game<'_> {
                     self.apply_fox_consumption(decision);
                 }
                 if let Some((id, kind)) = &tell_post {
-                    self.native_tick_post_one(round, *id, &kind.id);
+                    self.native_tick_post_named(round, *id, &kind.id);
                 }
                 // Let through, it checks its sleep as a mob told with its family does.
                 if let Some((id, kind, at)) = &tell_pre
-                    && self.native_tick_pre_one(round, *id, &kind.id)
+                    && self.native_tick_pre_named(round, *id, &kind.id)
                     && mod_api::__private::listened(mod_api::HookId::CanContinueSleeping)
                     && let Some(i) =
                         super::super::native_ticks::place(&self.mobs, *at, |m| m.id == *id)
@@ -808,19 +822,24 @@ impl Game<'_> {
                 dispatch_panic = callback_panic;
                 break;
             }
-            guests = self.lan_guest_views();
-            guest_ids = self
-                .lan
-                .as_ref()
-                .map(|host| {
-                    host.hub
-                        .guests
-                        .iter()
-                        .map(|g| (g.conn, g.entity_id as u32))
-                        .collect()
-                })
-                .unwrap_or_default();
-            spare = guests.first().map(|g| g.1.clone());
+            // A yield whose hooks wrote nothing and left the rows as they were changed nothing the
+            // views read: the pass goes on with them, as one with no yield does.
+            views_current = unchanged && self.host_writes == writes;
+            if !views_current {
+                guests = self.lan_guest_views();
+                guest_ids = self
+                    .lan
+                    .as_ref()
+                    .map(|host| {
+                        host.hub
+                            .guests
+                            .iter()
+                            .map(|g| (g.conn, g.entity_id as u32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                spare = guests.first().map(|g| g.1.clone());
+            }
             // The list came back as it went: its views are the loop's still.
             if !unchanged {
                 let current: sunrise_client::fast_hash::FxHashMap<u32, usize> =

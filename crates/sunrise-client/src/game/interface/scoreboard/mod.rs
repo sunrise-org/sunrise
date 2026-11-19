@@ -126,6 +126,13 @@ fn gives_uuid(t: Target) -> Option<u32> {
     }
 }
 
+/// The board's teams of the player and of the mobs on one, by index (`Game::mob_team_slots`).
+#[derive(Clone, Debug, Default)]
+pub(in crate::game) struct MobTeamSlots {
+    player: Option<usize>,
+    mobs: Vec<(u32, usize)>,
+}
+
 impl Game<'_> {
     fn scoreboard_path(&self) -> std::path::PathBuf {
         self.world_root.join("data/minecraft/scoreboard.dat")
@@ -724,25 +731,49 @@ impl Game<'_> {
     }
     /// The teams of the player and of the mobs on one (empty without teams).
     pub(super) fn mob_teams(&self) -> sunrise_client::mobs::Teams<'_> {
+        self.mob_teams_of(&self.mob_team_slots())
+    }
+    /// Where the player and the mobs on a team stand in the board's teams: the scan of every
+    /// saved UUID behind `mob_teams`, kept by a loop that yields to hooks while no mod wrote.
+    pub(super) fn mob_team_slots(&self) -> MobTeamSlots {
         if self.score.board.teams.is_empty() {
-            return Default::default();
+            return MobTeamSlots::default();
         }
+        let slot = |team: &sb::Team| {
+            self.score
+                .board
+                .teams
+                .iter()
+                .position(|t| std::ptr::eq(t, team))
+        };
         // One pass over the mobs, not one per mob.
         let tame_owners: HashMap<u32, [i32; 4]> = self
             .mobs
             .iter()
             .filter_map(|m| Some((m.id, tame_owner(m)?)))
             .collect();
-        sunrise_client::mobs::Teams {
-            player: self.player_team(),
+        MobTeamSlots {
+            player: self.player_team().and_then(slot),
             mobs: self
                 .persist
                 .uuids
                 .keys()
                 .filter_map(|id| {
                     let owner = || tame_owners.get(id).copied();
-                    Some((*id, self.team_with_owner(*id, owner)?))
+                    Some((*id, slot(self.team_with_owner(*id, owner)?)?))
                 })
+                .collect(),
+        }
+    }
+    /// The teams `slots` holds, read from the board.
+    pub(super) fn mob_teams_of(&self, slots: &MobTeamSlots) -> sunrise_client::mobs::Teams<'_> {
+        let teams = &self.score.board.teams;
+        sunrise_client::mobs::Teams {
+            player: slots.player.and_then(|i| teams.get(i)),
+            mobs: slots
+                .mobs
+                .iter()
+                .filter_map(|&(id, i)| Some((id, teams.get(i)?)))
                 .collect(),
         }
     }

@@ -520,10 +520,13 @@ fn a_mob_outside_the_entity_tick_list_checks_no_despawn() {
 }
 
 /// What a tick listener heard: each call's phase and entities, and at a Post where the first
-/// of them stands. Names the types of `named` to `entity_tick_each`.
+/// of them stands. Names the types of `named` to `entity_tick_each`; with `replace_cancels`,
+/// empties its cancel list in every Pre and cancels pig 71; takes `discard` out of the level
+/// in a Pre that tells it, without canceling it.
 struct TickTiming {
     named: &'static [&'static str],
     replace_cancels: bool,
+    discard: Option<u32>,
     heard: Arc<Mutex<TickCalls>>,
 }
 
@@ -535,7 +538,13 @@ impl mod_api::Hooks for TickTiming {
     fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
         event.listened = true;
     }
-    fn entity_tick_pre(&self, _: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
+    fn entity_tick_pre(&self, host: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
+        if let Some(victim) = self.discard.filter(|id| event.entities.contains(id)) {
+            let HostSide::Server(host) = host else {
+                panic!("server fixture");
+            };
+            assert!(host.entity(victim).expect("live at its Pre").discard(host));
+        }
         let mut heard = self.heard.lock().unwrap();
         heard.push(("pre", event.entities.to_vec(), None));
         if self.replace_cancels {
@@ -563,13 +572,14 @@ impl mod_api::Hooks for TickTiming {
 }
 
 /// The two pigs' tick hooks through the real creature pass; the first pig falls in its tick.
-fn pig_ticks(named: bool, replace_cancels: bool) -> TickCalls {
+fn pig_ticks(named: bool, replace_cancels: bool, discard: Option<u32>) -> TickCalls {
     let heard = Arc::new(Mutex::new(Vec::new()));
     let mods: mod_api::Mods = vec![ModEntry::new(
         "mob-tick-timing",
         Box::new(TickTiming {
             named: if named { &["minecraft:pig"] } else { &[] },
             replace_cancels,
+            discard,
             heard: heard.clone(),
         }),
     )]
@@ -596,7 +606,7 @@ fn pig_ticks(named: bool, replace_cancels: bool) -> TickCalls {
 #[test]
 #[ignore = "daily"]
 fn a_named_type_hears_each_entitys_own_pre_and_post() {
-    let heard = pig_ticks(true, false);
+    let heard = pig_ticks(true, false, None);
     let phases: Vec<_> = heard
         .iter()
         .map(|(phase, entities, _)| (*phase, entities.clone()))
@@ -618,7 +628,7 @@ fn a_named_type_hears_each_entitys_own_pre_and_post() {
 #[test]
 #[ignore = "daily"]
 fn a_named_pre_cannot_clear_an_earlier_turns_cancellation() {
-    let phases: Vec<_> = pig_ticks(true, true)
+    let phases: Vec<_> = pig_ticks(true, true, None)
         .into_iter()
         .map(|(phase, entities, _)| (phase, entities))
         .collect();
@@ -633,11 +643,120 @@ fn a_named_pre_cannot_clear_an_earlier_turns_cancellation() {
 #[test]
 #[ignore = "daily"]
 fn an_unnamed_family_hears_one_pre_and_one_post() {
-    let phases: Vec<_> = pig_ticks(false, false)
+    let phases: Vec<_> = pig_ticks(false, false, None)
         .into_iter()
         .map(|(phase, entities, _)| (phase, entities))
         .collect();
     assert_eq!(phases, [("pre", vec![71, 72]), ("post", vec![71, 72])]);
+}
+
+/// A mob a family's Pre takes out of the level, without canceling it, never ticks: the
+/// family's Post names only the mob that did.
+#[test]
+#[ignore = "daily"]
+fn a_mob_removed_in_its_familys_pre_is_not_in_its_post() {
+    let phases: Vec<_> = pig_ticks(false, false, Some(72))
+        .into_iter()
+        .map(|(phase, entities, _)| (phase, entities))
+        .collect();
+    assert_eq!(phases, [("pre", vec![71, 72]), ("post", vec![71])]);
+}
+
+/// A listener's calls, in order: (phase, entities).
+type Heard = Arc<Mutex<Vec<(&'static str, Vec<u32>)>>>;
+
+/// Records its tick calls; names `minecraft:pig` when `names`, and cancels `cancel` in a Pre
+/// that tells it.
+struct PigListener {
+    names: bool,
+    cancel: Option<u32>,
+    heard: Heard,
+}
+
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for PigListener {
+    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
+        event.listened = true;
+    }
+    fn entity_tick_pre(&self, _: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
+        if let Some(id) = self.cancel.filter(|id| event.entities.contains(id)) {
+            event.canceled.push(id);
+        }
+        self.heard
+            .lock()
+            .unwrap()
+            .push(("pre", event.entities.to_vec()));
+    }
+    fn entity_tick_post(&self, _: HostSide<'_>, event: &mut mod_api::EntityTickPostEvent<'_>) {
+        self.heard
+            .lock()
+            .unwrap()
+            .push(("post", event.entities.to_vec()));
+    }
+    fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+        if self.names {
+            r.entity_tick_each("minecraft:pig");
+        }
+    }
+}
+
+/// The two pigs' ticks heard by a mod that names pigs and by one that names nothing, which
+/// cancels `cancel` in its Pre: (the namer's calls, the other's).
+type PigCalls = Vec<(&'static str, Vec<u32>)>;
+fn namer_and_family(cancel: Option<u32>) -> (PigCalls, PigCalls) {
+    let (namer, family) = (Heard::default(), Heard::default());
+    let mods: mod_api::Mods = vec![
+        ModEntry::new(
+            "pig-namer",
+            Box::new(PigListener {
+                names: true,
+                cancel: None,
+                heard: namer.clone(),
+            }),
+        ),
+        ModEntry::new(
+            "pig-family",
+            Box::new(PigListener {
+                names: false,
+                cancel,
+                heard: family.clone(),
+            }),
+        ),
+    ]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_two_pigs(|game| game.tick_creature_entities().unwrap());
+    });
+    let take = |heard: &Heard| std::mem::take(&mut *heard.lock().unwrap());
+    (take(&namer), take(&family))
+}
+
+/// Only the mod that names a type hears its entities alone: a mod that named nothing hears them
+/// with their family, one Pre before the first tick and one Post after the last.
+#[test]
+#[ignore = "daily"]
+fn a_mod_that_named_nothing_hears_a_named_type_with_its_family() {
+    let (namer, family) = namer_and_family(None);
+    assert_eq!(
+        namer,
+        [
+            ("pre", vec![71]),
+            ("post", vec![71]),
+            ("pre", vec![72]),
+            ("post", vec![72]),
+        ]
+    );
+    assert_eq!(family, [("pre", vec![71, 72]), ("post", vec![71, 72])]);
+}
+
+/// A mod that named nothing cancels a named pig in the family's Pre: the pig doesn't tick, and
+/// the mod that named pigs hears nothing of it.
+#[test]
+#[ignore = "daily"]
+fn a_named_entity_canceled_in_its_familys_pre_is_not_told_alone() {
+    let (namer, family) = namer_and_family(Some(71));
+    assert_eq!(namer, [("pre", vec![72]), ("post", vec![72])]);
+    assert_eq!(family, [("pre", vec![71, 72]), ("post", vec![72])]);
 }
 
 /// Two arrows of a type a mod names, on the server: each told alone, its Post right after its own
@@ -651,6 +770,7 @@ fn named_projectiles_hear_each_their_own_pre_and_post() {
         Box::new(TickTiming {
             named: &["minecraft:arrow"],
             replace_cancels: false,
+            discard: None,
             heard: heard.clone(),
         }),
     )]
@@ -688,6 +808,75 @@ fn named_projectiles_hear_each_their_own_pre_and_post() {
     assert!(
         first[0] > 1.5,
         "the first arrow flew in its own tick: {first:?}"
+    );
+}
+
+/// Two arrows on the server heard by a mod that named arrows, each alone around its own flight,
+/// and by one that named nothing, with their family: its Pre before the first arrow flies and its
+/// Post after the last.
+#[test]
+#[ignore = "daily"]
+fn a_mod_that_named_nothing_hears_named_projectiles_with_their_family() {
+    let (namer, family) = (
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    let mods: mod_api::Mods = vec![
+        ModEntry::new(
+            "arrow-namer",
+            Box::new(TickTiming {
+                named: &["minecraft:arrow"],
+                replace_cancels: false,
+                discard: None,
+                heard: namer.clone(),
+            }),
+        ),
+        ModEntry::new(
+            "arrow-family",
+            Box::new(TickTiming {
+                named: &[],
+                replace_cancels: false,
+                discard: None,
+                heard: family.clone(),
+            }),
+        ),
+    ]
+    .into();
+    let mut ids = Vec::new();
+    mod_platform::testing::with_mods(mods, || {
+        with_two_pigs(|game| {
+            game.build_registries();
+            game.set_allow_commands(true);
+            for z in [0.5, 2.5] {
+                assert!(game.run_command(&format!(
+                    "summon minecraft:arrow 1.5 80.5 {z} {{NoGravity:1b,Motion:[0.5d,0.0d,0.0d]}}"
+                )));
+            }
+            ids = game.creatures.projectiles.iter().map(|p| p.id).collect();
+            game.ticked_entities_through = u32::MAX;
+            game.tick_projectiles().unwrap();
+        });
+    });
+    let phases = |heard: &Arc<Mutex<TickCalls>>| -> Vec<(&'static str, Vec<u32>)> {
+        heard
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(phase, entities, _)| (*phase, entities.clone()))
+            .collect()
+    };
+    assert_eq!(
+        phases(&namer),
+        [
+            ("pre", vec![ids[0]]),
+            ("post", vec![ids[0]]),
+            ("pre", vec![ids[1]]),
+            ("post", vec![ids[1]]),
+        ]
+    );
+    assert_eq!(
+        phases(&family),
+        [("pre", ids.clone()), ("post", ids.clone())]
     );
 }
 

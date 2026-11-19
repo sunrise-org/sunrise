@@ -23,12 +23,16 @@ pub use item::types::*;
 #[cfg(any(test, feature = "testing"))]
 pub(crate) use runtime::TEST_MODS;
 pub use runtime::{Flow, ModEntry, Mods, subscribed_by};
+pub(crate) use runtime::{Listeners, ModSet};
 pub(crate) use runtime::{
-    any_mod_disabled, entered, entered_parts, entered_with_id, install, listened, mark_mod,
-    mod_index_on, mods, set_mod_enabled,
+    any_mod_disabled, entered, entered_parts, entered_selected, entered_with_id, install, listened,
+    mark_mod, mod_index_on, mods, set_mod_enabled,
 };
 pub use world::types::*;
 #[doc(hidden)]
 pub(crate) mod built;
 
 pub(crate) use runtime::{listening, receives_cancelled};
+mod __private {
+    pub use crate::runtime::{Listeners, ModSet};
+}

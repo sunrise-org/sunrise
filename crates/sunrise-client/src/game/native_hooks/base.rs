@@ -3849,27 +3849,32 @@ impl Game<'_> {
     /// entity's tick in `tickNonPassenger`). Entity families may be observed on either side;
     /// see the hook catalog for coverage. Some routes run one call per entity, while others
     /// batch the family. Only IDs offered to this call may enter its cancellation output.
+    /// `listeners` is the game's choice of the mods this call goes to: an entity of a type a mod
+    /// named is told alone to the mods that named it, and with its family to the others.
     pub(in crate::game) fn native_entity_tick_pre(
         &mut self,
         dimension: &str,
         entities: &[u32],
         kinds: &[&str],
         canceled: &mut Vec<u32>,
+        listeners: mod_api::__private::Listeners<'_>,
     ) {
-        self.fire_entity_tick_pre(dimension, entities, kinds, canceled);
+        self.fire_entity_tick_pre(dimension, entities, kinds, canceled, listeners);
     }
     /// The entities `entities` ticked in the level `dimension`, and `kinds` holds the type of
     /// each, in the same order (NeoForge's `EntityTickEvent.Post`): those
     /// `native_entity_tick_pre` was told and did not cancel, also one that died or was removed in
     /// its tick. An entity told alone in its Pre is told alone here, right after its own tick; a
-    /// family once, after its last tick. On the server and on a client.
+    /// family once, after its last tick. On the server and on a client. `listeners` is the game's
+    /// choice of the mods this call goes to.
     pub(in crate::game) fn native_entity_tick_post(
         &mut self,
         dimension: &str,
         entities: &[u32],
         kinds: &[&str],
+        listeners: mod_api::__private::Listeners<'_>,
     ) {
-        self.fire_entity_tick_post(dimension, entities, kinds);
+        self.fire_entity_tick_post(dimension, entities, kinds, listeners);
     }
     /// Whether the experience orb `into` takes the orb `from` in (vanilla's
     /// `ExperienceOrb.canMerge`): the same value, and ids a multiple of 40 apart. Asked

@@ -11,3 +11,6 @@ sunrise-client game::creatures::borrowed_tick::mob_tick_access_tests::an_unnamed
 sunrise-client game::creatures::borrowed_tick::mob_tick_access_tests::a_named_pre_cannot_clear_an_earlier_turns_cancellation lib daily resources
 sunrise-client game::creatures::borrowed_tick::mob_tick_access_tests::named_projectiles_hear_each_their_own_pre_and_post lib daily resources
 sunrise-client game::creatures::borrowed_tick::mob_tick_access_tests::a_mob_moved_in_one_arrows_post_is_hit_by_the_next_arrow lib daily resources
+sunrise-client game::creatures::borrowed_tick::mob_tick_access_tests::a_mob_removed_in_its_familys_pre_is_not_in_its_post lib daily resources
+sunrise-client game::creatures::borrowed_tick::mob_tick_access_tests::a_mod_that_named_nothing_hears_a_named_type_with_its_family lib daily resources
+sunrise-client game::creatures::borrowed_tick::mob_tick_access_tests::a_named_entity_canceled_in_its_familys_pre_is_not_told_alone lib daily resources

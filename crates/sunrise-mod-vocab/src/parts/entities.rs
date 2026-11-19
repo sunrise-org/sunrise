@@ -247,12 +247,12 @@ pub trait EntitiesRegistrar {
         provider: EntityProviderOf,
     );
 
-    /// Tell `entity_tick_pre` and `entity_tick_post` for each entity of type `entity`
+    /// Tell this mod `entity_tick_pre` and `entity_tick_post` for each entity of type `entity`
     /// (`minecraft:zombie`, `mymod:golem`) alone, right before and right after its own tick
-    /// (NeoForge's `EntityTickEvent` timing), instead of once with its family. Every mod that
-    /// hooks them hears those entities alone. Name only the types that need their own moment:
-    /// each entity of a named type costs a call of its own every tick. A type that is not a
-    /// namespaced lowercase id refuses the mod's registration.
+    /// (NeoForge's `EntityTickEvent` timing), instead of once with its family. Only the mods that
+    /// name a type hear its entities alone; the others hear them with their family. Name only
+    /// the types that need their own moment: each entity of a named type costs a call of its own
+    /// every tick. A type that is not a namespaced lowercase id refuses the mod's registration.
     fn entity_tick_each(&mut self, entity: &str);
 
     /// [`Self::entity_tick_each`] for every entity type the tick hooks observe,
@@ -260,8 +260,8 @@ pub trait EntitiesRegistrar {
     fn entity_tick_each_entity(&mut self);
 }
 
-/// The entity types whose ticks are told one entity at a time, from every mod's
-/// [`EntitiesRegistrar::entity_tick_each`], resolved when the mods are installed.
+/// The entity types whose ticks are told one entity at a time, and to which mods, from every
+/// mod's [`EntitiesRegistrar::entity_tick_each`], resolved when the mods are installed.
 // hidden: the game reads it once at load to mark its entity types.
 // no wire: resolved on the host from the registrar's `entity_tick_each` calls, which cross on
 // their own; the set itself is never sent to a mod.
@@ -269,39 +269,70 @@ pub trait EntitiesRegistrar {
 #[doc(hidden)]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct EntityTickEach {
-    all: bool,
-    /// Sorted, without repeats.
-    kinds: Vec<String>,
+    /// The mods that named every type.
+    every: crate::ModSet,
+    /// Each type a mod named and the mods that hear it alone (those that named every type
+    /// too), sorted by type, without repeats.
+    kinds: Vec<(String, crate::ModSet)>,
+    /// The mods that named any type.
+    namers: crate::ModSet,
 }
 
 impl EntityTickEach {
-    /// The set the declarations name, in any order: `None` names every type.
-    pub fn of(declarations: &[Option<String>]) -> Self {
-        let all = declarations.iter().any(Option::is_none);
-        let mut kinds: Vec<String> = if all {
-            Vec::new()
-        } else {
-            declarations.iter().flatten().cloned().collect()
-        };
-        kinds.sort_unstable();
-        kinds.dedup();
-        Self { all, kinds }
+    /// The set the declarations name, each with the index of the mod that made it, in any
+    /// order: `None` names every type.
+    pub fn of(declarations: &[(usize, Option<String>)]) -> Self {
+        let every = crate::ModSet::of(
+            declarations
+                .iter()
+                .filter(|(_, kind)| kind.is_none())
+                .map(|(index, _)| *index),
+        );
+        let mut named: Vec<(&str, usize)> = declarations
+            .iter()
+            .filter_map(|(index, kind)| Some((kind.as_deref()?, *index)))
+            .collect();
+        named.sort_unstable();
+        let mut kinds: Vec<(String, crate::ModSet)> = Vec::new();
+        for (kind, index) in named {
+            match kinds.last_mut() {
+                Some((last, set)) if last == kind => set.insert(index),
+                _ => {
+                    let mut set = every.clone();
+                    set.insert(index);
+                    kinds.push((kind.to_owned(), set));
+                }
+            }
+        }
+        let namers = crate::ModSet::of(declarations.iter().map(|(index, _)| *index));
+        Self {
+            every,
+            kinds,
+            namers,
+        }
     }
     /// Whether a mod named any type.
     pub fn any(&self) -> bool {
-        self.all || !self.kinds.is_empty()
+        !self.namers.is_empty()
     }
     /// Whether a mod named every type.
     pub fn all(&self) -> bool {
-        self.all
+        !self.every.is_empty()
     }
-    /// Whether entities of type `kind` are told one at a time.
+    /// Whether some mod hears the entities of type `kind` one at a time.
     pub fn names(&self, kind: &str) -> bool {
-        self.all
-            || self
-                .kinds
-                .binary_search_by(|k| k.as_str().cmp(kind))
-                .is_ok()
+        self.hearing(kind).is_some()
+    }
+    /// The mods that hear the entities of type `kind` one at a time, if any does.
+    pub fn hearing(&self, kind: &str) -> Option<&crate::ModSet> {
+        match self.kinds.binary_search_by(|(k, _)| k.as_str().cmp(kind)) {
+            Ok(i) => Some(&self.kinds[i].1),
+            Err(_) => self.all().then_some(&self.every),
+        }
+    }
+    /// The mods that named any type: each hears its family without what it named.
+    pub fn namers(&self) -> &crate::ModSet {
+        &self.namers
     }
 }
 

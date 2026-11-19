@@ -183,6 +183,23 @@ pub(super) fn emit<'a>(
                 "{name}: an inert signal needs a final engine-only inert: &mut bool"
             ));
         }
+        // A selected hook's game call chooses which listeners it goes to: that choice stays in
+        // the engine call too, out of the event and its Wire layout.
+        let select = hook.select;
+        if select
+            && (!in_game
+                || inert_signal
+                || !hook.call.is_empty()
+                || !native_args.pop().is_some_and(|(arg, ty)| {
+                    arg == "listeners"
+                        && ty.to_token_stream().to_string().replace(' ', "")
+                            == "mod_api::__private::Listeners<'_>"
+                }))
+        {
+            return Err(format!(
+                "{name}: select needs a final engine-only listeners: mod_api::__private::Listeners<'_>"
+            ));
+        }
         // A hook that declares its parameters is called with them as one `<Name>Call`.
         let carrier = format!("{}Call", hook_id(name));
         let declared = hook
@@ -195,7 +212,7 @@ pub(super) fn emit<'a>(
             target_parameters(
                 name,
                 &native,
-                sig.inputs.len() - usize::from(inert_signal),
+                sig.inputs.len() - usize::from(inert_signal) - usize::from(select),
                 &carrier,
             )?;
             native_args
@@ -637,6 +654,9 @@ pub(super) fn emit<'a>(
         if inert_signal {
             dispatch_params.push("inert: &mut bool".into());
         }
+        if select {
+            dispatch_params.push("listeners: super::Listeners<'_>".into());
+        }
         let (generics, elided) = match (lifetimes.a, lifetimes.b) {
             (_, true) => ("<'a, 'b>", "<'_, '_>"),
             (true, false) => ("<'a>", "<'_>"),
@@ -710,6 +730,7 @@ pub(super) fn emit<'a>(
                     vec!["call".to_owned()]
                 })
                 .chain(inert_signal.then(|| "inert".to_owned()))
+                .chain(select.then(|| "listeners".to_owned()))
                 .collect::<Vec<_>>()
                 .join(", ");
             let mut signature = sig.clone();
@@ -810,6 +831,7 @@ pub(super) fn emit<'a>(
                     }))
                     .chain(crossing.validators.iter().cloned())
                     .chain(inert_signal.then(|| "inert".to_owned()))
+                    .chain(select.then(|| "listeners".to_owned()))
                     .collect::<Vec<_>>()
                     .join(", ");
                 if guarded_carrier {
@@ -987,6 +1009,9 @@ pub(super) fn emit<'a>(
         // A trait mod's call is marked with the mod for a panic to name.
         let each = match &hook.owner {
             Some(owner) => format!("super::entered_owned(HookId::{hook_id}, \"{name}\", {owner})"),
+            None if hook.select => {
+                format!("super::entered_selected(HookId::{hook_id}, \"{name}\", listeners)")
+            }
             None if answered || hook.collect_validator.is_some() => {
                 format!("super::entered_with_id(HookId::{hook_id}, \"{name}\")")
             }

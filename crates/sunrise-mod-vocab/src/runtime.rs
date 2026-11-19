@@ -360,6 +360,16 @@ pub(crate) fn entered_with_id(
     entered_subscribers(hook_id, hook).map(|entry| (entry.id, &*entry.hooks))
 }
 
+/// [`entered`] for the listeners the game chose (`Listeners`), for a hook declared with
+/// `select`: the others are passed over in the same dispatch order.
+pub(crate) fn entered_selected<'a>(
+    hook_id: generated::HookId,
+    hook: &'static str,
+    listeners: Listeners<'a>,
+) -> impl Iterator<Item = &'static dyn Hooks> + 'a {
+    entered_in(hook_id, hook, listeners).map(|entry| &*entry.hooks)
+}
+
 /// A hook's enabled subscribers in dispatch order (descending priority, then dependency order),
 /// each marked as running `hook` until the next one is (or the loop ends), so a panic in it
 /// names the mod.
@@ -367,9 +377,18 @@ pub(crate) fn entered_subscribers(
     hook_id: generated::HookId,
     hook: &'static str,
 ) -> impl Iterator<Item = &'static ModEntry> {
+    entered_in(hook_id, hook, Listeners::All)
+}
+
+/// [`entered_subscribers`] for the listeners `listeners` takes.
+fn entered_in<'a>(
+    hook_id: generated::HookId,
+    hook: &'static str,
+    listeners: Listeners<'a>,
+) -> impl Iterator<Item = &'static ModEntry> + 'a {
     let mut crash_guard = crate::dispatch_scope::ModGuard::empty();
     let scope = crate::dispatch_scope::snapshot();
-    listening(hook_id).map(move |(_, entry)| {
+    listening_in(hook_id, listeners).map(move |(_, entry)| {
         scope.replace(
             &mut crash_guard,
             crate::content::crash::ModCall {
@@ -495,12 +514,22 @@ pub(crate) fn receives_cancelled(hook: generated::HookId) -> bool {
 pub(crate) fn listening(
     hook_id: generated::HookId,
 ) -> impl Iterator<Item = (bool, &'static ModEntry)> {
+    listening_in(hook_id, Listeners::All)
+}
+
+/// [`listening`] for the listeners `listeners` takes.
+fn listening_in<'a>(
+    hook_id: generated::HookId,
+    listeners: Listeners<'a>,
+) -> impl Iterator<Item = (bool, &'static ModEntry)> + 'a {
     installed().into_iter().flat_map(move |installed| {
         installed
             .subscribers
             .subscribers(hook_id as usize)
             .filter(move |subscriber| {
-                !installed.disabled[subscriber.index].load(std::sync::atomic::Ordering::Relaxed)
+                listeners.takes(subscriber.index)
+                    && !installed.disabled[subscriber.index]
+                        .load(std::sync::atomic::Ordering::Relaxed)
             })
             .map(move |subscriber| {
                 // Every listener of a hook the loop reaches is one more entered: scoped
@@ -571,6 +600,93 @@ fn bump_listener_serial() {
 
 pub(crate) fn listener_serial() -> u64 {
     LISTENER_SERIAL.with(std::cell::Cell::get)
+}
+
+/// Which of a hook's listeners one call goes to, chosen by the game for a hook declared with
+/// `select` (the entity tick hooks: a mod that named a type hears its entities alone, the others
+/// with their family). Never seen by a mod.
+// hidden: the engine's own dispatch argument.
+// no wire: it stays in the engine's call; the event a mod gets is the same.
+// exhaustive: only the game builds or matches it, in the same change as a new choice.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub enum Listeners<'a> {
+    /// Every listener.
+    All,
+    /// The listeners in the set.
+    Only(&'a ModSet),
+    /// The listeners not in the set.
+    Except(&'a ModSet),
+    /// The one listener with this index in the installed mods.
+    One(usize),
+}
+
+impl Listeners<'_> {
+    /// Whether the mod at `index` among the installed mods is one of them.
+    fn takes(self, index: usize) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(set) => set.contains(index),
+            Self::Except(set) => !set.contains(index),
+            Self::One(one) => one == index,
+        }
+    }
+}
+
+/// Some of the installed mods, by their index in the installed list, resolved at load.
+// hidden: the engine's own selection of listeners.
+// no wire: resolved on the host from what the mods registered; never sent to a mod.
+// exhaustive: its fields are private, so mods cannot build or destructure it
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ModSet {
+    words: Vec<u64>,
+}
+
+impl ModSet {
+    /// The set of the mods at `indices`.
+    pub fn of(indices: impl IntoIterator<Item = usize>) -> Self {
+        let mut set = Self::default();
+        for index in indices {
+            set.insert(index);
+        }
+        set
+    }
+    /// Adds the mod at `index`.
+    pub fn insert(&mut self, index: usize) {
+        let word = index / 64;
+        if self.words.len() <= word {
+            self.words.resize(word + 1, 0);
+        }
+        self.words[word] |= 1 << (index % 64);
+    }
+    /// Adds every mod of `other`.
+    pub fn extend(&mut self, other: &Self) {
+        if self.words.len() < other.words.len() {
+            self.words.resize(other.words.len(), 0);
+        }
+        for (word, other) in self.words.iter_mut().zip(&other.words) {
+            *word |= other;
+        }
+    }
+    /// Whether the mod at `index` is in the set.
+    pub fn contains(&self, index: usize) -> bool {
+        self.words
+            .get(index / 64)
+            .is_some_and(|word| word & (1 << (index % 64)) != 0)
+    }
+    /// Whether the set holds no mod.
+    pub fn is_empty(&self) -> bool {
+        self.words.iter().all(|&word| word == 0)
+    }
+    /// The indices of its mods, in order.
+    pub fn indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.words.iter().enumerate().flat_map(|(w, &word)| {
+            (0..64)
+                .filter(move |bit| word & (1 << bit) != 0)
+                .map(move |bit| w * 64 + bit)
+        })
+    }
 }
 
 #[cfg(test)]

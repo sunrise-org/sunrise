@@ -53,8 +53,9 @@ pub struct PartRegistrar {
     pub(crate) attachment_uses: Vec<(String, String, String)>,
     pub(crate) attachment_types: HashMap<String, HashMap<String, bool>>,
     pub(crate) custom_stats: Vec<String>,
-    /// The entity types each named to `entity_tick_each`, in order: `None` for every type.
-    pub(crate) entity_tick_each: Vec<Option<String>>,
+    /// The entity types each named to `entity_tick_each`, in order, with the index of the mod
+    /// that named it: `None` for every type.
+    pub(crate) entity_tick_each: Vec<(usize, Option<String>)>,
     pub(crate) mod_id: &'static str,
     pub(crate) mod_index: usize,
     /// Whether the registering mod was loaded as a wasm module.

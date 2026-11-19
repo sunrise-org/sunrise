@@ -14,8 +14,10 @@ impl Game<'_> {
         let update_hook =
             merging && mod_api::__private::has_part_hook(mod_api::HookId::OnEntityItemUpdate);
         // Items a mod named (`entity_tick_each`) hear their Pre, and then their part, alone in
-        // their own turn (`tick_dropped_items`).
-        if (round.listening() || update_hook) && !round.alone_kind(native_ticks::ITEM) {
+        // their own turn (`tick_dropped_items`), from the mods that named them; the others hear
+        // them here, with their family.
+        let alone = round.alone_kind(native_ticks::ITEM);
+        if round.listening() || update_hook {
             let ticking = self.entity_ticking_area();
             let mut i = 0;
             while let Some(item) = self.dropped.get(i) {
@@ -25,7 +27,9 @@ impl Game<'_> {
                     item.position.z.floor() as i32,
                 );
                 if !(merging && self.joined_during_entity_pass(id)) && ticking(x, z) {
-                    if round.listening() {
+                    if alone {
+                        round.add_named(id, native_ticks::TickKind::Fixed(native_ticks::ITEM));
+                    } else if round.listening() {
                         round.add(id, native_ticks::TickKind::Fixed(native_ticks::ITEM));
                     } else if update_hook && self.item_update_halts(i) {
                         round.halt(id);

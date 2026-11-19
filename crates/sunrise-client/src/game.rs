@@ -1714,6 +1714,9 @@ struct Game<'a> {
     native_input: native_claimed_items::ModInput,
     /// The native lifecycle bookkeeping.
     native_lifecycle: native_lifecycle::NativeLifecycle,
+    /// How many host calls that can write a mod has made (`note_host_write`): a loop that yields
+    /// to a hook keeps what it built from the game across a yield that made none.
+    host_writes: u64,
     resident_entities: resident_state::ResidentEntities,
     /// The mobs lent to the hook calls running now, before they join a level
     /// (game/modding/native_unspawned_mob.rs).
@@ -11105,6 +11108,7 @@ impl<'a> Game<'a> {
             native_shaders: Default::default(),
             native_input: Default::default(),
             native_lifecycle: Default::default(),
+            host_writes: 0,
             resident_entities: Default::default(),
             lent_mobs: Default::default(),
             held_out: Vec::with_capacity(4),

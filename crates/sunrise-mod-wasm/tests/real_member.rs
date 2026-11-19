@@ -221,6 +221,7 @@ fn real_member() {
                 &[71, 72, 73],
                 &["minecraft:item", "minecraft:tnt", "minecraft:item"],
                 &mut canceled,
+                mod_api::__private::Listeners::All,
             );
             assert_eq!(canceled, [72], "the guest cancels the one entity it names");
             mod_api::dispatch_entity_tick_post(
@@ -228,6 +229,7 @@ fn real_member() {
                 "minecraft:overworld",
                 &[71, 73],
                 &["minecraft:item", "minecraft:item"],
+                mod_api::__private::Listeners::All,
             );
             let mut entity =
                 mod_api::ModBlockEntity::new("wasm_fixture:counter".into(), Default::default());

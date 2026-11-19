@@ -292,6 +292,7 @@ fn a_poisoned_move_listener_keeps_its_other_hooks() {
             &[7],
             &["minecraft:zombie"],
             &mut Vec::new(),
+            mod_api::__private::Listeners::All,
         );
         assert_eq!(*ticks.lock().unwrap(), 1, "the other hook still runs");
     });
@@ -344,6 +345,7 @@ fn a_panic_elsewhere_does_not_poison_the_move_listener() {
                 &[7],
                 &["minecraft:zombie"],
                 &mut Vec::new(),
+                mod_api::__private::Listeners::All,
             );
         }));
         assert!(caught.is_err(), "the other hook unwound");

@@ -128,6 +128,9 @@ pub struct Hook {
     /// unwinds is switched off for this hook for the session, and the outputs it had written roll
     /// back to what the game requested (#2414 ruling).
     pub isolate: bool,
+    /// A global listener or collector whose game call chooses which listeners it goes to (an
+    /// engine-only final `listeners` argument): `mod_api::__private::Listeners`.
+    pub select: bool,
     pub scope: Option<PartScope>,
     pub host: Option<HostAccess>,
     pub context: Option<PhaseContext>,
@@ -295,6 +298,7 @@ struct ModApiEntry {
     owner: Option<String>,
     collect_validator: Option<String>,
     isolate: Option<bool>,
+    select: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -404,6 +408,20 @@ impl Hook {
                 error: "isolate is for a global cancel hook".into(),
             });
         }
+        // A selected call chooses among the global listeners; a scoped hook calls Parts, an
+        // owner hook its own mod, and an answering one names who answered.
+        let select = api.select.unwrap_or(false);
+        if select
+            && (!matches!(api.contract, Contract::Listen | Contract::Collect)
+                || scope.is_some()
+                || api.owner.is_some()
+                || answered_by_mod)
+        {
+            return Err(CatalogError::InvalidHook {
+                hook: name.clone(),
+                error: "select is for a global listen or collect hook".into(),
+            });
+        }
         let counterparts = Counterparts {
             neoforge: counterparts(&name, "neoforge", entry.neoforge)?,
             fabric: counterparts(&name, "fabric", entry.fabric)?,
@@ -422,6 +440,7 @@ impl Hook {
             collect_validator: api.collect_validator,
             inert: entry.inert,
             isolate,
+            select,
             scope,
             host: entry.host,
             context: entry.context,
@@ -684,6 +703,7 @@ impl Declared {
                             "owner",
                             "collect_validator",
                             "isolate",
+                            "select",
                         ] {
                             if let Some(value) = entry.remove(key) {
                                 api.insert(key.into(), value);
@@ -867,6 +887,7 @@ impl Hook {
             collect_validator: None,
             inert: None,
             isolate: false,
+            select: false,
             scope: None,
             host: None,
             context: None,

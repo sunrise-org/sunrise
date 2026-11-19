@@ -526,7 +526,18 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                         "mod_api::__private::check_access({name:?}, mod_api::__private::LoadAccess::{level});"
                     )
                 };
-                code.push_str(&format!("{sig} {{ {access} {setup} {call} }}\n"));
+                // Every call that can write tells the game a mod may have changed it: a loop that
+                // yields to a hook keeps what it built from the game when none did.
+                let write = if entry
+                    .sig
+                    .receiver()
+                    .is_some_and(|receiver| receiver.mutability.is_some())
+                {
+                    "self.note_host_write();"
+                } else {
+                    ""
+                };
+                code.push_str(&format!("{sig} {{ {access} {write} {setup} {call} }}\n"));
             }
             code.push_str("}\n");
             if matches!(tier, Tier::Host | Tier::Backend | Tier::ClientBackend) {

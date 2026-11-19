@@ -808,25 +808,28 @@ impl Game<'_> {
         // the server decides what they hit. EntityTickEvent.Pre for them and
         // the tridents, once for the family before the loop holds them, and
         // the Post after; a canceled one keeps its state for the tick. One of a type a mod named
-        // is told alone, right before and right after its own tick.
+        // is told alone to the mods that named it, right before and right after its own tick;
+        // the others hear it with the family.
         let mut round = self.native_tick_round();
         let mut alone_any = false;
         if round.listening() {
             for p in self.creatures.projectiles.iter() {
+                let kind = crate::game::native_ticks::TickKind::Fixed(p.entity_type());
                 if round.alone_kind(p.entity_type()) {
                     alone_any = true;
+                    round.add_named(p.id, kind);
                 } else {
-                    round.add(
-                        p.id,
-                        crate::game::native_ticks::TickKind::Fixed(p.entity_type()),
-                    );
+                    round.add(p.id, kind);
                 }
             }
-            if round.alone_kind(TRIDENT) {
-                alone_any |= !self.tridents.is_empty();
-            } else {
-                for t in self.tridents.iter() {
-                    round.add(t.id, crate::game::native_ticks::TickKind::Fixed(TRIDENT));
+            let alone = round.alone_kind(TRIDENT);
+            alone_any |= alone && !self.tridents.is_empty();
+            for t in self.tridents.iter() {
+                let kind = crate::game::native_ticks::TickKind::Fixed(TRIDENT);
+                if alone {
+                    round.add_named(t.id, kind);
+                } else {
+                    round.add(t.id, kind);
                 }
             }
             self.native_tick_pre_batch(&mut round);
@@ -1086,7 +1089,7 @@ impl Game<'_> {
             let changed;
             (projectiles, tridents, changed) =
                 self.remote_projectiles_told(projectiles, tridents, |game| {
-                    ticks = game.native_tick_pre_one(round, id, kind);
+                    ticks = game.native_tick_pre_named(round, id, kind);
                 });
             if changed.0 {
                 places = Some(places_of(projectiles.iter().map(|p| p.id)));
@@ -1110,7 +1113,7 @@ impl Game<'_> {
             let changed;
             (projectiles, tridents, changed) =
                 self.remote_projectiles_told(projectiles, tridents, |game| {
-                    game.native_tick_post_one(round, id, kind);
+                    game.native_tick_post_named(round, id, kind);
                 });
             if changed.0 {
                 places = Some(places_of(projectiles.iter().map(|p| p.id)));
@@ -1146,7 +1149,7 @@ impl Game<'_> {
             let changed;
             (projectiles, tridents, changed) =
                 self.remote_projectiles_told(projectiles, tridents, |game| {
-                    ticks = game.native_tick_pre_one(round, id, TRIDENT);
+                    ticks = game.native_tick_pre_named(round, id, TRIDENT);
                 });
             if changed.1 {
                 places = Some(places_of(tridents.iter().map(|t| t.id)));
@@ -1167,7 +1170,7 @@ impl Game<'_> {
             let changed;
             (projectiles, tridents, changed) =
                 self.remote_projectiles_told(projectiles, tridents, |game| {
-                    game.native_tick_post_one(round, id, TRIDENT);
+                    game.native_tick_post_named(round, id, TRIDENT);
                 });
             if changed.1 {
                 places = Some(places_of(tridents.iter().map(|t| t.id)));
