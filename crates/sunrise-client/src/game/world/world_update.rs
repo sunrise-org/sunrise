@@ -256,9 +256,9 @@ impl Game<'_> {
             let _span = sunrise_client::spans::guard("unload_block_entities");
             let gone: sunrise_client::fast_hash::FxHashSet<(i32, i32)> =
                 unloaded.iter().map(|c| (c.x, c.z)).collect();
-            self.world
-                .block_entities
-                .unload(|p| gone.contains(&(p.0 >> 4, p.2 >> 4)));
+            for &column in &gone {
+                self.world.block_entities.unload_column(column);
+            }
             self.world
                 .block_names
                 .retain(|p, _| !gone.contains(&(p.0 >> 4, p.2 >> 4)));
@@ -317,9 +317,11 @@ impl Game<'_> {
                     uploads.iter().map(|(k, _)| *k).collect();
                 let chunks = &self.world.chunks;
                 let loaded = |k: &(i32, i32, i32)| chunks.contains_key(&(k.0, k.2));
+                // What stays keeps its order, so the list is still sorted up to `sorted`.
                 let mut spent: Vec<_> = pending
                     .extract_if(.., |(k, _)| fresh.contains(k) || !loaded(k))
                     .collect();
+                let sorted = pending.len();
                 for upload in uploads {
                     if loaded(&upload.0) {
                         pending.push(upload);
@@ -337,7 +339,16 @@ impl Game<'_> {
                 let far = |k: &(i32, i32, i32)| {
                     (k.0 - centre.0).pow(2) + (k.1 - cam_y).pow(2) + (k.2 - centre.1).pow(2)
                 };
-                pending.sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
+                let order = Some((centre, cam_y));
+                if self.pending_uploads_order != order {
+                    pending.sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
+                    self.pending_uploads_order = order;
+                } else if pending.len() > sorted {
+                    // The same camera section: the new meshes sort among themselves, and the
+                    // stable sort merges the two sorted runs in one pass.
+                    pending[sorted..].sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
+                    pending.sort_by_key(|(k, _)| std::cmp::Reverse(far(k)));
+                }
                 let (limit, budget) = if budgeted {
                     (
                         g.chunk_updates as usize,

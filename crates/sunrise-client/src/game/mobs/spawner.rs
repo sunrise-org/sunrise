@@ -603,8 +603,12 @@ impl Game<'_> {
             p.position.y.floor() as i32,
             p.position.z.floor() as i32,
         ];
-        let (keys, trial_keys, vault_keys) =
-            nearby_remote_spawner_keys(&self.world.block_entities, center);
+        let near = self.world.block_entities.near(
+            f64::from(center[0]),
+            f64::from(center[2]),
+            f64::from(REMOTE_SPAWNER_RANGE),
+        );
+        let (keys, trial_keys, vault_keys) = nearby_remote_spawner_keys(near, center);
         self.client_tick_spawners(&keys);
         for key in trial_keys {
             self.client_tick_trial_spawner(key);
@@ -688,6 +692,9 @@ impl Game<'_> {
     }
 }
 
+/// How far a remote client ticks spawners, trial spawners and vaults (Chebyshev distance).
+const REMOTE_SPAWNER_RANGE: u32 = 64;
+
 /// `SpawnerBlockEntity.clientTick` / `BaseSpawner.clientTick`: spawner, trial
 /// spawner and vault keys within 64 blocks (Chebyshev distance) of `center`
 /// among `entities`. Non-spawner block entities are ignored before distance
@@ -711,7 +718,7 @@ pub(super) fn nearby_remote_spawner_keys<'a>(
             .abs_diff(center[0])
             .max(pos.1.abs_diff(center[1]))
             .max(pos.2.abs_diff(center[2]));
-        if d <= 64 {
+        if d <= REMOTE_SPAWNER_RANGE {
             target.push(pos);
         }
     }

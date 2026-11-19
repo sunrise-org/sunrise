@@ -190,11 +190,7 @@ impl ViewedWorld {
     /// The column `key` goes, or is sent again: so do its block entities.
     fn unload_block_entities(&mut self, key: (i32, i32)) {
         self.block_entities.remove(&key);
-        if !self.world.block_entities.is_empty() {
-            self.world
-                .block_entities
-                .unload(|p| (p.0 >> 4, p.2 >> 4) == key);
-        }
+        self.world.block_entities.unload_column(key);
     }
 
     /// A block with a block entity placed at `pos` (`LevelChunk.setBlockState`): the travel makes

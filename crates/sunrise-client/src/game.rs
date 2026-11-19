@@ -1226,6 +1226,9 @@ struct Game<'a> {
     hud_layer_next: Option<usize>,
     /// The mod block entities' view distances, asked of the parts once (`native_block_entity_draw`).
     mod_view_distances: std::cell::OnceCell<native_block_entity_draw::ViewDistances>,
+    /// What drawing a block entity asks of its block, by state id (`block_entity_reach`):
+    /// resolved from the block names once, not for every block entity in every frame.
+    block_entity_reach: std::cell::OnceCell<Box<[(Reach, bool)]>>,
     /// `item_level` for one frame, game time, day time and dimension.
     item_level_cache: std::cell::RefCell<
         Option<(
@@ -1729,6 +1732,9 @@ struct Game<'a> {
     native_mod_screen: Option<String>,
     /// Meshed sections waiting for an upload budget (Sunrise settings).
     pending_uploads: Vec<((i32, i32, i32), sunrise_client::mesher::SectionMesh)>,
+    /// The camera section (column, height) `pending_uploads` is sorted for, farthest first:
+    /// while it stays, the list needs only its new meshes merged in, not a sort every frame.
+    pending_uploads_order: Option<((i32, i32), i32)>,
     upload_pace: upload_pace::UploadPace,
     /// This frame's view frustum, for culling entities and block entities.
     view_frustum: Option<sunrise_client::gfx::JoinedFrusta>,
@@ -5402,6 +5408,34 @@ impl Game<'_> {
         let posed = self.skin_frame.borrow().vertices;
         self.entity_motion_posed.borrow_mut().push(posed);
     }
+    /// How far the block entity of a block state is drawn (its `BlockEntityRenderer`'s reach), and
+    /// whether entity culling may hide it (the end portal and gateway never are), by state id,
+    /// resolved once: every block entity draw and the frame's block entity selection ask.
+    fn block_entity_reach_entry(&self, state: u32) -> (Reach, bool) {
+        let table = self.block_entity_reach.get_or_init(|| {
+            self.res
+                .facts()
+                .states
+                .iter()
+                .map(|state| {
+                    let unculled = matches!(
+                        &*state.name,
+                        "minecraft:end_gateway" | "minecraft:end_portal"
+                    );
+                    (Reach::of(&state.name), unculled)
+                })
+                .collect()
+        });
+        // A state the registry lacks has air's facts (`BlockFacts::get`).
+        table
+            .get(state as usize)
+            .copied()
+            .unwrap_or((Reach::Default, false))
+    }
+    /// The reach of the block entity a block state holds (see [`Self::block_entity_reach_entry`]).
+    pub(super) fn block_entity_reach(&self, state: u32) -> Reach {
+        self.block_entity_reach_entry(state).0
+    }
     /// ItemEntityRenderer: items bob and spin; blocks render as small cubes.
     fn entity_geometry(
         &mut self,
@@ -5737,11 +5771,9 @@ impl Game<'_> {
                 {
                     return false;
                 }
-                let name = &*self.res.facts().get(BlockStateId(state)).name;
                 if self.settings.sunrise.entity_culling == EntityCullingMode::Off
                     || self.pack_shadow_casters.0
-                    || name == "minecraft:end_portal"
-                    || name == "minecraft:end_gateway"
+                    || self.block_entity_reach_entry(state).1
                     || hi.y - lo.y > 2.0
                 {
                     return true;
@@ -10844,6 +10876,7 @@ impl<'a> Game<'a> {
             debug_renderers_version: None,
             hud_layer_next: None,
             mod_view_distances: Default::default(),
+            block_entity_reach: Default::default(),
             item_level_cache: Default::default(),
             world_frames: 0,
             fps: 0.0,
@@ -11131,6 +11164,7 @@ impl<'a> Game<'a> {
             async_particle_culler: RefCell::new(Default::default()),
             pack_shadow_casters: (false, false),
             pending_uploads: Vec::new(),
+            pending_uploads_order: None,
             upload_pace: Default::default(),
             extras: Default::default(),
             pvp: Default::default(),
@@ -11855,11 +11889,3 @@ mod sign_chain_tests;
 #[cfg(test)]
 #[path = "game/interface/tests/sign_use_tests.rs"]
 mod sign_use_tests;
-
-impl Game<'_> {
-    /// How far the block entity of a block state is drawn: its `BlockEntityRenderer`'s reach, which
-    /// every block entity draw and the frame's block entity selection ask.
-    pub(super) fn block_entity_reach(&self, state: u32) -> Reach {
-        Reach::of(&self.res.facts().get(BlockStateId(state)).name)
-    }
-}
