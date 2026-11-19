@@ -457,3 +457,4 @@ sunrise-client-lib ticket_levels::tests::grid_matches_the_map lib daily slow
 sunrise-client-lib ticket_levels::tiled_tests::tiles_match_scalar_levels_with_overlaps_and_portals lib daily slow
 sunrise-client-lib title::tests::f5_reloads_the_server_list lib daily network
 sunrise-client-lib vanillagen::structure_mobs::tests::structure_maps_reload_without_cross_world_bleed lib daily resources
+sunrise-client-lib mobs::ai::oxygen_bonus_tests::a_mob_losing_air_under_water_saves_oxygen_bonus lib daily resources

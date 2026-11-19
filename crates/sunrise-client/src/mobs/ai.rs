@@ -1958,6 +1958,32 @@ fn keeps_its_air(m: &Mob) -> bool {
     m.species() == Species::IronGolem
 }
 
+/// `LivingEntity.decreaseAirSupply` starts with `getAttribute(OXYGEN_BONUS)`, and
+/// `AttributeMap.getInstance` makes the instance, which `AttributeMap.pack` saves from then on.
+fn make_oxygen_bonus(m: &mut Mob, w: &MobWorld) {
+    if m.extra.oxygen_bonus_made {
+        return;
+    }
+    m.extra.oxygen_bonus_made = true;
+    let seed: Vec<_> = if m.extra.live.built().is_none() {
+        crate::entity_nbt::attribute_entries(m)
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let kind = m.kind.clone();
+    m.extra.live.edit(
+        w.attributes,
+        &kind.id,
+        "minecraft:oxygen_bonus",
+        true,
+        move || seed,
+        |_, _| Ok(()),
+    );
+}
+
 /// Entity.baseTick + LivingEntity.baseTick + Mob.baseTick.
 fn base_tick(
     m: &mut Mob,
@@ -2093,6 +2119,9 @@ fn base_tick(
                 || m.has_effect("minecraft:conduit_power");
             let nautilus = m.has_effect("minecraft:breath_of_the_nautilus");
             let drowns = submerged && !can_breathe_under_water(m) && !water_breathing && !nautilus;
+            if drowns && !keeps_its_air(m) {
+                make_oxygen_bonus(m, w);
+            }
             let held = submerged && nautilus && !water_breathing;
             let max = m.max_air_supply();
             let vanilla = Breath {
@@ -7218,6 +7247,77 @@ mod dolphin_noai_air_tests {
     #[ignore = "daily"]
     fn normal_dolphins_keep_their_underwater_countdown() {
         check(true, false, 4800, [4799, 4798]);
+    }
+}
+
+#[cfg(test)]
+mod oxygen_bonus_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn saved_ids(id: &str) -> Vec<(String, f64)> {
+        let mut out = Vec::new();
+        let ran = crate::mobs::world::with_built_test_world(
+            &[],
+            |world, registry| {
+                world
+                    .chunks
+                    .insert((0, 0), Arc::new(crate::chunk::Chunk::empty(0, 0)));
+                let water = registry.default_state("minecraft:water").unwrap();
+                for y in 3..=8 {
+                    world.set(2, y, 2, water).unwrap();
+                }
+            },
+            |w, types| {
+                let kind = Arc::new(types.types[id].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(2.5, 3.0, 2.5), 0.0);
+                m.no_ai = true;
+                m.no_gravity = true;
+                m.persistent = true;
+                let (mut level, mut events) = (crate::health::TestLevel::new(0), Vec::new());
+                assert!(tick(&mut m, w, &mut level.level(), &mut events));
+                assert!(m.fluids.eye_in_water);
+                let tag = crate::entity_nbt::mob_to_nbt(
+                    &m,
+                    [1, 2, 3, 4],
+                    None,
+                    None,
+                    |_| None,
+                    &Default::default(),
+                );
+                let Some(sunrise_core::nbt::Tag::List(list)) = tag.get("attributes") else {
+                    panic!("no attributes list");
+                };
+                for entry in list {
+                    let name = crate::save::text(entry.get("id")).unwrap();
+                    let base = crate::save::float(entry.get("base")).unwrap();
+                    out.push((name, base));
+                }
+            },
+        );
+        assert!(ran, "vanilla data is missing");
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// `LivingEntity.decreaseAirSupply` asks for `oxygen_bonus`, so a pig that loses a bubble
+    /// under water saves the instance with its default base; a squid, which breathes there,
+    /// never asks (vanilla 26.3, #2679).
+    #[test]
+    #[ignore = "daily"]
+    fn a_mob_losing_air_under_water_saves_oxygen_bonus() {
+        let pig = saved_ids("minecraft:pig");
+        assert!(
+            pig.contains(&("minecraft:oxygen_bonus".to_owned(), 0.0)),
+            "{pig:?}"
+        );
+        let squid = saved_ids("minecraft:squid");
+        assert!(
+            !squid
+                .iter()
+                .any(|(name, _)| name == "minecraft:oxygen_bonus"),
+            "{squid:?}"
+        );
     }
 }
 
