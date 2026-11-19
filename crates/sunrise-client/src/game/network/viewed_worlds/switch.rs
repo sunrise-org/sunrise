@@ -79,6 +79,8 @@ impl Game<'_> {
         for (x, z) in columns {
             self.client_chunk_unload(x, z, false);
         }
+        // The mods' extra block models were for the player's level.
+        self.world.clear_extra_models();
         let air = self.res.facts().air;
         let world = std::mem::replace(&mut self.world, Self::world_for_mods(air, seed));
         let Some(r) = self.remote.as_mut() else {

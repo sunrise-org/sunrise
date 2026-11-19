@@ -143,6 +143,59 @@ draw.terrain_model(self.belt, options)?;
   `Model`, a missing sprite, a pose that flattens the model, a ratio out of range, and a shift
   whose numbers aren't finite, whose sprites are unknown or whose source sprite no face uses.
 
+## Extra models in a block's mesh
+
+A block whose look depends on data a block state can't hold (a cable showing each side's
+channel count) gives the chunk mesher extra models to draw as part of it. On the client,
+`host.set_block_extra_models(pos, &models)` sets the resolved standalone models drawn at `pos`:
+
+```rust,ignore
+let parts = [self.core, self.side_counts[count]];
+host.set_block_extra_models(pos, &parts)?;
+```
+
+- The models are drawn after the block's own, unturned from its lower north-west corner (with its
+  offset), in its light and tints. Each quad keeps its render layer (solid, cut out,
+  translucent). A face with a cull direction is hidden by the neighbour there, as the block's
+  own faces are. On air they draw nothing.
+- A list replaces the position's last one; an empty list clears it. The section is meshed again
+  only when the list changes, so set it when the data changes, not each frame.
+- At most `BLOCK_EXTRA_MODELS_MAX` (64) models a position. `BlockExtraModelsError` names each
+  refusal: `NotLoaded` (no client column there, or outside the level's height), `TooMany`,
+  `Model` for a stale or unknown handle, and `Unavailable` outside the World phase (see below).
+  A refused call changes nothing.
+- A section's extra models share its quad and byte limits with its blocks. The blocks' own
+  geometry is always drawn; past the limits, the section's remaining extra models (in block
+  order, then list order) are not.
+- The list is the client's own, never saved or sent. It is cleared when the block state at
+  `pos` changes, when its column unloads (a column the server sends again comes without it) and
+  when the player's level changes. Set it again from the block entity's data or the mod's own
+  client map, on `client_block_changed`, `client_chunk_load` or a payload. It needs no block
+  entity.
+- The mesher reads the lists on its workers and never calls mod code. A handle a resource reload
+  made stale draws nothing until you set the lists again from the new handles.
+
+The setter is World-only. `client_resources_reloaded` runs in Reloading, where it answers
+`Unavailable`. Resolve the new handles there, then set the lists again from the next
+World-phase callback, such as the next client tick:
+
+```rust,ignore
+fn client_resources_reloaded(&self, host: &mut dyn ClientHost, _: &mut ClientResourcesReloadedEvent) {
+    let mut parts = self.parts.lock().unwrap();
+    parts.core = host.render_assets().model(&self.core_id).ok();
+    parts.reapply = true;
+}
+
+fn client_tick_pre(&self, host: &mut dyn ClientHost, _: &mut ClientTickPreEvent) {
+    let mut parts = self.parts.lock().unwrap();
+    if std::mem::take(&mut parts.reapply) {
+        for (&pos, cable) in &self.cables.lock().unwrap() {
+            let _ = host.set_block_extra_models(pos, &parts.models_for(cable));
+        }
+    }
+}
+```
+
 ## Persistent groups
 
 - `host.create_group(model, capacity)` reserves up to 16,384 copies of a solid model.

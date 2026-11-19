@@ -5,6 +5,7 @@
 //! follow `FluidRenderer` (see `fluid`).
 pub use crate::render_geometry::Vertex;
 pub use mod_api::client::mesher::TintSource;
+mod extra_models;
 mod fluid;
 mod leaf_culling;
 mod lighting;
@@ -688,6 +689,8 @@ fn visibility_rows(open: &[u16; 256]) -> u64 {
     }
     result
 }
+#[cfg(test)]
+mod extra_models_tests;
 #[cfg(test)]
 mod mod_geometry_tests;
 #[cfg(test)]
@@ -2205,6 +2208,9 @@ impl Mesher<'_> {
         let full_faces = &self.tables.full_faces;
         let catalog = &self.render.model_catalog;
         let mut models = Vec::new();
+        let extra_models = (!center.extra_models.is_empty()).then_some(&center.extra_models);
+        // The cells with extra models, in cell order, and what their faces are drawn with.
+        let mut extras = Vec::new();
         for y in 0..16 {
             for z in 0..16 {
                 // The padded index of the row's x = 0 cell: `pi(x, y, z)` is
@@ -2253,19 +2259,31 @@ impl Mesher<'_> {
                             );
                         }
                     }
-                    if !state.model {
+                    // The models a client mod draws as part of this block: after the section's
+                    // own geometry and within its budget (`extra_models::add`).
+                    let extra = extra_models.and_then(|extra| {
+                        extra.get(&((sy as u32) << 12 | crate::chunk::index(x, y, z) as u32))
+                    });
+                    if !state.model && extra.is_none() {
                         continue;
                     }
                     let world = BlockPos::new(center.x * 16 + x, base_y + y, center.z * 16 + z);
-                    if catalog
-                        .models_at(BlockStateId(id), world, &mut models)
-                        .is_err()
+                    if !state.model
+                        || catalog
+                            .models_at(BlockStateId(id), world, &mut models)
+                            .is_err()
                     {
-                        continue;
+                        models.clear();
                     }
                     // ModelBlockRenderer: the first part decides smooth lighting
-                    // for all; light-emitting blocks are always lit flat.
-                    let Some(first) = models.first() else {
+                    // for all, the block's own before a mod's (a handle a resource reload made
+                    // stale draws nothing); light-emitting blocks are always lit flat.
+                    let first = models.first().copied().or_else(|| {
+                        extra?
+                            .iter()
+                            .find_map(|&model| self.render.resolve_model(model).ok())
+                    });
+                    let Some(first) = first else {
                         continue;
                     };
                     let ao = self.smooth_lighting && state.emission == 0 && first.ambient_occlusion;
@@ -2323,49 +2341,21 @@ impl Mesher<'_> {
                                 )
                                 .unwrap_or(true);
                     }
-                    let connected = &self.render.connected;
+                    let at = CellFaces {
+                        pos: [x, y, z],
+                        cell,
+                        origin,
+                        ao,
+                        id,
+                        state,
+                        world,
+                        visible,
+                        interior_leaf,
+                    };
                     let start = [out.solid.len(), out.translucent.len()];
                     for model in &models {
                         for face in &model.faces {
-                            if face.quad.cull.is_some_and(|d| !visible[d as usize]) {
-                                continue;
-                            }
-                            // A pane's top and bottom strips between stacked panes, with
-                            // connected textures.
-                            if state.pane
-                                && !connected.is_empty()
-                                && let Some(dy) = match face.quad.facing {
-                                    ModelDirection::Up => Some(1),
-                                    ModelDirection::Down => Some(-1),
-                                    _ => None,
-                                }
-                            {
-                                let p = &face.quad.positions;
-                                // Only on the block's top or bottom plane: a pack's own pane
-                                // model may have ledges between.
-                                let plane = if dy > 0 { 1.0 } else { 0.0 };
-                                let on_edge = p.iter().all(|v| (v[1] - plane).abs() < 1e-4);
-                                let centre =
-                                    [0, 2].map(|k| p.iter().map(|v| v[k]).sum::<f32>() / 4.0);
-                                let other =
-                                    pad.blocks[(cell as isize + step_index([0, dy, 0])) as usize];
-                                if on_edge && connected.stacked_pane_hides(id, other, centre) {
-                                    continue;
-                                }
-                            }
-                            self.face(
-                                pad,
-                                &mut tints,
-                                &mut out,
-                                [x, y, z],
-                                cell,
-                                origin,
-                                face,
-                                ao,
-                                (id, state),
-                                world,
-                                interior_leaf,
-                            );
+                            self.model_face(pad, &mut tints, &mut out, &at, face);
                         }
                     }
                     if self.shader_pack {
@@ -2374,14 +2364,70 @@ impl Mesher<'_> {
                             TerrainSource::new(id, [x, y, z], state.emission, false),
                         );
                     }
+                    if let Some(extra) = extra {
+                        extras.push((at, extra));
+                    }
                 }
             }
+        }
+        if !extras.is_empty() {
+            extra_models::add(self, pad, &mut tints, &mut out, &extras);
         }
         if !self.tables.section_geometry.is_empty() {
             mod_geometry::add(self, &mut tints, &mut out);
         }
         out.finish_sprite_layers();
         out
+    }
+    /// One face of a model the block `at` draws, unless the neighbour on its cull side hides it
+    /// or, on a pane with connected textures, the pane stacked there does.
+    fn model_face(
+        &self,
+        pad: &Padded,
+        tints: &mut Tints,
+        out: &mut SectionMesh,
+        at: &CellFaces,
+        face: &BakedFace,
+    ) {
+        if face.quad.cull.is_some_and(|d| !at.visible[d as usize]) {
+            return;
+        }
+        let state = at.state;
+        let connected = &self.render.connected;
+        // A pane's top and bottom strips between stacked panes, with
+        // connected textures.
+        if state.pane
+            && !connected.is_empty()
+            && let Some(dy) = match face.quad.facing {
+                ModelDirection::Up => Some(1),
+                ModelDirection::Down => Some(-1),
+                _ => None,
+            }
+        {
+            let p = &face.quad.positions;
+            // Only on the block's top or bottom plane: a pack's own pane
+            // model may have ledges between.
+            let plane = if dy > 0 { 1.0 } else { 0.0 };
+            let on_edge = p.iter().all(|v| (v[1] - plane).abs() < 1e-4);
+            let centre = [0, 2].map(|k| p.iter().map(|v| v[k]).sum::<f32>() / 4.0);
+            let other = pad.blocks[(at.cell as isize + step_index([0, dy, 0])) as usize];
+            if on_edge && connected.stacked_pane_hides(at.id, other, centre) {
+                return;
+            }
+        }
+        self.face(
+            pad,
+            tints,
+            out,
+            at.pos,
+            at.cell,
+            at.origin,
+            face,
+            at.ao,
+            (at.id, state),
+            at.world,
+            at.interior_leaf,
+        );
     }
     #[allow(clippy::too_many_arguments)]
     fn face(
@@ -2455,7 +2501,7 @@ impl Mesher<'_> {
         // Fusion's and then OptiFine's connected textures: another sprite, or one per quarter,
         // and the overlays drawn over it (a few per face at most; more are dropped).
         let (fusion, connected) = (&self.render.fusion, &self.render.connected);
-        let mut overlays = [None; 8];
+        let mut overlays = [None; MAX_OVERLAYS];
         let mut count = 0;
         let mut push = |overlay| {
             if let Some(slot) = overlays.get_mut(count) {
@@ -2691,6 +2737,25 @@ impl Mesher<'_> {
             out.solid_tints.push(tint.unwrap_or(packed::WHITE));
         }
     }
+}
+/// The most connected-texture overlays one face draws over itself; more are dropped.
+const MAX_OVERLAYS: usize = 8;
+/// What the faces of the models a block draws are drawn with: its cell, place, lighting choice
+/// and the sides its neighbours leave open.
+struct CellFaces<'a> {
+    /// Section-local position.
+    pos: [i32; 3],
+    /// Padded index.
+    cell: usize,
+    /// The block's lower north-west corner with its offset.
+    origin: [f32; 3],
+    ao: bool,
+    id: u32,
+    state: &'a Info,
+    world: BlockPos,
+    /// By `Direction`: whether a face culled toward that side is drawn.
+    visible: [bool; 6],
+    interior_leaf: bool,
 }
 /// The cuts of a `ctm_compact` face, in quad parameters, without allocating: the first `.1`
 /// of `.0`.

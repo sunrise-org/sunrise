@@ -125,6 +125,40 @@ pub trait ClientRenderClientHost {
     #[access(WorldOnly)]
     fn block_tint_color(&self, state: BlockState, tint_index: i32, pos: [i32; 3]) -> Option<u32>;
     /// Side: client.
+    /// The standalone models (resolved with [`RenderAssets::model`]) drawn as part of the block
+    /// at `pos` in this client's level, as NeoForge's `ModelData` lets a block's model choose
+    /// parts at run time without a block state for each choice: a cable's per-side channel
+    /// counts. The chunk mesher draws them after the block's own models, unturned from the
+    /// block's lower north-west corner (with its offset), in the block's own light and tints.
+    /// Each quad takes its render layer as a block's would (cut out, translucent), and a face
+    /// with a cull direction is culled by the neighbour there as the block's own faces are. On
+    /// air they draw nothing.
+    ///
+    /// `models` replaces the list the position had; an empty list clears it. The section is
+    /// meshed again when the list changes. The list is the client's own, never saved or sent:
+    /// it is cleared when the block state at `pos` changes, when its column unloads (a column
+    /// the server sends again comes without it) and when the player's level changes. A block
+    /// entity is not needed. The mesher reads the list on its workers and calls no mod code.
+    /// A section's extra models are held to its quad and byte limits, after the blocks' own
+    /// geometry: past them, the rest of the section's extra models, in block order and then list
+    /// order, are not drawn, and the blocks' own always are.
+    ///
+    /// A handle a resource reload made stale draws nothing until the list is set again from the
+    /// new handles. The call is World-only, so not in `client_resources_reloaded` (Reloading):
+    /// resolve the new handles there with [`RenderAssets::model`] and set the lists again from
+    /// the next World-phase callback, such as `client_tick_pre`.
+    ///
+    /// Refused with nothing changed: `NotLoaded` when the client holds no column at `pos` or it
+    /// is outside the level's height, `TooMany` past [`BLOCK_EXTRA_MODELS_MAX`] models, `Model`
+    /// for a stale or unknown handle, and `Unavailable` outside the World phase (a resource
+    /// reload, setup, config loading), on native and wasm alike.
+    #[access(WorldOnly)]
+    fn set_block_extra_models(
+        &mut self,
+        pos: [i32; 3],
+        models: &[ModelRef],
+    ) -> Result<(), BlockExtraModelsError>;
+    /// Side: client.
     /// Published asset/data read: available in Setup, Reloading and World.
     /// For a client mod: what each resolved block state draws on its six sides, preserving
     /// its properties without reparsing names. Resolve states once at load. Each face's sprite (array and
