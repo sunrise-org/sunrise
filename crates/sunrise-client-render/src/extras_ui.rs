@@ -121,7 +121,8 @@ fn add_sections(groups: &mut Vec<Group<ExtraRow>>) {
                     label, key, active, ..
                 } => {
                     let key = crate::keybinds::display_name(&key).plain();
-                    Row::new(id, lang::get(label), Value::Read(key)).live(active)
+                    let binding = Binding::page_key(page, r, key);
+                    Row::new(id, lang::get(label), Value::Binding(binding)).live(active)
                 }
                 // A row kind newer than this engine.
                 _ => continue,
@@ -319,6 +320,47 @@ mod tests {
                 .is_empty()
         );
         assert_ne!(s.extras.mouse_tweaks_wheel, before);
+    }
+
+    /// A section with one key row.
+    struct KeyRow;
+    impl added::Page for KeyRow {
+        fn id(&self) -> &'static str {
+            "test.key"
+        }
+        fn title(&self) -> &'static str {
+            "sunrise.extras.header.inventory"
+        }
+        fn place(&self) -> added::Place {
+            added::Place::Extras
+        }
+        fn rows(&self, rows: &mut Vec<added::Row>) {
+            rows.push(added::Row::key("test.key.row", "key.keyboard.r"));
+        }
+        fn act(&self, _: usize, act: Act) {
+            panic!("the key row waits for a key, it heard {act:?}");
+        }
+    }
+
+    /// A section's key row binds by its page and row instead of cycling; the wheel leaves it be.
+    #[test]
+    fn a_sections_key_row_waits_for_a_key() {
+        use crate::settings_shell::Capture;
+        static KEY_ROW: KeyRow = KeyRow;
+        static PAGES: [&dyn added::Page; 1] = [&KEY_ROW];
+        TEST_PAGES.set(Some(&PAGES));
+        let mut s = Settings::default();
+        let mut shell = Shell::<ExtrasScreen>::default();
+        let row = ExtraRow::Added(0, 0);
+        let at = shell.point_at(&s, SIZE, row);
+        assert_eq!(
+            shell.click(&mut s, at, SIZE, false, false, false),
+            vec![
+                Output::Event(Event::ButtonClick),
+                Output::Bind(Capture::Page(0, 0))
+            ]
+        );
+        assert_eq!(ExtrasScreen.wheel_step(&mut s, row, true), None);
     }
 
     /// The sort key binds instead of cycling; the wheel leaves it be.

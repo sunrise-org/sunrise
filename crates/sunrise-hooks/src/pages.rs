@@ -17,7 +17,7 @@ pub enum Place {
     /// A section of Sunrise Settings' Extras page, with no entry: its rows join the page's group
     /// its title names when the page has one (`sunrise.extras.header.multiplayer`), else they
     /// start a group of their own after the page's. A [`Row::Heading`] starts another group. A
-    /// [`Row::Key`] shows its key there, without changing it: give a page of its own to a key.
+    /// [`Row::Key`] binds there as it does on a page of its own.
     Extras,
     /// The title screen's Friends icon slot (vanilla's `CommonButtons.friends`, beside Language
     /// and Accessibility): with a page registered here the icon opens the first one as a form of

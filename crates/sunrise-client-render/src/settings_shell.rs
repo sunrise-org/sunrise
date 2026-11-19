@@ -1103,6 +1103,8 @@ pub(crate) enum Capture {
     /// A controller button for a gameplay action (`OptionsUi::selected_pad_action`): the game binds
     /// the next button pressed, Start cancels, and the keyboard's Escape unbinds, as on Key Binds.
     Pad(&'static str),
+    /// A registered page's key row by page and row index, bound as `Key` is, into `Act::Bind`.
+    Page(usize, usize),
 }
 
 /// What a binding row is bound to now.
@@ -1146,8 +1148,15 @@ impl Reset {
 impl Binding {
     /// A key's binding, as Key Binds lists it: no reset of its own.
     pub(crate) fn key(name: &'static str, shown: String) -> Self {
+        Self::waiting_for(Capture::Key(name), shown)
+    }
+    /// Row `row` of registered page `page`, a key row ([`Capture::Page`]).
+    pub(crate) fn page_key(page: usize, row: usize, shown: String) -> Self {
+        Self::waiting_for(Capture::Page(page, row), shown)
+    }
+    fn waiting_for(capture: Capture, shown: String) -> Self {
         Self {
-            capture: Capture::Key(name),
+            capture,
             shown: Shown::Key(shown),
             shared: Vec::new(),
             reset: Reset::None,

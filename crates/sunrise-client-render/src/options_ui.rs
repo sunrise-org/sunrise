@@ -1767,7 +1767,8 @@ pub struct OptionsUi {
     pub selected_key: Option<&'static str>,
     /// The registered key waiting: (mod, mapping) in `mods.installed`.
     selected_mod_key: Option<(usize, usize)>,
-    selected_page_key: Option<(usize, usize)>,
+    /// The registered page's key row waiting for a key.
+    selected_page_key: Option<pages::PageKey>,
     /// The open registered page's rows its layout was made from (`refresh_added_rows`).
     added_seen: Vec<sunrise_hooks::pages::Row>,
     pending_mod_key: Option<winit::keyboard::KeyCode>,

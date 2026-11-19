@@ -94,10 +94,15 @@ impl OptionsUi {
     pub fn set_controller_context(&mut self, context: crate::controller_ui::Context) {
         self.controller.screen.context = context;
     }
-    /// The binding the screen waits on: a controller button's, else a key's.
+    /// The binding the screen waits on: a controller button's, a page's key row, or a key's.
     pub(super) fn waiting(&self) -> Option<shell::Capture> {
         let pad = self.selected_pad_action.map(shell::Capture::Pad);
-        pad.or(self.selected_key.map(shell::Capture::Key))
+        let page = self
+            .selected_page_key
+            .filter(|_| self.selected_key == Some(super::pages::PAGE_KEY))
+            .and_then(super::pages::find_page_key)
+            .map(|(page, row)| shell::Capture::Page(page, row));
+        pad.or(page).or(self.selected_key.map(shell::Capture::Key))
     }
     /// What a shell screen's outputs do to these options.
     pub(super) fn shell_events(
@@ -110,6 +115,10 @@ impl OptionsUi {
             match output {
                 shell::Output::Event(event) => events.push(event),
                 shell::Output::Bind(shell::Capture::Key(name)) => self.selected_key = Some(name),
+                shell::Output::Bind(shell::Capture::Page(page, row)) => {
+                    self.selected_page_key = super::pages::page_key_at(page, row);
+                    self.selected_key = self.selected_page_key.map(|_| super::pages::PAGE_KEY);
+                }
                 shell::Output::Bind(shell::Capture::Pad(action)) => {
                     self.selected_pad_action = Some(action)
                 }
