@@ -1067,6 +1067,7 @@ impl Game<'_> {
         }
         self.stat_criteria_changed(&name, stat_events);
         if let Some(pos) = opened
+            && self.finish_projection_menu_open(conn, pos).is_none()
             && !self.lan_open_container(conn, pos)
             && self
                 .lan

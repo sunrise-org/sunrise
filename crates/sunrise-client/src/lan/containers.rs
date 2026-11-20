@@ -382,6 +382,7 @@ impl Hub {
             .and_then(|m| m.id(menu_kind))?;
         let i = self.guests.iter().position(|g| g.conn == conn)?;
         self.close_container_at(i);
+        let source_dimension = self.config.dimension.clone();
         let window = self.guests.update(i, |g| {
             let window = g.next_menu_window();
             if slots == Slots::Native {
@@ -415,6 +416,7 @@ impl Hub {
             }));
             let mod_type = crate::containers::mod_menu_type(menu_kind);
             g.menu = Some(Menu {
+                source_dimension: source_dimension.clone(),
                 window,
                 kind,
                 registry_id: menu_kind.into(),
@@ -468,6 +470,7 @@ impl Hub {
         self.close_container_at(i);
         let size = usize::from(rows) * 9;
         items.resize(size, None);
+        let source_dimension = self.config.dimension.clone();
         let window = self.guests.update(i, |g| {
             g.native_menu = items.clone();
             let window = g.next_menu_window();
@@ -477,6 +480,7 @@ impl Hub {
                 title,
             }));
             g.menu = Some(Menu {
+                source_dimension: source_dimension.clone(),
                 window,
                 kind,
                 registry_id: format!("minecraft:generic_9x{rows}").into_boxed_str(),
@@ -711,6 +715,15 @@ impl Hub {
         p: &play::ContainerClick,
         world: &World,
     ) -> Option<PreparedClick> {
+        self.prepare_click_with_eye(conn, p, world, None)
+    }
+    pub fn prepare_click_with_eye(
+        &mut self,
+        conn: u32,
+        p: &play::ContainerClick,
+        world: &World,
+        eye: Option<[f64; 3]>,
+    ) -> Option<PreparedClick> {
         let i = self.guests.iter().position(|g| g.conn == conn)?;
         let in_menu = p.container != 0;
         let window_ok = !in_menu
@@ -742,7 +755,12 @@ impl Hub {
         }
         // A menu that is no longer valid takes no clicks.
         if let Some(m) = self.guests[i].menu.as_ref().filter(|_| in_menu)
-            && !m.still_valid(&self.loop_context, world, &self.guests[i])
+            && !m.still_valid_with_eye(
+                &self.loop_context,
+                world,
+                &self.guests[i],
+                eye.unwrap_or_else(|| self.guests[i].eye()),
+            )
         {
             return None;
         }
@@ -1209,11 +1227,13 @@ impl Hub {
     /// Slot changes of open containers (AbstractContainerMenu.broadcastChanges).
     pub fn sync_containers(&mut self, world: &World) {
         for i in 0..self.guests.len() {
-            let Some(menu) = self.guests[i]
-                .menu
-                .as_ref()
-                .filter(|_| self.here(&self.guests[i]))
-            else {
+            let Some(menu) = self.guests[i].menu.as_ref().filter(|menu| {
+                menu.source_dimension == self.config.dimension
+                    && (self.here(&self.guests[i])
+                        || (self.guests[i].dimension != self.config.dimension
+                            && self.guests[i].participates_online()
+                            && self.guests[i].placed))
+            }) else {
                 continue;
             };
             let (size, window, slots) = (menu.size, menu.window, menu.slots);

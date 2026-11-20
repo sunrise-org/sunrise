@@ -11,7 +11,7 @@
 //! stays reserved, so no mod may declare it (`Local::capture`), and the generic packet API
 //! still refuses it.
 use sunrise_protocol::{
-    attachment_sync, collider_sync, general_entity, live_world_sync,
+    attachment_sync, collider_sync, general_entity, live_world_actions, live_world_sync,
     payload_negotiation::{Error, Flow, ManifestBuilder, Phase, RegistrationPhase},
 };
 
@@ -26,6 +26,12 @@ pub(super) struct Declaration {
 /// Every engine declaration. Attachment sync, collider sync and general entity spawns: play,
 /// clientbound only.
 pub(super) const DECLARATIONS: &[Declaration] = &[
+    Declaration {
+        phase: Phase::Play,
+        id: live_world_actions::CHANNEL,
+        flow: Flow::ToServer,
+        version: live_world_actions::VERSION,
+    },
     Declaration {
         phase: Phase::Play,
         id: attachment_sync::CHANNEL,

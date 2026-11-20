@@ -163,6 +163,14 @@ impl RuntimeTable {
             .is_some_and(|entry| entry.state != State::Opening)
     }
 
+    /// A queued close/delete has already invalidated prepared live-world actions, even
+    /// though ordinary level handles remain readable until the scheduler applies it.
+    pub(in crate::game) fn is_closing(&self, id: &str) -> bool {
+        self.entries
+            .get(id)
+            .is_some_and(|entry| entry.state == State::Closing)
+    }
+
     /// Whether `id` is a runtime level, open or not yet.
     pub(in crate::game) fn holds(&self, id: &str) -> bool {
         self.entries.contains_key(id)
@@ -222,7 +230,7 @@ impl RuntimeTable {
     }
 
     /// The mod that opened `id`, or "?" for a level the table no longer holds.
-    fn owner_of(&self, id: &str) -> &'static str {
+    pub(in crate::game) fn owner_of(&self, id: &str) -> &'static str {
         self.entries.get(id).map_or("?", |entry| entry.owner)
     }
 
@@ -749,11 +757,21 @@ impl Game<'_> {
     /// Whether a player, or an arrival on its way, is in the level `dim`.
     fn level_has_players(&self, dim: Dim) -> bool {
         let id = dim.id();
+        // A projected turn borrows a physical destination body without moving it. Guests
+        // remain in the hub under that destination; the borrowed Game body is not another
+        // player in the contextual source. A direct local actor retains its captured level.
+        let physical = self
+            .native_acting_player()
+            .and_then(|player| self.projection_physical_player_level(player))
+            .map_or(self.dim, |level| Dim::from_id(level.dimension_id()));
         self.lan
             .as_ref()
             .is_some_and(|host| host.hub.guests.as_slice().iter().any(|g| g.dimension == id))
             || !self.arrival_chunks(dim).is_empty()
-            || (self.options.dedicated.is_none() && self.player.is_some() && self.dim == dim)
+            || (self.options.dedicated.is_none()
+                && self.lan_acting.is_none()
+                && self.player.is_some()
+                && physical == dim)
     }
 
     /// Whether `level` names the level now open under its id: the world open it was made in, and

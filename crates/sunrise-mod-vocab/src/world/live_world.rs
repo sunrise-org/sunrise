@@ -36,7 +36,7 @@ pub struct LiveWorldLimits {
     pub max: [i32; 3],
     /// Reserved member-cell budget; default 4096, checked against server quotas.
     pub cells: u32,
-    /// Reserved distinct source/destination chunk budget; default 64.
+    /// Reserved source terrain-retention columns and destination sweep chunks; default 128.
     pub chunks: u32,
     /// Reserved shape-box budget; default 32768.
     pub boxes: u32,
@@ -58,13 +58,39 @@ impl Default for LiveWorldLimits {
             min: [-128; 3],
             max: [127; 3],
             cells: 4096,
-            chunks: 64,
+            chunks: 128,
             boxes: 32768,
             contacts: 65536,
             candidates: 65536,
             translation: 1.0,
             rotation_degrees: 5.0,
             motion_steps: 32,
+        }
+    }
+}
+
+/// Derived requirements of a new sparse source selection; this read reserves nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct LiveWorldFootprint {
+    /// Number of distinct selected cells.
+    pub cells: u32,
+    /// Number of distinct chunks containing selected cells.
+    pub source_chunks: u32,
+    /// Actual source terrain-cover columns held by the ordinary forced-streaming rings.
+    pub retained_columns: u32,
+    /// Initial sparse view areas, before other owners' aggregate guest admission.
+    pub view_areas: u32,
+}
+impl LiveWorldFootprint {
+    /// Engine constructor for an admitted bounded footprint calculation.
+    #[doc(hidden)]
+    pub fn new(cells: u32, source_chunks: u32, retained_columns: u32, view_areas: u32) -> Self {
+        Self {
+            cells,
+            source_chunks,
+            retained_columns,
+            view_areas,
         }
     }
 }
@@ -151,6 +177,9 @@ pub struct LiveWorldCell {
     pub entity: Option<crate::BlockEntityRef>,
     /// Conservative source block revision, shared by member cells.
     pub revision: u64,
+    /// Conservative real source block-entity content/attachment mutation revision.
+    /// Inventory/ticker writes advance this without rebuilding static collision geometry.
+    pub content_revision: u64,
 }
 
 impl LiveWorldCell {
@@ -162,6 +191,7 @@ impl LiveWorldCell {
         collision: Vec<crate::ColliderBox>,
         entity: Option<crate::BlockEntityRef>,
         revision: u64,
+        content_revision: u64,
     ) -> Self {
         Self {
             pos,
@@ -169,6 +199,7 @@ impl LiveWorldCell {
             collision,
             entity,
             revision,
+            content_revision,
         }
     }
 }

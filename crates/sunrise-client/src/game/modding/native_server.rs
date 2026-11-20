@@ -1256,6 +1256,9 @@ impl Game<'_> {
         if !self.is_logical_server() {
             return (self.local_player()? == player).then(|| self.native_level_key());
         }
+        if let Some(physical) = self.projection_physical_player_level(player) {
+            return Some(physical.dimension());
+        }
         if self.native_acting_player() == Some(player) {
             let dim = match self.lan_acting {
                 Some(conn) => {
@@ -1925,7 +1928,9 @@ impl Game<'_> {
     /// in the world at a player (a thrown stack, an overflow drop, a sound, a broken block) is
     /// left out for a player in another level, whose inventory and data writes still hold.
     pub(in crate::game) fn acting_in_level_in_place(&self) -> bool {
-        if self.live_world_action_in_level() { return true; }
+        if self.live_world_action_in_level() {
+            return true;
+        }
         let Some(conn) = self.lan_acting else {
             return true;
         };

@@ -1,0 +1,3 @@
+sunrise-client game::native_live_worlds::picking::tests::authenticated_projection_packets_keep_real_source_menus_and_refuse_stale_actions lib daily child-process # Actual guest packets and Worlds; isolated registration/resource fixture.
+sunrise-client game::native_live_worlds::picking::tests::projected_block_item_packets_keep_inventory_and_check_actual_physical_bodies lib daily child-process # Actual held-block guest packets, physical actor/other blockers, rotated candidate and stale callbacks.
+sunrise-client game::native_live_worlds::picking::tests::projected_menu_callbacks_and_continuing_cleanup_conserve_cursor_and_openers lib daily child-process # Actual source menus, callback rollback and cursor/opener conservation across reach/retire/close.

@@ -33,10 +33,14 @@ impl Game<'_> {
     /// still in place); and the click itself runs with the host lifted out of the game. Returns
     /// the stacks the click threw out.
     pub(super) fn lan_hub_click(&mut self, conn: u32, p: &play::ContainerClick) -> Vec<ItemStack> {
+        let projected_eye = self.projection_menu_eye(conn);
         let Some(host) = self.lan.as_mut() else {
             return Vec::new();
         };
-        let Some(mut prepared) = host.hub.prepare_click(conn, p, &self.world) else {
+        let Some(mut prepared) =
+            host.hub
+                .prepare_click_with_eye(conn, p, &self.world, projected_eye)
+        else {
             return Vec::new();
         };
         let frozen = if Self::stacked_listened() {
@@ -107,11 +111,11 @@ impl Game<'_> {
                     for key in blocks {
                         game.journal_block_entity(key);
                     }
-                    game.hub_click_run(&packet, &shared, &thrown, answer, Some(&*stored))
+                    game.hub_click_run(conn, &packet, &shared, &thrown, answer, Some(&*stored))
                 },
             );
         } else {
-            self.hub_click_run(p, &prepared, &drops, None, None);
+            self.hub_click_run(conn, p, &prepared, &drops, None, None);
         }
         // A click the decision refused never ran: the container, the drag and the client are put
         // back as they were.
@@ -129,12 +133,16 @@ impl Game<'_> {
     /// as if none were open) and the mods' answer to the pickup, if they gave one.
     fn hub_click_run(
         &mut self,
+        conn: u32,
         p: &play::ContainerClick,
         prepared: &RefCell<Option<sunrise_client::lan::containers::PreparedClick>>,
         drops: &RefCell<Vec<ItemStack>>,
         answer: Option<&sunrise_client::menu::StackedOutcome>,
         stored: Option<&RuleAnswers>,
     ) {
+        if !self.projection_menu_apply_fresh(conn) {
+            return;
+        }
         let Some(mut click) = prepared.take() else {
             return;
         };

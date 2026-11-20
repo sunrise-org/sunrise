@@ -19,3 +19,4 @@ sunrise-client-lib lan::viewed_levels::tests::a_withdrawn_areas_chunks_are_forgo
 sunrise-client-lib lan::viewed_levels::tests::an_area_is_not_a_player lib daily network
 sunrise-client-lib lan::viewed_levels::tests::disconnect_drops_the_areas_and_their_tickets lib daily network
 sunrise-client-lib lan::viewed_levels::tests::each_limit_refuses_with_its_cap_and_keeps_the_old_areas lib daily network
+sunrise-client-lib lan::viewed_levels::tests::negotiated_four_sources_stream_and_old_two_slot_guests_keep_their_cap lib daily network

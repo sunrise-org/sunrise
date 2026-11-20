@@ -31,6 +31,7 @@ pub(crate) mod place_feature_refusal;
 pub mod ground;
 pub(crate) mod inside_write;
 pub(crate) mod landing_write;
+pub(crate) mod level_attachments;
 pub(crate) mod level_write_error;
 pub(crate) mod live_world;
 pub(crate) mod map_decoration_types;

@@ -175,6 +175,18 @@ fn runtime_projection_keeps_real_multichunk_inventory_ticker_and_sparse_shapes()
                     source.restore_projection(game),
                     Err(LiveWorldError::NotSaved)
                 );
+                let footprint = source
+                    .projection_footprint(game, &[[0, 64, 0], [1, 64, 0], [17, 64, 0]])
+                    .unwrap();
+                assert_eq!(
+                    (
+                        footprint.cells,
+                        footprint.source_chunks,
+                        footprint.retained_columns,
+                        footprint.view_areas
+                    ),
+                    (3, 2, 90, 2)
+                );
                 let pose = LiveWorldPose::at([10.0, 0.0, 10.0]);
                 let projection = source
                     .project(
@@ -189,6 +201,53 @@ fn runtime_projection_keeps_real_multichunk_inventory_ticker_and_sparse_shapes()
                 assert_eq!(
                     cells.iter().map(|c| c.pos).collect::<Vec<_>>(),
                     [[0, 64, 0], [1, 64, 0], [17, 64, 0]]
+                );
+                // Losing a real source chunk cannot turn a previously coherent support into air.
+                let missing = {
+                    let parked = game.levels.parked_mut_of(source.dimension_id()).unwrap();
+                    let chunk = parked.world.chunks.remove(&(1, 0)).unwrap();
+                    let stone = game
+                        .pack
+                        .assets
+                        .registry
+                        .default_state("minecraft:stone")
+                        .unwrap();
+                    parked.world.set(2, 65, 0, stone).unwrap(); // actual unrelated state invalidation
+                    chunk
+                };
+                assert_eq!(
+                    projection.publish_pose(game, 0, pose),
+                    Err(LiveWorldError::NotResident)
+                );
+                let colliders = game.live_world_colliders(
+                    sunrise_client_render::moving_colliders::Prepared::empty(),
+                );
+                let platform = colliders
+                    .placed()
+                    .next()
+                    .expect("last coherent source support remains placed");
+                let body = sunrise_core::geometry::Aabb::new(
+                    sunrise_core::geometry::Vec3::new(27.2, 65.0, 10.2),
+                    sunrise_core::geometry::Vec3::new(27.8, 66.8, 10.8),
+                );
+                assert!(
+                    platform
+                        .collider
+                        .collide(body, sunrise_core::geometry::Axis::Y, -0.25)
+                        .abs()
+                        < 1.0e-7,
+                    "ordinary moving collider still supports the body over the missing source wing"
+                );
+                game.levels
+                    .parked_mut_of(source.dimension_id())
+                    .unwrap()
+                    .world
+                    .chunks
+                    .insert((1, 0), missing);
+                assert_eq!(
+                    projection.cells(game).unwrap().len(),
+                    3,
+                    "fresh coherent source resumes without reconstruction"
                 );
                 let chest = cells[0].entity.unwrap();
                 assert_eq!(chest.level(game), Some(source));
@@ -281,11 +340,12 @@ fn runtime_projection_keeps_real_multichunk_inventory_ticker_and_sparse_shapes()
                 );
                 let checkpoint = projection.checkpoint(game).unwrap();
                 assert_eq!(checkpoint.source, "live_fixture:local");
-                // Drop the in-memory projection, then actually close and reopen the real runtime level.
-                game.live_worlds.get_mut().clear();
-                assert_eq!(projection.sample(game), Err(LiveWorldError::Stale));
+                // Actual source close retires its binding and reservations, without a manual table reset.
+                assert!(projection.sample(game).is_ok());
                 game.runtime_level_unload("live_fixture:local").unwrap();
                 game.apply_runtime_levels();
+                assert_eq!(projection.sample(game), Err(LiveWorldError::Stale));
+                assert_eq!(game.live_worlds.borrow().binding_count(), 0);
                 let reopened = game
                     .runtime_level_open(
                         "live_fixture:local",
@@ -337,8 +397,39 @@ fn runtime_projection_keeps_real_multichunk_inventory_ticker_and_sparse_shapes()
                     Some(chest),
                     "old source-open handles stay stale after the real reopen"
                 );
+                let inspected = game.control_live_worlds(Some("live_fixture:local"));
+                assert_eq!(inspected["cell_count"], 3);
+                let actual = &inspected["projections"][0];
+                assert_eq!(actual["generation"], restored.generation());
+                assert_eq!(actual["source_generation"], restored.level().generation());
+                let inspected_cells = actual["cells"].as_array().unwrap();
+                let chest_cell = inspected_cells
+                    .iter()
+                    .find(|cell| cell["pos"] == serde_json::json!([0, 64, 0]))
+                    .unwrap();
+                assert_eq!(chest_cell["block_entity"]["slots"][0]["count"], 7);
+                let counter_cell = inspected_cells
+                    .iter()
+                    .find(|cell| cell["pos"] == serde_json::json!([1, 64, 0]))
+                    .unwrap();
+                assert_eq!(
+                    counter_cell["block_entity"]["progress"]["cooking_timer"],
+                    41
+                );
+                assert_eq!(
+                    actual["sample"]["current"]["translation_bits"],
+                    serde_json::json!(
+                        restored
+                            .sample(game)
+                            .unwrap()
+                            .current
+                            .translation
+                            .map(f64::to_bits)
+                    )
+                );
                 restored.retire(game).unwrap();
                 assert_eq!(restored.sample(game), Err(LiveWorldError::Stale));
+                assert_eq!(game.control_live_worlds(None)["projection_count"], 0);
                 eprintln!(
                     "LIVE_WORLD_EVIDENCE {}",
                     serde_json::json!({"source":checkpoint.source,
@@ -522,6 +613,472 @@ fn native_live_world_ordinary_actions_admit_revalidate_and_update_real_membershi
                     game.player.as_ref().unwrap().position,
                     physical,
                     "source context never teleports physical player"
+                );
+            });
+        },
+    );
+}
+
+struct SchedulerFixture {
+    activate: Arc<AtomicU8>,
+    observations: Arc<std::sync::Mutex<Vec<(bool, Option<bool>)>>>,
+}
+#[mod_api::__subscriptions]
+impl Hooks for SchedulerFixture {
+    fn server_tick(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::ServerTickEvent<'_>,
+    ) {
+        if !matches!(
+            event.phase,
+            mod_api::ServerTickPhase::ServerTickStart {
+                world_running: true
+            }
+        ) || self.activate.load(Ordering::Relaxed) != 1
+        {
+            return;
+        }
+        // The source is inactive: its own level callback cannot request its first activation.
+        let source = host.level("live_scheduler:local").unwrap();
+        assert!(!source.in_place(host));
+        for chunk in [[0, 0], [1, 0]] {
+            assert!(
+                source
+                    .chunk_ref(host, chunk)
+                    .unwrap()
+                    .set_forced(host, true)
+            );
+        }
+        self.activate.store(2, Ordering::Relaxed);
+    }
+    fn level_tick_post(
+        &self,
+        host: mod_api::HostSide<'_>,
+        event: &mut mod_api::LevelTickPostEvent,
+    ) {
+        let mod_api::HostSide::Server(host) = host else {
+            return;
+        };
+        let source = host.level("live_scheduler:local").unwrap();
+        if event.level.dimension_id() == "live_scheduler:local"
+            || event.level.dimension_id() == "minecraft:overworld"
+        {
+            self.observations.lock().unwrap().push((
+                source.in_place(host),
+                source.should_tick_blocks_at(host, [1, 64, 0]),
+            ));
+        }
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn runtime_source_global_activation_and_parked_readiness_use_ordinary_scheduler() {
+    if super::native_entity_refs::tests::run_fresh_cases(
+        "game::native_live_worlds_tests::runtime_source_global_activation_and_parked_readiness_use_ordinary_scheduler",
+        "SUNRISE_LIVE_WORLD_SCHEDULER_CHILD",
+        &["scheduler"],
+    ) {
+        return;
+    }
+    let activate = Arc::new(AtomicU8::new(0));
+    let observations = Arc::new(std::sync::Mutex::new(Vec::new()));
+    mod_platform::testing::with_mods(
+        vec![ModEntry::new(
+            "live_scheduler",
+            Box::new(SchedulerFixture {
+                activate: activate.clone(),
+                observations: observations.clone(),
+            }),
+        )]
+        .into(),
+        || {
+            super::native_entity_refs::tests::with_game(|game| {
+                let _phase =
+                    mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+                let scratch = tempfile::tempdir().unwrap();
+                game.world_root = scratch.path().to_path_buf();
+                let _owner =
+                    mod_api::content::crash::enter_native_mod(mod_api::content::crash::ModCall {
+                        id: "live_scheduler",
+                        hook: "server_tick",
+                        part: None,
+                    });
+                // The shared fixture stops before world-open completion. Finish the ordinary
+                // server lifecycle before exercising tick_server; a merely constructed Game
+                // has neither a running server nor enabled lifecycle callbacks.
+                game.options.dedicated = Some(Vec::new());
+                game.native_lifecycle_world_ready();
+                let source = prepare_named(game, "live_scheduler:local");
+                for chunk in [[0, 0], [1, 0]] {
+                    source
+                        .chunk_ref(game, chunk)
+                        .unwrap()
+                        .set_forced(game, false);
+                }
+                let parent = game.level("minecraft:overworld").unwrap();
+                assert!(
+                    parent
+                        .chunk_ref(game, [0, 0])
+                        .unwrap()
+                        .set_forced(game, true)
+                );
+                assert!(
+                    !game
+                        .levels_to_tick()
+                        .contains(&Dim::from_id("live_scheduler:local"))
+                );
+                for _ in 0..2 {
+                    game.tick_server(false).unwrap();
+                }
+                assert!(
+                    observations
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .all(|(in_place, _)| !in_place)
+                );
+                let furnace = |game: &Game<'_>| {
+                    let world = game.native_level_world(source).unwrap();
+                    let Some(BlockEntity::Furnace(value)) = world.block_entities.get(&(1, 64, 0))
+                    else {
+                        panic!("actual source furnace disappeared")
+                    };
+                    value.cooking_timer
+                };
+                assert_eq!(
+                    furnace(game),
+                    40,
+                    "an inactive source received no block tick"
+                );
+                observations.lock().unwrap().clear();
+                activate.store(1, Ordering::Relaxed);
+                for _ in 0..4 {
+                    game.tick_server(false).unwrap();
+                }
+                assert_eq!(activate.load(Ordering::Relaxed), 2);
+                let seen = observations.lock().unwrap();
+                assert_eq!(
+                    seen.iter().filter(|(in_place, _)| *in_place).count(),
+                    4,
+                    "one real source callback per ordinary running tick"
+                );
+                assert!(
+                    seen.iter()
+                        .any(|(in_place, ready)| !in_place && *ready == Some(true)),
+                    "parent callback can read the parked source's own readiness"
+                );
+                assert!(
+                    seen.iter()
+                        .filter(|(in_place, _)| *in_place)
+                        .all(|(_, ready)| *ready == Some(true))
+                );
+                drop(seen);
+                assert_eq!(
+                    furnace(game),
+                    44,
+                    "actual furnace ticks once per source scheduler turn"
+                );
+                let before = observations.lock().unwrap().len();
+                game.tick_server(true).unwrap();
+                assert_eq!(observations.lock().unwrap().len(), before);
+                assert_eq!(
+                    furnace(game),
+                    44,
+                    "ordinary server pause holds its live ticker"
+                );
+            });
+        },
+    );
+}
+
+static PUBLICATION: mod_api::AttachmentType<mod_api::Compound> = mod_api::AttachmentType {
+    namespace: "pose_fixture",
+    name: "publication",
+    default: mod_api::Compound::new,
+    codec: Some(mod_api::AttachmentCodec {
+        encode: |value| Ok(value.clone()),
+        decode: |value| Ok(value.clone()),
+    }),
+    copy_on_death: false,
+    sync: false,
+};
+static BAD_PUBLICATION: mod_api::AttachmentType<mod_api::Compound> = mod_api::AttachmentType {
+    namespace: "pose_fixture",
+    name: "publication",
+    default: mod_api::Compound::new,
+    codec: Some(mod_api::AttachmentCodec {
+        encode: |_| Err(mod_api::AttachmentError::Encode),
+        decode: |value| Ok(value.clone()),
+    }),
+    copy_on_death: false,
+    sync: false,
+};
+struct PublicationFixture;
+#[mod_api::__subscriptions]
+impl Hooks for PublicationFixture {
+    fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+        r.register_attachment_type("pose_fixture:publication", false)
+            .unwrap();
+    }
+}
+fn publication(sample: mod_api::LiveWorldSample) -> mod_api::Compound {
+    let current = sample
+        .current
+        .translation
+        .into_iter()
+        .chain(sample.current.pivot)
+        .chain(sample.current.rotation)
+        .map(|value| value.to_bits() as i64)
+        .collect();
+    [
+        (
+            "revision".into(),
+            mod_api::Tag::Long(sample.revision as i64),
+        ),
+        ("current".into(), mod_api::Tag::LongArray(current)),
+    ]
+    .into()
+}
+
+#[test]
+#[ignore = "daily"]
+fn publication_and_owned_parked_metadata_abort_together_and_allow_same_tick_retry() {
+    use mod_api::{AttachmentError, Holder, HostTransaction as _, ServerHost};
+    if super::native_entity_refs::tests::run_fresh_cases(
+        "game::native_live_worlds_tests::publication_and_owned_parked_metadata_abort_together_and_allow_same_tick_retry",
+        "SUNRISE_LIVE_WORLD_PUBLICATION_CHILD",
+        &["publication"],
+    ) {
+        return;
+    }
+    mod_platform::testing::with_mods(
+        vec![
+            ModEntry::new("pose_fixture", Box::new(PublicationFixture)),
+            ModEntry::new(
+                "foreign_fixture",
+                Box::new(Fixture(Arc::new(AtomicU8::new(0)))),
+            ),
+        ]
+        .into(),
+        || {
+            super::native_entity_refs::tests::with_game(|game| {
+                let _phase =
+                    mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+                let scratch = tempfile::tempdir().unwrap();
+                game.world_root = scratch.path().to_path_buf();
+                let _owner =
+                    mod_api::content::crash::enter_native_mod(mod_api::content::crash::ModCall {
+                        id: "pose_fixture",
+                        hook: "server_tick",
+                        part: None,
+                    });
+                let source = prepare_named(game, "pose_fixture:local");
+                let destination = game.level("minecraft:overworld").unwrap();
+                let parent_revisions = destination.revisions(game).unwrap();
+                assert_eq!(parent_revisions.block_revision, game.world.revision);
+                let before_contents = source.revisions(game).unwrap();
+                assert!(before_contents.block_revision > 0 && before_contents.content_revision > 0);
+                {
+                    let world = &mut game
+                        .levels
+                        .parked_mut_of(source.dimension_id())
+                        .unwrap()
+                        .world;
+                    let Some(BlockEntity::Chest(items)) = world.block_entities.get_mut(&(0, 64, 0))
+                    else {
+                        panic!("actual source chest missing");
+                    };
+                    items[0].as_mut().unwrap().count += 1;
+                }
+                let changed_contents = source.revisions(game).unwrap();
+                assert_eq!(
+                    changed_contents.block_revision,
+                    before_contents.block_revision
+                );
+                assert!(changed_contents.content_revision > before_contents.content_revision);
+                {
+                    let world = &mut game
+                        .levels
+                        .parked_mut_of(source.dimension_id())
+                        .unwrap()
+                        .world;
+                    let Some(BlockEntity::Chest(items)) = world.block_entities.get_mut(&(0, 64, 0))
+                    else {
+                        unreachable!();
+                    };
+                    items[0].as_mut().unwrap().count -= 1;
+                }
+                let empty = game
+                    .runtime_level_open(
+                        "pose_fixture:empty",
+                        RuntimeLevel::new("minecraft:overworld", RuntimeGenerator::Void, 1022),
+                    )
+                    .unwrap();
+                game.apply_runtime_levels();
+                let actual_empty = game.native_level_world(empty).unwrap();
+                assert!(actual_empty.chunks.is_empty());
+                assert_eq!(
+                    empty.revisions(game).unwrap(),
+                    mod_api::LevelRevisions::new(
+                        actual_empty.revision,
+                        actual_empty.block_entities.content_revision()
+                    )
+                );
+                let stale_source = mod_api::LevelRef::with_generation(
+                    source.epoch(),
+                    source.dimension(),
+                    source.generation() + 1,
+                );
+                assert_eq!(
+                    stale_source.revisions(game),
+                    Err(mod_api::LevelReadError::Stale)
+                );
+                let mut initial = LiveWorldPose::at([10.0, 16.0, 10.0]);
+                initial.pivot = [2.0, 64.0, 2.0];
+                let projection = source
+                    .project(
+                        game,
+                        destination,
+                        &[[0, 64, 0], [1, 64, 0], [17, 64, 0]],
+                        initial,
+                        LiveWorldLimits::default(),
+                    )
+                    .unwrap();
+                let before = projection.sample(game).unwrap();
+                let before_admission = game.capture_projection_pose(projection).unwrap();
+                let old = publication(before);
+                PUBLICATION
+                    .set(&mut source.attachments(game), Holder::Level, old.clone())
+                    .unwrap();
+                assert!(!source.in_place(game));
+                assert_eq!(
+                    PUBLICATION.has(game, Holder::Level),
+                    Ok(false),
+                    "source write never addresses parent Holder::Level"
+                );
+                let mut requested = initial;
+                requested.translation[0] += 0.125;
+                requested.rotation = [0.0, 0.008726535498373935, 0.0, 0.9999619230641713];
+                let host: &mut dyn ServerHost = game;
+                let canceled = host.transaction(|host, _| {
+                    let accepted = projection
+                        .publish_pose(host, before.revision, requested)
+                        .unwrap();
+                    let metadata = publication(accepted);
+                    PUBLICATION.set(
+                        &mut source.attachments(host),
+                        Holder::Level,
+                        metadata.clone(),
+                    )?;
+                    assert_eq!(
+                        PUBLICATION.get_existing(&mut source.attachments(host), Holder::Level)?,
+                        Some(metadata)
+                    );
+                    assert!(!sunrise_client::join_seq::visibility::passes_settled());
+                    BAD_PUBLICATION.set(
+                        &mut source.attachments(host),
+                        Holder::Level,
+                        publication(accepted),
+                    )
+                });
+                assert_eq!(canceled, Err(AttachmentError::Encode));
+                assert_eq!(projection.sample(game).unwrap(), before);
+                assert_eq!(
+                    game.capture_projection_pose(projection).unwrap(),
+                    before_admission,
+                    "abort restores sample and per-tick admission exactly"
+                );
+                assert_eq!(
+                    PUBLICATION
+                        .get_existing(&mut source.attachments(game), Holder::Level)
+                        .unwrap(),
+                    Some(old.clone())
+                );
+                assert!(sunrise_client::join_seq::visibility::passes_settled());
+                let host: &mut dyn ServerHost = game;
+                let nested = host.transaction(|host, _| {
+                    host.transaction(|host, _| {
+                        let accepted = projection
+                            .publish_pose(host, before.revision, requested)
+                            .unwrap();
+                        PUBLICATION.set(
+                            &mut source.attachments(host),
+                            Holder::Level,
+                            publication(accepted),
+                        )
+                    })?;
+                    Err::<(), _>(AttachmentError::Encode)
+                });
+                assert_eq!(nested, Err(AttachmentError::Encode));
+                assert_eq!(
+                    game.capture_projection_pose(projection).unwrap(),
+                    before_admission,
+                    "nested commit retains root's oldest before-image"
+                );
+                assert_eq!(
+                    PUBLICATION
+                        .get_existing(&mut source.attachments(game), Holder::Level)
+                        .unwrap(),
+                    Some(old)
+                );
+                let host: &mut dyn ServerHost = game;
+                let accepted = host
+                    .transaction(|host, _| {
+                        let sample = projection
+                            .publish_pose(host, before.revision, requested)
+                            .unwrap();
+                        PUBLICATION.set(
+                            &mut source.attachments(host),
+                            Holder::Level,
+                            publication(sample),
+                        )?;
+                        Ok::<_, AttachmentError>(sample)
+                    })
+                    .unwrap();
+                assert_eq!(
+                    accepted.revision,
+                    before.revision + 1,
+                    "refused prior groups consume no tick/revision"
+                );
+                assert_eq!(projection.sample(game).unwrap(), accepted);
+                assert_eq!(
+                    PUBLICATION
+                        .get_existing(&mut source.attachments(game), Holder::Level)
+                        .unwrap(),
+                    Some(publication(accepted))
+                );
+                {
+                    let _foreign = mod_api::content::crash::enter_native_mod(
+                        mod_api::content::crash::ModCall {
+                            id: "foreign_fixture",
+                            hook: "server_tick",
+                            part: None,
+                        },
+                    );
+                    assert_eq!(
+                        source.revisions(game),
+                        Err(mod_api::LevelReadError::Unavailable)
+                    );
+                    assert_eq!(
+                        empty.revisions(game),
+                        Err(mod_api::LevelReadError::Unavailable)
+                    );
+                    assert_eq!(
+                        PUBLICATION.set(
+                            &mut source.attachments(game),
+                            Holder::Level,
+                            mod_api::Compound::new()
+                        ),
+                        Err(AttachmentError::MissingHolder)
+                    );
+                }
+                assert_eq!(
+                    PUBLICATION
+                        .get_existing(&mut source.attachments(game), Holder::Level)
+                        .unwrap(),
+                    Some(publication(accepted))
                 );
             });
         },

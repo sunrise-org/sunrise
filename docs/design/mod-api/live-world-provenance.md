@@ -93,7 +93,10 @@ outcome remains separate from this record until reported.
 The coordinator subsequently completed the exact public-tree checker with authorized
 network access to the existing promisor remote, then repeated it offline successfully
 at `f687661`. No source contents from those missing blobs were supplied as inputs here.
-The next dependent commit `9da9109` ran the ordinary pre-commit checker successfully.
+An earlier entry described `9da9109` as running the ordinary pre-commit checker.
+That description does not establish an installed automatic hook: the later `a944343`
+receipt recorded `core.hooksPath` unset and an explicit full checker pass. Only retained
+invocations establish execution; hook presence is not inferred from a successful commit.
 The earlier failed-hook receipt remains part of the history.
 
 Actual isolated Game action evidence is retained in the run named
@@ -180,3 +183,53 @@ platform assertion and duplicate dependency names) are retained alongside the
 corrected run. These are graph/manifest checks; official generator, consumer
 compilation and runtime evidence remain separately reported. The ordinary SDK
 consumer gate now requires exact closure and feature equality for both roots.
+
+## Fresh Sunrise-only helper inputs
+
+The coordinator explicitly assigned two fresh-context AI helpers for bounded same-source
+work. `/root/sunrise_input` supplied temporary input/menu drafts, their own-source list,
+integration notes and hashes. `/root/sunrise_storage` supplied temporary WAL/gate/snapshot
+and filesystem-test drafts, exact source hashes, integration order and limitations.
+Both were limited to this Sunrise tree, its rules and Sunrise-authored scratch drafts;
+neither edited the shared tree, compiled it, ran a game, contacted maintainers or supplied
+foreign implementation inputs. The lead remains the integrator. Their parser/patch checks
+are not runtime evidence. Original handoffs and subsequent actual integration receipts are
+retained separately under `.local/live-world-evidence/`.
+
+The coordinator also reported relevant newer official SDK work at main `94256510f74e6843754e0a93fd9eae4214c8a08737d273`:
+merged #3472 uses a different transitive subset policy, open #3468 overlaps the inactive-target
+fix, and open #3478 clarifies that policy. This is coordinator-reported public audit input,
+not an inspection or incorporation of those newer implementations here. The retained local
+strict target-specific SDK experiment requires reconciliation before any upstream proposal.
+The pinned development base and earlier failed export receipts remain unchanged.
+
+All implementation and draft text in this local series is AI-authored. Local signed-off
+commits do not certify human DCO eligibility, completed human review, upstream spec/claim
+approval or redistribution eligibility. Those decisions remain pending; nothing was posted.
+
+## Input/menu, retention and publication checkpoint
+
+The integrated same-source input/menu handoff was actually compiled and exercised through
+resource-backed Game child processes. The failed first batch remains retained: it exposed an
+incoming-versus-outgoing engine-channel admission error, a physical actor dimension lost in
+source scope and an incompletely started scheduler fixture. The corrected snapshots also
+exercise ordinary held-block packets, exact physical blockers, continuing menu cleanup,
+source versus parent sentinels, actual source activation and targeted metadata/pose rollback.
+A later snapshot adds pre-effect Busy refusal for caller-held projected use transactions and
+genuine current/parked/empty/foreign/stale level revision reads. The actual standard generator
+rejected an initial Option-shaped new read; it was corrected to existing LevelReadError with
+no expansion of the shrinking unwinding allowlist. Native/Game and wasm checks and actual
+listed tests are separately bound to their source snapshots under the local evidence folder.
+
+The real viewed-level hub test initially could not bind a local loopback socket in the
+sandbox. Its authorized loopback-capable rerun passed. That OS refusal was not an automatic
+approval rejection, a logic failure or a graphical client proof. The client Game's independent
+open/close routing test is a separate recorded result. The coordinator independently replayed
+the exact test binaries and reported matching results; those are separate receipts, not an
+inference from code compilation.
+
+WAL/save-gate/transfer payload drafts and the next public contract remain unintegrated at this
+checkpoint. Neither the existing metadata save nor the successful source transaction fixture
+is represented as atomic durable cross-owner transfer. Multi-source publication rollback,
+exact rotating persistence, actual prepared transfer/recovery, normal native/wasm packaging,
+window input and measurement remain distinct required gates.

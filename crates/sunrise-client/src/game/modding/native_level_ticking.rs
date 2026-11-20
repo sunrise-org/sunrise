@@ -1,8 +1,30 @@
 //! Ticking eligibility through the same predicates as the server's tick phases.
 use super::Game;
-use mod_api::LevelRef;
+use mod_api::{LevelReadError, LevelRef, LevelRevisions};
 
 impl Game<'_> {
+    pub(super) fn level_revisions(
+        &self,
+        level: LevelRef,
+    ) -> Result<LevelRevisions, LevelReadError> {
+        let world = self.native_level_world_result(level)?;
+        if !self.live_world_lifecycle_current(level) {
+            return Err(LevelReadError::Stale);
+        }
+        if level.dimension() != self.dim.key() && level.generation() != 0 {
+            let caller = self
+                .runtime_caller()
+                .map_err(|_| LevelReadError::Unavailable)?;
+            if self.levels.runtime.owner_of(level.dimension_id()) != caller {
+                return Err(LevelReadError::Unavailable);
+            }
+        }
+        Ok(LevelRevisions::new(
+            world.revision,
+            world.block_entities.content_revision(),
+        ))
+    }
+
     fn native_tick_position(&self, level: LevelRef, pos: [i32; 3]) -> Option<bool> {
         if !self.level_in_place(level) {
             return None;
@@ -22,7 +44,15 @@ impl Game<'_> {
         level: LevelRef,
         pos: [i32; 3],
     ) -> Option<bool> {
-        Some(self.native_tick_position(level, pos)? && self.block_ticking_at(pos[0], pos[2]))
+        let world = self.native_level_world(level)?;
+        if !self.level_in_world_bounds(level, pos)? || !world.is_loaded_at(pos[0], pos[1], pos[2]) {
+            return Some(false);
+        }
+        if level.dimension() == self.dim.key() {
+            return Some(self.block_ticking_at(pos[0], pos[2]));
+        }
+        self.levels
+            .parked_block_ticking_at(level.dimension_id(), pos)
     }
 }
 
@@ -93,7 +123,26 @@ mod tests {
             let unopened = LevelRef::new(level.epoch(), DimensionKey::NETHER);
             assert_reads(game, unopened, [0, 64, 0], None);
             game.enter_level(crate::game::Dim::Nether).unwrap();
-            assert_reads(game, level, [0, 64, 0], None);
+            assert_eq!(level.entity_ticking(game, [0, 64, 0]), None);
+            assert_eq!(level.should_tick_blocks_at(game, [0, 64, 0]), Some(true));
+            let parked = game.levels.parked_mut(crate::game::Dim::Overworld).unwrap();
+            parked.world.entities_pending.insert((0, 0));
+            assert_eq!(level.should_tick_blocks_at(game, [0, 64, 0]), Some(false));
+            let parked = game.levels.parked_mut(crate::game::Dim::Overworld).unwrap();
+            parked.world.entities_pending.clear();
+            game.enter_level(crate::game::Dim::Overworld).unwrap();
+            game.tickets.update(Some(Sources::default()));
+            game.enter_level(crate::game::Dim::Nether).unwrap();
+            assert_eq!(level.should_tick_blocks_at(game, [0, 64, 0]), Some(false));
+            game.enter_level(crate::game::Dim::Overworld).unwrap();
+            game.tickets.update(None);
+            game.enter_level(crate::game::Dim::Nether).unwrap();
+            assert_eq!(level.should_tick_blocks_at(game, [0, 64, 0]), Some(true));
+            let parked = game.levels.parked_mut(crate::game::Dim::Overworld).unwrap();
+            parked.world.chunks.remove(&(0, 0)).unwrap();
+            assert_eq!(level.should_tick_blocks_at(game, [0, 64, 0]), Some(false));
+            assert_eq!(level.should_tick_blocks_at(game, [0, 320, 0]), Some(false));
+            assert_eq!(stale.should_tick_blocks_at(game, [0, 64, 0]), None);
         });
         with_game(|game| {
             let level = game.level("minecraft:overworld").unwrap();

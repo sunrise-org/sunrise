@@ -130,6 +130,43 @@ impl Game<'_> {
 
     /// A packet from a guest that the hub does not handle itself.
     pub(in crate::game) fn lan_guest_packet(&mut self, conn: u32, packet: S) {
+        let menu_packet = matches!(
+            &packet,
+            S::ContainerClick(_)
+                | S::ContainerClose(_)
+                | S::ContainerButtonClick(_)
+                | S::ContainerSlotStateChanged(_)
+                | S::SelectBundleItem(_)
+                | S::PlaceRecipe(_)
+                | S::RenameItem(_)
+                | S::SetBeacon(_)
+                | S::SelectTrade(_)
+        );
+        if menu_packet && self.projection_menu_bound(conn) && !self.projection_menu_in_scope(conn) {
+            if !matches!(&packet, S::ContainerClick(_) | S::ContainerClose(_)) {
+                return;
+            }
+            let valid = self
+                .lan
+                .as_ref()
+                .and_then(|host| host.hub.guest(conn))
+                .and_then(|guest| self.projection_menu_valid(guest))
+                == Some(true);
+            if !valid && !matches!(&packet, S::ContainerClose(_)) {
+                self.guest_close_menus_and_tell(conn);
+                return;
+            }
+            let result =
+                self.with_projection_menu(conn, |game| game.lan_guest_packet_inner(conn, packet));
+            if let Err(error) = result {
+                log::warn!("projected menu packet refused: {error:?}");
+            }
+            return;
+        }
+        self.lan_guest_packet_inner(conn, packet);
+    }
+
+    fn lan_guest_packet_inner(&mut self, conn: u32, packet: S) {
         // A crossing the hub's move check passed; a dead player's is refused, not dropped.
         if let S::CustomPayload(p) = &packet
             && p.channel == sunrise_protocol::passage_sync::CROSS_CHANNEL
@@ -168,6 +205,37 @@ impl Game<'_> {
                 | S::PlaceRecipe(_)
         ) {
             self.guest_validate_menu(conn);
+        }
+        if self.lan.is_none() {
+            return;
+        }
+        if let S::CustomPayload(payload) = &packet
+            && payload.channel == sunrise_protocol::live_world_actions::CHANNEL
+        {
+            self.guest_projection_action(conn, &payload.data);
+            return;
+        }
+        // Parent actions never pass through a nearer live owner. This uses the authenticated
+        // physical eye, not the client cache or the source-context eye.
+        let parent_target = match &packet {
+            S::UseItemOn(payload) => {
+                Some((Hit::from_use_item_on(payload).point, Some(payload.sequence)))
+            }
+            S::PlayerAction(action) if matches!(action.action, 0 | 3) => Some((
+                action.pos.map(|value| f64::from(value) + 0.5),
+                Some(action.sequence),
+            )),
+            _ => None,
+        };
+        if let Some((point, sequence)) = parent_target
+            && self.projection_parent_obstructed(conn, point)
+        {
+            if let Some(host) = self.lan.as_mut()
+                && let Some(sequence) = sequence
+            {
+                host.hub.ack(conn, sequence);
+            }
+            return;
         }
         let Some(host) = self.lan.as_ref() else {
             return;
@@ -801,6 +869,7 @@ impl Game<'_> {
                 self.guest_carried_back(gi);
                 if closing {
                     self.player_menu_closing(conn);
+                    self.forget_projection_menu(conn);
                 }
             }
             S::ChatCommand(c) => self.guest_chat_command(conn, &c.command),

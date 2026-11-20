@@ -7,6 +7,19 @@ use crate::*;
 #[sunrise_mod_api_macros::host_area]
 pub trait LiveWorldsBackend {
     /// Side: server.
+    /// Checked sparse selection footprint before creating a binding or changing chunks.
+    /// Reads this mod's open Void source, including a parked source; loads nothing.
+    /// `retained_columns` includes the existing forced-streaming terrain ring, so callers
+    /// can choose an adequate `LiveWorldLimits::chunks`. Destination sweep, real shapes,
+    /// residency, other viewers and owner/global reservations are still checked by `project`.
+    /// Refuses selections that cannot fit the engine's checked coordinate/cover ceilings.
+    #[access(WorldOnly)]
+    fn level_projection_footprint(
+        &self,
+        level: LevelRef,
+        cells: &[[i32; 3]],
+    ) -> Result<LiveWorldFootprint, LiveWorldError>;
+    /// Side: server.
     /// The caller-owned binding of this runtime level, if one is active.
     #[access(WorldOnly)]
     fn level_live_world(&self, level: LevelRef) -> Result<Option<LiveWorldRef>, LiveWorldError>;

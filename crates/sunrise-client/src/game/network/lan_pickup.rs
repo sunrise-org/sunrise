@@ -24,6 +24,10 @@ fn plain<R>(
     op: impl FnOnce(&mut Menu, &Env) -> R,
     write_back: impl FnOnce(&mut Game<'_>, &mut Menu, &R),
 ) -> Option<R> {
+    let conn = game.lan.as_ref()?.hub.guests.get(gi)?.conn;
+    if !game.projection_menu_apply_fresh(conn) {
+        return None;
+    }
     let ran = game.guest_menu_op(gi, menu, op)?;
     write_back(game, menu, &ran);
     Some(ran)
@@ -94,6 +98,9 @@ impl Game<'_> {
                 (now == carried).then(|| same.clone())
             },
             |game, answer| {
+                if !game.projection_menu_apply_fresh(conn) {
+                    return;
+                }
                 game.journal_guest_click(conn);
                 let rules = StoredRules(&answers);
                 ran = game.guest_menu_op_with(gi, menu, Some(&rules), answer, op);

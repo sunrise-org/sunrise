@@ -42,6 +42,7 @@ fn open_mod_menu(game: &mut Game<'_>) -> ((i32, i32, i32), MenuSnapshot, sync::S
     game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
         g.menu_generation = 1;
         g.menu = Some(Open {
+            source_dimension: "minecraft:overworld".into(),
             window: 1,
             kind: 0,
             registry_id: "review:menu".into(),

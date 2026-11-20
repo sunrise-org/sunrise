@@ -11,7 +11,7 @@ use sunrise_protocol::live_world_sync::{self as wire, Message};
 #[derive(Default)]
 pub(super) struct Sync {
     sent: BTreeMap<(u128, u64), Sent>,
-    replicas: BTreeMap<u64, Replica>,
+    pub(super) replicas: BTreeMap<u64, Replica>,
     retired: BTreeSet<u64>,
     epoch: Option<WorldEpoch>,
 }
@@ -22,14 +22,15 @@ struct Sent {
     membership: u64,
     sample: LiveWorldSample,
 }
-struct Replica {
+pub(super) struct Replica {
     source: String,
     destination: String,
     collider: u32,
     boxes: u32,
-    source_revision: u64,
+    pub(super) source_revision: u64,
     state_hash: [u8; 32],
     cells: Vec<[i32; 3]>,
+    chunks: Vec<(i32, i32)>,
     sample: LiveWorldSample,
     membership: u64,
     frame: u64,
@@ -176,6 +177,9 @@ impl Game<'_> {
         if !self.is_logical_server() {
             return;
         }
+        if !sunrise_client::join_seq::visibility::passes_settled() {
+            return;
+        }
         if self.live_worlds.borrow().entries.is_empty()
             && self.live_worlds.borrow().sync.sent.is_empty()
         {
@@ -293,7 +297,7 @@ impl Game<'_> {
                     sender.close();
                     continue;
                 }
-                for (&(player, id), _) in &table.sync.sent {
+                for &(player, id) in table.sync.sent.keys() {
                     if player == uuid && !wanted.contains(&id) {
                         messages.push((
                             id,
@@ -447,6 +451,12 @@ impl Game<'_> {
                     }
                 }
                 let old_entry = sync.replicas.remove(&id).and_then(|r| r.entry);
+                let chunks = cells
+                    .iter()
+                    .map(|p| (p[0] >> 4, p[2] >> 4))
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
                 sync.replicas.insert(
                     id,
                     Replica {
@@ -457,6 +467,7 @@ impl Game<'_> {
                         source_revision: sample.source_revision,
                         state_hash: sample.state_hash,
                         cells,
+                        chunks,
                         sample: incoming,
                         membership,
                         frame: sample.frame,
@@ -509,7 +520,7 @@ impl Game<'_> {
         Ok(())
     }
 
-    fn replica_entry<'a>(&self, id: u64, replica: &'a mut Replica) -> Option<&'a Entry> {
+    pub(super) fn replica_entry<'a>(&self, id: u64, replica: &'a mut Replica) -> Option<&'a Entry> {
         if self.native_lifecycle.epoch() != Some(replica.epoch)
             || self.dim.id() != replica.destination
         {
@@ -518,10 +529,7 @@ impl Game<'_> {
         let source = self.level(&replica.source)?;
         let destination = self.level(&replica.destination)?;
         let world = self.native_level_view_world(source)?;
-        let loaded = replica
-            .cells
-            .iter()
-            .all(|p| world.is_loaded_at(p[0], p[1], p[2]));
+        let loaded = replica.chunks.iter().all(|p| world.chunks.contains_key(p));
         if loaded
             && replica
                 .observed
@@ -566,15 +574,15 @@ impl Game<'_> {
                 geometry: RefCell::new(None),
                 mesh: RefCell::new(None),
                 membership: replica.membership,
+                retained: replica.chunks.clone(),
                 stream_areas: Vec::new(),
             });
         }
         let entry = replica.entry.as_mut()?;
         if entry.membership != replica.membership {
             entry.cells.clone_from(&replica.cells);
+            entry.retained.clone_from(&replica.chunks);
             entry.membership = replica.membership;
-            *entry.geometry.get_mut() = None;
-            *entry.mesh.get_mut() = None;
         }
         entry.sample = replica.sample;
         entry.tick_start = replica.sample.previous;

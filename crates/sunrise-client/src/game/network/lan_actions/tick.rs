@@ -21,6 +21,7 @@ impl Game<'_> {
         self.lan_tables_tick();
         self.lan_mod_crafting_tick();
         self.lan_menu_links_tick();
+        self.tick_projection_menus();
         self.lan_containers_tick();
         self.tick_lan_mount_menus();
         self.native_players_equipment();

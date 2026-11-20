@@ -43,6 +43,20 @@ together with bounded conservative advancement. The explicit pivot is carried th
 the existing frame/history path, so drawing, carry-age interpolation and collision
 samples preserve the same pivot. An idle publisher collapses previous/current samples.
 
+Active membership derives ephemeral ordinary source streaming retention; it never changes
+persistent command or mod-forced tickets. `LevelRef::projection_footprint` reports the real
+terrain-ring charge before a binding, and `should_tick_blocks_at` observes each open parked
+level's own tickets and pending entities. Initial source activation must come from a global
+or running parent callback. Automatic source close releases binding caches and reservations.
+The client advertises and enforces a bounded four-slot viewed-level capacity; older clients'
+smaller negotiated caps and existing area/column/security limits remain authoritative.
+
+`LevelRef::revisions` reads actual open-world block and block-entity content counters without
+a binding or chunk load, with ordinary typed read refusals. The target-aware
+`LevelRef::attachments` adapter borrows the actual owned level holder. An existing binding's
+accepted pose and opaque caller metadata can join one ordinary Host transaction; cancellation
+restores samples, revisions, per-tick admission and exact target attachment before-images.
+
 The default limits are operating reservations, not coordinate representation limits.
 Coordinates remain checked i32. Mods select bounded cell/chunk/box/contact/candidate
 and motion-subdivision budgets subject to administrator-owned per-owner/aggregate
@@ -62,6 +76,21 @@ before mutation or stack consumption. Callback writes join the ordinary transact
 stale decisions refuse without replay. Breaks retain the hit and source/pose/membership
 and storage epochs through callbacks, revalidating immediately before removal.
 
+Ordinary client picking and authenticated main-hand guest requests retain the transformed
+server hit. The supported input slice includes ordinary block-item placement and stock
+chest/furnace menu operations, slot/progress synchronization and continuing source-frame reach
+and holder checks. Physical building blockers use the existing oriented kernel against actual
+parent bodies; the physical player is never moved into local coordinates. Menus retain real
+source holders, release ordinary openers and conserve the cursor on reach loss, retirement or
+queued source close. Caller-held outer transactions refuse projected use before any screen,
+slot, cursor or opener effect. Progressive survival mining, automatic off-hand fallthrough and
+specialized recipe/button/toggle packets explicitly refuse in this slice.
+
+The developer control query `simulation live-worlds [SOURCE]` uses the authoritative owner link
+to report bounded real cells/states/shapes, live container slots and furnace progress, read
+revisions and exact pose bits. It refuses unavailable or oversized snapshots instead of
+returning partial success. It is an inspection route, not another inventory or save authority.
+
 The implementation must report separately which runtime, save/reopen, action,
 transfer, client tracking and graphical tests actually ran. Declared API shape,
 geometry tests, and direct tests of the real Game are different evidence.
@@ -70,11 +99,10 @@ No #1022 completion claim follows from this slice.
 ## Follow-up contracts required for enablement
 
 Prepared multi-dimension transfer must durably journal both source and destination
-before either ownership change. An action must carry owner/generation/cell/pose
-revision and enter ordinary permissions, reach, use/mining and menu rules with a
-projected interaction context. Continuing vanilla chest/furnace menus and ordinary client mining/use input must retain
-the source owner/generation/cell identity and revalidate transformed reach on each click
-and tick. Retirement/unload must close them through ordinary cursor/inventory cleanup.
+before either ownership change. Binding creation/removal/membership must join the
+same durable metadata frontier before any broader transaction claim. The supported ordinary
+action and menu route above still needs genuine window/mouse validation and an independently
+packaged native/wasm fixture; API calls and a constructed client Game do not prove that scene.
 A vanilla display or marker is not an ownership substitute. Late
 join, paused/ticket-refused source contexts, parked save and recovery need tests
 on integrated, LAN and dedicated runtime paths. Unsupported routes refuse instead

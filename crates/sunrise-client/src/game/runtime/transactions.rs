@@ -201,6 +201,10 @@ pub(super) struct Level {
     /// Each entity's, player's, chunk's and the level's attachment map before this transaction
     /// first reached it (a block entity's is kept with it).
     attachments: HashMap<Holder, KeptAttachments>,
+    /// Exact accepted motion samples and per-tick admission state before each first publication.
+    projection_poses: HashMap<u64, super::native_live_worlds::KeptProjectionPose>,
+    /// Explicit owned parked level holders, never keyed by current-level-relative Holder::Level.
+    owned_level_attachments: HashMap<mod_api::LevelRef, KeptAttachments>,
     /// Held once this transaction reaches an attachment map, until it closes: the save
     /// admission gate (`passes_settled`) refuses a save while a map may hold tentative
     /// values, which only the root commit makes saveable.
@@ -430,6 +434,17 @@ impl Level {
 }
 
 impl Game<'_> {
+    /// Local block/menu journals may not merge position-only snapshots across dimensions.
+    pub(in crate::game) fn projection_action_transaction_allowed(
+        &self,
+        source: mod_api::LevelRef,
+    ) -> bool {
+        self.level_handle_current(source)
+            && self
+                .transactions
+                .iter()
+                .all(|level| level.dimension == Some(super::Dim::from_id(source.dimension_id())))
+    }
     /// Actual transaction/restore events for storage-attempt regression traces.
     #[cfg(test)]
     pub(in crate::game) fn trace_storage_attempt(&self, entry: String) {
@@ -564,6 +579,12 @@ impl Game<'_> {
         match (commit, self.transactions.last_mut()) {
             (true, Some(outer)) => {
                 outer.actions.merge(level.actions);
+                for (generation, kept) in level.projection_poses {
+                    outer.projection_poses.entry(generation).or_insert(kept);
+                }
+                for (target, kept) in level.owned_level_attachments {
+                    outer.owned_level_attachments.entry(target).or_insert(kept);
+                }
                 // Slots before whole entities: a slot the outer transaction already kept the
                 // whole entity of is older there, but one kept whole only by this child is not,
                 // so the child's slot entries go up beside its capture.
@@ -764,6 +785,43 @@ impl Game<'_> {
             .block_entities
             .entry(pos)
             .or_insert_with(|| Kept::capture(&self.world, &self.hoppers, pos));
+    }
+    pub(in crate::game) fn journal_projection_pose(&mut self, handle: mod_api::LiveWorldRef) {
+        self.transactions.writes = self.transactions.writes.wrapping_add(1);
+        let Some(kept) = self.capture_projection_pose(handle) else {
+            return;
+        };
+        if let Some(level) = self.transactions.last_mut() {
+            level
+                .save_gate
+                .get_or_insert_with(sunrise_client::join_seq::visibility::PassLease::enter);
+            level
+                .projection_poses
+                .entry(handle.generation())
+                .or_insert(kept);
+        }
+    }
+    pub(in crate::game) fn journal_owned_level_attachments(&mut self, target: mod_api::LevelRef) {
+        self.transactions.writes = self.transactions.writes.wrapping_add(1);
+        let Some(level) = self.transactions.last() else {
+            return;
+        };
+        if level.owned_level_attachments.contains_key(&target) {
+            return;
+        }
+        let Some(world) = self.native_level_world(target) else {
+            return;
+        };
+        let kept = KeptAttachments {
+            contents: world.attachments.clone(),
+            indexed: world.attachments.has_index_binding(),
+        };
+        if let Some(level) = self.transactions.last_mut() {
+            level
+                .save_gate
+                .get_or_insert_with(sunrise_client::join_seq::visibility::PassLease::enter);
+            level.owned_level_attachments.insert(target, kept);
+        }
     }
     /// Puts back the block entity at `pos` that a transaction removed, as `kept` holds it, with
     /// its generation, where none stands there now.
@@ -1549,6 +1607,27 @@ impl Game<'_> {
                     }
                 });
             }
+        }
+        for (target, kept) in level.owned_level_attachments {
+            if !self.level_handle_current(target) {
+                continue;
+            }
+            let map = if self.dim.key() == target.dimension() {
+                Some(&mut self.world.attachments)
+            } else {
+                self.levels
+                    .parked_mut_of(target.dimension_id())
+                    .map(|parked| &mut parked.world.attachments)
+            };
+            if let Some(map) = map {
+                map.replace_contents(kept.contents);
+                if !kept.indexed {
+                    map.unbind_index();
+                }
+            }
+        }
+        for kept in level.projection_poses.into_values() {
+            self.restore_projection_pose(kept);
         }
         level.actions.rollback_in(self);
         if let Some(saved) = level.board {

@@ -90,6 +90,7 @@ impl Game<'_> {
     }
 
     pub(in crate::game) fn refresh_client_pick(&mut self, partial_tick: f32) {
+        self.clear_projection_pick();
         if !self.native_window()
             || self.title.is_some()
             || self.player.is_none()
@@ -162,6 +163,16 @@ impl Game<'_> {
             }
             _ => block_candidate,
         });
+        self.refresh_projection_pick(
+            origin,
+            direction,
+            match original {
+                Some(CrosshairTarget::Block { hit, .. }) => Some(self.pick_distance(hit.point)),
+                Some(CrosshairTarget::Entity { point, .. }) => Some(self.pick_distance(point)),
+                _ => None,
+            },
+        );
+        let original = self.finish_projection_pick(original);
         self.publish_client_pick(original);
         self.client_pick.ray = None;
         if !mod_api::__private::listened(mod_api::HookId::ClientPick) {
@@ -187,7 +198,7 @@ impl Game<'_> {
         let result = result.filter(|&result| {
             valid_context && (Some(result) == original || self.accept_client_pick(result))
         });
-        self.publish_client_pick(result);
+        self.publish_client_pick(self.finish_projection_pick(result));
         self.transaction_close(&seal, true);
     }
 

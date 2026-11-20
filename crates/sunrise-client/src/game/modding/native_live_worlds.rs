@@ -4,13 +4,24 @@
 use super::{Game, api_values::TryIntoApi as _};
 #[path = "native_live_worlds/actions.rs"]
 mod actions;
+#[path = "native_live_worlds/inspection.rs"]
+mod inspection;
+#[path = "native_live_worlds/menus.rs"]
+mod menus;
+#[path = "native_live_worlds/obstruction.rs"]
+pub(in crate::game) mod obstruction;
+#[path = "native_live_worlds/picking.rs"]
+mod picking;
 #[path = "native_live_worlds/placement.rs"]
 mod placement;
+#[path = "native_live_worlds/retention.rs"]
+mod retention;
 #[path = "native_live_worlds/sync.rs"]
 mod sync;
 use mod_api::{
     ColliderBox, LevelRef, LiveWorldCell, LiveWorldCheckpoint, LiveWorldError as Error,
-    LiveWorldHit, LiveWorldLimits, LiveWorldPose, LiveWorldRef, LiveWorldSample,
+    LiveWorldFootprint, LiveWorldHit, LiveWorldLimits, LiveWorldPose, LiveWorldRef,
+    LiveWorldSample,
 };
 use sha2::{Digest as _, Sha256};
 use std::{
@@ -41,6 +52,11 @@ pub(in crate::game) struct LiveWorlds {
     quotas: Quotas,
     sync: sync::Sync,
     action: Option<actions::ProjectedAction>,
+    building: Option<Rc<obstruction::Building>>,
+    menus: BTreeMap<u32, menus::ProjectedMenu>,
+    pending_opens: BTreeMap<u32, menus::PendingOpen>,
+    menu_scope: Option<menus::MenuScope>,
+    pick: Option<picking::Pick>,
 }
 
 struct Quotas {
@@ -48,6 +64,7 @@ struct Quotas {
     total_cells: u64,
     owner_boxes: u64,
     total_boxes: u64,
+    owner_chunks: u64,
     total_chunks: u64,
 }
 impl Default for Quotas {
@@ -57,16 +74,26 @@ impl Default for Quotas {
             total_cells: 262144,
             owner_boxes: 524288,
             total_boxes: 1048576,
+            owner_chunks: 4096,
             total_chunks: 8192,
         }
     }
 }
 
 impl LiveWorlds {
+    #[cfg(test)]
+    pub(in crate::game) fn binding_count(&self) -> usize {
+        self.entries.len()
+    }
     pub(in crate::game) fn clear(&mut self) {
         self.entries.clear();
         self.sync.clear();
         self.action = None;
+        self.building = None;
+        self.menus.clear();
+        self.pending_opens.clear();
+        self.menu_scope = None;
+        self.pick = None;
     }
 }
 
@@ -76,6 +103,7 @@ struct Entry {
     destination: LevelRef,
     cells: Vec<[i32; 3]>,
     membership: u64,
+    retained: Vec<(i32, i32)>,
     stream_areas: Vec<sunrise_client::lan::viewed_levels::areas::ChunkArea>,
     limits: LiveWorldLimits,
     sample: LiveWorldSample,
@@ -90,8 +118,19 @@ struct Entry {
     mesh: RefCell<Option<Rc<Mesh>>>,
 }
 
+/// A motion before-image in the ordinary Host transaction journal, never a live body copy.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::game) struct KeptProjectionPose {
+    handle: LiveWorldRef,
+    sample: LiveWorldSample,
+    accepted_tick: Option<u64>,
+    tick_start: LiveWorldPose,
+    carrying: bool,
+}
+
 struct Geometry {
     source_revision: u64,
+    membership: u64,
     resources: u64,
     state_hash: [u8; 32],
 
@@ -101,6 +140,7 @@ struct Geometry {
 
 struct Mesh {
     source_revision: u64,
+    membership: u64,
     resources: u64,
     cells: Vec<MeshCell>,
 }
@@ -233,6 +273,52 @@ fn state_shape(
 }
 
 impl Game<'_> {
+    pub(super) fn level_projection_footprint(
+        &self,
+        level: LevelRef,
+        cells: &[[i32; 3]],
+    ) -> Result<LiveWorldFootprint, Error> {
+        let owner = self.projection_owner()?;
+        if !self.level_handle_current(level)
+            || !self.levels.runtime.owned_void(level.dimension_id(), owner)
+        {
+            return Err(Error::NotLocalWorld);
+        }
+        self.native_level_world(level).ok_or(Error::Stale)?;
+        retention::selection_footprint(level, cells)
+    }
+
+    pub(in crate::game) fn capture_projection_pose(
+        &self,
+        handle: LiveWorldRef,
+    ) -> Option<KeptProjectionPose> {
+        let table = self.live_worlds.borrow();
+        let entry = table
+            .entries
+            .get(&handle.generation())
+            .filter(|entry| entry.handle == handle)?;
+        Some(KeptProjectionPose {
+            handle,
+            sample: entry.sample,
+            accepted_tick: entry.accepted_tick,
+            tick_start: entry.tick_start,
+            carrying: entry.carrying,
+        })
+    }
+    pub(in crate::game) fn restore_projection_pose(&mut self, kept: KeptProjectionPose) {
+        if let Some(entry) = self
+            .live_worlds
+            .get_mut()
+            .entries
+            .get_mut(&kept.handle.generation())
+            .filter(|entry| entry.handle == kept.handle)
+        {
+            entry.sample = kept.sample;
+            entry.accepted_tick = kept.accepted_tick;
+            entry.tick_start = kept.tick_start;
+            entry.carrying = kept.carrying;
+        }
+    }
     /// Administrator-owned reservations; mods cannot raise the per-owner or aggregate budget.
     pub(in crate::game) fn read_live_world_quotas(
         &mut self,
@@ -261,6 +347,11 @@ impl Game<'_> {
                 16777216,
             ),
             (
+                "sunrise-live-world-owner-chunks",
+                &mut quotas.owner_chunks,
+                32768,
+            ),
+            (
                 "sunrise-live-world-total-chunks",
                 &mut quotas.total_chunks,
                 65536,
@@ -281,14 +372,25 @@ impl Game<'_> {
 
     fn projection_entry(&self, handle: LiveWorldRef) -> Result<std::cell::Ref<'_, Entry>, Error> {
         let owner = self.projection_owner()?;
-        if !self.level_handle_current(handle.level()) {
+        let entry = self.resolved_projection_entry(handle)?;
+        if entry.owner != owner {
+            return Err(Error::Stale);
+        }
+        Ok(entry)
+    }
+
+    /// Trusted engine identity lookup. The caller must already own either mod authority
+    /// or an authenticated connection and a binding resolved from this server table.
+    fn resolved_projection_entry(
+        &self,
+        handle: LiveWorldRef,
+    ) -> Result<std::cell::Ref<'_, Entry>, Error> {
+        if !self.live_world_lifecycle_current(handle.level()) {
             return Err(Error::Stale);
         }
         std::cell::Ref::filter_map(self.live_worlds.borrow(), |table| {
             table.entries.get(&handle.generation()).filter(|entry| {
-                entry.handle == handle
-                    && entry.owner == owner
-                    && self.level_handle_current(entry.destination)
+                entry.handle == handle && self.live_world_lifecycle_current(entry.destination)
             })
         })
         .map_err(|_| Error::Stale)
@@ -298,9 +400,18 @@ impl Game<'_> {
         let world = self
             .native_level_view_world(entry.handle.level())
             .ok_or(Error::Stale)?;
+        if !entry.frozen
+            && entry
+                .retained
+                .iter()
+                .any(|chunk| !world.chunks.contains_key(chunk))
+        {
+            return Err(Error::NotResident);
+        }
         if let Some(geometry) = entry.geometry.borrow().as_ref()
             && (entry.frozen
                 || (geometry.source_revision == world.revision
+                    && geometry.membership == entry.membership
                     && geometry.resources == self.standalone_geometry.generation()))
         {
             return Ok(geometry.clone());
@@ -322,6 +433,7 @@ impl Game<'_> {
         }
         let geometry = Rc::new(Geometry {
             source_revision: world.revision,
+            membership: entry.membership,
             resources: self.standalone_geometry.generation(),
             state_hash: state_hash(world, &entry.cells),
             contact: CarrierGeometry::new(u128::from(entry.collider), cells)
@@ -387,6 +499,7 @@ impl Game<'_> {
                     collision,
                     self.block_entity(handle.level(), pos),
                     world.revision,
+                    world.block_entities.content_revision(),
                 ))
             })
             .collect()
@@ -426,7 +539,16 @@ impl Game<'_> {
         handle: LiveWorldRef,
         hit: LiveWorldHit,
     ) -> Result<(), Error> {
-        let entry = self.projection_entry(handle)?;
+        self.projection_entry(handle)?;
+        self.live_world_validate_hit_resolved(handle, hit)
+    }
+
+    fn live_world_validate_hit_resolved(
+        &self,
+        handle: LiveWorldRef,
+        hit: LiveWorldHit,
+    ) -> Result<(), Error> {
+        let entry = self.resolved_projection_entry(handle)?;
         let world = self
             .native_level_world(handle.level())
             .ok_or(Error::Stale)?;
@@ -532,6 +654,8 @@ impl Game<'_> {
                     > table.quotas.owner_boxes
                 || reserved(all, |e| e.limits.boxes) + u64::from(limits.boxes)
                     > table.quotas.total_boxes
+                || reserved(own, |e| e.limits.chunks) + u64::from(limits.chunks)
+                    > table.quotas.owner_chunks
                 || reserved(all, |e| e.limits.chunks) + u64::from(limits.chunks)
                     > table.quotas.total_chunks
             {
@@ -544,6 +668,7 @@ impl Game<'_> {
         if !cells.iter().all(|&p| self.live_world_tick_ready(level, p)) {
             return Err(Error::NotResident);
         }
+        let retained = retention::checked_retention(&cells, limits)?;
         let generation = self.live_worlds.borrow().next + 1;
         let handle = LiveWorldRef::new(level, generation);
         let entry = Entry {
@@ -552,6 +677,7 @@ impl Game<'_> {
             destination,
             cells,
             membership: 0,
+            retained,
             stream_areas,
             limits,
             sample: LiveWorldSample::new(pose, pose, 0),
@@ -587,6 +713,8 @@ impl Game<'_> {
         let mut table = self.live_worlds.borrow_mut();
         table.next = generation;
         table.entries.insert(generation, entry);
+        drop(table);
+        self.refresh_live_world_retention(level);
         Ok(handle)
     }
 
@@ -712,6 +840,7 @@ impl Game<'_> {
                 entry.sample.revision.checked_add(1).ok_or(Error::Budget)?,
             )
         };
+        self.journal_projection_pose(handle);
         let mut table = self.live_worlds.borrow_mut();
         let sequence = table.sequence;
         let entry = table
@@ -907,6 +1036,10 @@ impl Game<'_> {
 
     pub(super) fn live_world_retire(&mut self, handle: LiveWorldRef) -> Result<(), Error> {
         self.projection_entry(handle)?;
+        if !self.projection_action_transaction_allowed(handle.level()) {
+            return Err(Error::Busy);
+        }
+        self.close_projection_menus(handle)?;
         let path = self.projection_metadata_path(handle.level())?;
         if path.exists() {
             sunrise_server_files::durable::remove(&path).map_err(|_| Error::Storage)?;
@@ -915,6 +1048,7 @@ impl Game<'_> {
             .borrow_mut()
             .entries
             .remove(&handle.generation());
+        self.refresh_live_world_retention(handle.level());
         Ok(())
     }
 
@@ -1074,18 +1208,24 @@ impl Game<'_> {
                     && self.level_handle_current(entry.destination)
             })
             .filter_map(|entry| {
-                self.projection_geometry(entry).ok().map(|geometry| Placed {
-                    id: entry.collider,
-                    collider: OrientedCollider::new(
-                        frame(if entry.carrying {
-                            entry.sample.current
-                        } else {
-                            entry.tick_start
-                        }),
-                        geometry.boxes.clone(),
-                    ),
-                    exempt: Vec::new(),
-                })
+                // A temporarily unavailable source freezes the last coherent derived collider.
+                // It never becomes observed empty terrain. New publications still require a
+                // fresh successful query; explicit empty/closed bindings are retired separately.
+                self.projection_geometry(entry)
+                    .or_else(|error| entry.geometry.borrow().clone().ok_or(error))
+                    .ok()
+                    .map(|geometry| Placed {
+                        id: entry.collider,
+                        collider: OrientedCollider::new(
+                            frame(if entry.carrying {
+                                entry.sample.current
+                            } else {
+                                entry.tick_start
+                            }),
+                            geometry.boxes.clone(),
+                        ),
+                        exempt: Vec::new(),
+                    })
             })
             .collect();
         if projected.is_empty() {
@@ -1107,7 +1247,13 @@ impl Game<'_> {
         let resources = self.standalone_geometry.generation();
         if let Some(mesh) = entry.mesh.borrow().as_ref()
             && (entry.frozen
-                || (mesh.source_revision == world.revision && mesh.resources == resources))
+                || entry
+                    .retained
+                    .iter()
+                    .any(|chunk| !world.chunks.contains_key(chunk))
+                || (mesh.source_revision == world.revision
+                    && mesh.membership == entry.membership
+                    && mesh.resources == resources))
         {
             return mesh.clone();
         }
@@ -1145,6 +1291,7 @@ impl Game<'_> {
             .collect();
         let mesh = Rc::new(Mesh {
             source_revision: world.revision,
+            membership: entry.membership,
             resources,
             cells,
         });

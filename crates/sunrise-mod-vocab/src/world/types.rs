@@ -312,6 +312,28 @@ impl LiveWorldRef {
     }
 }
 
+/// Conservative current read epochs of an actual open server level, independent of a projection.
+/// These are optimistic read witnesses, not save or transaction completion receipts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct LevelRevisions {
+    /// Changes to the actual World's block states.
+    pub block_revision: u64,
+    /// Changes to actual block-entity contents and their attachment storage.
+    /// This does not replace the separate opaque level-attachment readset.
+    pub content_revision: u64,
+}
+impl LevelRevisions {
+    /// Engine constructor over the actual existing World counters.
+    #[doc(hidden)]
+    pub fn new(block_revision: u64, content_revision: u64) -> Self {
+        Self {
+            block_revision,
+            content_revision,
+        }
+    }
+}
+
 /// A level of the open world, by its dimension (`minecraft:the_nether`).
 /// `Host::level` makes one, and `entity.level(host)` gives an entity's.
 #[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]

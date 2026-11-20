@@ -61,6 +61,8 @@ pub trait Rules {
 
 /// An open block container.
 pub struct Menu {
+    /// Actual World owning this menu's Slots; independent of the physical player's dimension.
+    pub source_dimension: String,
     pub window: i32,
     /// The `minecraft:menu` registry id.
     pub kind: i32,
@@ -133,24 +135,33 @@ impl Menu {
     /// menus whose type no part answers are not asked, nor is one whose block
     /// entities are gone: it closes.
     pub fn still_valid(&self, context: &LoopContext, world: &World, guest: &Guest) -> bool {
+        self.still_valid_with_eye(context, world, guest, guest.eye())
+    }
+    pub fn still_valid_with_eye(
+        &self,
+        context: &LoopContext,
+        world: &World,
+        guest: &Guest,
+        eye: [f64; 3],
+    ) -> bool {
         let block = match self.slots {
             Slots::Block(k) | Slots::Double(k, _) => Some(k),
             Slots::Ender => self.pos,
             Slots::Native => None,
         };
         let Some(k) = block.filter(|k| self.asks_still_valid && k.1 != VEHICLE_KEY_Y) else {
-            return self.slots.still_valid(world, guest, self.pos);
+            return self.slots.still_valid_with_eye(world, guest, self.pos, eye);
         };
         if !self.slots.valid(world) {
             return false;
         }
-        let mut valid = self.slots.in_reach(guest, self.pos);
+        let mut valid = self.slots.in_reach_with_eye(guest, self.pos, eye);
         native_menu_still_valid(
             context,
             guest.uuid,
             &self.registry_id,
             [k.0, k.1, k.2],
-            guest.eye(),
+            eye,
             &mut valid,
         );
         valid
@@ -330,11 +341,20 @@ impl Slots {
     /// and the guest is within reach of each (`stillValidBlockEntity`). The
     /// ender chest's block is `at` (`PlayerEnderChestContainer.activeChest`).
     pub fn still_valid(self, world: &World, guest: &Guest, at: Option<(i32, i32, i32)>) -> bool {
-        self.valid(world) && self.in_reach(guest, at)
+        self.still_valid_with_eye(world, guest, at, guest.eye())
+    }
+    pub fn still_valid_with_eye(
+        self,
+        world: &World,
+        guest: &Guest,
+        at: Option<(i32, i32, i32)>,
+        eye: [f64; 3],
+    ) -> bool {
+        self.valid(world) && self.in_reach_with_eye(guest, at, eye)
     }
     /// The reach half of `still_valid`: the guest is within its block
     /// interaction range plus 4 of each block behind the slots.
-    fn in_reach(self, guest: &Guest, at: Option<(i32, i32, i32)>) -> bool {
+    fn in_reach_with_eye(self, guest: &Guest, at: Option<(i32, i32, i32)>, eye: [f64; 3]) -> bool {
         let blocks = match self {
             Slots::Ender => at.into_iter().collect(),
             Slots::Native => Vec::new(),
@@ -342,9 +362,14 @@ impl Slots {
         };
         // A vehicle's container is kept under a key, not a block: the game
         // checks its reach to the vehicle (`isChestVehicleStillValid`).
-        blocks
-            .iter()
-            .all(|k| k.1 == VEHICLE_KEY_Y || guest.within_block_range([k.0, k.1, k.2], 4.0))
+        blocks.iter().all(|k| {
+            k.1 == VEHICLE_KEY_Y
+                || super::guest::within_block_range(
+                    eye,
+                    if guest.creative() { 9.0 } else { 8.5 },
+                    [k.0, k.1, k.2],
+                )
+        })
     }
     /// Container slot `n`.
     pub fn get(self, world: &World, guest: &Guest, mut n: usize) -> Option<ItemStack> {
@@ -2058,6 +2083,7 @@ pub(crate) mod tests {
         let mut g = guest();
         let slots = Slots::Block(k);
         g.menu = Some(Menu {
+            source_dimension: "minecraft:overworld".into(),
             window: 1,
             kind: 0,
             pos: Some(k),
@@ -2181,6 +2207,7 @@ pub(crate) mod tests {
         let mut g = guest();
         let slots = Slots::Block(k);
         g.menu = Some(Menu {
+            source_dimension: "minecraft:overworld".into(),
             window: 1,
             kind: 0,
             registry_id: "test:station".into(),
@@ -3341,6 +3368,7 @@ pub(crate) mod tests {
             OnlyWhenEmptyAdmitAllRules(OnlyWhenEmptyRules(Items::for_tests(Default::default())));
         let mut g = guest();
         g.menu = Some(Menu {
+            source_dimension: "minecraft:overworld".into(),
             window: 1,
             kind: 0,
             pos: Some((0, 0, 0)),

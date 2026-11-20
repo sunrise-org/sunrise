@@ -411,6 +411,7 @@ struct GameLevel<'w> {
     /// The world's enabled feature flags as this side knows them (`LevelReader.enabledFeatures`).
     enabled_features: &'w std::sync::Arc<[String]>,
     player_box: Option<([f64; 3], [f64; 3])>,
+    projection_building: Option<std::rc::Rc<native_live_worlds::obstruction::Building>>,
     /// The LAN guests in this level who trigger blocks (not spectators).
     guest_boxes: Vec<([f64; 3], [f64; 3])>,
     /// Other players that block placement during a guest turn, including live
@@ -576,6 +577,10 @@ impl GameLevel<'_> {
     /// spectators, the minecarts and the `Blockers` (a removed mob or a marker
     /// armor stand, whose box is empty, doesn't).
     fn building_blocker_boxes(&self) -> Vec<Aabb> {
+        self.building_blocker_boxes_limited(usize::MAX)
+            .expect("unbounded ordinary blocker collection")
+    }
+    fn building_blocker_boxes_limited(&self, limit: usize) -> Option<Vec<Aabb>> {
         let boxed = |(lo, hi): &([f64; 3], [f64; 3])| {
             Aabb::new(
                 Vec3::new(lo[0], lo[1], lo[2]),
@@ -583,7 +588,8 @@ impl GameLevel<'_> {
             )
         };
         let b = self.entities();
-        self.player_box
+        let blockers = self
+            .player_box
             .iter()
             .chain(
                 self.building_player_boxes
@@ -606,8 +612,15 @@ impl GameLevel<'_> {
                 b.falling
                     .iter()
                     .map(|f| sunrise_client::falling_block::bounds(f.position)),
-            )
-            .collect()
+            );
+        let mut boxes = Vec::new();
+        for bounds in blockers {
+            if boxes.len() == limit {
+                return None;
+            }
+            boxes.push(bounds);
+        }
+        Some(boxes)
     }
 }
 /// A landing's block game event, emitted after its world write is applied.
@@ -2443,7 +2456,9 @@ impl Game<'_> {
         )
     }
     fn eye_position(&self) -> Option<[f64; 3]> {
-        if let Some(eye) = self.live_world_action_eye() { return Some(eye); }
+        if let Some(eye) = self.live_world_action_eye() {
+            return Some(eye);
+        }
         let p = self.player.as_ref()?;
         Some([
             p.position.x,
@@ -2969,6 +2984,7 @@ impl Game<'_> {
         placement_preview: bool,
         f: impl FnOnce(&Behaviours, &mut GameLevel<'_>, &mut Ticks) -> R,
     ) -> R {
+        let projection_building = self.projection_building_context();
         let darken = self.sky_darken();
         let (rain, thunder) = self.weather_levels(1.0);
         let (
@@ -2988,31 +3004,39 @@ impl Game<'_> {
         } else {
             // Spectators ignore block triggers (Entity.isIgnoringBlockTriggers).
             let spectator = self.spectator();
-            let player_box = self.player.as_ref().filter(|_| !spectator).map(|p| {
-                let w = f64::from(p.dimensions.width) / 2.0;
-                (
-                    [p.position.x - w, p.position.y, p.position.z - w],
-                    [
-                        p.position.x + w,
-                        p.position.y + f64::from(p.dimensions.height),
-                        p.position.z + w,
-                    ],
-                )
-            });
-            let player_collision = self.player.as_ref().filter(|_| !spectator).map(|p| {
-                let main_hand = self.inventory.get(self.selected).and_then(Option::as_ref);
-                PlayerCollision {
-                    y: p.position.y,
-                    descending: p.velocity.y < 0.0,
-                    fall_distance: p.fall_distance,
-                    main_hand_item: main_hand.map_or_else(
-                        || Arc::from("minecraft:air"),
-                        |stack| Arc::clone(&stack.item),
-                    ),
-                    main_hand_count: main_hand.map_or(0, |stack| stack.count as i32),
-                    leather_boots: worn_boots::leather_boots(&self.armor),
-                }
-            });
+            let player_box = self
+                .player
+                .as_ref()
+                .filter(|_| !spectator && projection_building.is_none())
+                .map(|p| {
+                    let w = f64::from(p.dimensions.width) / 2.0;
+                    (
+                        [p.position.x - w, p.position.y, p.position.z - w],
+                        [
+                            p.position.x + w,
+                            p.position.y + f64::from(p.dimensions.height),
+                            p.position.z + w,
+                        ],
+                    )
+                });
+            let player_collision = self
+                .player
+                .as_ref()
+                .filter(|_| !spectator && projection_building.is_none())
+                .map(|p| {
+                    let main_hand = self.inventory.get(self.selected).and_then(Option::as_ref);
+                    PlayerCollision {
+                        y: p.position.y,
+                        descending: p.velocity.y < 0.0,
+                        fall_distance: p.fall_distance,
+                        main_hand_item: main_hand.map_or_else(
+                            || Arc::from("minecraft:air"),
+                            |stack| Arc::clone(&stack.item),
+                        ),
+                        main_hand_count: main_hand.map_or(0, |stack| stack.count as i32),
+                        leather_boots: worn_boots::leather_boots(&self.armor),
+                    }
+                });
             let cart_boxes = self
                 .carts
                 .iter()
@@ -3078,12 +3102,18 @@ impl Game<'_> {
                 self.lan
                     .iter()
                     .flat_map(|h| {
-                        h.hub
-                            .guests
-                            .simulation_iter()
-                            .filter(|g| h.hub.here(g) && !g.spectator())
+                        h.hub.guests.simulation_iter().filter(|g| {
+                            g.placed
+                                && !g.spectator()
+                                && (h.hub.here(g) || self.projection_menu_bound(g.conn))
+                        })
                     })
-                    .filter_map(|g| g.menu.as_ref().and_then(|m| m.pos)),
+                    .filter_map(|g| {
+                        g.menu
+                            .as_ref()
+                            .filter(|menu| menu.source_dimension == self.dim.id())
+                            .and_then(|m| m.pos)
+                    }),
             ) {
                 open_containers.push(key);
                 if let Some(other) = self.chest_other_half(key) {
@@ -3159,6 +3189,7 @@ impl Game<'_> {
                 .as_ref()
                 .map_or(&self.level.enabled_features, |remote| &remote.features),
             player_box,
+            projection_building,
             guest_boxes,
             building_player_boxes,
             player_collision,
@@ -8463,7 +8494,7 @@ impl Game<'_> {
         // screen does not hide it: vanilla checks the HUD and the game mode, not the screen.
         let adventure = self.mode == sunrise_client::command::args::GameMode::Adventure;
         let can_build = self.may_build() || adventure;
-        let outline = if block_outline_drawn(
+        let mut outline = if block_outline_drawn(
             self.ui.hide_gui,
             self.entity_targeted(),
             can_build,
@@ -8499,6 +8530,15 @@ impl Game<'_> {
         } else {
             Vec::new()
         };
+        if block_outline_drawn(
+            self.ui.hide_gui,
+            self.entity_targeted(),
+            self.may_build(),
+            self.shows_panorama(),
+        ) && self.projection_pick().is_some()
+        {
+            outline = self.projection_pick_outline(alpha);
+        }
         pr.lap("pr_outline");
         let title = self.shows_panorama();
         let (yaw, pitch) = if title {

@@ -259,6 +259,22 @@ impl Game<'_> {
             }
             return MenuOpen::Stale;
         }
+        let projected = match self.prepare_projection_menu(conn, menu, slots, pos) {
+            Ok(projected) => projected,
+            Err(_) => return MenuOpen::Stale,
+        };
+        // Callbacks may have changed real source slots: read them immediately before publication.
+        let items = if projected.is_some() {
+            let Some(guest) = self.lan.as_ref().and_then(|host| host.hub.guest(conn)) else {
+                return MenuOpen::Stale;
+            };
+            let Some(items) = slots.read(&self.world, guest) else {
+                return MenuOpen::Stale;
+            };
+            items
+        } else {
+            items
+        };
         let Some(host) = self.lan.as_mut() else {
             return MenuOpen::Refused;
         };
@@ -273,6 +289,7 @@ impl Game<'_> {
         if counts_openers && !spectator && self.container_openers_changed(pos, true) {
             self.container_edge_sound(pos, true);
         }
+        self.install_projection_menu(conn, projected);
         self.player_menu_opening(conn);
         MenuOpen::Opened
     }
@@ -426,6 +443,14 @@ impl Game<'_> {
     }
 
     pub(super) fn guest_remove_menus(&mut self, conn: u32, removal: MenuRemoval) {
+        if self.projection_menu_bound(conn) && !self.projection_menu_in_scope(conn) {
+            let result =
+                self.with_projection_menu(conn, |game| game.guest_remove_menus(conn, removal));
+            if let Err(error) = result {
+                log::warn!("projected menu cleanup refused: {error:?}");
+            }
+            return;
+        }
         let Some(host) = self.lan.as_ref() else {
             return;
         };
@@ -462,6 +487,7 @@ impl Game<'_> {
         }
         // `PlayerContainerEvent.Close`, after the menu's `removed`.
         self.player_menu_closing(conn);
+        self.forget_projection_menu(conn);
     }
 
     /// `ContainerEntity`'s `Container.stopOpen` when a vehicle menu closes
@@ -536,6 +562,9 @@ impl Game<'_> {
     /// `stillValid` of the guest's open container: its blocks are still there
     /// and in reach, or its vehicle exists and is in reach. True with none open.
     pub(super) fn container_menu_valid(&self, g: &sunrise_client::lan::guest::Guest) -> bool {
+        if let Some(valid) = self.projection_menu_valid(g) {
+            return valid;
+        }
         let Some(host) = self.lan.as_ref() else {
             return true;
         };
@@ -552,7 +581,7 @@ impl Game<'_> {
     /// `AbstractContainerMenu.stillValid` of whatever menu the guest has open
     /// (a container or vehicle, a trade, the crafting table, a station, a
     /// lectern, a mount's inventory). True when none is open.
-    pub(super) fn guest_menu_still_valid(&self, conn: u32) -> bool {
+    pub(in crate::game) fn guest_menu_still_valid(&self, conn: u32) -> bool {
         let Some(host) = self.lan.as_ref() else {
             return true;
         };

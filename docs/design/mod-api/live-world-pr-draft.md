@@ -5,6 +5,12 @@ an owner-authorized eventual submission.
 
 Refs #1022
 
+AI-authored local experiment. Human DCO eligibility, human review, maintainers' claim/spec
+approval and upstream submission readiness remain pending. A local Git sign-off is not
+maintainer approval or proof of any of those decisions. The development base remains the
+recorded `d4be683`; no latest-main compatibility is asserted. Related SDK-tool experiments
+are a separate extraction/reconciliation concern, not part of this feature PR scope.
+
 - [x] feature
 - [ ] parity
 - [ ] breaking
@@ -31,13 +37,25 @@ callback inventory rollback, other-owner occlusion and ordinary break membership
 Earlier failed attempts and their causes remain recorded in the provenance log.
 The protocol codec's bounded synthetic-input test is a separate gate.
 
-This dependent slice includes negotiated client metadata over actual viewed worlds
-and the generated explicit owner action methods. It does not yet establish
-continuing vanilla container menus or ordinary client mining/use input. Full
-process restart, window rendering, native/wasm independent fixture loading,
-ordinary-save journal and prepared cross-owner transfer/return remain required.
+This dependent slice includes negotiated client metadata over actual viewed worlds,
+ordinary client main-hand targeting, authenticated guest block-item placement and continuing
+stock chest/furnace menus. Actual Game regressions exercise stale tokens, source-frame
+menu slots/progress/openers, physical translated/rotated blockers, callback inventory and
+selection changes, lifecycle cleanup, ordinary scheduler activation and an outer-transaction
+use refusal before screen/cursor effects. The client Game accepts the advertised viewed-level
+slots and refuses one beyond the cap; the real hub separately preserves an older client's cap.
+Targeted level attachment/pose rollback and real unbound-level read revisions are tested.
+Exact source/binary/command bindings and earlier failures live in the local evidence bundle;
+these results do not establish a genuine graphical window or a completed issue milestone.
 
-Tried in game: pending actual local runtime evidence.
+Progressive survival mining, automatic off-hand fallthrough and specialized recipe/button
+packets refuse. Full process restart, window rendering, native/wasm independent fixture loading,
+ordinary-save journal, atomic binding metadata and prepared cross-owner transfer/return remain
+required. The current projection checkpoint is not an atomic cross-owner/autosave journal.
+The proposed external-resolved publication mode is not part of this compiled checkpoint.
+
+Tried in game: resource-backed Game/runtime and client-routing fixtures passed; actual
+mouse/window and normally packaged independent native/wasm fixture evidence remains pending.
 
 Performance: no projection means an empty-table branch. Stable local collision
 geometry and prepared model faces are cached on source block/resource revisions;

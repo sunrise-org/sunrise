@@ -547,6 +547,18 @@ impl Levels {
             .map(|(_, level)| &mut level.streaming)
     }
 
+    /// Borrow a parked level's own block-ticket/pending-entity decision without switching it in.
+    pub(super) fn parked_block_ticking_at(&self, dimension: &str, pos: [i32; 3]) -> Option<bool> {
+        let parked = self.parked_of(dimension)?;
+        Some(
+            !parked
+                .world
+                .entities_pending
+                .contains(&(pos[0] >> 4, pos[2] >> 4))
+                && parked.tickets.levels().block_ticking_at(pos[0], pos[2]),
+        )
+    }
+
     /// `ServerLevel.setChunkForced`: force a column in an already open level without changing the acting
     /// player's level; the same queue and load barrier serve the active level.
     pub(super) fn force_parked_chunk(
@@ -969,22 +981,8 @@ impl Game<'_> {
         level: mod_api::LevelRef,
         pos: [i32; 3],
     ) -> bool {
-        if !self.level_handle_current(level) {
-            return false;
-        }
-        if level.dimension() == self.dim.key() {
-            return self.world.is_loaded_at(pos[0], pos[1], pos[2])
-                && self.block_ticking_at(pos[0], pos[2]);
-        }
-        let Some(parked) = self.levels.parked.get(&Dim::from_id(level.dimension_id())) else {
-            return false;
-        };
-        parked.world.is_loaded_at(pos[0], pos[1], pos[2])
-            && !parked
-                .world
-                .entities_pending
-                .contains(&(pos[0] >> 4, pos[2] >> 4))
-            && parked.tickets.levels().block_ticking_at(pos[0], pos[2])
+        self.level_should_tick_blocks_at(level, pos)
+            .unwrap_or(false)
     }
 
     /// Put `target`'s level in place, opening it first if it is not loaded.
@@ -1589,6 +1587,10 @@ impl Game<'_> {
     pub(super) fn close_parked_level(&mut self, dim: Dim) -> Result<()> {
         let back = self.dim;
         self.enter_level(dim)?;
+        if let Err(error) = self.close_projection_menus_for_level(dim) {
+            self.enter_level(back)?;
+            return Err(format!("live-world menu close refused: {error:?}").into());
+        }
         // Vanilla saves the level's chunks before their unload hooks.
         self.native_chunks_loaded();
         if let Err(why) = self.save_level(true) {
@@ -1639,6 +1641,7 @@ impl Game<'_> {
     /// The mods hear `dim`'s level close (`LevelEvent.Unload`), once for
     /// each open they heard.
     fn native_level_closed(&mut self, dim: Dim) {
+        self.live_world_level_closed(dim);
         self.remove_level_fake_players(dim.id());
         if let Some(i) = self.levels.heard_open.iter().position(|d| *d == dim) {
             self.levels.heard_open.remove(i);

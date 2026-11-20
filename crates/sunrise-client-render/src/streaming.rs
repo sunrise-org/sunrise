@@ -617,6 +617,8 @@ pub struct Streaming {
     pub forced: HashSet<(i32, i32)>,
     /// The `/forceload`ed chunks, the ones saved in `chunk_tickets.dat`.
     commanded: HashSet<(i32, i32)>,
+    /// Ephemeral engine-owned retention. It is never part of saved `/forceload` or mod tickets.
+    runtime_forced: HashSet<(i32, i32)>,
     mod_tickets: ModTickets,
     /// No work is scheduled while paused (title screen).
     pub paused: bool,
@@ -1232,6 +1234,7 @@ impl Streaming {
             radius: 8,
             forced: HashSet::new(),
             commanded: HashSet::new(),
+            runtime_forced: HashSet::new(),
             mod_tickets: ModTickets::default(),
             paused: false,
             upload_backlog: 0,
@@ -2753,7 +2756,11 @@ impl Streaming {
         self.mod_tickets = ModTickets::from_saved(tickets);
         self.commanded = commanded;
         self.forced.clear();
-        let held: Vec<_> = self.commanded.iter().copied().collect();
+        let held: Vec<_> = self
+            .commanded
+            .union(&self.runtime_forced)
+            .copied()
+            .collect();
         for chunk in held {
             self.settle(chunk);
         }
@@ -2767,6 +2774,25 @@ impl Streaming {
     /// The `/forceload`ed chunks.
     pub fn commanded(&self) -> &HashSet<(i32, i32)> {
         &self.commanded
+    }
+    /// Replace bounded runtime retention, leaving ordinary persistent ticket owners intact.
+    /// Admission belongs to the engine service before this call; this only uses the existing
+    /// forced-column streaming and ticking machinery and does not synchronously load chunks.
+    pub fn set_runtime_forced(&mut self, chunks: HashSet<(i32, i32)>) {
+        if chunks == self.runtime_forced {
+            return;
+        }
+        let changed: Vec<_> = self
+            .runtime_forced
+            .symmetric_difference(&chunks)
+            .copied()
+            .collect();
+        self.runtime_forced = chunks;
+        for chunk in changed {
+            if self.settle(chunk) {
+                self.rank_forced(chunk.0, chunk.1, chunk.0, chunk.1);
+            }
+        }
     }
     /// The chunk tickets of mods.
     pub fn mod_tickets(&self) -> &ModTickets {
@@ -2790,7 +2816,10 @@ impl Streaming {
     /// Bring `forced` in line with who holds `chunk`: true when it just
     /// became forced. The one writer of `forced`.
     fn settle(&mut self, chunk: (i32, i32)) -> bool {
-        if self.commanded.contains(&chunk) || self.mod_tickets.holds(chunk) {
+        if self.commanded.contains(&chunk)
+            || self.runtime_forced.contains(&chunk)
+            || self.mod_tickets.holds(chunk)
+        {
             self.forced.insert(chunk)
         } else {
             self.forced.remove(&chunk);
@@ -2961,7 +2990,8 @@ impl ViewArrival {
 /// out, features (34) at three, terrain (35) at four.
 const FORCED_FULL_RING: i32 = 2;
 const FORCED_FEATURES_RING: i32 = 3;
-const FORCED_TERRAIN_RING: i32 = 4;
+/// The terrain generation ring around a forced column, also charged by runtime retention admission.
+pub const FORCED_TERRAIN_RING: i32 = 4;
 /// The areas kept loaded: circles around the player and `extra`, and forced chunks.
 struct Ranges<'a> {
     center: (i32, i32),
