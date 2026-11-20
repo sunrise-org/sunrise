@@ -110,6 +110,15 @@ impl Game<'_> {
         if self.with_hand(hand, |g| g.use_finds_no_target(&held)) {
             return false;
         }
+        // EnderEyeItem.use PASSes while the player looks at an end portal frame (its
+        // getPlayerPOVHitResult, no fluids): nothing starts, and the other hand gets its turn.
+        if &*held.item == "minecraft:ender_eye"
+            && self
+                .item_pick()
+                .is_some_and(|hit| &*self.block_name(hit.pos) == "minecraft:end_portal_frame")
+        {
+            return false;
+        }
         // It runs the use here too: ItemStack.use starts the `use_cooldown`
         // of an item with no use time, and the server's
         // ClientboundCooldownPacket confirms it; one held in use starts it at

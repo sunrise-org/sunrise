@@ -273,6 +273,9 @@ pub struct ItemInfo {
     /// `equippable.damage_on_hurt`: the item wears when its wearer is hurt
     /// (false for the elytra).
     pub equip_damage_on_hurt: bool,
+    /// `equippable.equip_on_interact`: a player's click puts it on a mob that can wear it
+    /// (`ItemStack.interactLivingEntity`, `Equippable.equipOnTarget`).
+    pub equip_on_interact: bool,
     /// `equippable.allowed_entities` resolved to entity type ids; None allows all.
     pub equip_allowed: Option<HashSet<String>>,
     pub equip_sound: Option<String>,
@@ -1211,6 +1214,9 @@ impl Items {
                     equip_damage_on_hurt: c["minecraft:equippable"]["damage_on_hurt"]
                         .as_bool()
                         .unwrap_or(true),
+                    equip_on_interact: c["minecraft:equippable"]["equip_on_interact"]
+                        .as_bool()
+                        .unwrap_or(false),
                     equip_allowed: match &c["minecraft:equippable"]["allowed_entities"] {
                         Value::String(spec) => Some(entity_spec(&entity_tags, spec)),
                         Value::Array(list) => Some(

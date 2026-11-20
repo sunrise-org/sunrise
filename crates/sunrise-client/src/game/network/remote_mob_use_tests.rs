@@ -21,12 +21,12 @@ fn remote_mob_takes_only_adult_piglin_currency_with_free_offhand() {
                 .set_slot_stack(sunrise_items::equipment::OFFHAND, None);
             g.mobs[0].extra.age = 0;
             g.inventory[g.selected] = Some(ItemStack::new("minecraft:gold_ingot", 1));
-            assert!(g.remote_mob_takes(0, Hand::Main));
+            assert!(g.remote_mob_takes(0, Hand::Main).is_some());
             g.mobs[0].extra.age = -24000;
-            assert!(!g.remote_mob_takes(0, Hand::Main));
+            assert!(g.remote_mob_takes(0, Hand::Main).is_none());
             g.mobs[0].extra.age = 0;
             g.inventory[g.selected] = Some(ItemStack::new("minecraft:golden_apple", 1));
-            assert!(!g.remote_mob_takes(0, Hand::Main));
+            assert!(g.remote_mob_takes(0, Hand::Main).is_none());
             g.use_item().unwrap();
             assert!(g.using.is_some());
             g.inventory[g.selected] = Some(ItemStack::new("minecraft:gold_ingot", 1));
@@ -34,7 +34,7 @@ fn remote_mob_takes_only_adult_piglin_currency_with_free_offhand() {
                 sunrise_items::equipment::OFFHAND,
                 Some(ItemStack::new("minecraft:gold_ingot", 1)),
             );
-            assert!(!g.remote_mob_takes(0, Hand::Main));
+            assert!(g.remote_mob_takes(0, Hand::Main).is_none());
         })
     });
 }

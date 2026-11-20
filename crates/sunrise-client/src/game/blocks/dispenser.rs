@@ -225,7 +225,7 @@ pub(super) fn mob_slot_item(m: &Mob, slot: Slot) -> Option<Arc<str>> {
     }
 }
 /// `LivingEntity.canUseSlot` and its overrides.
-fn mob_can_use_slot(m: &Mob, slot: Slot) -> bool {
+pub(super) fn mob_can_use_slot(m: &Mob, slot: Slot) -> bool {
     let s = m.species();
     let grown = m.alive() && !m.is_baby();
     match s {

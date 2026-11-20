@@ -253,6 +253,60 @@ pub fn equippable(stack: &ItemStack, items: &crate::items::Items) -> Option<Equi
     out
 }
 
+/// `stack.get(DataComponents.EQUIPPABLE)` with what a player's click reads of it: the item's own
+/// or the saved component's (`mobs::equip::equippable`), then the server's patch, which may
+/// remove or replace it. `builtin` names a patched component's entity types.
+pub fn patched_equippable<'a>(
+    stack: &'a ItemStack,
+    items: &'a crate::items::Items,
+    builtin: &Builtin,
+) -> Option<crate::mobs::equip::Equippable<'a>> {
+    let out = crate::mobs::equip::equippable(items, stack);
+    let Some((added, removed)) = stack
+        .data()
+        .and_then(|data| data.wire.patch())
+        .and_then(|p| sunrise_protocol::item::WirePatch::decode(p).ok())
+    else {
+        return out;
+    };
+    for (kind, c) in &added {
+        if let (component::EQUIPPABLE, Component::Raw(bytes)) = (*kind, c) {
+            return decode_click_equippable(bytes, builtin);
+        }
+    }
+    if removed.contains(&component::EQUIPPABLE) {
+        return None;
+    }
+    out
+}
+
+/// `Equippable.STREAM_CODEC` up to `equipOnInteract`: the slot, the equip sound, the asset id,
+/// the camera overlay, the allowed entities (`HolderSet` as its codec saves it), then the
+/// dispensable, swappable, damage-on-hurt and equip-on-interact flags.
+fn decode_click_equippable(
+    bytes: &[u8],
+    builtin: &Builtin,
+) -> Option<crate::mobs::equip::Equippable<'static>> {
+    let mut r = Reader::new(bytes);
+    let slot = equipment_slot_name(r.varint().ok()?)?;
+    sound_tag(&mut r, builtin)?;
+    for _ in 0..2 {
+        if r.bool().ok()? {
+            r.string(32767).ok()?;
+        }
+    }
+    let allowed = if r.bool().ok()? {
+        Some(holder_set_tag(&mut r, "minecraft:entity_type", builtin)?)
+    } else {
+        None
+    };
+    for _ in 0..3 {
+        r.bool().ok()?;
+    }
+    let equip_on_interact = r.bool().ok()?;
+    crate::mobs::equip::Equippable::patched(slot, equip_on_interact, allowed)
+}
+
 /// `Equippable.equipSound` from the stack's component, else the item's.
 /// A present component without the field is the generic armour sound (None),
 /// not the prototype's.

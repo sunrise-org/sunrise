@@ -53,6 +53,9 @@ impl Slot {
 pub struct Equippable<'a> {
     /// `Equippable.slot`, an `EquipmentSlot` name (`head`, `mainhand`, `body`, `saddle`, ...).
     pub slot: &'static str,
+    /// `Equippable.equipOnInteract`: a player's click puts it on a mob that can wear it
+    /// (`ItemStack.interactLivingEntity`).
+    pub equip_on_interact: bool,
     allowed: Allowed<'a>,
 }
 
@@ -64,18 +67,41 @@ enum Allowed<'a> {
     Ids(&'a HashSet<String>),
     /// A stack's own `HolderSet<EntityType>`: one id, a `#tag`, or a list of ids.
     Holders(&'a Tag),
+    /// The same, decoded from a server's component patch (`crate::item_sync::patched_equippable`).
+    Patched(Tag),
 }
 
 impl Equippable<'_> {
+    /// A component a server's patch gives the stack: `slot` one of the `EquipmentSlot` names,
+    /// `allowed` its `HolderSet` in the saved form (None: every entity type).
+    pub fn patched(
+        slot: &str,
+        equip_on_interact: bool,
+        allowed: Option<Tag>,
+    ) -> Option<Equippable<'static>> {
+        Some(Equippable {
+            slot: SLOT_NAMES.into_iter().find(|name| *name == slot)?,
+            equip_on_interact,
+            allowed: allowed.map_or(Allowed::Any, Allowed::Patched),
+        })
+    }
     /// `Equippable.canBeEquippedBy`: whether the entity type `entity` may wear it, with `tags` the
     /// entity type tags a stack's `#tag` names.
     pub fn allows(&self, entity: &str, tags: &HashMap<String, HashSet<String>>) -> bool {
         match self.allowed {
             Allowed::Any => true,
             Allowed::Ids(ids) => ids.contains(entity),
-            Allowed::Holders(Tag::List(list)) => list.iter().any(|h| holds(h, entity, tags)),
-            Allowed::Holders(one) => holds(one, entity, tags),
+            Allowed::Holders(set) => holder_set_holds(set, entity, tags),
+            Allowed::Patched(ref set) => holder_set_holds(set, entity, tags),
         }
+    }
+}
+
+/// Whether a `HolderSet`'s saved form (one entry or a list of them) holds `entity`.
+fn holder_set_holds(set: &Tag, entity: &str, tags: &HashMap<String, HashSet<String>>) -> bool {
+    match set {
+        Tag::List(list) => list.iter().any(|h| holds(h, entity, tags)),
+        one => holds(one, entity, tags),
     }
 }
 
@@ -102,6 +128,10 @@ pub fn equippable<'a>(
             slot: SLOT_NAMES
                 .into_iter()
                 .find(|name| slot.0.iter().copied().eq(name.encode_utf16()))?,
+            equip_on_interact: sunrise_world::datafix::dynamic::as_bool(
+                tag.get("equip_on_interact"),
+                false,
+            ),
             allowed: tag
                 .get("allowed_entities")
                 .map_or(Allowed::Any, Allowed::Holders),
@@ -111,6 +141,7 @@ pub fn equippable<'a>(
     let slot = info.equip_slot.as_deref()?;
     Some(Equippable {
         slot: SLOT_NAMES.into_iter().find(|name| *name == slot)?,
+        equip_on_interact: info.equip_on_interact,
         allowed: info
             .equip_allowed
             .as_ref()

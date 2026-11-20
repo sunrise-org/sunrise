@@ -8573,6 +8573,22 @@ impl Game<'_> {
             _ => None,
         }
     }
+    /// `EnderEyeItem.useOn`'s test: an end portal frame without an eye.
+    pub(super) fn frame_takes_eye(&self, pos: [i32; 3]) -> bool {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        self.pack.assets.registry.state(state).is_some_and(|block| {
+            &*block.name == "minecraft:end_portal_frame"
+                && block.properties.get("eye").map(String::as_str) == Some("false")
+        })
+    }
+    /// `MinecartItem.useOn`'s test: a block in `#minecraft:rails`.
+    pub(super) fn block_is_rail(&self, pos: [i32; 3]) -> bool {
+        let name = self.block_name(pos);
+        self.items()
+            .block_tags
+            .get("minecraft:rails")
+            .is_some_and(|rails| rails.contains(&*name))
+    }
     pub(super) fn remote_block_template(
         &mut self,
         hit: &super::Hit,
@@ -8893,9 +8909,10 @@ impl Game<'_> {
                 self.remote_use_instrument(held);
                 return true;
             }
-            // EnderEyeItem.use: startUsingItem unless an End portal frame is
-            // aimed at, with or without a stronghold to throw the eye at.
-            "minecraft:ender_eye" => !self.aims_at_end_portal_frame(),
+            // EnderEyeItem.use: startUsingItem, with or without a stronghold to
+            // throw the eye at (its own ray at a frame PASSed before, in
+            // remote_use_item).
+            "minecraft:ender_eye" => true,
             // Item.use: a kinetic weapon starts being used.
             id if sunrise_client::spear::Kinetic::of(id).is_some() => true,
             // ShieldItem.use: anything that blocks attacks, off cooldown.

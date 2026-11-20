@@ -10,20 +10,39 @@ use sunrise_client::{
     mobs::{Mob, Species, armadillo, equine, llama, nautilus, panda, villager},
 };
 
+/// What took a right click on a mob in `Player.interactOn`: the mob's own `Mob.interact`, or,
+/// when that passes, the held stack's `Equippable.equipOnTarget`
+/// (`ItemStack.interactLivingEntity`). The swing follows the one that answered.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum MobAnswer {
+    Mob,
+    Equip,
+}
+
 impl Game<'_> {
-    /// Whether mob `i` takes a right click with `hand`'s item on this
-    /// client (`Mob.interact`'s result consumes the action).
-    pub(super) fn remote_mob_takes(&mut self, i: usize, hand: Hand) -> bool {
+    /// What takes a right click on mob `i` with `hand`'s item on this client, if anything
+    /// does (`Player.interactOn`'s result consumes the action).
+    pub(super) fn remote_mob_takes(&mut self, i: usize, hand: Hand) -> Option<MobAnswer> {
         self.remote_mob_answers(i, hand, true)
     }
 
-    /// The same answer, changing nothing: an allay's and a dyed sheep's answer is the
+    /// Whether anything takes it, changing nothing: an allay's and a dyed sheep's answer is the
     /// interaction itself, and the controller's guide asks every frame.
     pub(super) fn remote_mob_would_take(&mut self, i: usize, hand: Hand) -> bool {
-        self.remote_mob_answers(i, hand, false)
+        self.remote_mob_answers(i, hand, false).is_some()
     }
 
-    fn remote_mob_answers(&mut self, i: usize, hand: Hand, act: bool) -> bool {
+    fn remote_mob_answers(&mut self, i: usize, hand: Hand, act: bool) -> Option<MobAnswer> {
+        if self.remote_mob_interacts(i, hand, act) {
+            return Some(MobAnswer::Mob);
+        }
+        // Player.interactOn: when the mob passes, ItemStack.interactLivingEntity puts an
+        // equip_on_interact item (a saddle, horse or wolf armour, a harness) on it.
+        self.equips_on_interact(i, hand).then_some(MobAnswer::Equip)
+    }
+
+    /// `Mob.interact` on this client's copy: whether its result consumes the action.
+    fn remote_mob_interacts(&mut self, i: usize, hand: Hand, act: bool) -> bool {
         let Some(m) = self.mobs.get(i).filter(|m| m.alive()) else {
             return false;
         };
@@ -101,7 +120,9 @@ impl Game<'_> {
             // HappyGhast.mobInteract: a harnessed adult is ridden.
             Species::HappyGhast => !baby && m.extra.body_id().is_some(),
             // TamableAnimal (wolf, cat, parrot) on a client: CONSUME once tame.
-            Species::Wolf | Species::Cat | Species::Parrot => m.extra.tame,
+            Species::Wolf | Species::Cat => m.extra.tame,
+            // Parrot.mobInteract: its poisonous food (a cookie) is SUCCESS, tame or not.
+            Species::Parrot => m.extra.tame || self.parrot_poisonous(item),
             // Allay.mobInteract: gives an item or takes it back.
             Species::Allay if !act => self.allay_would_take(i, hand, stack.cloned()),
             Species::Allay => self.predict_allay_interaction(i, hand, stack.cloned()),
@@ -190,13 +211,55 @@ impl Game<'_> {
             _ => false,
         }
     }
+    /// `Equippable.equipOnTarget` on a client, for the held stack's own `equippable` (the
+    /// server's patch may add, replace or remove it) when its `equip_on_interact` is set: SUCCESS
+    /// when the mob can wear it in its slot (`isEquippableInSlot`: the slot usable, the type
+    /// allowed), the slot is empty and the mob is alive.
+    fn equips_on_interact(&self, i: usize, hand: Hand) -> bool {
+        use super::dispenser::{Slot, mob_can_use_slot, mob_slot_item};
+        let (Some(m), Some(remote)) = (self.mobs.get(i), self.remote.as_ref()) else {
+            return false;
+        };
+        let stack = match hand {
+            Hand::Main => self.stack_in(self.selected),
+            Hand::Off => self.offhand.as_ref(),
+        };
+        let Some(equippable) = stack
+            .and_then(|s| {
+                sunrise_client::item_sync::patched_equippable(s, self.res.items(), &remote.builtin)
+            })
+            .filter(|e| e.equip_on_interact)
+        else {
+            return false;
+        };
+        let Some(slot) = Slot::from_name(equippable.slot) else {
+            return false;
+        };
+        let tags = &self.res.stations().enchantments.entity_tags;
+        m.alive()
+            && mob_can_use_slot(m, slot)
+            && equippable.allows(m.kind.id.as_str(), tags)
+            && mob_slot_item(m, slot).is_none()
+    }
+    /// `#minecraft:parrot_poisonous_food`.
+    fn parrot_poisonous(&self, item: &str) -> bool {
+        self.res
+            .items()
+            .item_tags
+            .get("minecraft:parrot_poisonous_food")
+            .is_some_and(|tag| tag.contains(item))
+    }
     /// Whether that answer is `InteractionResult.SUCCESS`, the only result that
     /// swings the hand: `CONSUME` ends the click without one. An adult animal's
     /// food (`Animal.mobInteract`), a zombie villager's golden apple and a
     /// sheep's shears (the server alone checks `readyForShearing`) answer
     /// CONSUME on a client, and a horse's or panda's food SUCCESS_SERVER
-    /// (#9437). A tame wolf, cat or parrot sitting down is SUCCESS.
-    pub(super) fn remote_mob_swings(&self, i: usize, hand: Hand) -> bool {
+    /// (#9437). A tame wolf, cat or parrot sitting down is SUCCESS, and so is an item
+    /// `Equippable.equipOnTarget` puts on the mob: `answer` says which of the two took the click.
+    pub(super) fn remote_mob_swings(&self, i: usize, hand: Hand, answer: MobAnswer) -> bool {
+        if answer == MobAnswer::Equip {
+            return true;
+        }
         let Some(m) = self.mobs.get(i).filter(|m| m.alive()) else {
             return false;
         };
@@ -209,6 +272,10 @@ impl Game<'_> {
         // an unnamed one passes on to the trader's trading (SUCCESS_SERVER).
         if m.species() == Species::WanderingTrader && item == "minecraft:name_tag" {
             return stack.is_some_and(|s| s.custom_name().is_some());
+        }
+        // Parrot.mobInteract's poisonous food answers SUCCESS.
+        if m.species() == Species::Parrot && self.parrot_poisonous(item) {
+            return true;
         }
         mob_swings(m, item)
     }
