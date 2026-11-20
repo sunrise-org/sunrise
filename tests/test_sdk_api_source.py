@@ -13,14 +13,16 @@ def package(name, directory=None, kinds=("lib",), dependencies=(), source=None):
     return {
         "id": name, "name": name, "version": "0.1.0", "source": source,
         "manifest_path": f"/w/{directory or 'crates/' + name}/Cargo.toml",
-        "targets": [{"kind": list(kinds), "name": name}],
+        "targets": [{"kind": list(kinds), "name": name.replace("-", "_")}],
         "features": {},
-        "dependencies": [{"name": dependency, "kind": kind, "path": path} for dependency, kind, path in dependencies],
+        "dependencies": [{"name": dependency, "kind": kind, "path": path, "target": None,
+                          "rename": None, "optional": False} for dependency, kind, path in dependencies],
     }
 
 
 def node(name, *edges):
-    return {"id": name, "deps": [{"pkg": dependency, "dep_kinds": [{"kind": kind}]} for dependency, kind in edges]}
+    return {"id": name, "deps": [{"name": dependency.replace("-", "_"), "pkg": dependency,
+                                  "dep_kinds": [{"kind": kind, "target": None}]} for dependency, kind in edges]}
 
 
 def metadata():
@@ -119,21 +121,17 @@ class ManifestTests(unittest.TestCase):
     def test_manifest_keeps_the_library_and_its_normal_dependencies(self):
         crate = Crate("sunrise-mod-api", "crates/sunrise-mod-api", True)
         crates = {"sunrise-mod-api": crate, "vocab": Crate("vocab", "crates/nested/vocab", False)}
-        # The game resolves glam with its defaults and three features, log with its defaults and `std`, and libm
-        # with `arch` and no defaults.
-        resolved = {(None, "glam"): ({"default", "std", "bytemuck", "serde"}, True),
-                    (None, "log"): ({"default", "std"}, True), (None, "libm"): ({"arch"}, False)}
         written = api_source.normalise_manifest(self.API, self.WORKSPACE, crate, crates,
-                                                {"testing": ["vocab/testing"]}, resolved)
+                                                {"testing": ["vocab/testing"]})
         self.assertEqual(tomllib.loads(written), {
             "package": {"name": "sunrise-mod-api", "version": "0.1.0", "edition": "2024", "license": "MIT",
                         "publish": False, "autobins": False, "autoexamples": False, "autotests": False,
                         "autobenches": False, "build": "build.rs"},
             "lib": {"name": "mod_api"},
             "dependencies": {"vocab": {"path": "../nested/vocab"},
-                             "log": {"version": "0.4", "features": ["std"]},
-                             "glam": {"version": "0.30", "features": ["bytemuck", "serde", "std"]},
-                             "libm": {"version": "0.2", "default-features": False, "features": ["arch"]}},
+                             "log": "0.4",
+                             "glam": {"version": "0.30", "features": ["bytemuck", "serde"]},
+                             "libm": {"version": "0.2", "default-features": False}},
             "target": {"cfg(unix)": {"dependencies": {"libc": "0.2"}}},
             "features": {"testing": ["vocab/testing"]},
             "lints": {"clippy": {"type_complexity": "allow"}},
@@ -144,171 +142,202 @@ class ManifestTests(unittest.TestCase):
         manifest = {"package": {"name": "vocab", "version": "0.1.0"},
                     "dependencies": {"sunrise-items": {"path": "../../sunrise-items"}}}
         with self.assertRaises(Refusal) as refused:
-            api_source.normalise_manifest(manifest, self.WORKSPACE, crate, {"vocab": crate}, {}, {})
+            api_source.normalise_manifest(manifest, self.WORKSPACE, crate, {"vocab": crate}, {})
         self.assertEqual(refused.exception.code, "E_PATH_DEPENDENCY")
 
-    def test_asking_for_a_feature_the_game_does_not_resolve_is_refused(self):
-        crate = Crate("vocab", "crates/nested/vocab", False)
-        for spec, resolved in (({"version": "1", "features": ["derive"]}, ({"default", "std"}, True)),
-                               ("1", ({"std"}, False))):
-            manifest = {"package": {"name": "vocab", "version": "0.1.0"}, "dependencies": {"serde": spec}}
-            with self.subTest(spec), self.assertRaises(Refusal) as refused:
-                api_source.normalise_manifest(manifest, self.WORKSPACE, crate, {"vocab": crate}, {},
-                                              {(None, "serde"): resolved})
-            self.assertEqual(refused.exception.code, "E_FEATURES")
-
-
-class RequestedFeatureTests(unittest.TestCase):
+class NativeFeatureTests(unittest.TestCase):
     REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
-    CRATE = Crate("core", "crates/core", False)
-    ARM = 'cfg(target_arch = "aarch64")'
-    X86 = 'cfg(target_arch = "x86_64")'
+    CRATE = Crate("sunrise-mod-api", "crates/sunrise-mod-api", False)
 
-    def metadata(self, *edges, optional=False):
-        """Cargo's target-filtered graph. Inactive registry packages can still be in `packages`."""
-        packages = [package("core")]
-        dependencies = []
-        for alias, name, platform in edges:
-            if name not in {item["name"] for item in packages}:
-                dependency = package(name, source=self.REGISTRY)
-                dependency["features"] = {"default": [], "std": []}
-                packages.append(dependency)
-            dependencies.append({"name": alias.replace("-", "_"), "pkg": name,
-                                 "dep_kinds": [{"kind": None, "target": platform}]})
-            packages[0]["dependencies"].append({"name": name, "rename": alias if alias != name else None,
-                                                "target": platform, "kind": None, "optional": optional})
-        return {"packages": packages, "resolve": {"nodes": [{"id": "core", "deps": dependencies}]}}
+    def data(self, platform=None):
+        packages = [package(api_source.API, dependencies=[("wrapper", None, None)]),
+                    package(api_source.WASMTIME, dependencies=[("wasmtime", None, None)])]
+        definitions = {"wrapper": {"std": [], "simd": []}, "inner": {"default": [], "extra": ["dep:leaf"]},
+                       "leaf": {}, "outside-closure": {}, "wasmtime": {"std": []},
+                       "linux-only": {}, "windows-only": {}, "mac-only": {}, "ghost": {}}
+        for name, features in definitions.items():
+            item = package(name, source=self.REGISTRY)
+            item["features"] = features
+            packages.append(item)
+        lines = ["0sunrise-mod-host v0.1.0|", "1sunrise-mod-api v0.1.0|", "2wrapper v0.1.0|std",
+                 "3inner v0.1.0|default,extra", "4leaf v0.1.0|"]
+        if platform:
+            lines.append(f"3{platform} v0.1.0|")
+        lines += ["1outside-closure v0.1.0|", "1sunrise-wasmtime v0.1.0|", "2wasmtime v0.1.0|std"]
+        # Metadata may retain inactive dep_kinds. This deliberately stale edge must not override the actual tree.
+        return {"packages": packages, "resolve": {"nodes": [node(api_source.API, ("wrapper", None)),
+                node(api_source.WASMTIME, ("wasmtime", None)), node("wrapper", ("ghost", None))]}}, "\n".join(lines)
 
-    def written(self, manifest, metadata, game):
-        manifest = {"package": {"name": "core", "version": "0.1.0"}, **manifest}
-        resolved = api_source.requested_features(metadata, self.CRATE, manifest, game)
-        return tomllib.loads(api_source.normalise_manifest(manifest, {}, self.CRATE, {"core": self.CRATE},
-                                                           manifest.get("features", {}), resolved))
+    def pins(self, metadata, tree, root=api_source.API):
+        features, dependencies = api_source.target_build(tree, complete=True)
+        return api_source.feature_unifiers(metadata, root, features, dependencies)
 
-    def test_inactive_architecture_is_not_required_or_rewritten(self):
-        manifest = {"target": {
-            self.ARM: {"dependencies": {"math-kernel": {"package": "portable-math", "version": "0.1"}}},
-            self.X86: {"dependencies": {"math-kernel": {"package": "x86-math", "version": "0.1",
-                                                        "features": ["sse2"]}, "safe_arch": "=1.2.0"}},
-        }}
-        # The same renamed alias can resolve a different package on another architecture. Cargo formats cfg
-        # whitespace; it has already decided that the x86 table is inactive for this ARM build.
-        data = self.metadata(("math-kernel", "portable-math", 'cfg(target_arch="aarch64")'))
-        data["packages"].extend([package("x86-math", source=self.REGISTRY),
-                                 package("safe_arch", source=self.REGISTRY)])
-        data["packages"][0]["dependencies"].extend([
-            {"name": name, "rename": alias, "target": self.X86, "kind": None, "optional": False}
-            for alias, name in (("math-kernel", "x86-math"), (None, "safe_arch"))])
-        written = self.written(manifest, data, {"core 0.1.0": set(), "portable-math 0.1.0": {"default", "std"}})
-        self.assertEqual(written["target"][self.ARM]["dependencies"]["math-kernel"],
-                         {"package": "portable-math", "version": "0.1", "features": ["std"]})
-        self.assertEqual(written["target"][self.X86], manifest["target"][self.X86])
+    def test_transitive_unions_are_pinned_only_inside_the_actual_api_closure(self):
+        metadata, tree = self.data()
+        pins = self.pins(metadata, tree)
+        by_package = {spec["package"]: spec for spec in pins.values()}
+        self.assertEqual(set(by_package), {"wrapper", "inner", "leaf"})
+        self.assertEqual(by_package["inner"], {"package": "inner", "version": "=0.1.0",
+                                               "default-features": True, "features": ["extra"]})
+        self.assertEqual(by_package["leaf"], {"package": "leaf", "version": "=0.1.0", "default-features": False})
+        self.assertNotIn("ghost", by_package)
+        self.assertNotIn("outside-closure", by_package)
+        self.assertNotIn("wasmtime", by_package)
+        self.assertEqual(pins["wrapper"]["features"], ["std"])
+        self.assertTrue(all(name.startswith("__sunrise_sdk_features_") for name in pins if name != "wrapper"))
 
-    def test_unconditional_renamed_dependency_uses_its_package_features(self):
-        manifest = {"dependencies": {"json-codec": {"package": "serde_json", "version": "0.1",
-                                                     "default-features": False}}}
-        written = self.written(manifest, self.metadata(("json-codec", "serde_json", None)),
-                               {"core 0.1.0": set(), "serde_json 0.1.0": {"std", "raw_value"}})
-        self.assertEqual(written["dependencies"]["json-codec"],
-                         {"package": "serde_json", "version": "0.1", "default-features": False,
-                          "features": ["raw_value", "std"]})
+    def test_one_portable_manifest_keeps_wasm_specs_and_native_targets_separate(self):
+        original = {"package": {"name": api_source.API, "version": "0.1.0"},
+                    "dependencies": {"wrapper": {"version": "0.1", "default-features": False}},
+                    "target": {'cfg(target_arch = "wasm32")': {"dependencies": {"wasm-helper": "0.1"}}}}
+        targets = {}
+        expected = {"x86_64-unknown-linux-gnu": "linux-only", "x86_64-pc-windows-gnu": "windows-only",
+                    "aarch64-apple-darwin": "mac-only"}
+        for target, platform in expected.items():
+            data, tree = self.data(platform)
+            targets[target] = self.pins(data, tree)
+        source = api_source.with_feature_unifiers(original, targets)
+        written = api_source.normalise_manifest(source, {}, self.CRATE, {api_source.API: self.CRATE}, {})
+        parsed = tomllib.loads(written)
+        self.assertEqual(parsed["dependencies"], original["dependencies"])
+        self.assertEqual(parsed["target"]['cfg(target_arch = "wasm32")'], original["target"]['cfg(target_arch = "wasm32")'])
+        for target, platform in expected.items():
+            names = {spec["package"] for spec in parsed["target"][target]["dependencies"].values()}
+            self.assertEqual(names, {"wrapper", "inner", "leaf", platform})
+        self.assertEqual(set(original["target"]), {'cfg(target_arch = "wasm32")'})
 
-    def test_package_and_exported_library_names_can_differ(self):
-        manifest = {"dependencies": {"md-5": {"version": "0.1", "default-features": False}}}
-        data = self.metadata(("md-5", "md-5", None))
-        data["resolve"]["nodes"][0]["deps"][0]["name"] = "md5"
-        data["packages"][1]["targets"][0]["name"] = "md5"
-        written = self.written(manifest, data, {"core 0.1.0": set(), "md-5 0.1.0": {"std"}})
-        self.assertEqual(written["dependencies"]["md-5"],
-                         {"version": "0.1", "default-features": False, "features": ["std"]})
-
-    def test_only_activated_optional_edges_receive_game_features(self):
-        spec = {"package": "optional-codec", "version": "0.1", "optional": True, "default-features": False}
-        cases = [({}, set(), False), ({"weak": ["codec?/std"]}, {"weak"}, False),
-                 ({"codec": []}, {"codec"}, False), ({}, {"codec"}, True),
-                 ({"enabled": ["dep:codec"]}, {"enabled"}, True),
-                 ({"strong": ["codec/std"]}, {"strong"}, True),
-                 ({"default": ["enabled"], "enabled": ["dep:codec"]}, {"default"}, True)]
-        for definitions, enabled, active in cases:
-            with self.subTest(definitions=definitions, enabled=enabled):
-                manifest = {"dependencies": {"codec": spec}, "features": definitions}
-                # Workspace metadata can include an edge enabled by another package. Presence there, or even
-                # somewhere else in the game, does not enable this crate's optional edge.
-                data = self.metadata(("codec", "optional-codec", None), optional=True)
-                written = self.written(manifest, data,
-                                       {"core 0.1.0": enabled, "optional-codec 0.1.0": {"std"}})
-                self.assertEqual(written["dependencies"]["codec"],
-                                 {**spec, "features": ["std"]} if active else spec)
-
-    def test_missing_active_registry_dependencies_still_refuse(self):
-        for platform, optional in ((None, False), (self.ARM, False), (None, True)):
-            with self.subTest(platform=platform, optional=optional):
-                dependencies = {"codec": {"package": "real-codec", "version": "0.1", "optional": optional}}
-                manifest = ({"dependencies": dependencies} if platform is None
-                            else {"target": {platform: {"dependencies": dependencies}}})
-                manifest["features"] = {"enabled": ["dep:codec"]} if optional else {}
-                with self.assertRaises(Refusal) as refused:
-                    self.written(manifest, self.metadata(("codec", "real-codec", platform), optional=optional),
-                                 {"core 0.1.0": {"enabled"} if optional else set()})
-                self.assertEqual(refused.exception.code, "E_FEATURES")
-                self.assertIn("real-codec 0.1.0", str(refused.exception))
-
-    def test_missing_unconditional_metadata_edge_is_not_treated_as_inactive(self):
-        manifest = {"dependencies": {"codec": "0.1"}}
-        data = self.metadata(("codec", "codec", None))
-        data["resolve"]["nodes"][0]["deps"].clear()
-        with self.assertRaises(Refusal) as refused:
-            self.written(manifest, data, {"core 0.1.0": set(), "codec 0.1.0": {"std"}})
-        self.assertEqual(refused.exception.code, "E_FEATURES")
-
-    def test_host_proc_macro_features_are_not_requested_from_the_target_tree(self):
-        manifest = {"dependencies": {"derive-codec": "0.1"}}
-        data = self.metadata(("derive-codec", "derive-codec", None))
-        data["packages"][1]["targets"][0]["kind"] = ["proc-macro"]
-        written = self.written(manifest, data, {"core 0.1.0": set()})
-        self.assertEqual(written["dependencies"], manifest["dependencies"])
-
-    def test_unrenamed_and_renamed_versions_use_their_actual_library_edges(self):
-        manifest = {"dependencies": {"codec-bundle": "2", "legacy": {"package": "codec-bundle", "version": "1"}}}
-        root = package("core")
-        root["dependencies"] = [
-            {"name": "codec-bundle", "rename": rename, "target": None, "kind": None, "optional": False}
-            for rename in (None, "legacy")]
+    def test_versions_and_renames_cannot_capture_another_package_pin(self):
+        root = package(api_source.API, dependencies=[("codec-bundle", None, None), ("codec-bundle", None, None)])
+        root["dependencies"][1]["rename"] = "legacy"
         versions = []
-        for version in ("1", "2"):
+        for version, feature in (("1.0.0", "old"), ("2.0.0", "modern")):
             item = package("codec-bundle", source=self.REGISTRY)
-            item.update(id="codec" + version, version=version + ".0.0", features={"default": [], "old": [], "modern": []})
-            item["targets"][0]["name"] = "codec_core"
-            if version == "2":
-                item["targets"][0]["kind"] = ["rlib"]
+            item.update(id="registry+codec@" + version, version=version, features={feature: []})
+            item["targets"][0].update(name="codec_core", kind=["rlib"])
             versions.append(item)
-        edges = [{"name": alias, "pkg": identity, "dep_kinds": [{"kind": None, "target": None}]}
-                 for alias, identity in (("legacy", "codec1"), ("codec_core", "codec2"))]
-        game = {"core 0.1.0": set(), "codec-bundle 1.0.0": {"default", "old"},
-                "codec-bundle 2.0.0": {"default", "modern"}}
-        for order in (edges, list(reversed(edges))):
-            with self.subTest(order=[edge["name"] for edge in order]):
-                data = {"packages": [root, *versions], "resolve": {"nodes": [{"id": "core", "deps": order}]}}
-                written = self.written(manifest, data, game)
-                self.assertEqual(written["dependencies"]["codec-bundle"], {"version": "2", "features": ["modern"]})
-                self.assertEqual(written["dependencies"]["legacy"],
-                                 {"package": "codec-bundle", "version": "1", "features": ["old"]})
-        # An invalid/ambiguous resolver graph is refused, never resolved by node ordering.
-        ambiguous = [dict(edge, name="codec_core") for edge in edges]
-        data = {"packages": [root, *versions], "resolve": {"nodes": [{"id": "core", "deps": ambiguous}]}}
+        original = {"package": {"name": api_source.API, "version": "0.1.0"},
+                    "dependencies": {"codec-bundle": "2", "legacy": {"package": "codec-bundle", "version": "1"}}}
+        first = None
+        for order in (versions, list(reversed(versions))):
+            edges = [{"name": "legacy" if item["version"] == "1.0.0" else "codec_core", "pkg": item["id"],
+                      "dep_kinds": [{"kind": None, "target": None}]} for item in order]
+            data = {"packages": [root, *order], "resolve": {"nodes": [{"id": root["id"], "deps": edges}]}}
+            tree = "\n".join(["0sunrise-mod-api v0.1.0|", *[f"1codec-bundle v{item['version']}|{next(iter(item['features']))}" for item in order]])
+            pins = self.pins(data, tree)
+            self.assertEqual({spec["version"]: spec["features"] for spec in pins.values()},
+                             {"=1.0.0": ["old"], "=2.0.0": ["modern"]})
+            source = api_source.with_feature_unifiers(original, {"native-target": pins})
+            self.assertEqual(source["dependencies"], original["dependencies"])
+            self.assertEqual(source["target"]["native-target"]["dependencies"]["codec-bundle"]["features"], ["modern"])
+            self.assertEqual(source["target"]["native-target"]["dependencies"]["legacy"]["features"], ["old"])
+            self.assertEqual(pins, first if first is not None else pins)
+            first = pins
+
+    def test_missing_active_packages_unknown_features_and_ambiguous_sources_refuse(self):
+        data, tree = self.data()
+        data["packages"] = [item for item in data["packages"] if item["name"] != "leaf"]
         with self.assertRaises(Refusal) as refused:
-            self.written(manifest, data, game)
+            self.pins(data, tree)
         self.assertEqual(refused.exception.code, "E_FEATURES")
+        data, tree = self.data()
+        with self.assertRaises(Refusal) as refused:
+            self.pins(data, tree.replace("default,extra", "default,extra,unknown"))
+        self.assertEqual(refused.exception.code, "E_FEATURES")
+        data, tree = self.data()
+        duplicate = package("inner", source="git+https://example.invalid/inner#012345")
+        duplicate["id"] = "other-inner"
+        data["packages"].append(duplicate)
+        with self.assertRaises(Refusal) as refused:
+            self.pins(data, tree)
         self.assertIn("ambiguous", str(refused.exception))
 
-    def test_cargo_filters_target_predicates_for_metadata(self):
-        with (patch.object(api_source.prebuilt_game, "rustc_host", return_value="aarch64-apple-darwin"),
-              patch.object(api_source, "run", return_value='{"packages": []}') as run):
-            self.assertEqual(api_source.target_metadata(Path("/api"), {"TEST": "yes"}, offline=True),
-                             {"packages": []})
-        run.assert_called_once_with(["cargo", "metadata", "--locked", "--offline", "--format-version", "1",
-                                     "--filter-platform", "aarch64-apple-darwin"],
-                                    cwd=Path("/api"), env={"TEST": "yes"})
+    def test_missing_or_ambiguous_direct_extern_identity_refuses(self):
+        data, tree = self.data()
+        root_node = next(item for item in data["resolve"]["nodes"] if item["id"] == api_source.API)
+        root_node["deps"].clear()
+        with self.assertRaises(Refusal) as refused:
+            self.pins(data, tree)
+        self.assertEqual(refused.exception.code, "E_FEATURES")
+        data, tree = self.data()
+        root_node = next(item for item in data["resolve"]["nodes"] if item["id"] == api_source.API)
+        root_node["deps"].append({"name": "another_wrapper", "pkg": "wrapper",
+                                  "dep_kinds": [{"kind": None, "target": None}]})
+        with self.assertRaises(Refusal) as refused:
+            self.pins(data, tree)
+        self.assertEqual(refused.exception.code, "E_FEATURES")
+
+    def test_source_names_cannot_capture_generated_transitive_dependencies(self):
+        original = {"dependencies": {"__sunrise_sdk_features_collision": "1"}}
+        with self.assertRaises(Refusal) as refused:
+            api_source.with_feature_unifiers(original, {"native-target": {"inner": {"version": "1"}}})
+        self.assertEqual(refused.exception.code, "E_FEATURES")
+
+    def test_fidelity_still_refuses_missing_transitive_packages_or_wider_closures(self):
+        metadata, game = self.data()
+        consumer = game.replace("3inner v0.1.0|default,extra", "3inner v0.1.0|default").replace("4leaf v0.1.0|\n", "")
+        with self.assertRaises(Refusal) as refused:
+            api_source.check_root(metadata, metadata, api_source.API, game, consumer, "starter")
+        self.assertEqual(refused.exception.code, "E_CLOSURE")
+        consumer = game.replace("1outside-closure v0.1.0|", "2outside-closure v0.1.0|\n1outside-closure v0.1.0|")
+        with self.assertRaises(Refusal) as refused:
+            api_source.check_root(metadata, metadata, api_source.API, game, consumer, "starter")
+        self.assertEqual(refused.exception.code, "E_CLOSURE")
+
+    def test_equal_package_closure_with_other_features_still_refuses(self):
+        metadata, game = self.data()
+        consumer = game.replace("3inner v0.1.0|default,extra", "3inner v0.1.0|default").replace("4leaf v0.1.0|", "2leaf v0.1.0|")
+        with self.assertRaises(Refusal) as refused:
+            api_source.check_root(metadata, metadata, api_source.API, game, consumer, "starter")
+        self.assertEqual(refused.exception.code, "E_FEATURES")
+
+    def test_complete_tree_excludes_host_macros_and_rejects_deduplication(self):
+        tree = "\n".join(["0sunrise-mod-api v0.1.0|", "1macros v0.1.0 (proc-macro)|",
+                           "2shared v0.1.0|host", "3host-only v0.1.0|", "1shared v0.1.0|target",
+                           "2target-only v0.1.0|"])
+        features, dependencies = api_source.target_build(tree, complete=True)
+        self.assertEqual(features["shared 0.1.0"], {"target"})
+        self.assertEqual(dependencies["shared 0.1.0"], {"target-only 0.1.0"})
+        self.assertNotIn("host-only 0.1.0", features)
+        with self.assertRaises(Refusal) as refused:
+            api_source.target_build(tree + "\n1shared v0.1.0|target (*)", complete=True)
+        self.assertEqual(refused.exception.code, "E_FEATURES")
+
+    def test_native_output_is_independent_of_leg_iteration_and_metadata_order(self):
+        legs = [("linux-target", False), ("linux-target", True), ("windows-target", False)]
+        def resolved(folder, target, server):
+            data, tree = self.data("linux-only" if target == "linux-target" else "windows-only")
+            if server:
+                data["packages"].reverse()
+            return data, tree
+        with patch.object(api_source, "game_leg", side_effect=resolved):
+            first = api_source.native_feature_unifiers(Path("/w"), legs)
+            second = api_source.native_feature_unifiers(Path("/w"), list(reversed(legs)))
+        self.assertEqual(first, second)
+        with patch.object(api_source, "game_leg", side_effect=lambda folder, target, server: self.data("linux-only" if server else "mac-only")):
+            with self.assertRaises(Refusal) as refused:
+                api_source.native_feature_unifiers(Path("/w"), legs[:2])
+        self.assertEqual(refused.exception.code, "E_FEATURES")
+
+    def test_release_legs_ignore_common_source_and_never_add_wasm(self):
+        names = "\n".join(["api-x86_64-unknown-linux-gnu.tar.xz", "api-x86_64-unknown-linux-gnu-server.tar.xz",
+                           "api-x86_64-pc-windows-gnu.tar.xz", "api-aarch64-apple-darwin.tar.xz",
+                           "runtime-x86_64-unknown-linux-gnu.tar.xz", "api-source.tar.xz"])
+        with patch.object(api_source, "run", return_value=names):
+            self.assertEqual(api_source.sdk_legs(), [("aarch64-apple-darwin", False),
+                ("x86_64-pc-windows-gnu", False), ("x86_64-unknown-linux-gnu", False), ("x86_64-unknown-linux-gnu", True)])
+
+    def test_cargo_metadata_and_tree_use_the_exact_native_target_without_building(self):
+        def run(command, **kwargs):
+            if command[:2] == ["rustc", "--print"]:
+                return 'target_os="windows"\n'
+            return '{"packages": []}' if command[1] == "metadata" else "tree"
+        with patch.object(api_source, "run", side_effect=run) as called:
+            self.assertEqual(api_source.game_leg(Path("/missing"), "x86_64-pc-windows-gnu", False), ({"packages": []}, "tree"))
+        commands = [call.args[0] for call in called.call_args_list]
+        self.assertEqual(commands[0], ["rustc", "--print", "cfg", "--target", "x86_64-pc-windows-gnu"])
+        self.assertIn("--no-dedupe", commands[2])
+        self.assertEqual(commands[2][-2:], ["--features", "system-allocator"])
+        self.assertTrue(all("build" not in command and "check" not in command for command in commands))
 
 
 class RootTests(unittest.TestCase):
@@ -316,14 +345,17 @@ class RootTests(unittest.TestCase):
     REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
 
     def metadata(self):
-        return {"packages": [package("sunrise-mod-api"), package("sunrise-wasmtime"),
+        return {"packages": [package("sunrise-mod-api", dependencies=[("serde", None, None)]),
+                             package("sunrise-wasmtime", dependencies=[("wasmtime", None, None)]),
                              package("serde", source=self.REGISTRY), package("wasmtime", source=self.REGISTRY)],
                 "resolve": {"nodes": [node("sunrise-mod-api", ("serde", None)),
                                       node("sunrise-wasmtime", ("wasmtime", None)), node("serde"), node("wasmtime")]}}
 
-    GAME = "\n".join(["0sunrise-mod-host v0.1.0|", "1serde v0.1.0|derive", "1wasmtime v0.1.0|cranelift,std"])
-    STARTER = "\n".join(["0mod-starter v0.1.0|", "1serde v0.1.0|derive"])
-    NATIVE = "\n".join(["0mod-starter-wasmtime v0.1.0|", "1serde v0.1.0|derive", "1wasmtime v0.1.0|cranelift,std"])
+    GAME = "\n".join(["0sunrise-mod-host v0.1.0|", "1sunrise-mod-api v0.1.0|", "2serde v0.1.0|derive",
+                       "1sunrise-wasmtime v0.1.0|", "2wasmtime v0.1.0|cranelift,std"])
+    STARTER = "\n".join(["0mod-starter v0.1.0|", "1sunrise-mod-api v0.1.0|", "2serde v0.1.0|derive"])
+    NATIVE = "\n".join(["0mod-starter-wasmtime v0.1.0|", "1sunrise-mod-api v0.1.0|", "2serde v0.1.0|derive",
+                         "1sunrise-wasmtime v0.1.0|", "2wasmtime v0.1.0|cranelift,std"])
 
     def check(self, root, consumer):
         return api_source.check_root(self.metadata(), self.metadata(), root, self.GAME, consumer, "consumer")
@@ -336,7 +368,7 @@ class RootTests(unittest.TestCase):
         with self.assertRaises(Refusal) as refused:
             self.check("sunrise-wasmtime", self.STARTER)
         self.assertEqual(refused.exception.code, "E_FEATURES")
-        self.assertIn("wasmtime 0.1.0: game ['cranelift', 'std'], ours None", str(refused.exception))
+        self.assertIn("does not resolve sunrise-wasmtime 0.1.0", str(refused.exception))
         with self.assertRaises(Refusal) as refused:
             self.check("sunrise-wasmtime", self.NATIVE.replace("cranelift,std", "std"))
         self.assertEqual(refused.exception.code, "E_FEATURES")
@@ -347,8 +379,10 @@ class RootTests(unittest.TestCase):
         wider["packages"].append(package("subtle", source=self.REGISTRY))
         wider["resolve"]["nodes"].append(node("subtle"))
         next(n for n in wider["resolve"]["nodes"] if n["id"] == "wasmtime")["deps"].append(
-            {"pkg": "subtle", "dep_kinds": [{"kind": None}]})
-        game = "\n".join([self.GAME, "1subtle v0.1.0|"])
+            {"name": "subtle", "pkg": "subtle", "dep_kinds": [{"kind": None, "target": None}]})
+        next(p for p in wider["packages"] if p["id"] == "wasmtime")["dependencies"].append(
+            {"name": "subtle", "kind": None, "target": None, "rename": None, "optional": False})
+        game = "\n".join([self.GAME, "3subtle v0.1.0|"])
         args = ("sunrise-wasmtime", game, self.NATIVE, "consumer")
         self.assertEqual(api_source.check_root(wider, self.metadata(), *args, exact=False), 2)
         # Wasmtime itself is exact: a feature the game lacks fails, and so does one the game has that it misses.
@@ -370,7 +404,8 @@ class RootTests(unittest.TestCase):
             api_source.check_root(wider, self.metadata(), *args)
         self.assertEqual(refused.exception.code, "E_CLOSURE")
         with self.assertRaises(Refusal) as refused:
-            api_source.check_root(self.metadata(), wider, *args, exact=False)
+            api_source.check_root(self.metadata(), wider, "sunrise-wasmtime", self.GAME,
+                                  self.NATIVE + "\n3subtle v0.1.0|", "consumer", exact=False)
         self.assertEqual(refused.exception.code, "E_CLOSURE")
 
 

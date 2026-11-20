@@ -159,3 +159,24 @@ ordinary Cargo conditions in the one portable API-source archive.
 All local Git signoffs remain local authorship records. Human DCO eligibility,
 review and upstream claim/spec approval remain pending; the experiment and its
 offline PR drafts do not assert those approvals.
+
+The portable transitive-feature correction derives normal-library edges from
+`cargo tree --no-dedupe`, excluding host proc-macro subtrees. Platform-filtered
+metadata alone is insufficient: it can retain inactive dependency kinds on a
+surviving edge. Metadata supplies exact package, version and library identities;
+the actual target tree supplies active edges and feature unions. The release's
+own `sdk-archives` listing selects native legs. Registry declarations already
+inside each API root's closure are pinned per exact native target; existing
+direct names are reused because Cargo refuses duplicate names for one package
+version. The original wasm and other-target dependency declarations stay intact.
+No dependency implementation is read or copied.
+
+The no-compilation manifest probe uses the normalized manifests and empty Rust
+target placeholders, not a copy of the game or a substitute runtime fixture. It
+resolves each published native target through real Cargo and compares complete
+package and feature sets for both API roots. Its wasm resolution checks that the
+native feature pins do not activate there. Initial probe failures (an overbroad
+platform assertion and duplicate dependency names) are retained alongside the
+corrected run. These are graph/manifest checks; official generator, consumer
+compilation and runtime evidence remain separately reported. The ordinary SDK
+consumer gate now requires exact closure and feature equality for both roots.
