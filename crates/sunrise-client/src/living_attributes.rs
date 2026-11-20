@@ -141,6 +141,24 @@ pub fn apply_saved(attributes: &mut Live, saved: Option<&Tag>) -> Result<()> {
     let Some(Tag::List(list)) = saved else {
         return Ok(());
     };
+    apply_list(attributes, list, |_| true)
+}
+
+/// Whether `entity`'s own code sets `attribute`'s base past the attribute's range, so a load
+/// keeps the saved base as vanilla does: `AbstractCubeMob.setCubeMobHealth` (size², up to
+/// 16129) and `MagmaCube.setSize`'s armor (size * 3). Any other base takes the #3728 clamp.
+pub fn own_unbounded_base(entity: &str, attribute: &str) -> bool {
+    matches!(
+        (entity, attribute),
+        (
+            "minecraft:slime" | "minecraft:magma_cube",
+            "minecraft:max_health"
+        ) | ("minecraft:magma_cube", "minecraft:armor")
+    )
+}
+
+/// [`apply_saved`] over a list, clamping a base (`loaded_base`) only where `clamp` says.
+fn apply_list(attributes: &mut Live, list: &[Tag], clamp: impl Fn(&str) -> bool) -> Result<()> {
     for entry in list {
         let Some(key) = text(entry.get("id")).and_then(|id| attributes.key(&id)) else {
             continue;
@@ -161,12 +179,13 @@ pub fn apply_saved(attributes: &mut Live, saved: Option<&Tag>) -> Result<()> {
             _ => Vec::new(),
         };
         let definition = attributes.catalog().attribute(key.attribute()).definition;
+        let base = float(entry.get("base")).unwrap_or(0.0);
         let packed = Packed {
-            base: loaded_base(
-                key.name(),
-                definition,
-                float(entry.get("base")).unwrap_or(0.0),
-            ),
+            base: if clamp(key.name()) {
+                loaded_base(key.name(), definition, base)
+            } else {
+                base
+            },
             modifiers,
         };
         let Some(handle) = attributes
@@ -468,9 +487,10 @@ impl LivingAttributes {
 
     fn build(&self, catalog: &Arc<Catalog>, entity: &str, seed: Vec<Tag>) -> Result<Live> {
         let mut live = new_live(catalog, entity)?;
-        apply_saved(&mut live, Some(&Tag::List(seed)))?;
+        // The seed is the entity's own record, which no load clamp touches.
+        apply_list(&mut live, &seed, |_| false)?;
         if let Some(saved) = &self.saved {
-            apply_saved(&mut live, Some(&Tag::List(saved.to_vec())))?;
+            apply_list(&mut live, saved, |name| !own_unbounded_base(entity, name))?;
         }
         for (name, modifier) in self.transient.iter().flat_map(|t| t.iter()) {
             let Some(key) = live.key(name) else {

@@ -254,7 +254,20 @@ impl Game<'_> {
         attribute: &str,
         base: f64,
     ) -> bool {
-        base.is_finite() && self.native_living_write(living, attribute, AttributeWrite::Base(base))
+        base.is_finite()
+            && self.native_living_write(
+                living,
+                attribute,
+                AttributeWrite::Base(self.mod_base_in_range(attribute, base)),
+            )
+    }
+
+    /// A mod's base clamped to the attribute's range, which `/attribute base set` and the entity's own code skip.
+    pub(in crate::game) fn mod_base_in_range(&self, attribute: &str, base: f64) -> f64 {
+        self.motion
+            .attributes
+            .definition(attribute)
+            .map_or(base, |d| d.sanitize(base))
     }
 
     fn native_living_add_modifier(
@@ -1256,6 +1269,35 @@ mod tests {
     use super::super::api_values::TryIntoApi;
     use super::*;
     use sunrise_core::geometry::Vec3;
+
+    /// The mod API keeps a written base in range; vanilla's own `setBaseValue` (`/attribute base set`) does not.
+    #[test]
+    #[ignore = "daily"]
+    fn a_mod_base_write_stays_in_range_and_a_vanilla_one_does_not() {
+        super::super::native_entity_refs::tests::with_game(|game| {
+            for (id, entity) in [(55, "minecraft:pig"), (56, "minecraft:slime")] {
+                let ty = game.res.mob_types().get(entity).unwrap().clone();
+                game.mobs.push(Mob::new(id, ty, Vec3::ZERO, 0.0));
+                let living = game.living(game.entity(id).unwrap()).unwrap();
+                assert!(game.living_set_attribute_base(living, "minecraft:max_health", 2000.0));
+                assert_eq!(
+                    game.living_attribute_base(living, "minecraft:max_health"),
+                    Some(1024.0),
+                    "{entity}: the mod's write"
+                );
+                let write = AttributeWrite::Base(2000.0);
+                assert_eq!(
+                    game.write_attribute(Target::Mob(id), "minecraft:max_health", write),
+                    Some(true)
+                );
+                assert_eq!(
+                    game.living_attribute_base(living, "minecraft:max_health"),
+                    Some(2000.0),
+                    "{entity}: /attribute base set"
+                );
+            }
+        });
+    }
 
     #[test]
     #[ignore = "daily"]

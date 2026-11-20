@@ -1802,7 +1802,11 @@ fn mob_from_nbt_at(
             let (Some(id), Some(v)) = (text(a.get("id")), float(a.get("base"))) else {
                 continue;
             };
-            let v = m.kind.attribute_bounds.loaded_base(&id, v);
+            let v = if crate::living_attributes::own_unbounded_base(&m.kind.id, &id) {
+                v
+            } else {
+                m.kind.attribute_bounds.loaded_base(&id, v)
+            };
             // A mount's rolled health and speed stay attribute bases, which the server syncs.
             let equine = crate::mobs::equine::is_equine(m.species());
             match id.as_str() {

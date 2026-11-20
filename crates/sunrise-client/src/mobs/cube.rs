@@ -830,3 +830,89 @@ mod set_size_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod own_base_tests {
+    use crate::mobs::{Mob, MobType};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use sunrise_world::attributes::entity::Catalog;
+
+    /// The saved `attributes` as (id, base), after the live map is built as a tick builds it.
+    fn saved_bases(m: &Mob, catalog: &Arc<Catalog>) -> Vec<(String, f64)> {
+        let _ = m.extra.live.read(
+            catalog,
+            &m.kind.id,
+            "minecraft:max_health",
+            sunrise_world::attribute_map::ValueKind::Base,
+            || {
+                crate::entity_nbt::attribute_entries(m)
+                    .into_iter()
+                    .map(|(_, e)| e)
+                    .collect()
+            },
+        );
+        let tag = crate::entity_nbt::mob_to_nbt(
+            m,
+            [1, 2, 3, 4],
+            None,
+            None,
+            |_| None,
+            &Default::default(),
+        );
+        let Some(sunrise_core::nbt::Tag::List(list)) = tag.get("attributes") else {
+            panic!("no attributes list");
+        };
+        list.iter()
+            .map(|e| {
+                (
+                    crate::save::text(e.get("id")).unwrap(),
+                    crate::save::float(e.get("base")).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    /// Vanilla never clamps a base, only the value: a size-39 slime saves `max_health` 1600 and
+    /// a magma cube given `Size:199` saves `armor` 600, once its map is built and again after a
+    /// reload of that save (#2676).
+    #[test]
+    #[ignore = "daily"]
+    fn a_cube_keeps_the_bases_its_own_size_set() {
+        let ran = crate::mobs::world::with_test_world(&[], |w, types| {
+            let types: HashMap<String, Arc<MobType>> = types
+                .types
+                .iter()
+                .map(|(id, kind)| (id.clone(), Arc::new(kind.clone())))
+                .collect();
+            for (id, size, attribute, base) in [
+                ("minecraft:slime", 39, "minecraft:max_health", 1600.0),
+                ("minecraft:magma_cube", 199, "minecraft:armor", 600.0),
+            ] {
+                let snbt = format!(r#"{{id:"{id}",Pos:[0.5d,80d,0.5d],NoAI:1b,Size:{size}}}"#);
+                let tag = sunrise_core::nbt::parse_snbt(&snbt).unwrap().0;
+                let m = crate::entity_nbt::mob_from_nbt(&tag, &types, 1, None).unwrap();
+                let first = saved_bases(&m, w.attributes);
+                assert!(
+                    first.contains(&(attribute.to_owned(), base)),
+                    "{id}: {first:?}"
+                );
+                let saved = crate::entity_nbt::mob_to_nbt(
+                    &m,
+                    [1, 2, 3, 4],
+                    None,
+                    None,
+                    |_| None,
+                    &Default::default(),
+                );
+                let again = crate::entity_nbt::mob_from_nbt(&saved, &types, 1, None).unwrap();
+                let second = saved_bases(&again, w.attributes);
+                assert!(
+                    second.contains(&(attribute.to_owned(), base)),
+                    "{id} reloaded: {second:?}"
+                );
+            }
+        });
+        assert!(ran, "vanilla data is missing");
+    }
+}
