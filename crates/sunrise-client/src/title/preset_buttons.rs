@@ -73,6 +73,42 @@ impl Title {
         }
         top.min(h - 128.0 - 24.0 * added as f32)
     }
+    /// The main title's controls in order, from the same layout as drawing and input.
+    pub fn main_widget_rows(
+        &self,
+        atlas: &HudAtlas,
+        (w, h): (f32, f32),
+    ) -> Vec<(u8, [f32; 4], String, bool)> {
+        let mut rows: Vec<_> = self
+            .buttons(w, h)
+            .into_iter()
+            .map(|b| (b.id, [b.x, b.y, b.w, 20.0], b.label, b.enabled))
+            .collect();
+        // In TitleScreen.init the icon row is registered before Options and Quit.
+        rows.sort_by_key(|(id, ..)| matches!(id, 3 | 2));
+        let (notice, rect) = Self::main_credits(atlas, w.ceil(), h.ceil());
+        self.credits_button.set(rect);
+        rows.push((0, rect, notice, true));
+        rows
+    }
+
+    pub(super) fn main_credits(atlas: &HudAtlas, w: f32, h: f32) -> (String, [f32; 4]) {
+        let notice = lang::get_or(
+            "sunrise.title.not_affiliated",
+            "Not affiliated with Mojang or Microsoft",
+        );
+        let width = HudBatch::text_width(atlas, &notice).ceil();
+        (notice, [w - width - 2.0, h - 10.0, width, 10.0])
+    }
+
+    pub fn set_removed_main_widgets(&mut self, removed: [u64; 4]) {
+        self.removed_main_widgets = removed;
+    }
+
+    pub(super) fn main_widget_removed(&self, id: u8) -> bool {
+        self.removed_main_widgets[usize::from(id / 64)] & (1 << (id % 64)) != 0
+    }
+
     pub(super) fn buttons(&self, w: f32, h: f32) -> Vec<Button> {
         // The game rules draw and press their own.
         if self.rules.borrow().is_some() {
@@ -183,6 +219,9 @@ impl Title {
                     );
                     button.icon = Some((icon, 15.0));
                     buttons.push(button);
+                }
+                if self.removed_main_widgets != [0; 4] {
+                    buttons.retain(|button| !self.main_widget_removed(button.id));
                 }
                 buttons
             }

@@ -1221,6 +1221,7 @@ impl Game<'_> {
             return Vec::new();
         };
         let button = |rect| Target {
+            listener: None,
             rect,
             kind: Kind::Button,
         };
@@ -1234,6 +1235,7 @@ impl Game<'_> {
         if self.recipe_ui.overlay.is_none() {
             // The search box is painted by hand: a field, for the pad's keyboard.
             out.push(Target {
+                listener: None,
                 rect: [xo + 25.0, yo + 13.0, 81.0, 14.0],
                 kind: Kind::Field,
             });
@@ -1273,6 +1275,7 @@ impl Game<'_> {
         for (n, tab) in self.recipe_ui.view.tabs.iter().enumerate() {
             let (x, y) = self.tab_pos(xo, yo, n);
             out.push(Target {
+                listener: None,
                 rect: [x, y, 35.0, 27.0],
                 kind: Kind::Tab(*tab == selected),
             });

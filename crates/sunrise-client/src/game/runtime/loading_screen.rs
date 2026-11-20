@@ -82,11 +82,17 @@ pub(super) struct Loading {
 /// world renderer anyway (a hidden window may never be asked to redraw).
 pub(super) const TITLE_FRAME_WAIT: Duration = Duration::from_secs(1);
 impl Loading {
-    /// The world renderer is built on the main thread, so building it before
-    /// the title is on the screen holds the title back by that build. Wait for
-    /// one title frame first, unless a world is waiting to open.
+    /// Until the game takes over, the loading screen cannot give init listeners a ClientHost.
+    pub(super) fn init_hooks_need_game(&self) -> bool {
+        mod_api::__private::listened(mod_api::HookId::ScreenInitPost)
+            || mod_api::__private::listened(mod_api::HookId::ScreenInitPre)
+    }
+
+    /// Wait for one title frame before building the world renderer on the main
+    /// thread, unless a world is waiting to open or init listeners need the game.
     pub(super) fn ready_for_handoff(&self) -> bool {
-        self.title_drawn
+        self.init_hooks_need_game()
+            || self.title_drawn
             || self.menu.pending.is_some()
             || self.ui_at.is_none_or(|at| at.elapsed() >= TITLE_FRAME_WAIT)
     }
@@ -280,6 +286,7 @@ impl Loading {
         else {
             return;
         };
+        let init_hooks_need_game = self.init_hooks_need_game();
         let mut batch = HudBatch::new(size, self.settings.gui_scale_inputs());
         self.draw_menu(&mut batch);
         self.menu.frame_drawn((batch.width, batch.height));
@@ -290,7 +297,11 @@ impl Loading {
         );
         if let Some(renderer) = &mut self.renderer {
             match renderer.render(&frame) {
-                Ok(true) if self.gui.is_some() && self.menu.pending.is_none() => {
+                Ok(true)
+                    if self.gui.is_some()
+                        && self.menu.pending.is_none()
+                        && !init_hooks_need_game =>
+                {
                     self.title_drawn = true;
                 }
                 Ok(_) => {}

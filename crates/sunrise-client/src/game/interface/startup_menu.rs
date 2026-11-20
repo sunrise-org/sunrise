@@ -138,7 +138,9 @@ impl StartupMenu {
         if let Some(title) = &mut self.title {
             title.set_rule_registry(registry);
         }
-        // The startup menu's title is the game's from here: its hooks fire now.
+        // Opening still arbitrates the title, but init waits until the adopted
+        // screen, options page and keyboard focus are all installed.
+        game.screen_state.build.defer_init = true;
         match self.title.take() {
             Some(title) => {
                 let title = title.with_user(|| game.options.player_name());
@@ -175,6 +177,8 @@ impl StartupMenu {
         if let Some(focus) = self.key_focus.take() {
             game.key_focus_adopt(focus, self.key_slider_edit);
         }
+        game.screen_state.build.defer_init = false;
+        game.build_screen();
     }
 
     /// After a frame is drawn: its widgets become the last frame's, and the
@@ -1118,6 +1122,17 @@ impl Loading {
         event_loop: &dyn EventLoopCtl,
         event: WindowEvent,
     ) -> Result<()> {
+        if self.init_hooks_need_game()
+            && !matches!(
+                event,
+                WindowEvent::CloseRequested
+                    | WindowEvent::RedrawRequested
+                    | WindowEvent::Resized(_)
+                    | WindowEvent::ScaleFactorChanged { .. }
+            )
+        {
+            return Ok(());
+        }
         // The buttons crates add to the title screen show by what is installed now
         // (`sunrise_hooks::title`), as on the game's own title screen.
         self.sync_title_mods();
@@ -1383,7 +1398,7 @@ impl Loading {
         // (`sunrise_hooks::title`), as on the game's own title screen.
         self.sync_title_mods();
         let logs = sunrise_client::logging::recent_lines();
-        let Some(gui) = &self.gui else {
+        let Some(gui) = self.gui.as_ref().filter(|_| !self.init_hooks_need_game()) else {
             // The pack's screens do not exist yet: the boot screen holds the
             // window, the wordmark and the console's lines while they load.
             sunrise_client::ui_theme::draw_boot(&self.boot, batch, &logs);

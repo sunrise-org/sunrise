@@ -1,0 +1,3 @@
+ids = ["hook:screen_init_post"]
+why = "Post now runs on a screen build after stock initialization, not after a frame observer notices the screen or its rectangle. A real rebuild fires even if the screen ID or panel rectangle is unchanged."
+migrate = "Request hook_version = 2. Read event.screen as before; use event.widgets.listeners, add_listener and remove_listener to edit the current title or pause build. Register buttons per build rather than each frame, and do not reuse listener references across rebuilds."

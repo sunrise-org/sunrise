@@ -333,6 +333,13 @@ struct RoomMemo {
 #[derive(Default)]
 pub(super) struct ScreenBuildState {
     current: Option<ScreenBuild>,
+    viewport: Option<([u32; 2], GuiSize)>,
+    pub(super) overlay: Option<&'static str>,
+    widgets_pending: bool,
+    pub(super) defer_init: bool,
+    title_inputs: Option<(usize, bool)>,
+    pub(super) widget_epoch: u64,
+    pub(super) widgets: Option<super::screen_widgets::BuiltScreenWidgets>,
     /// The frame's effects answer, while this frame asked for one.
     effects: std::cell::Cell<Option<EffectsMemo>>,
     /// The frame's `screen_room` answer, while this frame asked for one.
@@ -428,10 +435,10 @@ impl ScreenBuildState {
         identity: Option<&'static str>,
         gui: GuiSize,
         layout: Option<ScreenLayout>,
-    ) {
+    ) -> bool {
         if !shown {
             self.current = None;
-            return;
+            return false;
         }
         if self.needs_build(screen, shown, identity, gui) {
             self.current = Some(ScreenBuild::new(screen, identity, gui, layout));
@@ -439,16 +446,16 @@ impl ScreenBuildState {
             {
                 self.builds += 1;
             }
-            return;
+            return true;
         }
         let Some(layout) = layout else {
-            return;
+            return false;
         };
         let build = self.current.as_mut().expect("shown");
         let (rect, origin, built, exclusion) = match layout {
             ScreenLayout::Container(layout) => {
                 if matches!(&build.layout, BuildLayout::Container(built) if *built == layout) {
-                    return;
+                    return false;
                 }
                 let exclusion = layout.exclusion();
                 (
@@ -461,7 +468,7 @@ impl ScreenBuildState {
             layout => {
                 let layout = layout.widgets();
                 if build.layout == layout {
-                    return;
+                    return false;
                 }
                 (build.rect, build.origin, layout, Vec::new())
             }
@@ -474,6 +481,9 @@ impl ScreenBuildState {
         {
             self.builds += 1;
         }
+        // Container panels and text positions can change without reinitializing
+        // their controls. A changed pause layout is a new set of buttons.
+        matches!(build.layout, BuildLayout::Pause(_))
     }
 }
 
@@ -501,23 +511,28 @@ impl Game<'_> {
     /// and drops it when it closes. A frame that changes neither builds
     /// nothing, so `observe_screen` calls it every frame.
     pub(super) fn build_screen(&mut self) {
-        let shown =
-            self.screen != Screen::Playing || self.title.is_some() || self.screen_over_playing();
+        if self.screen_state.build.defer_init {
+            return;
+        }
+        let shown = self.screen != Screen::Playing || self.title.is_some();
+        let overlay = self.overlay_screen_id();
         // Gui.setScreen: KeyMapping.releaseAll, as the screen or overlay opens.
-        if shown {
+        if shown || self.screen_over_playing() {
             self.native_input.mappings.release_all();
             self.release_screen_mappings();
         }
         let (framebuffer, gui) = self.gui_frame_now();
-        let identity = self
-            .title
-            .as_ref()
-            .map(|title| title.mode.id())
-            .or_else(|| {
-                self.screen_over_playing()
-                    .then(|| self.observed_screen_view().map(|view| view.id))
-                    .flatten()
-            });
+        let identity = if self.screen == Screen::Playing {
+            self.title.as_ref().map(|title| title.mode.id())
+        } else {
+            None
+        };
+        let title_inputs = if let Some(title) = &mut self.title {
+            title.mods = self.settings.mods.installed.len();
+            (identity == Some("title")).then_some((title.mods, title.allows_multiplayer))
+        } else {
+            None
+        };
         // Validate the assigned mod book before its flags can affect any
         // cached origin, slot rectangles or exclusion areas.
         if self.native_screen_book().is_some() {
@@ -596,9 +611,39 @@ impl Game<'_> {
             .map(ScreenLayout::Container)
             .or_else(|| pause.map(ScreenLayout::Pause))
             .or(text);
-        self.screen_state
-            .build
-            .sync(self.screen, shown, identity, gui, layout);
+        let state = &mut self.screen_state.build;
+        let resized = state
+            .viewport
+            .replace((framebuffer, gui))
+            .is_some_and(|previous| previous != (framebuffer, gui));
+        let overlay_changed = std::mem::replace(&mut state.overlay, overlay) != overlay;
+        let closed = !shown && state.current.is_some();
+        let rebuilt = state.sync(self.screen, shown, identity, gui, layout);
+        let title_changed =
+            std::mem::replace(&mut state.title_inputs, title_inputs) != title_inputs;
+        if closed || rebuilt || (shown && resized) || title_changed {
+            state.widget_epoch = state.widget_epoch.wrapping_add(1);
+            state.widgets_pending = shown;
+            if state.widgets.take().is_some() {
+                self.pad.menu.armed = None;
+                if let Some(title) = &mut self.title {
+                    title.set_removed_main_widgets([0; 4]);
+                }
+            }
+        } else if overlay_changed {
+            self.pad.menu.armed = None;
+        }
+        if self.has_screen_init_hooks() {
+            match overlay {
+                Some(id) if (overlay_changed || resized) && self.has_screen_init_post() => {
+                    self.init_stock_screen_widgets(Some(id), gui, true);
+                }
+                None if std::mem::take(&mut self.screen_state.build.widgets_pending) => {
+                    self.init_stock_screen_widgets(identity, gui, false);
+                }
+                _ => {}
+            }
+        }
     }
 
     /// The build's container layout, when it holds `batch`'s size.

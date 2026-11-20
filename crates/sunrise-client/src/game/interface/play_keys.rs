@@ -64,8 +64,8 @@ impl Game<'_> {
                         return Ok(());
                     }
                     self.pause_focus = None;
-                    self.set_screen(Screen::Paused);
                     self.pause_menu = true;
+                    self.set_screen(Screen::Paused);
                     self.capture(false);
                 }
                 Screen::Creative => {

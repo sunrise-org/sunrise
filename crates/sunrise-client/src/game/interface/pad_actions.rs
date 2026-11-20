@@ -88,6 +88,7 @@ impl Game<'_> {
                 (x..x + w).contains(&at.0) && (y..y + h).contains(&at.1)
             })
             .unwrap_or(Target {
+                listener: None,
                 rect: declared.rect,
                 kind: Kind::Button,
             });

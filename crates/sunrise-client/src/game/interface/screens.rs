@@ -380,6 +380,49 @@ impl Game<'_> {
             icons: pause_icons(w, h, inputs.links, inputs.additions, &inputs.rows),
         }
     }
+    pub(super) fn pause_stock_widgets(
+        &self,
+        (w, h): (f32, f32),
+    ) -> Vec<super::screen_widgets::StockControl> {
+        use super::screen_widgets::StockControl;
+        let fallback;
+        let layout = match self.built_pause(w, h) {
+            Some(layout) => layout,
+            None => {
+                fallback = self.pause_layout(w, h);
+                &fallback
+            }
+        };
+        let additions = self.pause_screen_additions();
+        let mut buttons: Vec<_> = layout
+            .buttons
+            .iter()
+            .map(|&(x, y, width, key, id, active)| StockControl {
+                id,
+                bounds: [x, y, width, 20.0],
+                label: if let (14, Some((label, _))) = (id, &additions) {
+                    crate::game::native_scoreboard::api_text(label)
+                        .unwrap_or_else(|_| mod_api::Text::literal(label.plain()))
+                } else {
+                    mod_api::Text::translate(key, vec![])
+                },
+                active,
+            })
+            .collect();
+        let icons = layout
+            .icons
+            .iter()
+            .enumerate()
+            .map(|(i, &(x, y, _))| StockControl {
+                id: if i == FRIENDS_ICON { 10 } else { 12 + i as u8 },
+                bounds: [x, y, 20.0, 20.0],
+                label: mod_api::Text::translate(ICON_LABELS[i], vec![]),
+                active: icon_active(i, self.friends_shown()),
+            });
+        buttons.splice(3..3, icons);
+        buttons
+    }
+
     pub(super) fn draw_pause_menu(&mut self, batch: &mut HudBatch) {
         let friends = self.friends_shown();
         let atlas = &self.gui.atlas;
@@ -408,6 +451,9 @@ impl Game<'_> {
         };
         let mut tooltip = None;
         for &(x, y, bw, key, id, active) in &layout.buttons {
+            if self.pause_widget_removed(id) {
+                continue;
+            }
             let is_focused = self.pause_focus == Some(id);
             let hover = active && (ui::hovered(self.cursor, x, y, bw, 20.0) || is_focused);
             let label = match (id, &additions) {
@@ -431,6 +477,9 @@ impl Game<'_> {
             }
         }
         for (i, &(x, y, sprite)) in layout.icons.iter().enumerate() {
+            if self.pause_widget_removed(if i == FRIENDS_ICON { 10 } else { 12 + i as u8 }) {
+                continue;
+            }
             let active = icon_active(i, friends);
             let is_focused = (self.pause_focus == Some(10) && i == FRIENDS_ICON)
                 || (self.pause_focus == Some(12 + i as u8));
@@ -481,6 +530,7 @@ impl Game<'_> {
                 });
             }
         }
+        self.draw_stock_screen_additions(batch);
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Foreground);
         // SpriteIconButton.withTootip: the label as a tooltip.
         if let Some(tip) = tooltip {
@@ -567,17 +617,24 @@ impl Game<'_> {
             .buttons
             .iter()
             .copied()
-            .find(|b| b.5 && ui::hovered(self.cursor, b.0, b.1, b.2, 20.0))
+            .find(|b| {
+                b.5 && !self.pause_widget_removed(b.4)
+                    && ui::hovered(self.cursor, b.0, b.1, b.2, 20.0)
+            })
             .map(|b| b.4)
             .or_else(|| {
                 // The report bugs, feedback and player reporting icons (ids 12, 13 and 15).
                 [0, 1, 3]
                     .into_iter()
-                    .find(|&i| ui::hovered(self.cursor, icons[i].0, icons[i].1, 20.0, 20.0))
+                    .find(|&i| {
+                        !self.pause_widget_removed(12 + i as u8)
+                            && ui::hovered(self.cursor, icons[i].0, icons[i].1, 20.0, 20.0)
+                    })
                     .map(|i| 12 + i as u8)
             })
             .or_else(|| {
                 (self.friends_shown()
+                    && !self.pause_widget_removed(10)
                     && ui::hovered(
                         self.cursor,
                         icons[FRIENDS_ICON].0,
@@ -613,7 +670,12 @@ impl Game<'_> {
         };
         // The widget tuples are `Copy`: one small copy per press keeps the
         // build readable while the focus moves.
-        let buttons = layout.buttons.to_vec();
+        let buttons: Vec<_> = layout
+            .buttons
+            .iter()
+            .copied()
+            .filter(|b| !self.pause_widget_removed(b.4))
+            .collect();
         let icons = layout.icons;
         let mut active_ids: Vec<u8> = buttons
             .iter()
@@ -622,7 +684,11 @@ impl Game<'_> {
             .map(|b| b.4)
             .collect();
         let friends = self.friends_shown();
-        active_ids.extend(pause_icon_focus_ids(friends));
+        active_ids.extend(
+            pause_icon_focus_ids(friends)
+                .into_iter()
+                .filter(|&id| !self.pause_widget_removed(id)),
+        );
         if active_ids.is_empty() {
             return Ok(());
         }
@@ -670,7 +736,9 @@ impl Game<'_> {
                 for (i, &(x, y, _)) in icons.iter().enumerate() {
                     if icon_active(i, friends) {
                         let id = if i == FRIENDS_ICON { 10 } else { 12 + i as u8 };
-                        rects.push((id, x, y, 20.0));
+                        if !self.pause_widget_removed(id) {
+                            rects.push((id, x, y, 20.0));
+                        }
                     }
                 }
                 let cur_id = self.pause_focus.unwrap_or(0);

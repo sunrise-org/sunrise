@@ -49,6 +49,58 @@ the sign's block position and whether its front side is being edited. It returns
 editor open, or outside a world. A close of the sign editor always sends the sign update, however it
 closes; there is no close that skips it, because the vanilla client never omits that packet.
 
+## Editing widgets on stock screens
+
+`screen_init_post` is the client-only, non-cancellable counterpart of NeoForge's
+`ScreenEvent.Init.Post`. It runs on a fresh screen build after stock controls
+and initial focus are installed, before drawing or input. A resize or effective
+GUI-scale change rebuilds the controls, even if the panel rectangle looks the
+same. Drawing another frame or dismissing an overlay over an unchanged build
+is not initialization.
+On `title` and the full `paused` menu, `screen_init_pre` can skip the stock
+listeners. Post still fires on that empty build; it can add the first control.
+Other screens do not expose their stock listeners.
+
+Widget editing is supported on `title` and `paused` (the full pause menu).
+Other screens can still notify listeners; their widget list is empty and edits
+return `ScreenWidgetError::UnsupportedScreen`. Widget listeners are controls,
+not backgrounds or inventory slots.
+
+```rust,ignore
+use mod_api::{ClientHost, ScreenInitPostEvent, Text};
+use mod_api::client::widgets::{Button, Widget};
+
+fn press(host: &mut dyn ClientHost, action: &str) {
+    if action == "settings" {
+        // Handle this mod-local action in your own code.
+        let _ = host;
+    }
+}
+
+fn screen_init_post(_host: &dyn ClientHost, event: &mut ScreenInitPostEvent<'_>) {
+    if event.screen.id != "paused" {
+        return;
+    }
+    let [_, _, width, _] = event.screen.rect;
+    let button = Button::new([width - 110.0, 10.0, 100.0, 20.0], Text::translate("example.settings", vec![]));
+    let _ = event.widgets.add_listener(Widget::Button(button), Some(("settings", press)));
+}
+```
+
+`listeners()` describes the current staged list in screen order. Pass a listed
+reference to `remove_listener` to remove that control from drawing, input,
+focus and narration together. References belong to one build: they cannot be
+reused after the screen closes, the control is removed, or the screen rebuilds.
+Add a `Widget::TextField` with no action, or a button with a nonempty action ID
+and a native callback. The game draws and narrates these controls and routes
+mouse, keyboard and controller input to them. The action runs only for the
+mod that registered the enabled button. IDs need only be unique within that
+mod's current build. Re-register at each build, not each frame.
+
+Existing controls keep their order and focus unless removed. Additions follow
+in mod dispatch and registration order. A refused edit changes nothing; later
+mods see successful earlier edits, not changes from a failed callback.
+
 ## Reading open trades
 
 From a client hook in the world, get the menu from `host.local_player()` and

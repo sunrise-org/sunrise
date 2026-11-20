@@ -44,6 +44,9 @@ impl Game<'_> {
     /// The box a typed character goes to (`type_chars_into_screen`'s choice), as it stands
     /// after `edited` when there is one, whose responders then run.
     fn focused_text_edit(&mut self, edited: Option<&TextEdit>) -> Option<TextEdit> {
+        if let Some(edit) = self.stock_widget_edit(edited) {
+            return Some(edit);
+        }
         if control::title_owns_text(&self.screen, self.title.is_some()) {
             let mut state = None;
             self.title

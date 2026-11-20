@@ -111,10 +111,25 @@ pub enum Kind {
 /// A focus target: a rectangle in GUI pixels and what it is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Target {
+    /// Identity for a control registered by a particular screen build.
+    pub listener: Option<(u64, usize)>,
     pub rect: [f32; 4],
     pub kind: Kind,
 }
 impl Target {
+    /// Built controls are never refound by position, even when they overlap.
+    pub fn same_control(self, other: Self) -> bool {
+        match (self.listener, other.listener) {
+            (None, None) => self
+                .rect
+                .iter()
+                .zip(other.rect)
+                .all(|(a, b)| (a - b).abs() < 0.5),
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        }
+    }
+
     pub fn center(&self) -> (f32, f32) {
         let [x, y, w, h] = self.rect;
         (x + w / 2.0, y + h / 2.0)
@@ -264,7 +279,11 @@ pub fn target_as(rect: [f32; 4], kind: Kind) {
     }
     TARGETS.with_borrow_mut(|(current, _, _)| {
         if current.len() < 1024 {
-            current.push(Target { rect, kind });
+            current.push(Target {
+                rect,
+                kind,
+                listener: None,
+            });
         }
     });
 }
@@ -1409,14 +1428,17 @@ mod tests {
         let widgets = [fov, w("Video Settings..."), done, done2];
         let targets = [
             Target {
+                listener: None,
                 rect: [0.0, 0.0, 10.0, 10.0],
                 kind: slider,
             },
             Target {
+                listener: None,
                 rect: [0.0, 90.0, 10.0, 10.0],
                 kind: Kind::Row,
             },
             Target {
+                listener: None,
                 rect: [0.0, 100.0, 10.0, 10.0],
                 kind: Kind::Row,
             },

@@ -9,6 +9,8 @@ use mod_api::{prelude::*, *};
 pub(crate) struct GameDrawContext<'a, 'g> {
     pub(crate) game: &'a Game<'g>,
     pub(crate) surface: &'a mut crate::hud::HudBatch,
+    pub(in crate::game) widget_labels:
+        Option<std::slice::Iter<'a, std::sync::Arc<crate::text::Text>>>,
     /// The call's open clips (`push_clip`), closed when the call returns.
     clips: crate::game::gui_clips::GuiClips,
 }
@@ -18,6 +20,7 @@ impl<'a, 'g> GameDrawContext<'a, 'g> {
             game,
             surface,
             clips: Default::default(),
+            widget_labels: None,
         }
     }
 }
@@ -155,9 +158,18 @@ impl DrawContext for GameDrawContext<'_, '_> {
         active: bool,
         highlighted: bool,
     ) -> Result<(), mod_api::text::TextFormError> {
-        let label = label.try_into_engine(&())?;
+        let converted;
+        let label = if let Some(labels) = &mut self.widget_labels {
+            labels
+                .next()
+                .expect("one prepared label per added button")
+                .as_ref()
+        } else {
+            converted = label.try_into_engine(&())?;
+            &converted
+        };
         self.game
-            .native_widget_button(&mut *self.surface, rect, &label, active, highlighted);
+            .native_widget_button(&mut *self.surface, rect, label, active, highlighted);
         Ok(())
     }
     fn widget_text_field(&mut self, field: &TextFieldView) -> TextFieldLayout {

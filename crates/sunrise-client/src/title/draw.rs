@@ -114,27 +114,21 @@ impl Title {
                 if let Some(nightly) = sunrise_core::release::nightly_label() {
                     batch.text(atlas, &nightly, 2.0, 2.0, u32::MAX, true);
                 }
-                let notice = &lang::get_or(
-                    "sunrise.title.not_affiliated",
-                    "Not affiliated with Mojang or Microsoft",
-                );
-                // TitleScreen.init's `PlainTextButton`: the text's width wide, 10
-                // high at `height - 10`; `extractContents` underlines it while
-                // hovered or focused, and its press opens the credits.
-                let tw = HudBatch::text_width(atlas, notice).ceil();
-                let rect = [w - tw - 2.0, h - 10.0, tw, 10.0];
-                self.credits_button.set(rect);
-                crate::widgets::record(notice, rect, true);
-                let inside = cursor.0 >= rect[0]
-                    && cursor.0 < rect[0] + rect[2]
-                    && cursor.1 >= rect[1]
-                    && cursor.1 < rect[1] + rect[3];
-                crate::widgets::widget_cursor(inside, true);
-                let mut text = Text::literal(notice);
-                if inside {
-                    text = text.underlined();
+                if !self.main_widget_removed(0) {
+                    let (notice, rect) = Self::main_credits(atlas, w, h);
+                    self.credits_button.set(rect);
+                    crate::widgets::record(&notice, rect, true);
+                    let inside = cursor.0 >= rect[0]
+                        && cursor.0 < rect[0] + rect[2]
+                        && cursor.1 >= rect[1]
+                        && cursor.1 < rect[1] + rect[3];
+                    crate::widgets::widget_cursor(inside, true);
+                    let mut text = Text::literal(notice);
+                    if inside || self.focused_button == Some(0) {
+                        text = text.underlined();
+                    }
+                    batch.text_styled(atlas, &text, rect[0], rect[1], u32::MAX, true);
                 }
-                batch.text_styled(atlas, &text, rect[0], rect[1], u32::MAX, true);
             }
             Mode::Select { worlds, selected } => {
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);

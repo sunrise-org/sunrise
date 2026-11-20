@@ -4958,12 +4958,6 @@ impl Game<'_> {
             // TitleScreen.extractRenderState, then ToastManager over it: vanilla
             // draws the toast manager on every screen, so a pack download or a
             // resource-reload failure still shows on the title (#4428).
-            // The buttons crates add show by what is installed now: the Mods
-            // page's list changes while the title is open.
-            let mods = self.settings.mods.installed.len();
-            if let Some(title) = &mut self.title {
-                title.mods = mods;
-            }
             let drawn = self.draw_title_screen_with_pre_hook(&mut batch);
             if drawn && let Some(title) = &self.title {
                 title.draw_with_items(
@@ -4973,7 +4967,12 @@ impl Game<'_> {
                     self.cursor,
                     self.settings.file.bool("hideSplashTexts"),
                     self.settings.file.bool("hideServerAddress"),
-                    &mut |phase, batch| self.draw_screen_phase(batch, phase),
+                    &mut |phase, batch| {
+                        if phase == sunrise_client::screen_draw::RenderPhase::Foreground {
+                            self.draw_stock_screen_additions(batch);
+                        }
+                        self.draw_screen_phase(batch, phase);
+                    },
                 );
             }
             // ScreenEvent.Render.Post over the title's own screens: a mod draws
@@ -9222,6 +9221,19 @@ impl Game<'_> {
         ) {
             self.window_pointer_space.take();
         }
+        // The title's registered rows use the live installed-mod count. Keep their
+        // build in sync for input as well as for rendering.
+        if self.title.is_some() && self.screen == Screen::Playing && self.has_screen_init_hooks() {
+            self.build_screen();
+        }
+        let stock_widget_released = matches!(
+            event,
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            }
+        ) && self.end_stock_widget_capture();
         let pressed = match &event {
             WindowEvent::KeyboardInput { event, .. } => {
                 event.state == ElementState::Pressed && !event.repeat
@@ -9238,6 +9250,7 @@ impl Game<'_> {
             self.physical_buttons.clear();
             self.drag_button = None;
             self.container_buttons.clear();
+            self.end_stock_widget_capture();
         }
         if let WindowEvent::ModifiersChanged(m) = &event {
             self.update_modifiers(m.state());
@@ -9508,7 +9521,9 @@ impl Game<'_> {
             let title_text = control::title_owns_text(&self.screen, self.title.is_some());
             if self.screen_hooks_open()
                 && self.screen != Screen::Options
-                && (!title_text || self.title.as_mut().is_some_and(|t| t.has_caret_field()))
+                && (!title_text
+                    || self.stock_widget_text_focused()
+                    || self.title.as_mut().is_some_and(|t| t.has_caret_field()))
             {
                 typed = key_event.text.take().map(|text| text.to_string());
             }
@@ -9640,6 +9655,18 @@ impl Game<'_> {
                 return Ok(());
             }
             self.key_focus_mouse_press(&event);
+            if stock_widget_released
+                || (matches!(
+                    event,
+                    WindowEvent::MouseInput {
+                        state: ElementState::Pressed,
+                        button: MouseButton::Left,
+                        ..
+                    }
+                ) && self.stock_widget_mouse(true))
+            {
+                return Ok(());
+            }
             match event {
                 WindowEvent::CloseRequested => {
                     if !self.settings.quit_shortcuts
@@ -9666,6 +9693,9 @@ impl Game<'_> {
                         r.resize(size.width, size.height);
                     }
                     self.refresh_window_cursor();
+                    if self.has_screen_init_hooks() {
+                        self.build_screen();
+                    }
                     self.observe_fullscreen();
                 }
                 WindowEvent::Focused(focused) => {
@@ -9728,6 +9758,9 @@ impl Game<'_> {
                                 mouse_post = Some(post);
                             }
                             native_hooks::ScreenMousePre::NotFired => {}
+                        }
+                        if self.stock_widget_drag() {
+                            return Ok(());
                         }
                         if self.dialog_open() {
                             self.dialog_drag();

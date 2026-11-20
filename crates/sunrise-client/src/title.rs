@@ -445,6 +445,7 @@ pub struct Title {
     warning_check: Cell<[f32; 4]>,
     /// The bottom notice's `PlainTextButton` as last drawn: x, y, width, height.
     credits_button: Cell<[f32; 4]>,
+    removed_main_widgets: [u64; 4],
     /// `Minecraft.allowsMultiplayer()` once the account's attributes are known.
     pub allows_multiplayer: bool,
     /// The packages in the mods folder (the Mods screen's rows): the main menu's added buttons
@@ -908,6 +909,7 @@ impl Title {
             message_lines: Cell::new(1),
             warning_check: Cell::new([0.0; 4]),
             credits_button: Cell::new([0.0; 4]),
+            removed_main_widgets: [0; 4],
             allows_multiplayer: true,
             mods: 0,
             ban_queue: Default::default(),
@@ -2331,7 +2333,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 return (Action::None, true);
             }
         }
-        if matches!(self.mode, Mode::Main) {
+        if matches!(self.mode, Mode::Main) && !self.main_widget_removed(0) {
             let [bx, by, bw, bh] = self.credits_button.get();
             if (bx..bx + bw).contains(&x) && (by..by + bh).contains(&y) {
                 return (Action::Credits, true);
@@ -3030,6 +3032,9 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             };
         }
         if let Some(id) = self.focused_button {
+            if id == 0 && matches!(self.mode, Mode::Main) && !self.main_widget_removed(0) {
+                return (Action::Credits, true);
+            }
             let (w, h) = size;
             let buttons = self.buttons(w, h);
             if let Some(b) = buttons.into_iter().find(|b| b.id == id && b.enabled) {

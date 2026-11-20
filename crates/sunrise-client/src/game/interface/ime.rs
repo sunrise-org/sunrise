@@ -41,6 +41,9 @@ impl HeldKeyText {
 impl Game<'_> {
     /// Whether a text box has focus right now (the fields `ime_commit` can fill).
     pub(super) fn text_field_focused(&mut self) -> bool {
+        if self.stock_widget_text_focused() {
+            return true;
+        }
         if self.dialog_open() {
             return self.dialog_has_text_field();
         }
@@ -194,7 +197,7 @@ impl Game<'_> {
         if !self.text_field_focused() {
             return;
         }
-        if self.dialog_type(text) {
+        if self.stock_widget_type(text) || self.dialog_type(text) {
             return;
         }
         if self.title_input_active() {

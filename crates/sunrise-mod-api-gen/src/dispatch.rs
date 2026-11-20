@@ -564,7 +564,9 @@ pub(super) fn emit<'a>(
                         _ => None,
                     })
                     .flatten();
-            let field_ty = if mutable_entity {
+            let field_ty = if hook.name == "screen_init_post" && name == "widgets" {
+                syn::parse_quote!(ScreenWidgets<'_>)
+            } else if mutable_entity {
                 syn::parse_quote!(ModBlockEntityView<'_>)
             } else if optional_mutable_entity {
                 syn::parse_quote!(Option<ModBlockEntityView<'_>>)
@@ -967,6 +969,11 @@ pub(super) fn emit<'a>(
             },
             inits.join(", "),
         );
+        let build = if name == "screen_init_post" {
+            String::new()
+        } else {
+            build
+        };
         let write_back = if name == "block_entity_tick" {
             format!(
                 "*{event}.reply = if tick_changed {{ BlockEntityTickReply::Changed }} else {{ BlockEntityTickReply::Unchanged }}; {write_back}"
@@ -1187,6 +1194,12 @@ pub(super) fn emit<'a>(
                 format!(
                     "for (mod_id, {mod_item}) in super::entered_with_id(HookId::{hook_id}, \"{name}\") {{ if {event}.data.failure().is_some() {{ break; }} let result = super::chunk_disk::invoke(mod_id, || {{ {} }}); result.unwrap_or_else(|error| {event}.data.refuse(error)); if let Some(error) = {event}.data.failure().cloned() {{ let mut error = error; if error.mod_id.is_empty() {{ error.mod_id = mod_id.into(); }} {event}.data.attribute_failure(error); break; }} }}",
                     call(&mod_item, "break"),
+                ),
+            ),
+            None if name == "screen_init_post" => (
+                String::new(),
+                format!(
+                    "let mut {entered} = super::runtime::ListenerScope::new(); for (_, entry) in super::listening(HookId::{hook_id}) {{ let {mod_item} = {entered}.enter(entry, \"{name}\"); let saved = widgets.__checkpoint(); let mut {event} = {event_type} {{ screen, widgets: widgets.__edit(entry.id) }}; match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::runtime::refusable(contained, || {mod_item}.{name}({invoke})))) {{ Ok(Ok(())) => {{}}, Ok(Err(refusal)) => {{ widgets.__rollback(saved); refusal.report(); }}, Err(_) => {{ widgets.__rollback(saved); }} }} }}"
                 ),
             ),
             None if name == "consume_effect" => (

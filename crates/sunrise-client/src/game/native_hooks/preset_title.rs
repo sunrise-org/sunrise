@@ -7,7 +7,9 @@ impl Game<'_> {
     ) {
         title.set_additional_data_packs(self.pack.additional_data.clone());
         title.set_preset_data_source(self.pack.data_changes.clone());
-        if !self.screen_hooks_heard() {
+        let opening = self.screen_hooks_heard();
+        title.gated = opening || self.has_screen_init_hooks();
+        if !opening {
             self.screen_state.build.reopened();
             self.title = Some(title);
             self.build_screen();
@@ -23,6 +25,5 @@ impl Game<'_> {
             ScreenDecision::Keep | ScreenDecision::Open => self.build_screen(),
         }
         self.screen_state.observed = self.observed_now();
-        self.shown_init_post();
     }
 }

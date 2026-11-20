@@ -517,6 +517,7 @@ impl Game<'_> {
             return Vec::new();
         };
         let button = |rect| Target {
+            listener: None,
             rect,
             kind: Kind::Button,
         };
@@ -545,6 +546,7 @@ impl Game<'_> {
                 .collect();
         }
         targets.push(Target {
+            listener: None,
             rect: [xo + 25.0, yo + 13.0, 81.0, 14.0],
             kind: Kind::Field,
         });
@@ -556,6 +558,7 @@ impl Game<'_> {
         for (n, index) in ui.visible_tabs().into_iter().enumerate() {
             let tab = &p.tabs[index];
             targets.push(Target {
+                listener: None,
                 rect: [xo - 30.0, yo + 3.0 + 27.0 * n as f32, 35.0, 27.0],
                 kind: Kind::Tab(tab.selected),
             });

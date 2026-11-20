@@ -415,6 +415,9 @@ pub(super) fn start_game<'a>(
     game.publish_initial_client_models()?;
     // Finish Setup -> Config -> World before any screen, connection, input or tick hooks.
     game.native_configs_client_start();
+    // A resource-error page can open here. During handoff its renderer and
+    // final focus are not installed yet, so init cannot fire here.
+    game.screen_state.build.defer_init = handoff;
     if let Some(error) = pack_error {
         game.open_options_at(true, sunrise_client::options_ui::Page::Packs);
         game.ui.options.resource_error = Some(error);

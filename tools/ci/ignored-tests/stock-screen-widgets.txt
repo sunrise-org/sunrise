@@ -1,0 +1,4 @@
+sunrise-client game::screen_widgets::tests::no_post_listener_preserves_stock_widgets lib daily resources
+sunrise-client game::screen_widgets::tests::pause_listeners_are_ordered_and_pressed_only_by_the_owner lib daily resources
+sunrise-client game::screen_widgets::tests::pre_skips_stock_but_post_can_install_the_only_control lib daily resources
+sunrise-client game::screen_widgets::tests::title_post_mounts_an_edit_box_and_a_modal_does_not_reinitialize_it lib daily resources

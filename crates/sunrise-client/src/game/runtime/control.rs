@@ -293,6 +293,9 @@ impl Game<'_> {
     /// Nothing here is a key — the caller drops control characters. `Err` when
     /// no text box of the screen takes them.
     pub(super) fn type_chars_into_screen(&mut self, text: &str) -> Result<()> {
+        if self.stock_widget_type(text) {
+            return Ok(());
+        }
         if self.book.is_some() {
             self.book_type(text);
             return Ok(());

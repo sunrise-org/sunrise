@@ -150,16 +150,24 @@ impl Game<'_> {
         // Gameplay keys must not stay held behind the options screen, where
         // bindings can also change before the physical key is released.
         self.keys.clear();
-        self.set_screen(Screen::Options);
-        self.options_from_title = from_title;
-        let minecart_improvements = self.minecart_improvements();
-        // Restore fullbright when leaving another server.
-        self.hold_fullbright();
-        let ui = &mut self.ui.options;
-        ui.open_at(!from_title && self.title.is_none(), page);
-        ui.minecart_improvements = minecart_improvements;
-        ui.languages = lang::available(&[&self.pack.source]);
-        self.refresh_pack_lists();
+        let init = |game: &mut Self| {
+            game.options_from_title = from_title;
+            let minecart_improvements = game.minecart_improvements();
+            // Restore fullbright when leaving another server.
+            game.hold_fullbright();
+            let ui = &mut game.ui.options;
+            ui.open_at(!from_title && game.title.is_none(), page);
+            ui.minecart_improvements = minecart_improvements;
+            ui.languages = lang::available(&[&game.pack.source]);
+            game.refresh_pack_lists();
+        };
+        if self.screen == Screen::Options {
+            init(self);
+            self.screen_state.build.reopened();
+            self.build_screen();
+        } else {
+            self.set_screen_with(Screen::Options, init);
+        }
     }
     /// While the resource pack screen is open, `resourcepacks/` is looked at once a second
     /// and the list found again when its packs changed (`PackSelectionScreen.tick`'s

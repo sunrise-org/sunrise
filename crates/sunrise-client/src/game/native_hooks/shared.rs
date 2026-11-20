@@ -96,9 +96,9 @@ pub(super) fn observed_overlay_id(overlays: &[(bool, &'static str)]) -> Option<&
 }
 
 impl Game<'_> {
-    pub(super) fn observed_screen_view(&self) -> Option<ScreenView<'_>> {
+    pub(super) fn overlay_screen_id(&self) -> Option<&'static str> {
         let book = self.book.as_ref().map(super::books::BookScreen::id);
-        let overlay = observed_overlay_id(&[
+        observed_overlay_id(&[
             (self.command_prompt.is_some(), "command_prompt"),
             (self.link_prompt.is_some(), "link_prompt"),
             (self.code_of_conduct.is_some(), "code_of_conduct"),
@@ -106,7 +106,11 @@ impl Game<'_> {
             (self.dialog_open(), "dialog"),
             (book.is_some(), book.unwrap_or("book_view")),
             (self.sign_edit.is_some(), "sign_editor"),
-        ]);
+        ])
+    }
+
+    pub(super) fn observed_screen_view(&self) -> Option<ScreenView<'_>> {
+        let overlay = self.overlay_screen_id();
         let Some(id) = overlay else {
             return self.screen_view_now();
         };
@@ -164,7 +168,6 @@ impl Game<'_> {
                         // A title screen: told here, so the frame's observer
                         // doesn't announce it again.
                         self.screen_state.observed = self.observed_now();
-                        self.shown_init_post();
                     }
                     return;
                 }
@@ -253,8 +256,8 @@ impl Game<'_> {
         match target {
             ScreenTarget::Pause => {
                 self.pause_focus = None;
-                self.set_screen(Screen::Paused);
                 self.pause_menu = true;
+                self.set_screen(Screen::Paused);
             }
             ScreenTarget::Options => self.open_options(false),
             ScreenTarget::Inventory => {
@@ -327,7 +330,7 @@ impl Game<'_> {
     }
     /// `screen` as the screen hooks see it while it opens or closes: no
     /// renderer (a test, a window not yet up) leaves its rectangle empty.
-    fn screen_change_view(&self, screen: Screen) -> ScreenView<'_> {
+    pub(super) fn screen_change_view(&self, screen: Screen) -> ScreenView<'_> {
         let rect = match &self.renderer {
             Some(renderer) => self.screen_rect(
                 &HudBatch::new(
@@ -377,7 +380,7 @@ impl Game<'_> {
     ) -> bool {
         if !self.screen_hooks_heard() {
             open(self);
-            self.screen_state.build.reopened();
+            self.screen_state.build.overlay = None;
             self.build_screen();
             return true;
         }
@@ -405,18 +408,15 @@ impl Game<'_> {
             ScreenDecision::Vanilla(target) => {
                 self.open_screen_target(target);
                 self.screen_state.observed = self.observed_now();
-                self.shown_init_post();
                 return false;
             }
             ScreenDecision::Open => {}
         }
         open(self);
-        self.screen_state.build.reopened();
+        self.screen_state.build.overlay = None;
         self.build_screen();
         // Told here, so the frame's `observe_screen` sees no change to announce.
         self.screen_state.observed = self.observed_now();
-        let none = self.screen_change_view(Screen::Playing);
-        self.native_screen_init_post(&screen_view_with_id(&none, id));
         true
     }
 
@@ -453,7 +453,7 @@ impl Game<'_> {
     /// (`screen_hooks_heard`), `set_mode` applies at once. Run after each window
     /// event and control command, and each frame.
     pub(super) fn settle_title_mode(&mut self) {
-        let gated = self.screen_hooks_heard();
+        let gated = self.screen_hooks_heard() || self.has_screen_init_hooks();
         let Some(title) = self.title.as_mut() else {
             return;
         };
@@ -483,19 +483,7 @@ impl Game<'_> {
             }
         }
         self.screen_state.observed = self.observed_now();
-        self.shown_init_post();
     }
-    /// `screen_init_post` for what shows now, once a change was told to the
-    /// frame's observer: a title screen, a mod's, or the game's own.
-    fn shown_init_post(&self) {
-        let view = self.screen_change_view(self.screen);
-        let id = match &self.title {
-            Some(title) if self.screen == Screen::Playing => title.mode.id(),
-            _ => view.id,
-        };
-        self.native_screen_init_post(&screen_view_with_id(&view, id));
-    }
-
     /// Shows `title`, as `Minecraft.setScreen(new TitleScreen())` (or the
     /// screen it opens on: the multiplayer list, a disconnect, an error)
     /// does at startup and when a world closes. `screen_opening` fires to its
@@ -568,8 +556,8 @@ impl Game<'_> {
     /// changes before they apply (`set_screen`, `open_screen_overlay`,
     /// `settle_title_mode`, `show_title`, `hide_title`); what is left, an
     /// overlay closing, is announced here, through the same `screen_change`
-    /// and in the same order, but after the change. `screen_init_post`
-    /// follows for every kind, on opening and on a resize.
+    /// and in the same order, but after the change. Post runs on ScreenBuild,
+    /// not on this observer.
     fn observe_change(&mut self, current: Option<ObservedScreen>) {
         let changed = match (&self.screen_state.observed, &current) {
             (Some(old), Some(new)) => old.id != new.id || old.menu != new.menu,
@@ -595,13 +583,6 @@ impl Game<'_> {
                     from.is_some(),
                 );
             }
-            if let Some(new) = &current {
-                self.native_screen_init_post(&new.view());
-            }
-        } else if let (Some(old), Some(new)) = (&self.screen_state.observed, &current)
-            && old.rect != new.rect
-        {
-            self.native_screen_init_post(&new.view());
         }
         self.screen_state.observed = current;
     }

@@ -212,6 +212,7 @@ pub(super) fn drawn_targets() -> Vec<Target> {
         .iter()
         .filter(|w| w.enabled)
         .map(|w| Target {
+            listener: None,
             rect: [w.x, w.y, w.w, w.h],
             kind: Kind::Button,
         })
@@ -293,18 +294,21 @@ mod tests {
 
     fn button(x: f32, y: f32) -> Target {
         Target {
+            listener: None,
             rect: [x, y, 98.0, 20.0],
             kind: Kind::Button,
         }
     }
     fn row(y: f32) -> Target {
         Target {
+            listener: None,
             rect: [100.0, y, 220.0, 36.0],
             kind: Kind::Row,
         }
     }
     fn slider() -> Target {
         Target {
+            listener: None,
             rect: [0.0, 0.0, 150.0, 20.0],
             kind: Kind::Slider {
                 value: 0.5,
@@ -314,6 +318,7 @@ mod tests {
     }
     fn field() -> Target {
         Target {
+            listener: None,
             rect: [0.0, 0.0, 200.0, 20.0],
             kind: Kind::Field,
         }
@@ -372,6 +377,7 @@ mod tests {
             button(266.0, 108.0), // Quit
             button(164.0, 60.0),  // Singleplayer
             Target {
+                listener: None,
                 rect: [140.0, 84.0, 20.0, 20.0],
                 kind: Kind::Button,
             }, // Friends
@@ -515,10 +521,12 @@ mod tests {
     #[test]
     fn the_keyboard_skips_slots_and_inventory_tabs() {
         let slot = Target {
+            listener: None,
             rect: [0.0, 0.0, 16.0, 16.0],
             kind: Kind::Slot,
         };
         let tab = Target {
+            listener: None,
             rect: [0.0, 0.0, 26.0, 32.0],
             kind: Kind::Tab(false),
         };

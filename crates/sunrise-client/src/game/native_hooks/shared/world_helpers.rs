@@ -207,6 +207,5 @@ impl Game<'_> {
             }
         }
         self.screen_state.observed = self.observed_now();
-        self.shown_init_post();
     }
 }
