@@ -1223,8 +1223,13 @@ fn public_transfer_refuses_second_destination_aborts_root_then_moves_and_returns
             );
             assert_eq!(dormant.revisions(game), Err(mod_api::LevelReadError::Stale));
             let actual = game.native_level_world(dormant).unwrap();
-            assert_eq!((actual.revision, actual.block_entities.content_revision()),
-                (before_revisions[2].block_revision, before_revisions[2].content_revision));
+            assert_eq!(
+                (actual.revision, actual.block_entities.content_revision()),
+                (
+                    before_revisions[2].block_revision,
+                    before_revisions[2].content_revision
+                )
+            );
             assert_eq!(wal::read_epoch(root).unwrap(), before_epoch);
             assert_eq!(
                 core_images(root, &[A, B, C, "minecraft:overworld"]),

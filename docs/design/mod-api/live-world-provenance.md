@@ -385,3 +385,17 @@ than assuming that the moved-cell payload alone determines checkpoint cost. Thes
 are coverage/configuration of the existing contract, not another ownership framework.
 Their final actual execution belongs to the next recorded Game artifact. All earlier
 failed runs, unchanged-source bindings and coordinator replay receipts remain historical.
+
+The subsequent clean `4e30476652` explicit-base readiness invocation finished nonzero with
+its source unchanged. Workspace/server Clippy, static checks, doc tests and generated dispatch
+tests passed. The selected Game unit failure remained the separately reproduced non-Unicode
+directory-creation limitation; the complete Python selection remained nonzero. Its exact
+output also exposed one tuple-only rustfmt difference, corrected without changing the test.
+Actual ignored Game executions then passed the extended two-destination transfer and ordinary
+action rollback rows. The new publication-policy row instead returned Unavailable before
+reaching its first policy decision; the coordinator reproduced that same failure independently.
+That fixture now uses the established opened-world scratch root, session lock, aligned SaveDir
+and world-ready setup, with explicit owner/phase assertions before the public call. This is
+a test-context correction pending its own execution, not evidence that the policy passed.
+The full readiness failure is retained, and unchanged Linux/Python selections are not rerun
+or relabelled green because of this bounded fixture/format correction.

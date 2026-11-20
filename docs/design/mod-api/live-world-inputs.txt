@@ -147,6 +147,7 @@ crates/sunrise-client/src/game/network/viewed_worlds/mod.rs
 crates/sunrise-client/src/game/network/viewed_worlds/routing.rs
 crates/sunrise-client/src/game/network/viewed_worlds/worlds.rs
 crates/sunrise-client/src/game/runtime/control.rs
+crates/sunrise-client/src/game/runtime/execution_role.rs
 crates/sunrise-client/src/game/runtime/transactions.rs
 crates/sunrise-client/src/game/runtime/transactions/decision.rs
 crates/sunrise-client/src/game/runtime/transactions/decision_storage.rs
@@ -229,6 +230,7 @@ crates/sunrise-mod-api-gen/src/wire/ty.rs
 crates/sunrise-mod-api-macros/Cargo.toml
 crates/sunrise-mod-api-macros/src/lib.rs
 crates/sunrise-mod-api/Cargo.toml
+crates/sunrise-mod-api/src/testing.rs
 crates/sunrise-mod-host/Cargo.toml
 crates/sunrise-mod-point-shape/Cargo.toml
 crates/sunrise-mod-runtime/Cargo.toml
@@ -241,6 +243,7 @@ crates/sunrise-mod-vocab/src/block/types.rs
 crates/sunrise-mod-vocab/src/client/model_instance.rs
 crates/sunrise-mod-vocab/src/client/scene.rs
 crates/sunrise-mod-vocab/src/content/crash.rs
+crates/sunrise-mod-vocab/src/dispatch_scope.rs
 crates/sunrise-mod-vocab/src/entity/collider.rs
 crates/sunrise-mod-vocab/src/exports/domains.rs
 crates/sunrise-mod-vocab/src/exports/level_attachments.rs
@@ -280,6 +283,7 @@ crates/sunrise-mod-vocab/src/world/ground.rs
 crates/sunrise-mod-vocab/src/world/level_attachments.rs
 crates/sunrise-mod-vocab/src/world/live_world.rs
 crates/sunrise-mod-vocab/src/world/mod.rs
+crates/sunrise-mod-vocab/src/world/phase.rs
 crates/sunrise-mod-vocab/src/world/phase_refusal.rs
 crates/sunrise-mod-vocab/src/world/read_error.rs
 crates/sunrise-mod-vocab/src/world/runtime_levels.rs

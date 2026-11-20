@@ -18,6 +18,17 @@ fn trusted_external_pose_consumes_overlap_while_default_identity_and_step_guards
         vec![mod_api::ModEntry::new("live_fixture", Box::new(Fixture))].into(),
         || {
             super::super::native_entity_refs::tests::with_game(|game| {
+                let scratch = tempfile::tempdir().unwrap();
+                game.world_root = scratch.path().to_path_buf();
+                game.session_lock =
+                    Some(sunrise_client::save::SessionLock::acquire(scratch.path()).unwrap());
+                game.save = Arc::new(sunrise_client::save::SaveDir::new(
+                    sunrise_client::save::dimension_dir(scratch.path(), game.dim.id()),
+                    game.world.shape,
+                    Some(Default::default()),
+                ));
+                game.options.dedicated = Some(Vec::new());
+                game.native_lifecycle_world_ready();
                 let _phase =
                     mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
                 let _owner =
@@ -38,6 +49,11 @@ fn trusted_external_pose_consumes_overlap_while_default_identity_and_step_guards
                     .default_state("minecraft:stone")
                     .unwrap();
                 game.world.set(17, 64, 0, stone).unwrap();
+                assert_eq!(game.runtime_caller(), Ok("live_fixture"));
+                assert!(mod_api::__private::access_allowed(
+                    "level_project",
+                    mod_api::__private::LoadAccess::WorldOnly
+                ));
                 let cells = &[[17, 64, 0]];
                 let pose = LiveWorldPose::at([0.0; 3]);
                 assert_eq!(
