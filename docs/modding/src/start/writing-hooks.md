@@ -71,6 +71,7 @@ registration context instead of access to a live world. See
 From your mod project, run [`cargo sunrise-mod hooks <query>`](../reference/sdk/05-commands.md)
 to find matching hook names in the pinned SDK, for example:
 
+<!-- quickstart-test: in first-mod/greeter -->
 ```sh
 cargo sunrise-mod hooks player_tick_post
 ```

@@ -8,8 +8,13 @@ a comment on the line before it:
 
     <!-- quickstart-test: skip, <why> -->
 
-so a new block is run unless its author says why not. The run fails at the first block that exits non-zero and names
-its page and line.
+so a new block is run unless its author says why not. A block that runs in the project an earlier page made (the
+pages run in file name order) names its folder the same way, under the run's scratch folder, where each page's working
+folder is named after the page:
+
+    <!-- quickstart-test: in first-mod/greeter -->
+
+The run fails at the first block that exits non-zero and names its page and line.
 
     python3 tools/book_quickstart.py                 # the pages as written: the tool the install page downloads
     python3 tools/book_quickstart.py --tool <path>   # the same, then with this cargo-sunrise-mod for the mod pages
@@ -23,6 +28,7 @@ import argparse
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -31,12 +37,13 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 START = ROOT / "docs/modding/src/start"
 INSTALL = "install-tool.md"
-SKIP = re.compile(r"<!--\s*quickstart-test:\s*skip,\s*(.+?)\s*-->")
+MARK = re.compile(r"<!--\s*quickstart-test:\s*(?:skip,\s*(?P<skip>.+?)|in\s+(?P<folder>\S+))\s*-->")
 LAUNCHER = "sunrise-launcher"
 
 
 def blocks(text):
-    """The page's ```sh blocks in order, each as (line of its fence, code, why it is skipped or None)."""
+    """The page's ```sh blocks in order, each as (line of its fence, code, why it is skipped or None, the folder
+    under the run's scratch folder it runs in or None)."""
     found, lines, at = [], text.splitlines(), 0
     while at < len(lines):
         if lines[at].strip() != "```sh":
@@ -46,24 +53,28 @@ def blocks(text):
         if end is None:
             raise SystemExit(f"line {at + 1}: a ```sh block that never closes")
         before = next((line for line in reversed(lines[:at]) if line.strip()), "")
-        skip = SKIP.fullmatch(before.strip())
-        found.append((at + 1, "\n".join(lines[at + 1:end]), skip and skip[1]))
+        mark = MARK.fullmatch(before.strip())
+        found.append((at + 1, "\n".join(lines[at + 1:end]), mark and mark["skip"], mark and mark["folder"]))
         at = end + 1
     return found
 
 
 def run_page(page, folder, env, log=sys.stdout):
-    """Runs the page's blocks in one shell started in `folder`. Returns what went wrong, or None."""
+    """Runs the page's blocks in one shell started in `folder`, a folder of the run's scratch folder. Returns what went
+    wrong, or None."""
     found = blocks(page.read_text())
     read, write = os.pipe()
     script, runnable = ["set -e"], []
-    for line, code, skip in found:
+    for line, code, skip, where in found:
         if skip:
             print(f"{page.name}:{line}: not run ({skip})", file=log, flush=True)
             continue
         runnable.append(line)
         # The marker goes to the descriptor Python reads, so the failing block is known whatever the block prints.
-        script += [f"echo {line} >&{write}", code]
+        script.append(f"echo {line} >&{write}")
+        if where:
+            script.append(f"cd -- {shlex.quote(str(Path(folder).parent / where))}")
+        script.append(code)
     process = subprocess.Popen(["bash", "-c", "\n".join(script)], cwd=folder, env=env, pass_fds=(write,),
                                stdout=log, stderr=subprocess.STDOUT)
     os.close(write)
