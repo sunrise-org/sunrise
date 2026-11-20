@@ -30,7 +30,9 @@ use super::raw_backlog::Received;
 use super::remote_chunks::{ChunkDecoder, ChunkFormat, Next};
 use super::remote_vehicles::PassengerSeat;
 use super::render_tick::{mob_tracking_body, player_tracking_body};
-use super::{Dim, Game, Mining, Screen, item_use::ticks_left, level_sounds::LevelSound};
+use super::{
+    Dim, Game, Mining, Screen, commands::Target, item_use::ticks_left, level_sounds::LevelSound,
+};
 use crate::game::api_values::TryIntoApi;
 use mod_api::InteractionKey;
 use std::{
@@ -6093,7 +6095,7 @@ impl Game<'_> {
 
     /// `ClientPacketListener.handleLookAt`: `Entity.lookAt` from this
     /// player's feet or eyes, towards the packet's entity (its feet or eyes)
-    /// when this client tracks it, else towards the packet's point.
+    /// when this client has it, else towards the packet's point.
     fn remote_look_at(&mut self, p: &play::PlayerLookAt) {
         // `EntityAnchorArgument.Anchor`: 0 feet, 1 eyes.
         const EYES: i32 = 1;
@@ -6107,17 +6109,79 @@ impl Game<'_> {
         let to = p
             .entity
             .as_ref()
-            .and_then(|e| {
-                let m = self.mobs.iter().find(|m| m.id == e.id as u32)?;
-                let y = if e.anchor == EYES {
-                    m.eye_y()
-                } else {
-                    m.position.y
-                };
-                Some([m.position.x, y, m.position.z])
-            })
+            .and_then(|e| self.look_at_anchor(e.id, e.anchor == EYES))
             .unwrap_or(p.target);
-        (self.yaw, self.pitch) = look_at_rotation(from, to);
+        let (yaw, pitch) = look_at_rotation(from, to);
+        // Entity.lookAt: the head and `yRotO`/`xRotO` take the new angles
+        // too, so neither the view nor the model eases into the turn.
+        (self.yaw, self.pitch) = (yaw, pitch);
+        self.rope_rot_old = (yaw, pitch);
+        if let Some(player) = self.player.as_mut() {
+            player.yaw = yaw;
+            player.head_yaw = yaw;
+        }
+        self.snap_player_model_pitch();
+    }
+
+    /// `ClientboundPlayerLookAtPacket.getPosition`'s entity half:
+    /// `EntityAnchorArgument.Anchor.apply` on `ClientLevel.getEntity(id)`,
+    /// where this client's copy of it is now. None when it has no such entity.
+    fn look_at_anchor(&self, id: i32, eyes: bool) -> Option<[f64; 3]> {
+        let remote = self.remote.as_ref()?;
+        let family = self
+            .client_level_entity(remote, id)
+            .and_then(|t| Some((self.target_position(t)?, self.target_eye_height(t))));
+        let (mut at, eye_height) = match family {
+            Some(found) => found,
+            None => {
+                let (kind, row) = remote.tracked_entity(id)?;
+                let at = self.client_copy_position(id).unwrap_or(row);
+                (at, self.type_eye_height(kind))
+            }
+        };
+        if eyes {
+            at[1] += eye_height;
+        }
+        Some(at)
+    }
+
+    /// Where this client's own copy of an entity that no `Target` names here
+    /// is now: a display still easing through a teleport, an interaction, a
+    /// fishing hook that moves between packets. None for one the client keeps
+    /// only as its tracked row, whose last packet position is then its pose.
+    fn client_copy_position(&self, id: i32) -> Option<[f64; 3]> {
+        if let Some(display) = self.text_displays.get(&id) {
+            return Some(display.position().to_array());
+        }
+        if let Some(interaction) = self.interactions.get(&id) {
+            let p = interaction.position;
+            return Some([p.x, p.y, p.z]);
+        }
+        let id = id as u32;
+        let p = self
+            .fishing_hook_by_id(id)
+            .map(|(hook, _)| hook.position)
+            .or_else(|| {
+                self.remote_hooks
+                    .iter()
+                    .find(|hook| hook.id() == id)
+                    .map(|hook| hook.position)
+            })?;
+        Some([p.x, p.y, p.z])
+    }
+
+    /// `ClientLevel.getEntity`: the local player, or an entity the server
+    /// tracks to this client in the family this client holds it in. None for
+    /// an id it doesn't have.
+    pub(in crate::game) fn client_level_entity(&self, remote: &Remote, id: i32) -> Option<Target> {
+        if id == remote.entity_id {
+            return self.player.as_ref().map(|_| Target::Player);
+        }
+        remote.tracked(id)?;
+        match self.level_entity(id)? {
+            Target::Mob(mob) if !self.mobs.iter().any(|m| m.id == mob && !m.removed) => None,
+            target => Some(target),
+        }
     }
 
     /// ClientPacketListener.handleMovePlayer.
@@ -10764,6 +10828,9 @@ pub(crate) mod tests {
     }
     mod client_level_lifecycle_tests {
         include!("client_level_lifecycle_tests.rs");
+    }
+    mod client_look_at_tests {
+        include!("client_look_at_tests.rs");
     }
     mod client_menu_tests {
         include!("client_menu_tests.rs");

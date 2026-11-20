@@ -181,7 +181,7 @@ impl Game<'_> {
                 .mobs
                 .iter()
                 .find(|m| m.id == id)
-                .map_or(0.0, |m| m.eye_y() - m.position.y),
+                .map_or(0.0, |m| m.eye_height()),
             // ArmorStand.getDefaultDimensions: a marker's are empty, a small
             // stand's are BABY_DIMENSIONS, whose eye height is 0.9875F.
             Target::Stand(id) => match self.armor_stands.iter().find(|a| a.id == id) {
@@ -195,7 +195,7 @@ impl Game<'_> {
     }
     /// `EntityType.getDimensions().eyeHeight()` from `entity-types.json`,
     /// read once: a float, widened as `Entity.getEyeY` does.
-    fn type_eye_height(&self, ty: &str) -> f64 {
+    pub(in crate::game) fn type_eye_height(&self, ty: &str) -> f64 {
         static EYE_HEIGHTS: std::sync::OnceLock<std::collections::HashMap<String, f64>> =
             std::sync::OnceLock::new();
         EYE_HEIGHTS

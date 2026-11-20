@@ -109,18 +109,13 @@ impl Game<'_> {
     /// login, or for an entity the client doesn't have.
     pub(super) fn native_client_entity_target(&self, entity: EntityRef) -> Option<Target> {
         let (remote, id) = self.native_client_entity_context(entity)?;
-        if id == remote.entity_id {
-            return self.player.as_ref().map(|_| Target::Player);
-        }
         // The server tracks the dragon alone; its parts are the client's own copies of it.
-        if let Some(part) = self.level_dragon_part(entity.id()) {
+        if id != remote.entity_id
+            && let Some(part) = self.level_dragon_part(entity.id())
+        {
             return Some(part);
         }
-        remote.tracked(id)?;
-        match self.level_entity(id)? {
-            Target::Mob(mob) if !self.mobs.iter().any(|m| m.id == mob && !m.removed) => None,
-            target => Some(target),
-        }
+        self.client_level_entity(remote, id)
     }
     /// What a handle names for a read that works on both sides: the server's
     /// entity (`native_entity_target`) or, on a client, its own copy of it.

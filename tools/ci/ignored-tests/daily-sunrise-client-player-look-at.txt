@@ -1,0 +1,2 @@
+# ClientboundPlayerLookAtPacket on the client: the anchor's live copy and the snapped old angles, against pinned 26.3 bits (#3430).
+sunrise-client game::remote::tests::client_look_at_tests::look_at_aims_at_the_clients_live_copy_and_snaps_every_old_angle lib daily resources
