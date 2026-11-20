@@ -1361,6 +1361,7 @@ fn ai_and_finish_tick(
         // NoAI mob pushes what it overlaps (and is pushed back by its own
         // push).
         drop_tiny_motion(m);
+        ridden_without_ai(m, w, level, events);
         walk_and_freeze(m, w, level, events);
         push_entities(m, w, level, events);
         ageable_step(m, w, level, events);
@@ -3135,6 +3136,34 @@ mod selector_restore_tests {
             assert_eq!(drops.load(Ordering::SeqCst), 2);
         }
     }
+}
+
+/// `LivingEntity.aiStep`'s `travelRidden`: a player rider still drives a NoAI mount (NoAI only
+/// turns off `isEffectiveAi`, which the riderless `travel` asks for), so it turns with its rider
+/// (`tickRidden`) and moves on its input, as the AI path does after `serverAiStep`.
+fn ridden_without_ai(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    events: &mut Vec<MobEvent>,
+) {
+    if !m.alive() || !super::equine::controlled(m) {
+        return;
+    }
+    super::equine::ridden_step(m, w.loop_context);
+    m.handle_jumping(w);
+    let input = Vec3::new(
+        f64::from(m.ai.xxa),
+        f64::from(m.ai.yya),
+        f64::from(m.ai.zza),
+    );
+    if super::equine::moved_by_client(m) {
+        m.velocity = Vec3::ZERO;
+    } else {
+        m.travel(w, level, input, events);
+        hurt_teleports(m, w, events);
+    }
+    m.apply_effects_from_blocks(w, events);
 }
 
 /// Mob.serverAiStep
@@ -6886,6 +6915,55 @@ mod allay_healing_tests {
         if !ran {
             eprintln!("Prepared mob data unavailable; Allay tick coverage did not run");
         }
+    }
+}
+
+#[cfg(test)]
+mod noai_ridden_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// `LivingEntity.aiStep` runs `travelRidden` for a player rider whatever NoAI says: a
+    /// saddled NoAI donkey turns its pitch to half its rider's (`AbstractHorse.tickRidden`),
+    /// walks forward on the rider's input and lands on the ground (#3040).
+    #[test]
+    #[ignore = "daily"]
+    fn a_ridden_noai_donkey_travels_and_turns_with_its_rider() {
+        let ran = crate::mobs::world::with_built_test_world(
+            &[],
+            |world, registry| {
+                world
+                    .chunks
+                    .insert((0, 0), Arc::new(crate::chunk::Chunk::empty(0, 0)));
+                let stone = registry.default_state("minecraft:stone").unwrap();
+                for x in 0..16 {
+                    for z in 0..16 {
+                        world.set(x, 63, z, stone).unwrap();
+                    }
+                }
+            },
+            |w, types| {
+                let kind = Arc::new(types.types["minecraft:donkey"].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(8.5, 64.0, 8.5), 0.0);
+                m.no_ai = true;
+                m.persistent = true;
+                m.set_saddle(Some(crate::items::ItemStack::new("minecraft:saddle", 1)));
+                let start = m.position;
+                let (mut level, mut events) = (crate::health::TestLevel::new(0), Vec::new());
+                for _ in 0..3 {
+                    m.rider = Some(super::super::equine::Rider {
+                        forward: 1.0,
+                        pitch: 20.0,
+                        ..Default::default()
+                    });
+                    assert!(tick(&mut m, w, &mut level.level(), &mut events));
+                }
+                assert_eq!(m.head_pitch, 10.0);
+                assert!(m.on_ground);
+                assert!(m.position.z > start.z, "{:?} from {start:?}", m.position);
+            },
+        );
+        assert!(ran, "vanilla data is missing");
     }
 }
 
