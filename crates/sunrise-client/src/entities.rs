@@ -2403,7 +2403,7 @@ impl ArmorStand {
         travels_after: bool,
         mover: sunrise_world::entity_move::MoverType,
         context: &sunrise_world::native_load_context::LoopContext,
-    ) {
+    ) -> bool {
         let mut scene = SceneCollisions {
             subject: self.feet_are_leather_boots().then_some(
                 crate::collisions::PowderSnowSubject {
@@ -2417,6 +2417,9 @@ impl ArmorStand {
         // move gate (#2414); PR 1a records the movement unchanged.
         let mut gate =
             crate::move_gate::armed(context, self.id, "minecraft:armor_stand", mover, delta);
+        if gate.skipped() {
+            return false;
+        }
         let delta = gate.delta();
         let Ok(moved) = crate::move_gate::scene_resolve_in_border_with(
             &mut gate,
@@ -2432,7 +2435,7 @@ impl ArmorStand {
             border.map(|b| (b, [self.position.x, self.position.z])),
             entities,
         ) else {
-            return;
+            return false;
         };
         let length = moved.length_squared();
         if length > 1.0e-7 || delta.length_squared() - length < 1.0e-7 {
@@ -2461,6 +2464,7 @@ impl ArmorStand {
             self.on_ground = vertical && delta.y < 0.0;
             self.ground_support(&mut scene, moved);
         }
+        true
     }
     /// `Entity.checkSupportingBlock` after a move by `movement`: the block
     /// under the feet while `on_ground`, none otherwise.

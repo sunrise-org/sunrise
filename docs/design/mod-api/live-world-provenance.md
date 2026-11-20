@@ -520,3 +520,82 @@ full explicit-base readiness failures remain nonpasses; this follow-up did not r
 unmodified Linux/Python readiness universe or relabel it green. All source-only incidental
 search output stayed in Sunrise's own repository; no reference/other-engine/private port
 implementation was read or used.
+
+## Upright carried-body and retired-recapture follow-up
+
+A coordinator-supplied generic runtime observation prompted own synthetic ordinary-client
+horizontal-axis rotation tests. No private caller source, coordinates, solver algorithms or
+reference implementation values were read. The original own 744 artifact reproduced
+uphill upright-body embedding followed by idle fall-through. Its real two-process retired
+return/recapture regression separately passed; that does not classify another caller's
+Revision refusal. Expanded ordinary-scheduler coverage also verifies that global/parked
+block writes refuse and the actual Source callback owns state-bearing seed writes.
+
+The bounded correction computes actual current support-face clearance within existing step
+height and uses the existing one collided Carried invocation. Source-only reviews rejected
+a forbidden direct collision resolver and an early zero-contact-delta return; their raw
+candidates remain retained. Pure contact inspection uses the existing collision query
+instead. A zero-centre-contact pivot can still need uphill footprint clearance.
+
+Own ordinary no-projection controls established both the unchanged zero-Y/tiny-gap ground
+transition and once-only landing through the measured reversal gap with downward velocity.
+The signed regression's overly strict later carried-position expectation was aligned only
+after those actual controls; original failures remain failures. Exact first rises/pivot,
+nonembedding, horizontal stability, post-landing stability, no net rising-height loss,
+ground/packet/hint behavior and ordinary jump remain checked. No Java golden or new
+geometric tolerance was introduced.
+
+Own 4294 execution then reproduced a separate existing-contract violation: one actual
+FlowCancel preserved ItemEntity position/velocity/other flags but changed on_ground from
+true to false. The coordinator independently repeated that failure and the ordinary
+control, then retained the exact executable. A previous Mob test masked the ground setter
+because that kind does not implement it. The fix propagates the existing single gate's
+run/skipped outcome through generic, player and armor-stand delegates; Skip/error prevents
+the carry caller's post-move contact write. Real ItemEntity and ArmorStand rows preserve
+the complete actual pre-invocation tuple with exactly one callback.
+
+Frozen source8/build6 compiled the Game and affected client-lib test targets with unchanged
+source. The new focused rows and historical selected controls passed; exact commands, raw
+sources, profile/resources and binary hashes live under upright-carry-candidate. One wrong
+client-lib selector executed zero tests and was correctly refused by the driver; it remains
+an immutable nonpass. A separate corrected exact selector actually ran the stand control,
+and actual-corrected-final-6 records the explicit composition rather than rewriting history.
+These are direct constructed-client/Game and library observations, not a rebuilt SDK or
+physical-window claim. Final focused lint/format/index/hook outcomes are recorded separately
+after execution; historical whole-readiness and legacy WASM-load failures remain nonpasses.
+
+The canonical fixture-only follow-ups remain separate commits. The coordinator reports
+normal native fixture18 compilation/packaging and its independent multi-process runtime
+sequence; the legacy WASM artifact compiled but failed during ticket-controller return
+decoding before opening its Source. A later coordinator read-only official audit reports
+that current main removed WASM mod support; this local native-oriented continuation neither
+revives that transport nor silently rebases the preserved experimental base. No public
+coordination or new upstream-approval claim follows from either result.
+
+The source8 performance row's raw JSON also retains an inaccurate hardcoded fast-profile
+label. The separate timing-profile erratum binds the original log to Cargo's actual
+Game/client-lib test-target profile (opt-level zero, debug information disabled,
+debug assertions/overflow checks enabled). The original output is not rewritten and is not reported as a fast or client
+throughput benchmark. No additional executable build was made just to change that label.
+
+Strict focused Clippy then passed for both sunrise-client and sunrise-client-lib lib/tests
+with -D warnings, with the complete frozen Rust source unchanged and no Rust diagnostics.
+The coordinator independently repeated the signed/pivot, ItemEntity/ArmorStand cancellation
+and targeted ordinary lower movement controls. Final formatting, ignored-row and indexed
+public-tree/hook outcomes belong to the subsequent recorded local commit gate. No whole
+readiness, new SDK or physical-window result is inferred from these checks.
+
+The first ignored-row check failed because the newly authored child test modules were not
+yet indexed, and because the earlier experimental player-queue aggregate test retained a
+descriptive ignore without a policy row. The unchanged test/checker/parser/exception table
+were hash-compared against own 74; this is an earlier local omission, not an official
+upstream-baseline claim. The real aggregate refusal test then executed successfully on the
+frozen lower artifact before its ignore reason was changed to daily and an exact logical
+row was added. No assertion or implementation changed, and no exception hid correctness.
+The first failed inventory and an unsuccessful timing-wrapper metric remain retained.
+
+Final format and ignored-row checks passed against the indexed new modules and daily row.
+Only that ignore-attribute string changed after the frozen strict Clippy/runtime proof;
+all ordinary function bodies and all production carry helpers remain byte-identical. The
+source9 receipt states this qualification explicitly instead of claiming another executable
+build. Indexed public-tree and real per-commit hook results are bound at the Git boundary.

@@ -47,3 +47,22 @@ before/after claim additionally needs a matching baseline workload/profile; none
 by this source account or by successful correctness tests.
 
 See [the existing profiling tools](../../profiling.md) for capture and inspection commands.
+
+The upright-footprint carry correction lives in `piston_push::carrying`. On a changed
+support it may enumerate and sort actual support-face heights into reused thread-local
+scratch, bounded by the body's existing step height. It shares the prepared current index
+by Arc clone rather than constructing another placement index. Admitted movement then
+uses the ordinary collision route and actual current/downward inspection; that inspection
+still creates ordinary entity-obstacle storage and is not allocation-free. The unchanged
+no-moved-collider return avoids this per-rider work. A skipped gate avoids all later contact
+flag writes. Zero-step bodies do not acquire an invented step allowance.
+
+The matching ordinary static-floor controls distinguish zero-Y tiny-gap accumulation and
+once-only landing with existing downward velocity. The actual signed/pivot/client and
+authoritative ItemEntity/ArmorStand cancellation rows are correctness regressions; their
+wall-clock duration is not a client frame-time or allocation benchmark.
+
+The retained source8 timing JSON includes an older hardcoded fast-profile label. Its
+actual Cargo compiler-artifact profile and command/environment are authoritative; the
+separate `source8-timing-profile-erratum.json` binds that discrepancy to the raw output.
+Do not infer a fast-profile measurement from that literal or rewrite the original log.

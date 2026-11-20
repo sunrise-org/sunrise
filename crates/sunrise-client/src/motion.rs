@@ -2077,7 +2077,7 @@ impl MotionWorld<'_, '_, '_> {
     /// the ground and collision state (`Entity.setOnGroundWithMovement`), so a
     /// push lifting the body off the ground or sideways leaves it airborne until
     /// the next tick's own move lands it again.
-    pub fn block_push(&mut self, mover: MoverType, movement: Vec3) -> Result<()> {
+    pub fn block_push(&mut self, mover: MoverType, movement: Vec3) -> Result<bool> {
         let gate = crate::move_gate::armed(
             self.loop_context,
             self.player.entity_id as u32,
@@ -2086,9 +2086,10 @@ impl MotionWorld<'_, '_, '_> {
             movement,
         );
         if gate.skipped() {
-            return Ok(());
+            return Ok(false);
         }
-        entity_move::move_entity(self, mover, gate.delta())
+        entity_move::move_entity(self, mover, gate.delta())?;
+        Ok(true)
     }
     /// `LocalPlayer.move`: the move, then `updateAutoJump` with the float
     /// horizontal displacement. The gate is this invocation's (#2414), armed

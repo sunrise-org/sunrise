@@ -13,6 +13,7 @@
 # Own independent example: /private/tmp/sunrise-live-world-api-example/live_world_fixture/src; no generated SDK/pins read as implementation.
 # Post-SDK generic shutdown/destination audit: own source only; no personal outputs/source/coordinates read. Own source-only CLI procedure inputs retained in /private/tmp/sunrise-live-world-api-example/current-procedure.receipt.json.
 # These files were read fully, in excerpts, or as symbol-search matches.
+# Upright carry follow-up: own ordinary controls/cancellation fixtures plus coordinator generic behavior and own-source Skip/navigation observations; no private implementation input.
 .githooks/pre-commit
 .github/workflows/prebuilt-game-build.yml
 AGENTS.md
@@ -44,6 +45,7 @@ crates/sunrise-client/Cargo.toml
 crates/sunrise-client/src/carrier_store.rs
 crates/sunrise-client/src/client_lib.rs
 crates/sunrise-client/src/control.rs
+crates/sunrise-client/src/entities.rs
 crates/sunrise-client/src/game.rs
 crates/sunrise-client/src/game/administration/commands/mod.rs
 crates/sunrise-client/src/game/administration/commands/players.rs
@@ -53,8 +55,12 @@ crates/sunrise-client/src/game/blocks/block_entity_ticks.rs
 crates/sunrise-client/src/game/blocks/falling_blocks.rs
 crates/sunrise-client/src/game/blocks/level_access.rs
 crates/sunrise-client/src/game/blocks/piston_carry_state.rs
+crates/sunrise-client/src/game/blocks/piston_push.rs
 crates/sunrise-client/src/game/blocks/piston_push/carrying.rs
 crates/sunrise-client/src/game/blocks/player_destroy.rs
+crates/sunrise-client/src/game/entities/armor_stands.rs
+crates/sunrise-client/src/game/entities/collision_source.rs
+crates/sunrise-client/src/game/entities/entity.rs
 crates/sunrise-client/src/game/entities/minecarts.rs
 crates/sunrise-client/src/game/entities/text_displays.rs
 crates/sunrise-client/src/game/host/draw.rs
@@ -95,6 +101,7 @@ crates/sunrise-client/src/game/modding/native_live_worlds/actions.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/binding_journal.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/checkpoint.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/checkpoint_adverse_tests.rs
+crates/sunrise-client/src/game/modding/native_live_worlds/checkpoint_adverse_tests/retired_recapture_tests.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/durability.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/fence_tests.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/inspection.rs
@@ -109,6 +116,7 @@ crates/sunrise-client/src/game/modding/native_live_worlds/publication_tests.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/retention.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/sync.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/sync_carry_tests.rs
+crates/sunrise-client/src/game/modding/native_live_worlds/sync_carry_tests/tilt_tests.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/transfer.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/transfer_cell_snapshot_tests.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/transfer_cell_snapshots.rs
@@ -194,6 +202,7 @@ crates/sunrise-client/src/lan/viewed_levels/tests.rs
 crates/sunrise-client/src/lib.rs
 crates/sunrise-client/src/menu.rs
 crates/sunrise-client/src/mod_content_tests.rs
+crates/sunrise-client/src/motion.rs
 crates/sunrise-client/src/net.rs
 crates/sunrise-client/src/raw_payloads/engine.rs
 crates/sunrise-client/src/raw_payloads/engine_tests.rs
@@ -327,6 +336,8 @@ crates/sunrise-world/src/collision.rs
 crates/sunrise-world/src/collision_context.rs
 crates/sunrise-world/src/compression.rs
 crates/sunrise-world/src/dynamic_support.rs
+crates/sunrise-world/src/entity_move.rs
+crates/sunrise-world/src/ground_support.rs
 crates/sunrise-world/src/level/pistons.rs
 crates/sunrise-world/src/level/place.rs
 crates/sunrise-world/src/level/tick.rs
@@ -335,6 +346,7 @@ crates/sunrise-world/src/level/ticks/transfer.rs
 crates/sunrise-world/src/level/ticks/transfer_tests.rs
 crates/sunrise-world/src/level/update.rs
 crates/sunrise-world/src/liquid_collision.rs
+crates/sunrise-world/src/move_gate.rs
 crates/sunrise-world/src/piston_shape.rs
 crates/sunrise-world/src/powder_snow_collision.rs
 crates/sunrise-world/src/region.rs
@@ -368,11 +380,16 @@ tests/test_prebuilt_game.py
 tests/test_remote_mining.py
 tests/test_sdk_api_source.py
 tools/check_public_tree.py
+tools/ci/check_ignored_test_rows.py
 tools/ci/check_warnings.py
 tools/ci/format_scan.py
+tools/ci/ignored-test-exceptions.json
 tools/ci/ignored-tests/README.md
+tools/ci/ignored-tests/daily-sunrise-client-lib-common-checkpoint-payload.txt
 tools/ci/ignored-tests/daily-sunrise-client-live-world-carry.txt
 tools/ci/ignored-tests/daily-sunrise-client-live-worlds.txt
+tools/ci/ignored-tests/daily-sunrise-client-moving-collider-carrying.txt
+tools/ci/ignored_inventory.py
 tools/ci/nightly.py
 tools/ci/rust_changes.py
 tools/fixtures/live_world_api/AUTHORING-PROVENANCE.md

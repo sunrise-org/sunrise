@@ -1169,7 +1169,7 @@ impl Game<'_> {
         shulker: Option<u32>,
         delta: Vec3,
         grid: &mut Option<sunrise_client::entities::ObstacleGrid>,
-    ) {
+    ) -> bool {
         let joined = shulker.and_then(|id| self.mobs.iter().find(|m| m.id == id).map(|m| m.join));
         let grid = grid.get_or_insert_with(|| self.stand_entity_collisions());
         let mut nearby = Vec::new();
@@ -1192,7 +1192,7 @@ impl Game<'_> {
             travels_after,
             mover,
             &self.loop_context,
-        );
+        )
     }
     /// `Ravager.roar` with `mob_griefing` on: every armor stand in `area` (the
     /// ravager's box grown by 4) takes `strongKnockback` from the ravager at

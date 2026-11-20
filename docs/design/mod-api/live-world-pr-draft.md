@@ -109,3 +109,13 @@ This host also demonstrably cannot create the existing test's invalid UTF-8 dire
 and some Linux CI/tooling selections need unavailable host prerequisites. A passing focused
 suite is not reported as a passing whole readiness run. The final report must retain actual
 per-selection outcomes, remaining-crate execution and normal SDK/window evidence separately.
+
+Follow-up contact scope: horizontal-axis support rotation now checks the upright rider's
+actual footprint within its ordinary step allowance and submits one ordinary collided
+Carried move. Cancellation propagates from each existing movement delegate so its later
+ground write cannot violate Skip. Actual ordinary no-projection controls distinguish real
+once-only settling from support loss; the regression retains strict initial rises/pivot,
+nonembedding, horizontal stability, no net rising-height loss and actual carry hints.
+The contact correction could be reviewed as an existing moving-collider bug fix, while its
+public viewed-source regression depends on the coupled runtime group. That is a proposed
+extraction boundary, not a separately tested branch or latest-main compatibility claim.

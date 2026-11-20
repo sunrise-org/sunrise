@@ -558,3 +558,6 @@ fn client_tick_consumes_coalesced_projection_contact_before_ordinary_position_re
         });
     });
 }
+
+#[path = "sync_carry_tests/tilt_tests.rs"]
+mod tilt_tests;

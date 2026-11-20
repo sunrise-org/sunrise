@@ -546,25 +546,23 @@ impl Game<'_> {
         movement: Vec3,
         no_physics: bool,
         stand_grid: &mut Option<sunrise_client::entities::ObstacleGrid>,
-    ) {
+    ) -> bool {
         if target == MoveWho::Player {
-            self.block_push_player(mover, movement);
-            return;
+            return self.block_push_player(mover, movement);
         }
         // Armor stands arm their gate in their own collided shove.
         if let MoveWho::Entity(EntityHandle::ArmorStand(i)) = target {
-            self.shoves_armor_stand(i, mover, shulker, movement, stand_grid);
-            return;
+            return self.shoves_armor_stand(i, mover, shulker, movement, stand_grid);
         }
         let mut gate = self.entity_move(target, mover, movement);
         if gate.skipped() {
-            return;
+            return false;
         }
         let movement = gate.delta();
         // `Entity.move` with `noPhysics`: `setPos` the whole way.
         if no_physics {
             self.apply_push(&mut gate, target, movement);
-            return;
+            return true;
         }
         let entities = self.pushed_entity_colliders(target);
         let Ok(moved) = pushed_movement(
@@ -584,12 +582,13 @@ impl Game<'_> {
             None,
             &entities,
         ) else {
-            return;
+            return false;
         };
         self.set_pushed_on_ground(target, movement, moved);
         if moved.length_squared() > 0.0 {
             self.apply_push(&mut gate, target, moved);
         }
+        true
     }
 
     /// A mod's `Entity.move(cause, movement)` for the listed entity `handle` (never the player
@@ -647,10 +646,10 @@ impl Game<'_> {
     /// its end writes the ground state (`Entity.setOnGroundWithMovement`). A
     /// push lifting the body off the ground leaves it airborne, and the next
     /// tick's gravity lands it instead of a stale ground flag holding it.
-    fn block_push_player(&mut self, mover: MoverType, movement: Vec3) {
+    fn block_push_player(&mut self, mover: MoverType, movement: Vec3) -> bool {
         let entities = self.entity_collisions(Mover::Player);
         if let Some(player) = self.player.as_mut() {
-            let _ = MotionWorld {
+            MotionWorld {
                 entities: &entities,
                 player,
                 scene: &mut self.world,
@@ -663,7 +662,10 @@ impl Game<'_> {
                 tag_items: Some(world_items!(self)),
                 block_registries: Some(&self.pack.block_registries),
             }
-            .block_push(mover, movement);
+            .block_push(mover, movement)
+            .unwrap_or(false)
+        } else {
+            false
         }
     }
 

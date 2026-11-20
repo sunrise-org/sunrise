@@ -51,6 +51,14 @@ together with bounded conservative advancement. The explicit pivot is carried th
 the existing frame/history path, so drawing, carry-age interpolation and collision
 samples preserve the same pivot. An idle publisher collapses previous/current samples.
 
+An upright carried body can need support-face clearance when its support turns around a
+horizontal axis. The existing carry path requests that clearance only within the body's
+ordinary step allowance, through the same collided movement and single movement gate. It
+then inspects actual current/downward contact instead of forcing a ground flag. A cancelled
+invocation preserves the complete previous body state, including through the player and
+armor-stand movement delegates. Ordinary gravity may settle an admitted body through a real
+remaining gap; that is distinct from embedding, falling through or replaying a carry.
+
 Active membership derives ephemeral ordinary source streaming retention; it never changes
 persistent command or mod-forced tickets. `LevelRef::projection_footprint` reports the real
 terrain-ring charge before a binding, and `should_tick_blocks_at` observes each open parked
@@ -188,3 +196,8 @@ the actual recorded routes; unsupported routes refuse instead of inventing a liv
 The provenance/evidence records identify actual execution and failures. No #1022 completion,
 upstream approval, complete block/BE support or latest-main compatibility follows from this
 local experiment.
+
+The preserved experimental base still contains legacy WASM catalog routes. Their actual
+compile/load outcomes remain separate evidence for that base. The future proposal follows
+the native direction identified by the coordinator's recorded official transport audit;
+this continuation does not revive the subsequently removed transport.
