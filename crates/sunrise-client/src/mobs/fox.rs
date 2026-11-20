@@ -1090,13 +1090,19 @@ fn path_clear(m: &Mob, w: &MobWorld, to: Vec3) -> bool {
     }
     true
 }
+/// `FoxPounceGoal.tick`'s pitch: `signum(-y) * Math.acos(horizontal / len)` times
+/// `Mth.RAD_TO_DEG` in one multiply.
+fn pounce_pitch(horizontal: f64, y: f64, len: f64) -> f64 {
+    signum(-y) * jmath::acos(horizontal / len) * f64::from(sunrise_core::geometry::trig::RAD_TO_DEG)
+}
+/// `Math.signum`: a zero (of either sign) or a NaN comes back as it is.
 fn signum(x: f64) -> f64 {
     if x > 0.0 {
         1.0
     } else if x < 0.0 {
         -1.0
     } else {
-        0.0
+        x
     }
 }
 
@@ -1253,8 +1259,7 @@ impl Goal for Pounce {
                 let y = v.y * bias;
                 let len = (horizontal * horizontal + y * y).sqrt();
                 if len > f64::from(1.0e-5f32) {
-                    let pitch = signum(-y) * jmath::acos(horizontal / len) * 180.0
-                        / f64::from(std::f32::consts::PI);
+                    let pitch = pounce_pitch(horizontal, y, len);
                     m.head_pitch = (pitch as f32 % 360.0).clamp(-90.0, 90.0);
                 }
             }
@@ -2405,4 +2410,94 @@ mod defend_tests {
         );
         assert!(ran, "vanilla data is missing");
     }
+}
+
+#[cfg(test)]
+mod pounce_pitch_tests {
+    /// `FoxPounceGoal.tick` multiplies by `Mth.RAD_TO_DEG` once, then narrows to a float.
+    #[test]
+    fn the_pounce_pitch_uses_vanillas_degree_factor() {
+        let (horizontal, y) = (0.3f64, 0.5f64);
+        let len = (horizontal * horizontal + y * y).sqrt();
+        assert_eq!(super::pounce_pitch(horizontal, y, len) as f32, -59.03624);
+    }
+}
+
+#[cfg(test)]
+mod pounce_turn_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// The pinned-vanilla side is `VanillaTurnOracle`'s `fox.txt` (`tools/test_turn_parity.py`):
+    /// `Fox$FoxPounceGoal.tick` on a fox with no target, from each motion, pitch and `jumping`
+    /// (the upward bias), as the pitch bits it leaves. A flat motion keeps `Math.signum`'s zero
+    /// sign, and the rising, falling and nearly still ones take each branch.
+    #[test]
+    #[ignore = "daily"]
+    fn the_pounce_turn_matches_the_pinned_oracle() {
+        let bits = |v: f64| format!("{:016x}", v.to_bits());
+        let ran = crate::mobs::world::with_test_world(&[], |w, types| {
+            let mut rows = Vec::new();
+            for v in MOTIONS {
+                for pitch in [0.0f32, 30.0, -12.5] {
+                    for jump in [false, true] {
+                        let kind = Arc::new(types.types["minecraft:fox"].clone());
+                        let mut m = Mob::new(1, kind, Vec3::new(2.5, 64.0, 2.5), 0.0);
+                        m.velocity = Vec3::new(v[0], v[1], v[2]);
+                        m.head_pitch = pitch;
+                        m.ai.jumping = jump;
+                        let mut test_level = crate::health::TestLevel::new(0);
+                        let level = &mut test_level.level();
+                        let mut events = Vec::new();
+                        let mut cx = Cx {
+                            w,
+                            level,
+                            events: &mut events,
+                        };
+                        Pounce.tick(&mut m, &mut cx);
+                        rows.push(format!(
+                            "{} {} {} {:08x} {jump} {:08x}",
+                            bits(v[0]),
+                            bits(v[1]),
+                            bits(v[2]),
+                            pitch.to_bits(),
+                            m.head_pitch.to_bits()
+                        ));
+                    }
+                }
+            }
+            if let Some(dir) = std::env::var_os("SUNRISE_TURN_OUTPUT_DIR") {
+                std::fs::write(
+                    std::path::Path::new(&dir).join("fox.txt"),
+                    rows.join("\n") + "\n",
+                )
+                .unwrap();
+            }
+            for row in [
+                "3ff0000000000000 0000000000000000 0000000000000000 00000000 false 80000000",
+                "3fd3333333333333 3fe0000000000000 0000000000000000 00000000 false c26c251c",
+                "3fd3333333333333 3fe0000000000000 0000000000000000 00000000 true c2a973c3",
+            ] {
+                assert!(rows.iter().any(|r| r == row), "missing pinned row {row}");
+            }
+            assert_eq!(rows.len(), MOTIONS.len() * 3 * 2);
+        });
+        assert!(ran, "prepared mob data must run the pounce fixture");
+    }
+
+    const MOTIONS: [[f64; 3]; 13] = [
+        [1.0, 0.0, 0.0],
+        [1.0, -0.0, 0.0],
+        [0.3, 0.5, 0.0],
+        [0.3, -0.5, 0.0],
+        [0.5, 1.0, 0.0],
+        [0.01, -1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, -1.0, 0.0],
+        [0.1, 0.1, 0.0],
+        [0.1, -0.1, 0.0],
+        [0.2, 0.05, 0.3],
+        [1e-6, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+    ];
 }

@@ -9869,8 +9869,8 @@ fn look_at_rotation(from: [f64; 3], to: [f64; 3]) -> (f32, f32) {
     use sunrise_core::geometry::trig::atan2;
     let (dx, dy, dz) = (to[0] - from[0], to[1] - from[1], to[2] - from[2]);
     let horizontal = (dx * dx + dz * dz).sqrt();
-    // `* 180.0F / (float)Math.PI` on the double.
-    let degrees = |r: f64| r * 180.0 / f64::from(std::f32::consts::PI);
+    // One multiply by `Mth.RAD_TO_DEG` on the double.
+    let degrees = |r: f64| r * f64::from(sunrise_core::geometry::trig::RAD_TO_DEG);
     let pitch = wrap_degrees((-degrees(atan2(dy, horizontal))) as f32);
     let yaw = wrap_degrees(degrees(atan2(dz, dx)) as f32 - 90.0);
     (yaw, pitch)

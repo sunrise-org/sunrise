@@ -1759,8 +1759,8 @@ pub fn stuck_in_body(
         );
         let dxz = f64::from(dx * dx + dz * dz).sqrt() as f32;
         let degrees = |y: f32, x: f32| {
-            (sunrise_core::jmath::atan2(f64::from(y), f64::from(x)) * 180.0
-                / f64::from(std::f32::consts::PI)) as f32
+            (sunrise_core::jmath::atan2(f64::from(y), f64::from(x))
+                * f64::from(sunrise_core::geometry::trig::RAD_TO_DEG)) as f32
         };
         let y_rot = degrees(dx, dz);
         let x_rot = degrees(dy, dxz);
