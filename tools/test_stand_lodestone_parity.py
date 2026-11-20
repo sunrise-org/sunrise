@@ -33,7 +33,7 @@ def main():
     run(argparse.Namespace(work_dir=base/'java',reference_only=True,reference_dir=None,binary=None))
     binary=args.binary
     if not binary:
-        subprocess.run(['cargo','build','--profile','fast','-p','sunrise-game','--bin','sunrise-client'],
+        subprocess.run(['cargo','build','--profile','fast','-p','sunrise-game','--bin','sunrise-client', *runner.lab.VANILLA_GAME],
                        cwd=runner.lab.ROOT,check=True)
         metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],
                                                     cwd=runner.lab.ROOT,text=True))

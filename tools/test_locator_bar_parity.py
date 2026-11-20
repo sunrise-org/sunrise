@@ -259,7 +259,7 @@ def sides(name, binary=None):
                     lab.ROOT / 'mods/sunrise/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                    cwd=lab.ROOT, check=True, capture_output=True)
     if binary is None:
-        subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client'], cwd=lab.ROOT,
+        subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client', *lab.VANILLA_GAME], cwd=lab.ROOT,
                        check=True, capture_output=True)
         import json
         metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],

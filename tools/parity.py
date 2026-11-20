@@ -246,7 +246,9 @@ def artifact_path(kind, name, profile):
     return TARGET / directory / ("examples" if kind == "example" else "") / name
 
 
-SELECTION_FLAGS = {"-p", "--package", "-F", "--features"}  # followed by a value
+# Followed by a value. --target-dir is not a selection, but a build into another folder is another program, and the
+# prebuild must build it there (lab.extras_game).
+SELECTION_FLAGS = {"-p", "--package", "-F", "--features", "--target-dir"}
 SELECTION_SWITCHES = {"--workspace", "--all", "--all-features", "--no-default-features"}
 
 
@@ -688,6 +690,8 @@ def selected_builds(artifacts, packages=None):
         if len(artifact) < 5:
             continue
         kind, name, profile, selection, examples = artifact
+        if stale_game_build(selection):
+            continue
         owner = (packages or {}).get((kind, name))
         selected = [value for flag, value in zip(selection, selection[1:]) if flag == "-p"]
         if not name and kind in ("bins", "examples") and "sunrise-client" in selected \
@@ -698,6 +702,15 @@ def selected_builds(artifacts, packages=None):
             # A recorded target may have moved packages; retain its feature flags and old selections.
             selection = [*selection, "-p", owner]
         yield kind, name, profile, selection, examples
+
+
+def stale_game_build(selection):
+    """Whether a recorded build of sunrise-game names no build variant: neither the vanilla build (lab.VANILLA_GAME's
+    --no-default-features) nor the extras' own target folder (lab.extras_game). Such a record is from before the
+    harnesses named theirs; prebuilding it would put the game with its extras where the harnesses run the vanilla
+    one. The harness's next run records the real one."""
+    selected = {value for flag, value in zip(selection, selection[1:]) if flag == "-p"}
+    return "sunrise-game" in selected and "--no-default-features" not in selection and "--target-dir" not in selection
 
 
 def prebuild(artifacts, jobs):

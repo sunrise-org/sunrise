@@ -137,7 +137,7 @@ def main():
         'compile-java')
     run(['java', '-cp', str(classes) + os.pathsep + dependencies, 'dev.sunriselab.parity.VanillaBoatAuthorityOracle',
          work / 'inputs.json', work / 'vanilla.json'], 'vanilla')
-    run(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client'], 'compile-rust')
+    run(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client', *lab.VANILLA_GAME], 'compile-rust')
     binary = lab.cargo_target() / 'fast' / ('sunrise-client.exe' if os.name == 'nt' else 'sunrise-client')
     with (work / 'rust.log').open('w') as log, tempfile.TemporaryDirectory(prefix='boat-authority-') as game_dir:
         run_game([str(binary), '--headless', '--resources', str(args.resources.resolve()), '--game-dir', game_dir], cwd=game_dir,

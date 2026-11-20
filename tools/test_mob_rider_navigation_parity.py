@@ -167,7 +167,7 @@ def main():
         if result.returncode:
             raise RuntimeError(f'{name}: {result.returncode}; see {out / (name+".log")}')
     if args.binary is None:
-        run(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client'], 'build', cwd=lab.ROOT)
+        run(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client', *lab.VANILLA_GAME], 'build', cwd=lab.ROOT)
         binary = lab.cargo_target()/'fast'/('sunrise-client.exe' if os.name == 'nt' else 'sunrise-client')
     else:
         binary = args.binary.resolve(strict=True)

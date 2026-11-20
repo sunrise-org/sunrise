@@ -130,7 +130,7 @@ def main():
         return
     binary = args.binary
     if binary is None:
-        run(['cargo', 'build', '-p', 'sunrise-game', '--bin', 'sunrise-client'], 'compile-rust')
+        run(['cargo', 'build', '-p', 'sunrise-game', '--bin', 'sunrise-client', *lab.VANILLA_GAME], 'compile-rust')
         binary = lab.cargo_target() / 'debug' / ('sunrise-client.exe' if os.name == 'nt' else 'sunrise-client')
     with tempfile.TemporaryDirectory(prefix='hz-boat-rider-') as scratch:
         with (work / 'rust.log').open('w', encoding='utf-8') as log:

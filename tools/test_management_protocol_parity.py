@@ -544,7 +544,7 @@ def main():
     shutil.rmtree(build, ignore_errors=True)
     build.mkdir(parents=True)
     oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client',
-                   '-p', 'sunrise-server', '--bin', 'sunrise-server'], build, 'compile-rust')
+                   '-p', 'sunrise-server', '--bin', 'sunrise-server', *lab.VANILLA_GAME], build, 'compile-rust')
     target = lab.cargo_target() / 'fast'
     work = Path(tempfile.mkdtemp(prefix='hz-management-'))
     os.environ['SUNRISE_API_DISCOVERY'] = NO_SERVICES

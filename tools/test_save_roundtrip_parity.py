@@ -668,7 +668,7 @@ def main():
     else:
         bin_dir = Path(args.bin_dir).resolve() if args.bin_dir else None
         if bin_dir is None:
-            subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'sunrise-game', '-p', 'sunrise-client-lib', '--bins'], cwd=ROOT, check=True)
+            subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'sunrise-game', '-p', 'sunrise-client-lib', '--bins', *lab.VANILLA_GAME], cwd=ROOT, check=True)
             bin_dir = ROOT / os.environ.get('CARGO_TARGET_DIR', 'target') / 'fast'
         h = sunrise_resave(v0, RUN / 'h', bin_dir)
     print('comparing', v0, 'with', h)

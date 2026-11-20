@@ -91,7 +91,7 @@ def check_thrown(host, guest, out):
 
 def main():
     subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'sunrise-game', '-p', 'sunrise-client-lib',
-                    '--bin', 'sunrise-client', '--bin', 'sunrise-ctl'], cwd=lab.ROOT, check=True)
+                    '--bin', 'sunrise-client', '--bin', 'sunrise-ctl', *lab.VANILLA_GAME], cwd=lab.ROOT, check=True)
     metadata = json.loads(subprocess.check_output(
         ['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=lab.ROOT, text=True))
     ctl = lab.ROOT / metadata['target_directory'] / 'fast' / 'sunrise-ctl'

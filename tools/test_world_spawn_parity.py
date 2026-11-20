@@ -166,7 +166,7 @@ def main():
     if args.origins_only:
         sys.exit(1 if origin_diffs else 0)
 
-    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client'], build,
+    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client', *lab.VANILLA_GAME], build,
                   'compile-rust', timeout=3600)
     binary = target_dir('fast') / ('sunrise-client.exe' if os.name == 'nt' else 'sunrise-client')
     # One worker thread: the chunks decorated in a fixed order (see above).

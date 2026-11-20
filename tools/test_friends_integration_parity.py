@@ -4,8 +4,6 @@
 Registered with parity.py so changes to the drivers and the game binary select
 this integration coverage in CI as well as the deterministic library probes.
 """
-import json
-from pathlib import Path
 import subprocess
 import sys
 
@@ -19,10 +17,8 @@ if __name__ == '__main__':
     # own executable doesn't register (docs/layers.md, "How a Sunrise crate plugs in").
     subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'sunrise-official', '-p', 'sunrise-client-lib',
                     '-p', 'sunrise-relay', '--bin', 'sunrise-official', '--bin', 'sunrise-ctl',
-                    '--bin', 'sunrise-relay'], cwd=lab.ROOT, check=True)
-    metadata = json.loads(subprocess.check_output(
-        ['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=lab.ROOT, text=True))
-    bins = Path(metadata['target_directory']) / 'fast'
+                    '--bin', 'sunrise-relay', *lab.extras_game()], cwd=lab.ROOT, check=True)
+    bins = lab.extras_target() / 'fast'
     sys.argv = [sys.argv[0], '--client', str(bins / 'sunrise-official'),
                 '--relay', str(bins / 'sunrise-relay'), '--baseline',
                 *(['--offscreen'] if sys.platform == 'darwin' else [])]

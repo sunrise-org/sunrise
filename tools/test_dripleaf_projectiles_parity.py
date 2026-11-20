@@ -119,7 +119,7 @@ def main():
         binary = args.binary.resolve(strict=True)
     else:
         subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game',
-                        '--bin', 'sunrise-client'], cwd=lab.ROOT, check=True)
+                        '--bin', 'sunrise-client', *lab.VANILLA_GAME], cwd=lab.ROOT, check=True)
         metadata = json.loads(subprocess.check_output(
             ['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
         binary = Path(metadata['target_directory']) / 'fast' / (

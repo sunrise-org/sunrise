@@ -35,6 +35,30 @@ class ParityRunnerTests(unittest.TestCase):
         self.assertEqual(parity.artifacts_of(["cargo", "build", "--release", "-p", "sunrise-world", "--bin=sunrise-world"]),
                          [["bin", "sunrise-world", "release", ["-p", "sunrise-world"], False]])
 
+    def test_a_build_into_another_target_folder_is_rebuilt_there(self):
+        # lab.extras_game: a harness that tests an Extra builds the game with its extras into a folder of its own.
+        command = ["cargo", "build", "--locked", "--profile", "fast", "-p", "sunrise-game", "-p", "sunrise-client-lib",
+                   "--bins", "--target-dir", ".local/parity-target/extras"]
+        artifacts = parity.artifacts_of(command)
+        self.assertEqual(artifacts, [["bins", "", "fast", ["-p", "sunrise-game", "-p", "sunrise-client-lib", "--target-dir",
+                                                           ".local/parity-target/extras"], False]])
+        self.assertEqual(parity.prebuild_commands(artifacts), [
+            ["cargo", "build", "--locked", "--profile", "fast", "-p", "sunrise-game", "-p", "sunrise-client-lib",
+             "--target-dir", ".local/parity-target/extras", "--bins"]])
+
+    def test_a_game_build_recorded_without_its_variant_is_not_prebuilt(self):
+        # From before the harnesses named the vanilla build or the extras' folder: it would put the game with its
+        # extras where the vanilla harnesses run theirs.
+        old = parity.artifacts_of(["cargo", "build", "--profile", "fast", "-p", "sunrise-game", "--bin", "sunrise-client"])
+        vanilla = parity.artifacts_of(["cargo", "build", "--profile", "fast", "-p", "sunrise-game", "--bin", "sunrise-client",
+                                       "--no-default-features", "--features", "audio"])
+        world = parity.artifacts_of(["cargo", "build", "--release", "-p", "sunrise-world", "--bin", "sunrise-world"])
+        self.assertEqual(parity.prebuild_commands(old + vanilla + world), [
+            ["cargo", "build", "--locked", "--profile", "fast", "-p", "sunrise-game", "--no-default-features", "--features",
+             "audio", "--bin", "sunrise-client"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "sunrise-world", "--bin", "sunrise-world"],
+        ])
+
     def test_prebuild_follows_a_moved_target_without_losing_features(self):
         selection = ["-p", "sunrise-client", "--no-default-features", "--features", "sunrise-client/rng-trace"]
         artifacts = [["example", "client_probe", "fast", selection, True],

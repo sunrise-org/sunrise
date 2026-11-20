@@ -153,7 +153,7 @@ def main():
     parser.add_argument('--resources', default=str(lab.RESOURCES), help='the prepared resources the game reads')
     parser.add_argument('-j', '--jobs', type=int, help='cargo build jobs')
     args = parser.parse_args()
-    bin_dir = Path(args.bin_dir).resolve() if args.bin_dir else identity.build(lab.ROOT, lab.cargo_target(), args.jobs)
+    bin_dir = Path(args.bin_dir).resolve() if args.bin_dir else identity.build(lab.ROOT, lab.extras_target(), args.jobs)
     env = dict(os.environ)
     icd = identity.lavapipe()
     if icd:

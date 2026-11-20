@@ -359,7 +359,7 @@ def main():
                                    'dev.sunriselab.parity.VanillaSculkOracle', inputs, build / 'vanilla.txt'],
                                   build, 'vanilla', timeout=3600)
     if not args.java_only:
-        oracle_harness.run_logged(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client'],
+        oracle_harness.run_logged(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client', *lab.VANILLA_GAME],
                                   build, 'compile-rust')
         oracle_harness.run_logged([lab.cargo_target() / 'fast/sunrise-client', '--resources', resources], build, 'sunrise',
                                   env=lab.game_env(SUNRISE_SCULK_FIXTURE=f'{inputs},{build / "sunrise.txt"}'))

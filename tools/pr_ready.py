@@ -291,6 +291,7 @@ def parity_summary(output):
 # CI's lint job (.github/workflows/dyna-ci.yml): collect warnings across the whole graph before rejecting them.
 CI_CLIPPY = "python3 tools/ci/check_warnings.py cargo clippy --keep-going --workspace --all-targets --locked"
 CI_CLIPPY_SERVER = "python3 tools/ci/check_warnings.py cargo clippy --keep-going -p sunrise-client -p sunrise-game -p sunrise-mod-host --all-targets --locked --no-default-features"
+CI_CLIPPY_VANILLA = "python3 tools/ci/check_warnings.py cargo clippy --keep-going -p sunrise-game --all-targets --locked --no-default-features --features audio"
 
 
 # CI installs the current stable each run (rustup toolchain install stable), and Rust ships one every six weeks
@@ -367,7 +368,8 @@ def plan(args, base, changed, crates_of, libraries, dependencies):
     clippy_crates = dependent_crates(crates, dependencies)
     clippy = CI_CLIPPY
     if clippy_crates is None or "sunrise-client" in clippy_crates:
-        clippy = f'status=0\n{CI_CLIPPY} || status=$?\n{CI_CLIPPY_SERVER} || status=$?\nexit "$status"'
+        clippy = (f'status=0\n{CI_CLIPPY} || status=$?\n{CI_CLIPPY_SERVER} || status=$?\n'
+                  f'{CI_CLIPPY_VANILLA} || status=$?\nexit "$status"')
     test_skip = None if crates is None or crates else "no crate touched"
     doc_crates = sorted(libraries if crates is None else libraries.intersection(crates))
     doc_selection = "--workspace" if crates is None else " ".join(f"-p {shlex.quote(c)}" for c in doc_crates)

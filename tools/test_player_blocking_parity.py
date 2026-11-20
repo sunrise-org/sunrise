@@ -63,7 +63,7 @@ def main():
                     'dev.sunriselab.parity.VanillaPlayerBlockingOracle', str(cases), str(native)], check=True)
     binary = args.binary
     if binary is None:
-        subprocess.run(['cargo', 'build', '-p', 'sunrise-game', '--bin', 'sunrise-client'], cwd=lab.ROOT, check=True)
+        subprocess.run(['cargo', 'build', '-p', 'sunrise-game', '--bin', 'sunrise-client', *lab.VANILLA_GAME], cwd=lab.ROOT, check=True)
         binary = lab.cargo_target() / 'debug' / ('sunrise-client.exe' if os.name == 'nt' else 'sunrise-client')
     resources = args.resources or lab.LOCAL / 'sunrise-client' / lock['minecraft']['version']
     rust = work / 'rust.txt'

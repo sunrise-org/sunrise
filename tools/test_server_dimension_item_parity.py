@@ -91,7 +91,7 @@ def main():
     report = build / 'report.json'
     report.unlink(missing_ok=True)
     dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
-    subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client'],
+    subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client', *lab.VANILLA_GAME],
                    cwd=lab.ROOT, check=True, capture_output=True)
     binary = lab.cargo_target() / 'fast' / ('sunrise-client.exe' if os.name == 'nt' else 'sunrise-client')
     vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']

@@ -128,10 +128,14 @@ def checkout_base(base):
 
 
 def build(cwd, target, jobs):
-    env = dict(os.environ, CARGO_TARGET_DIR=str(target))
-    command = BUILD + (['-j', str(jobs)] if jobs else [])
+    # The target folder on the command line, where tools/parity.py's record of the build keeps it.
+    try:
+        folder = os.path.relpath(target, cwd)
+    except ValueError:  # another drive (Windows)
+        folder = str(target)
+    command = BUILD + ['--target-dir', folder] + (['-j', str(jobs)] if jobs else [])
     started = time.monotonic()
-    subprocess.run(command, cwd=cwd, env=env, check=True)
+    subprocess.run(command, cwd=cwd, check=True)
     print(f'built {cwd} in {time.monotonic() - started:.0f} s', flush=True)
     return target / 'fast'
 
@@ -887,7 +891,7 @@ def main():
 
     timings = {}
     started = time.monotonic()
-    head_bin = Path(args.bin_dir).resolve() if args.bin_dir else build(ROOT, lab.cargo_target(), args.jobs)
+    head_bin = Path(args.bin_dir).resolve() if args.bin_dir else build(ROOT, lab.extras_target(), args.jobs)
     timings['change_build_s'] = round(time.monotonic() - started)
     started = time.monotonic()
     own = needs_own_build(base)

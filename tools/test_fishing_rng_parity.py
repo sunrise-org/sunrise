@@ -68,7 +68,7 @@ def main():
         XDG_DATA_HOME=str(work / "data"),
         XDG_CONFIG_HOME=str(work / "config"),
     )
-    subprocess.run(["cargo", "build", "--profile", "fast", "-p", "sunrise-game", "--bin", "sunrise-client"],
+    subprocess.run(["cargo", "build", "--profile", "fast", "-p", "sunrise-game", "--bin", "sunrise-client", *lab.VANILLA_GAME],
                    cwd=lab.ROOT, env=env, check=True)
     binary = lab.cargo_target() / "fast" / ("sunrise-client.exe" if os.name == "nt" else "sunrise-client")
     subprocess.run([sys.executable, str(lab.ROOT / "tools/test_command_exec_parity.py"),

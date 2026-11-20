@@ -7512,11 +7512,9 @@ def main():
         bins = Path(args.bin_dir).resolve()
     else:
         subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'sunrise-game', '-p', 'sunrise-client-lib',
-                        '--bin', 'sunrise-client', '--bin', 'sunrise-ctl'],
+                        '--bin', 'sunrise-client', '--bin', 'sunrise-ctl', *lab.extras_game()],
                        cwd=ROOT, check=True)
-        meta = json.loads(subprocess.run(['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=ROOT,
-                                         capture_output=True, text=True, check=True).stdout)
-        bins = Path(meta['target_directory']) / 'fast'
+        bins = lab.extras_target() / 'fast'
     resources = lab.RESOURCES.resolve()
     if not (resources / 'sunrise-resources.json').exists():
         sys.exit(f'no prepared resources in {resources}')

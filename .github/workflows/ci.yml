@@ -119,6 +119,8 @@ jobs:
           cargo +stable clippy --workspace --all-targets --locked -- -D warnings
           # The server build (released as sunrise-engine): the game without sound or controllers.
           cargo +stable clippy -p sunrise-client -p sunrise-game -p sunrise-mod-host --all-targets --locked --no-default-features -- -D warnings
+          # The vanilla game the parity harnesses build and test (tools/lab.py VANILLA_GAME): sound, no extras, no controllers.
+          cargo +stable clippy -p sunrise-game --all-targets --locked --no-default-features --features audio -- -D warnings
       - name: Check generated mod API signatures
         run: python3 tools/ci/check_api_boundary.py
   verify-test:

@@ -131,7 +131,7 @@ def main():
          str(java_root / 'dev/sunriselab/parity/VanillaScreenBuildOracle.java')])
     run(['java', '-Xmx2G', '-cp', str(classes) + os.pathsep + dependencies,
          'dev.sunriselab.parity.VanillaScreenBuildOracle', str(work / 'cases.jsonl'), str(work / 'native.jsonl')])
-    run(['cargo', 'build', '-q', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client'], cwd=lab.ROOT,
+    run(['cargo', 'build', '-q', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client', *lab.VANILLA_GAME], cwd=lab.ROOT,
         env={**os.environ, 'CARGO_BUILD_JOBS': os.environ.get('CARGO_BUILD_JOBS', '3')})
     executable = lab.cargo_target() / ('fast/sunrise-client.exe' if os.name == 'nt' else 'fast/sunrise-client')
     with tempfile.TemporaryDirectory(prefix='game-', dir=work) as game_dir:

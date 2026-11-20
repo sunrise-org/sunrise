@@ -41,6 +41,10 @@ VERSION = pinned_version()
 # sunrise-prepare made from them.
 GAME = LOCAL / "minecraft" / VERSION
 RESOURCES = LOCAL / "sunrise-client" / VERSION
+# The vanilla game, as the parity harnesses build and test it: none of Sunrise's extras and no controller hardware
+# (vanilla 26.3 has neither), sound kept. A harness's cargo command ends with these flags; this is the one place
+# the vanilla build is defined (docs/parity-workflow.md). A harness that tests an Extra builds into extras_target().
+VANILLA_GAME = ["--no-default-features", "--features", "audio"]
 
 
 def version_info(client_jar=None):
@@ -53,6 +57,28 @@ def version_info(client_jar=None):
 def cargo_target():
     """Cargo's target directory, honouring CARGO_TARGET_DIR (tools/parity.py sets it)."""
     return ROOT / os.environ.get("CARGO_TARGET_DIR", "target")
+
+
+def extras_target():
+    """The target folder of builds with Sunrise's extras (the game with its default features, or the official game),
+    for the harnesses that test an Extra: one of its own under cargo_target(), so such a build never replaces the
+    vanilla programs the other harnesses run from the shared folder (docs/parity-workflow.md)."""
+    return cargo_target() / "extras"
+
+
+def extras_game():
+    """The flag a build with the extras adds to its cargo command: its target folder (extras_target), relative to the
+    repository root, where the harnesses and tools/parity.py's prebuild run cargo. On the command line, not in the
+    environment, so the runner's record of the build keeps it, and the same on every machine."""
+    return ["--target-dir", relative_to_root(extras_target())]
+
+
+def relative_to_root(path):
+    """path relative to ROOT where it can be (as text), else as it is (another drive on Windows)."""
+    try:
+        return os.path.relpath(path, ROOT)
+    except ValueError:
+        return str(path)
 
 
 def binary(folder, name):

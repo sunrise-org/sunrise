@@ -173,7 +173,7 @@ def main():
         binary = args.binary.resolve(strict=True)
     else:
         subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'sunrise-game',
-                        '--bin', 'sunrise-client'], cwd=lab.ROOT, check=True)
+                        '--bin', 'sunrise-client', *lab.VANILLA_GAME], cwd=lab.ROOT, check=True)
         binary = lab.cargo_target() / 'fast' / ('sunrise-client.exe' if os.name == 'nt' else 'sunrise-client')
     client_binary = args.client_binary.resolve(strict=True) if args.client_binary else binary
     lock, jars, libraries = base.verify_artifacts()

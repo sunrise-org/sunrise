@@ -405,6 +405,11 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && (needs.changes.outputs.rust_required != 'false') }}
         id: server-lint
         run: python3 tools/ci/check_warnings.py cargo clippy $JOBS --keep-going -p sunrise-client -p sunrise-game -p sunrise-mod-host --all-targets --no-default-features
+      # The vanilla game the parity harnesses build and test (tools/lab.py VANILLA_GAME): sound, no extras, no controllers.
+      - name: Lint the vanilla game without Sunrise's extras
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && (needs.changes.outputs.rust_required != 'false') }}
+        id: vanilla-lint
+        run: python3 tools/ci/check_warnings.py cargo clippy $JOBS --keep-going -p sunrise-game --all-targets --no-default-features --features audio
       - name: The mod API builds for wasm32
         id: the_mod_api_builds_for_wasm32
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && (needs.changes.outputs.rust_required != 'false') }}

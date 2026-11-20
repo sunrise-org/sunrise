@@ -161,11 +161,17 @@ jobs:
           if grep -q "'--example', 'client_probe'" "${scripts[@]}"; then
             cargo build --profile fast -p sunrise-client-lib --example client_probe
           fi
-          if grep -q "'sunrise-game', '-p', 'sunrise-client-lib', '--bins'" "${scripts[@]}"; then
-            cargo build --locked --profile fast -p sunrise-game -p sunrise-client-lib --bins
+          # The harnesses build the vanilla game (lab.VANILLA_GAME): the same flags here, or each harness builds the
+          # game again over the one built here. The harnesses that test an Extra are named_only and build into
+          # their own target folder (lab.extras_target).
+          vanilla_flags() { python3 -c 'import sys; sys.path.insert(0, "tools"); import lab; print(*lab.VANILLA_GAME)'; }
+          if grep -q "'sunrise-game', '-p', 'sunrise-client-lib', '--bins', \*lab.VANILLA_GAME" "${scripts[@]}"; then
+            read -ra vanilla < <(vanilla_flags)
+            cargo build --locked --profile fast -p sunrise-game -p sunrise-client-lib --bins "${vanilla[@]}"
           fi
-          if grep -Eq "[\"']sunrise-game[\"'], [\"']--bin[\"'], [\"']sunrise-client[\"']" "${scripts[@]}"; then
-            cargo build --profile fast -p sunrise-game --bin sunrise-client
+          if grep -Eq "[\"']sunrise-game[\"'], [\"']--bin[\"'], [\"']sunrise-client[\"'], \*lab.VANILLA_GAME" "${scripts[@]}"; then
+            read -ra vanilla < <(vanilla_flags)
+            cargo build --profile fast -p sunrise-game --bin sunrise-client "${vanilla[@]}"
           fi
           # The client lib tests harnesses run (`cargo test -p <package> --lib`, the dev profile as parity.py sets it),
           # one at a time and before any oracle starts: one rustc of up to 12 GiB each, which a 16 GiB runner

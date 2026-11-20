@@ -80,6 +80,8 @@ All runners on a machine share `PARITY_MACHINE_JOBS` slots (default: half the CP
 
 The game logs into `SUNRISE_HOME` and falls back to the player's own game folder when it is unset, so a harness that starts the game, `sunrise-ctl`, the launcher or the dedicated server builds the environment with `lab.game_env(**extra)`: no audio, and fresh scratch folders for `SUNRISE_HOME`, `SUNRISE_LAUNCHER_HOME`, `XDG_DATA_HOME` and `XDG_CONFIG_HOME`, removed when the harness exits (a folder you pass, or that the environment already has, is kept). The runner also gives each harness its own `SUNRISE_HOME` under `.local/parity-runner/game-home/`. `tests/test_game_home.py` fails for a script in `tools/` that starts the game without it.
 
+A harness builds the vanilla game, the build the harnesses and CI test: none of Sunrise's extras and no controller hardware, which vanilla 26.3 doesn't have. Its cargo command for `sunrise-game` ends with `*lab.VANILLA_GAME` (`--no-default-features --features audio`), the one place that build is defined. Harnesses that test an Extra (`frame_identity`, `hdr_auto_flip`, `friends_integration`) build the game with its extras and are `named_only`; they and `lan_integration` (`tools/lan_e2e.py`) build into a target folder of their own (`lab.extras_game()`: `extras/` under the target folder), so a build with the extras never replaces the vanilla programs the other harnesses run. The CI warm-up (`.github/workflows/parity.yml`) builds the same vanilla game, and the runner's prebuild repeats each harness's recorded build, its target folder included, leaving out a game build recorded before the harness named its build.
+
 `frame_identity` (`tools/test_frame_identity_parity.py`) holds the picture where a change shouldn't move it, as the HDR design note's first tests ask ([design/hdr-linear-light.md](design/hdr-linear-light.md#tests)). Its oracle is the base build, not vanilla: pictures of the game hold Minecraft's textures and can't be committed. It builds `BASE_SHA` (else the merge-base with `origin/main`) in a worktree and target folder of its own under `.local/frame-identity/`, kept between runs so a later base rebuilds incrementally, draws fixed scenes offscreen with each build under `SUNRISE_STILL=1` (HDR off; the Golden Hour pack in SDR and with offscreen HDR output; HDR turned off in a running game), and requires identical pixels, writing `diff-<scene>.png` where they aren't. Both builds draw on lavapipe where Mesa's Vulkan driver is installed, else on the machine's default adapter. When the change touches only `tools/`, `tests/`, `.github/` or Markdown outside `crates/`, the base reuses the change's binaries (`--build-base` builds it anyway), so the run checks that two runs of one build agree. It is `named_only` in `tools/parity_hosts.json`, since it fails any change that moves the picture on purpose; a change that must leave the picture alone runs it by name with `python3 tools/parity.py frame_identity`.
 
 ### Other machines
@@ -238,12 +240,12 @@ process gets scratch game, launcher, XDG data and config homes; audio
 and launcher self-update are disabled.
 
 `lan_integration` and `friends_integration` register these suites with `parity.py`.
-`friends_integration` (under a minute) is selected like any harness when the
-drivers or game implementation change. `lan_integration` is the whole LAN suite
-(~40 minutes on a loaded runner, and single checks flake under load), so
-`tools/parity_hosts.json` lists it under `named_only`: no automatic selection
-(`--changed`, `--failed`, `--flake-check`, or the daily) picks it; it runs
-when named or explicitly selected with local `--all`. LAN writes `results.json`
+`friends_integration` tests Play with Friends, a Sunrise Extra with no vanilla
+oracle, and `lan_integration` is the whole LAN suite (~40 minutes on a loaded
+runner, and single checks flake under load), so `tools/parity_hosts.json` lists
+both under `named_only`: no automatic selection (`--changed`, `--failed`,
+`--flake-check`, or the daily) picks them; they run when named or explicitly
+selected with local `--all`. LAN writes `results.json`
 with the host mode and each result beside its screenshots and logs. A skipped
 case is recorded explicitly and does not count as passing coverage.
 

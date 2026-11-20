@@ -254,7 +254,7 @@ def main():
     oh.run_logged(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-nowarn', '-sourcepath',
                    lab.ROOT / 'mods/sunrise/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                   build, 'compile-java')
-    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client'], build,
+    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client', *lab.VANILLA_GAME], build,
                   'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))

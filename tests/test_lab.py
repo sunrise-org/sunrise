@@ -1,3 +1,4 @@
+import ast
 import hashlib
 import io
 import json
@@ -395,3 +396,46 @@ class GameEnvScreenTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GameBuildVariantTests(unittest.TestCase):
+    """The harnesses, the CI warm-up and the prebuild agree on the build of the game: the vanilla build
+    (lab.VANILLA_GAME) in the shared target folder, and the game with its extras only in a folder of its own."""
+
+    VARIANTS = {"VANILLA_GAME", "extras_game"}
+
+    def test_every_harness_build_of_the_game_names_its_variant(self):
+        unnamed = []
+        for path in sorted(ROOT.glob("tools/test_*_parity.py")) + [ROOT / "tools/lan_e2e.py"]:
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if not isinstance(node, ast.List):
+                    continue
+                words = {element.value for element in node.elts
+                         if isinstance(element, ast.Constant) and isinstance(element.value, str)}
+                if "cargo" not in words or "metadata" in words or not words & {"sunrise-game", "sunrise-official"}:
+                    continue
+                names = {name.attr if isinstance(name, ast.Attribute) else name.id
+                         for element in node.elts if isinstance(element, ast.Starred)
+                         for name in ast.walk(element.value) if isinstance(name, (ast.Attribute, ast.Name))}
+                if not names & self.VARIANTS and "--target-dir" not in words:
+                    unnamed.append(f"{path.name}:{node.lineno}")
+        # frame_identity's BUILD gets its target folder in build(), for its base build and the change's.
+        self.assertIn("'--target-dir'", (ROOT / "tools/test_frame_identity_parity.py").read_text(encoding="utf-8"))
+        self.assertEqual([name for name in unnamed if not name.startswith("test_frame_identity_parity.py:")], [])
+
+    def test_the_extras_folder_is_named_from_the_repository_root(self):
+        with mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": str(lab.ROOT / ".local" / "parity-target")}):
+            self.assertEqual(lab.extras_game(), ["--target-dir", os.path.join(".local", "parity-target", "extras")])
+        with mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "target"}):
+            self.assertEqual(lab.extras_target(), lab.ROOT / "target" / "extras")
+
+    def test_the_ci_warm_up_builds_the_game_the_harnesses_build(self):
+        workflow = (ROOT / ".github/workflows/parity.yml").read_text(encoding="utf-8")
+        step = workflow.split("name: Build the daily harnesses' game probes", 1)[1].split("\n      - name:", 1)[0]
+        builds = [line.strip() for line in step.splitlines()
+                  if line.strip().startswith("cargo build") and "-p sunrise-game" in line]
+        self.assertEqual(len(builds), 2)
+        for line in builds:
+            with self.subTest(line=line):
+                self.assertTrue(line.endswith('"${vanilla[@]}"'))
+        self.assertIn("print(*lab.VANILLA_GAME)", step)

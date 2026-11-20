@@ -355,7 +355,7 @@ def main():
     build.mkdir(parents=True, exist_ok=True)
     report = build / 'report.json'
     report.unlink(missing_ok=True)
-    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client'], build,
+    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client', *lab.VANILLA_GAME], build,
                   'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))

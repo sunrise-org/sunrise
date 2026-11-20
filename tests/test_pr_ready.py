@@ -21,7 +21,8 @@ PACKAGES = {"sunrise-core": "crates/sunrise-core", "sunrise-client": "crates/sun
 LIBRARIES = set(PACKAGES) - {"xtask"}
 DEPENDENCIES = {"sunrise-client": {"sunrise-core"}}
 MODS = ""
-CLIPPY = f'status=0\n{pr_ready.CI_CLIPPY} || status=$?\n{pr_ready.CI_CLIPPY_SERVER} || status=$?\nexit "$status"'
+CLIPPY = (f'status=0\n{pr_ready.CI_CLIPPY} || status=$?\n{pr_ready.CI_CLIPPY_SERVER} || status=$?\n'
+          f'{pr_ready.CI_CLIPPY_VANILLA} || status=$?\nexit "$status"')
 # The bash on PATH: Windows' CreateProcess looks in System32 before PATH, so a bare "bash" there is WSL's
 # (#5383), which has none of the host's paths. Git Bash on PATH runs the launcher's snippets as on Linux.
 BASH = shutil.which("bash")
