@@ -183,6 +183,40 @@ fn verify_publication(
     }
     Ok(())
 }
+type CellImage = (mod_api::BlockState, Option<Compound>);
+fn returned_payload_image(
+    host: &dyn ServerHost,
+    source: LevelRef,
+    destination: LevelRef,
+    selected: &[[i32; 3]],
+) -> Result<(Vec<CellImage>, Vec<CellImage>)> {
+    let image = |level: LevelRef, positions: Vec<[i32; 3]>| -> Result<Vec<CellImage>> {
+        positions
+            .into_iter()
+            .map(|pos| {
+                let state = level
+                    .block_state(host, pos)
+                    .ok_or(LiveWorldError::NotResident)?;
+                let data = match host.block_entity(level, pos) {
+                    Some(entity) => Some(
+                        entity
+                            .data(host)
+                            .ok_or(Error::Refused("live returned block entity is unavailable"))?,
+                    ),
+                    None => None,
+                };
+                Ok((state, data))
+            })
+            .collect()
+    };
+    Ok((
+        image(source, selected.to_vec())?,
+        image(
+            destination,
+            selected.iter().copied().map(world_cell).collect(),
+        )?,
+    ))
+}
 fn checkpoint(host: &mut dyn ServerHost, state: &mut State) -> Result<()> {
     let receipt = state.source.unwrap().checkpoint(host)?;
     state.durable_epoch = Some(receipt.barrier_epoch);
@@ -261,6 +295,101 @@ impl Fixture {
                 destination.should_tick_blocks_at(host, [x * 16, 160, z * 16]) == Some(true)
             }))
     }
+    fn validate_returned_ownership(
+        &self,
+        host: &mut dyn ServerHost,
+        state: &mut State,
+    ) -> Result<()> {
+        let source = state.source.unwrap();
+        let destination = state.destination.unwrap();
+        let record = state
+            .record
+            .as_ref()
+            .filter(|record| record.phase == Phase::WorldOwned)
+            .ok_or(Error::Refused("retirement lacks its WorldOwned marker"))?;
+        let marker = record::encode(record)?;
+        let planned = record.planned_epoch.ok_or(Error::Refused(
+            "WorldOwned marker lacks its planned transfer epoch",
+        ))?;
+        let observed = record.transfer_epoch;
+        state.source_chunks = columns(&cells());
+        if !self.bootstrap(host, state)? {
+            return Err(LiveWorldError::NotResident.into());
+        }
+        if source.live_world(host)?.is_some() {
+            return Err(Error::Refused(
+                "returned source still has an active binding",
+            ));
+        }
+        let air = host
+            .block_state_id("minecraft:air")
+            .ok_or(Error::Refused("air unavailable"))?;
+        let selected = cells();
+        let before = returned_payload_image(host, source, destination, &selected)?;
+        if before
+            .0
+            .iter()
+            .any(|(state, entity)| *state != air || entity.is_some())
+            || before.1.iter().any(|(state, _)| *state == air)
+        {
+            return Err(Error::Refused(
+                "returned payload has missing or duplicate live owners",
+            ));
+        }
+        let revisions = (source.revisions(host)?, destination.revisions(host)?);
+        // A stale descriptor is not absence. Only this actual common receipt can certify an
+        // explicitly retired, complete empty binding at the current Source revision.
+        let receipt = source.checkpoint(host)?;
+        let row = receipt
+            .levels
+            .iter()
+            .find(|row| row.level == source)
+            .ok_or(Error::Refused(
+                "retirement receipt lacks the current Source",
+            ))?;
+        let parent = receipt
+            .levels
+            .iter()
+            .find(|row| row.level == destination)
+            .ok_or(Error::Refused(
+                "retirement receipt lacks the current payload owner",
+            ))?;
+        if row.binding.is_some()
+            || row.retired_generation.is_none()
+            || row.retired_members != Some(0)
+            || (row.block_revision, row.content_revision)
+                != (revisions.0.block_revision, revisions.0.content_revision)
+            || (parent.block_revision, parent.content_revision)
+                != (revisions.1.block_revision, revisions.1.content_revision)
+            || receipt.barrier_epoch < planned
+            || observed.is_some_and(|epoch| receipt.barrier_epoch < epoch)
+        {
+            return Err(Error::Refused(
+                "current common receipt does not certify this completed return",
+            ));
+        }
+        let actual = OWNER
+            .get_existing(&mut source.attachments(host), Holder::Level)?
+            .ok_or(Error::Refused(
+                "WorldOwned marker disappeared during validation",
+            ))?;
+        if record::encode(&actual)? != marker
+            || (source.revisions(host)?, destination.revisions(host)?) != revisions
+            || source.live_world(host)?.is_some()
+            || returned_payload_image(host, source, destination, &selected)? != before
+        {
+            return Err(Error::Refused(
+                "returned ownership changed during its common checkpoint",
+            ));
+        }
+        // Preserve the exact persistent record and live contents. This process merely records
+        // the receipt it observed; no initialization, binding or pose publication occurs here.
+        state.durable_epoch = Some(receipt.barrier_epoch);
+        state.last = format!("validated WorldOwned retirement receipt={receipt:?}");
+        state.last_checkpoint = Some(receipt);
+        self.release(host, state);
+        Ok(())
+    }
     fn load(&self, host: &mut dyn ServerHost, state: &mut State) -> Result<()> {
         let source = state.source.unwrap();
         // Global callback current-level identity is unspecified: name the real source holder.
@@ -297,8 +426,14 @@ impl Fixture {
                             "Projected marker exists without saved descriptor",
                         ));
                     }
-                    Some(Phase::WorldOwned) | None => {}
+                    Some(Phase::WorldOwned) => self.validate_returned_ownership(host, state)?,
+                    None => {}
                 }
+            }
+            Err(LiveWorldError::Stale)
+                if state.record.as_ref().map(|record| record.phase) == Some(Phase::WorldOwned) =>
+            {
+                self.validate_returned_ownership(host, state)?;
             }
             Err(error) => return Err(error.into()),
         }
