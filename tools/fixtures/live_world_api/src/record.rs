@@ -35,6 +35,13 @@ pub struct Record {
     pub steps: u32,
 }
 impl Record {
+    pub(super) fn unstarted_initialization(&self) -> bool {
+        self.phase == Phase::Initializing
+            && self.accepted.is_none()
+            && self.planned_epoch.is_none()
+            && self.transfer_epoch.is_none()
+            && self.steps == 0
+    }
     pub fn new(phase: Phase) -> Self {
         Self {
             phase,
@@ -141,4 +148,56 @@ fn decode(value: &Compound) -> std::result::Result<Record, AttachmentError> {
         transfer_epoch: read_epoch("transfer_epoch")?,
         steps,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persisted_resume_authorization_refuses_every_started_or_other_ownership_record() {
+        let empty = Record::new(Phase::Initializing);
+        assert!(
+            decode(&encode(&empty).unwrap())
+                .unwrap()
+                .unstarted_initialization()
+        );
+        let accepted = Accepted {
+            previous: LiveWorldPose::at([1.0, 2.0, 3.0]),
+            current: LiveWorldPose::at([4.0, 5.0, 6.0]),
+            revision: 9,
+        };
+        let mut forbidden = Vec::new();
+        for phase in [Phase::LocalOwned, Phase::WorldOwned] {
+            forbidden.push(Record::new(phase));
+        }
+        let mut projected = Record::new(Phase::Projected);
+        projected.accepted = Some(accepted.clone());
+        forbidden.push(projected);
+        let mut sample = empty.clone();
+        sample.accepted = Some(accepted);
+        forbidden.push(sample);
+        let mut planned = empty.clone();
+        planned.planned_epoch = Some(0); // Presence is meaningful, even a zero-valued epoch.
+        forbidden.push(planned);
+        let mut transferred = empty.clone();
+        transferred.transfer_epoch = Some(0);
+        forbidden.push(transferred);
+        let mut moved = empty;
+        moved.steps = 1;
+        forbidden.push(moved);
+        for record in forbidden {
+            let saved = encode(&record).unwrap();
+            let loaded = decode(&saved).unwrap();
+            assert!(
+                !loaded.unstarted_initialization(),
+                "must refuse persisted {loaded:?}"
+            );
+            assert_eq!(
+                encode(&loaded).unwrap(),
+                saved,
+                "inspection must preserve the actual audit record"
+            );
+        }
+    }
 }

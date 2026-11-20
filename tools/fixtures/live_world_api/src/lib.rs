@@ -22,6 +22,7 @@ const MOTION_STEPS: u32 = 120;
 #[derive(Clone, Copy, Debug)]
 enum Action {
     Initialize,
+    ResumeInitialize,
     Project,
     Capture,
     Return,
@@ -30,7 +31,7 @@ enum Action {
     Run,
     Pause,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Initialization {
     MarkerBarrier,
     Seed,
@@ -89,6 +90,8 @@ struct State {
     checkpoint_pending: bool,
     last_transfer: Option<LiveWorldTransferReceipt>,
     last_checkpoint: Option<LiveWorldSaveReceipt>,
+    last_checkpoint_problem: Option<String>,
+    last_checkpoint_transaction: Option<mod_api::TransactionLifecycle>,
     motion: Option<(u32, LiveWorldPose)>,
     durable_epoch: Option<u64>,
     last: String,
@@ -218,7 +221,17 @@ fn returned_payload_image(
     ))
 }
 fn checkpoint(host: &mut dyn ServerHost, state: &mut State) -> Result<()> {
-    let receipt = state.source.unwrap().checkpoint(host)?;
+    state.last_checkpoint_transaction = Some(host.transaction_lifecycle());
+    let receipt = match state.source.unwrap().checkpoint(host) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            state.last_checkpoint_problem = Some(format!(
+                "initialization={:?}; transaction={:?}; error={error:?}",
+                state.initialization, state.last_checkpoint_transaction
+            ));
+            return Err(error.into());
+        }
+    };
     state.durable_epoch = Some(receipt.barrier_epoch);
     state.last = format!("checkpoint receipt={receipt:?}");
     state.last_checkpoint = Some(receipt);
@@ -417,9 +430,9 @@ impl Fixture {
                 match state.record.as_ref().map(|r| r.phase) {
                     Some(Phase::LocalOwned) => state.project = true,
                     Some(Phase::Initializing) => {
-                        return Err(Error::Refused(
-                            "incomplete explicit initialization requires inspection",
-                        ));
+                        // Keep the existing marker read-only. An explicit, independently checked
+                        // resume command is required; ordinary initialize still refuses it.
+                        state.last = "incomplete initialization awaits inspection and explicit resume-initialize".into();
                     }
                     Some(Phase::Projected) => {
                         return Err(Error::Refused(
@@ -454,6 +467,120 @@ impl Fixture {
         }
         state.loaded = true;
         Ok(())
+    }
+    fn initialization_marker_barrier(
+        &self,
+        host: &mut dyn ServerHost,
+        state: &mut State,
+    ) -> Result<()> {
+        let source = state.source.unwrap();
+        let destination = state.destination.unwrap();
+        if host.level(SOURCE) != Some(source) || host.level(DESTINATION) != Some(destination) {
+            return Err(LiveWorldError::Stale.into());
+        }
+        let expected = state
+            .record
+            .as_ref()
+            .filter(|record| record.unstarted_initialization())
+            .ok_or(Error::Refused(
+                "resume requires an unstarted Initializing record",
+            ))?;
+        let marker = record::encode(expected)?;
+        let actual = OWNER
+            .get_existing(&mut source.attachments(host), Holder::Level)?
+            .ok_or(Error::Refused("initialization marker is missing"))?;
+        if record::encode(&actual)? != marker {
+            return Err(Error::Refused(
+                "initialization marker changed before inspection",
+            ));
+        }
+        if source.live_world(host)?.is_some() {
+            return Err(Error::Refused(
+                "initialization source has an active binding",
+            ));
+        }
+        match source.saved_projection(host) {
+            Err(LiveWorldError::NotSaved) => {}
+            Err(error) => return Err(error.into()),
+            Ok(_) => return Err(Error::Refused("initialization source has a saved binding")),
+        }
+        let selected = cells();
+        if selected.iter().any(|p| {
+            source.should_tick_blocks_at(host, *p) != Some(true)
+                || destination.should_tick_blocks_at(host, world_cell(*p)) != Some(true)
+        }) {
+            return Err(LiveWorldError::NotResident.into());
+        }
+        let air = host
+            .block_state_id("minecraft:air")
+            .ok_or(Error::Refused("air unavailable"))?;
+        let before = returned_payload_image(host, source, destination, &selected)?;
+        if before
+            .0
+            .iter()
+            .chain(&before.1)
+            .any(|(state, entity)| *state != air || entity.is_some())
+        {
+            return Err(Error::Refused(
+                "inspection found existing payload; initialization cannot resume",
+            ));
+        }
+        let revisions = (source.revisions(host)?, destination.revisions(host)?);
+        checkpoint(host, state)?;
+        let receipt = state.last_checkpoint.as_ref().unwrap();
+        for (level, expected) in [(source, revisions.0), (destination, revisions.1)] {
+            let row =
+                receipt
+                    .levels
+                    .iter()
+                    .find(|row| row.level == level)
+                    .ok_or(Error::Refused(
+                        "initialization receipt lacks the inspected level",
+                    ))?;
+            if (row.block_revision, row.content_revision)
+                != (expected.block_revision, expected.content_revision)
+                || (level == source
+                    && (row.binding.is_some()
+                        || row.retired_generation.is_some()
+                        || row.retired_members.is_some()))
+            {
+                return Err(Error::Refused(
+                    "initialization receipt differs from the inspected empty state",
+                ));
+            }
+        }
+        let current = OWNER
+            .get_existing(&mut source.attachments(host), Holder::Level)?
+            .ok_or(Error::Refused(
+                "initialization marker disappeared after checkpoint",
+            ))?;
+        if host.level(SOURCE) != Some(source)
+            || host.level(DESTINATION) != Some(destination)
+            || record::encode(&current)? != marker
+            || (source.revisions(host)?, destination.revisions(host)?) != revisions
+            || source.live_world(host)?.is_some()
+            || returned_payload_image(host, source, destination, &selected)? != before
+        {
+            return Err(Error::Refused(
+                "initialization inspection changed during checkpoint",
+            ));
+        }
+        Ok(())
+    }
+    fn resume_initialization(&self, host: &mut dyn ServerHost, state: &mut State) -> Result<()> {
+        if state.initialization.is_none() {
+            if !state
+                .record
+                .as_ref()
+                .is_some_and(Record::unstarted_initialization)
+            {
+                return Err(Error::Refused(
+                    "resume requires the existing unstarted Initializing marker",
+                ));
+            }
+            state.initialization = Some(Initialization::MarkerBarrier);
+        }
+        self.initialize(host, state)
     }
     fn initialize(&self, host: &mut dyn ServerHost, state: &mut State) -> Result<()> {
         let source = state.source.unwrap();
@@ -502,7 +629,7 @@ impl Fixture {
         }
         // Persist the first-use marker before any seed writes. A partial seed never gets reseeded.
         if state.initialization == Some(Initialization::MarkerBarrier) {
-            checkpoint(host, state)?;
+            self.initialization_marker_barrier(host, state)?;
             state.initialization = Some(Initialization::Seed);
         }
         if state.initialization == Some(Initialization::Seed) {
@@ -830,6 +957,7 @@ impl Fixture {
             if matches!(
                 action,
                 Action::Initialize
+                    | Action::ResumeInitialize
                     | Action::Project
                     | Action::Capture
                     | Action::Return
@@ -840,6 +968,7 @@ impl Fixture {
             }
             match action {
                 Action::Initialize => self.initialize(host, state)?,
+                Action::ResumeInitialize => self.resume_initialization(host, state)?,
                 Action::Project => {
                     if state.record.as_ref().map(|r| r.phase) != Some(Phase::LocalOwned) {
                         return Err(Error::Refused("project requires LocalOwned"));
@@ -890,6 +1019,7 @@ impl Hooks for Fixture {
     ) {
         for verb in [
             "initialize",
+            "resume-initialize",
             "project",
             "run",
             "pause",
@@ -917,6 +1047,7 @@ impl Hooks for Fixture {
         let mut state = self.state.lock().unwrap();
         let action = match event.command.literals.get(1).map(String::as_str) {
             Some("initialize") => Some(Action::Initialize),
+            Some("resume-initialize") => Some(Action::ResumeInitialize),
             Some("project") => Some(Action::Project),
             Some("run") => Some(Action::Run),
             Some("pause") => Some(Action::Pause),
@@ -942,7 +1073,7 @@ impl Hooks for Fixture {
                 let marker =
                     source.map(|l| OWNER.get_existing(&mut l.attachments(host), Holder::Level));
                 let value = format!(
-                    "marker={marker:?}; saved={:?}; sample={:?}; members={:?}; revisions={:?}/{:?}; source_chest={source_chest:?}; source_furnace={source_furnace:?}; world_chest={world_chest:?}; world_furnace={world_furnace:?}; queued={:?}; pending={:?}; checkpoint_pending={}; last_transfer={:?}; last_checkpoint={:?}; moving={}; durable_epoch={:?}; fenced={}; last={}",
+                    "marker={marker:?}; saved={:?}; sample={:?}; members={:?}; revisions={:?}/{:?}; source_chest={source_chest:?}; source_furnace={source_furnace:?}; world_chest={world_chest:?}; world_furnace={world_furnace:?}; queued={:?}; pending={:?}; initialization={:?}; checkpoint_pending={}; last_transfer={:?}; last_checkpoint={:?}; checkpoint_problem={:?}; checkpoint_transaction={:?}; transaction={:?}; moving={}; durable_epoch={:?}; fenced={}; last={}",
                     source.map(|l| l.saved_projection(host)),
                     state.projection.map(|p| p.sample(host)),
                     state.projection.map(|p| p.cells(host)),
@@ -950,9 +1081,13 @@ impl Hooks for Fixture {
                     world.map(|l| l.revisions(host)),
                     state.action,
                     state.pending.as_ref().map(|p| p.0),
+                    state.initialization,
                     state.checkpoint_pending,
                     state.last_transfer,
                     state.last_checkpoint,
+                    state.last_checkpoint_problem,
+                    state.last_checkpoint_transaction,
+                    host.transaction_lifecycle(),
                     state.motion.is_some(),
                     state.durable_epoch,
                     state.fenced,
