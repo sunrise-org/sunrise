@@ -35,6 +35,7 @@ enum Action {
 enum Initialization {
     MarkerBarrier,
     Seed,
+    Seeding,
     PayloadBarrier,
 }
 #[derive(Debug)]
@@ -633,71 +634,236 @@ impl Fixture {
             state.initialization = Some(Initialization::Seed);
         }
         if state.initialization == Some(Initialization::Seed) {
-            let flags = BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS;
-            for &position in &members {
-                let name = match position {
-                    [0, 65, 0] => "minecraft:chest",
-                    [1, 65, 0] => "minecraft:furnace",
-                    _ => "minecraft:stone",
-                };
-                let block = host
-                    .block_state_id(name)
-                    .ok_or(Error::Refused("fixture block unavailable"))?;
-                if !source
-                    .set_block(host, position, block, flags)
-                    .map_err(|e| Error::Write(format!("{e:?}")))?
-                {
-                    return Err(Error::Refused("seed block write refused"));
-                }
-            }
-            let chest = host
-                .block_entity(source, [0, 65, 0])
-                .ok_or(Error::Refused("chest unavailable"))?;
-            if !chest
-                .merge_data(
-                    host,
-                    compound(Tag::compound([(
-                        "Items",
-                        Tag::List(vec![item(0, "minecraft:stone", 7)]),
-                    )])),
-                )
-                .map_err(|e| Error::Write(format!("{e:?}")))?
-            {
-                return Err(Error::Refused("chest seed data was not accepted"));
-            }
-            let furnace = host
-                .block_entity(source, [1, 65, 0])
-                .ok_or(Error::Refused("furnace unavailable"))?;
-            if !furnace
-                .merge_data(
-                    host,
-                    compound(Tag::compound([
-                        (
-                            "Items",
-                            Tag::List(vec![
-                                item(0, "minecraft:raw_iron", 64),
-                                item(1, "minecraft:coal", 1),
-                            ]),
-                        ),
-                        ("lit_time_remaining", Tag::Int(2000)),
-                        ("lit_total_time", Tag::Int(2000)),
-                        ("cooking_time_spent", Tag::Int(40)),
-                        ("cooking_total_time", Tag::Int(200)),
-                    ])),
-                )
-                .map_err(|e| Error::Write(format!("{e:?}")))?
-            {
-                return Err(Error::Refused("furnace seed data was not accepted"));
-            }
-            let mut record = state.record.clone().unwrap();
-            record.phase = Phase::LocalOwned;
-            save_record(host, source, record.clone())?;
-            state.record = Some(record);
-            state.initialization = Some(Initialization::PayloadBarrier);
+            // State-bearing writes require the Source in place. Its ordinary level callback
+            // will seed once; a Host transaction does not change a parked level's context.
+            state.last = "marker durable; waiting for the exact Source level seed callback".into();
+            return Ok(());
         }
+        if state.initialization != Some(Initialization::PayloadBarrier) {
+            return Err(Error::Refused(
+                "initialization is not at a global save frontier",
+            ));
+        }
+        let expected = state
+            .record
+            .as_ref()
+            .ok_or(Error::Refused("seed marker is missing"))?;
+        if expected.phase != Phase::LocalOwned {
+            return Err(Error::Refused("completed seed lacks its LocalOwned marker"));
+        }
+        let marker = record::encode(expected)?;
+        let image = returned_payload_image(host, source, destination, &members)?;
+        let revisions = (source.revisions(host)?, destination.revisions(host)?);
         checkpoint(host, state)?;
+        for (level, expected) in [(source, revisions.0), (destination, revisions.1)] {
+            let row = state
+                .last_checkpoint
+                .as_ref()
+                .unwrap()
+                .levels
+                .iter()
+                .find(|row| row.level == level)
+                .ok_or(Error::Refused(
+                    "seed checkpoint lacks the actual payload level",
+                ))?;
+            if (row.block_revision, row.content_revision)
+                != (expected.block_revision, expected.content_revision)
+                || (level == source
+                    && (row.binding.is_some()
+                        || row.retired_generation.is_some()
+                        || row.retired_members.is_some()))
+            {
+                return Err(Error::Refused(
+                    "seed checkpoint differs from its actual readset",
+                ));
+            }
+        }
+        let actual = OWNER
+            .get_existing(&mut source.attachments(host), Holder::Level)?
+            .ok_or(Error::Refused("completed seed marker disappeared"))?;
+        if host.level(SOURCE) != Some(source)
+            || host.level(DESTINATION) != Some(destination)
+            || record::encode(&actual)? != marker
+            || (source.revisions(host)?, destination.revisions(host)?) != revisions
+            || source.live_world(host)?.is_some()
+            || returned_payload_image(host, source, destination, &members)? != image
+        {
+            return Err(Error::Refused(
+                "seed changed during its completed checkpoint",
+            ));
+        }
         state.initialization = None;
         state.project = true;
+        Ok(())
+    }
+    fn seed_in_source(
+        &self,
+        host: &mut dyn ServerHost,
+        state: &mut State,
+        level: LevelRef,
+    ) -> Result<()> {
+        let source = state.source.ok_or(LiveWorldError::Stale)?;
+        let destination = state.destination.ok_or(LiveWorldError::Stale)?;
+        if level != source
+            || host.level(SOURCE) != Some(source)
+            || host.level(DESTINATION) != Some(destination)
+            || !source.in_place(host)
+            || host.transaction_lifecycle() != mod_api::TransactionLifecycle::None
+        {
+            return Err(Error::Refused(
+                "seed callback lacks the exact current Source context",
+            ));
+        }
+        let expected = state
+            .record
+            .as_ref()
+            .filter(|r| r.unstarted_initialization())
+            .ok_or(Error::Refused(
+                "seed requires its unchanged Initializing marker",
+            ))?;
+        let marker = record::encode(expected)?;
+        let actual = OWNER
+            .get_existing(&mut source.attachments(host), Holder::Level)?
+            .ok_or(Error::Refused("seed marker is missing"))?;
+        if record::encode(&actual)? != marker || source.live_world(host)?.is_some() {
+            return Err(Error::Refused(
+                "seed ownership changed after the marker checkpoint",
+            ));
+        }
+        match source.saved_projection(host) {
+            Err(LiveWorldError::NotSaved) => {}
+            Err(error) => return Err(error.into()),
+            Ok(_) => return Err(Error::Refused("seed source already has a saved binding")),
+        }
+        let members = cells();
+        let air = host
+            .block_state_id("minecraft:air")
+            .ok_or(Error::Refused("air unavailable"))?;
+        let before = returned_payload_image(host, source, destination, &members)?;
+        if members.iter().any(|p| {
+            source.should_tick_blocks_at(host, *p) != Some(true)
+                || destination.should_tick_blocks_at(host, world_cell(*p)) != Some(true)
+        }) || before
+            .0
+            .iter()
+            .chain(&before.1)
+            .any(|(state, entity)| *state != air || entity.is_some())
+        {
+            return Err(Error::Refused(
+                "Source callback found changed, unreadable or existing seed payload",
+            ));
+        }
+        // Claim this one in-memory callback before its first effect. Failure fences a partial
+        // seed; duplicate callbacks and future opens cannot automatically replay it.
+        state.initialization = Some(Initialization::Seeding);
+        state.last = format!(
+            "seeding in Source={level:?}; transaction={:?}",
+            host.transaction_lifecycle()
+        );
+        let flags = BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS;
+        for &position in &members {
+            let name = match position {
+                [0, 65, 0] => "minecraft:chest",
+                [1, 65, 0] => "minecraft:furnace",
+                _ => "minecraft:stone",
+            };
+            let block = host
+                .block_state_id(name)
+                .ok_or(Error::Refused("fixture block unavailable"))?;
+            if !source
+                .set_block(host, position, block, flags)
+                .map_err(|e| Error::Write(format!("{e:?}")))?
+            {
+                return Err(Error::Refused("seed block write refused"));
+            }
+        }
+        let chest = host
+            .block_entity(source, [0, 65, 0])
+            .ok_or(Error::Refused("chest unavailable"))?;
+        let chest_data = compound(Tag::compound([(
+            "Items",
+            Tag::List(vec![item(0, "minecraft:stone", 7)]),
+        )]));
+        if !chest
+            .merge_data(host, chest_data.clone())
+            .map_err(|e| Error::Write(format!("{e:?}")))?
+        {
+            return Err(Error::Refused("chest seed data was not accepted"));
+        }
+        let furnace = host
+            .block_entity(source, [1, 65, 0])
+            .ok_or(Error::Refused("furnace unavailable"))?;
+        let furnace_data = compound(Tag::compound([
+            (
+                "Items",
+                Tag::List(vec![
+                    item(0, "minecraft:raw_iron", 64),
+                    item(1, "minecraft:coal", 1),
+                ]),
+            ),
+            ("lit_time_remaining", Tag::Int(2000)),
+            ("lit_total_time", Tag::Int(2000)),
+            ("cooking_time_spent", Tag::Int(40)),
+            ("cooking_total_time", Tag::Int(200)),
+        ]));
+        if !furnace
+            .merge_data(host, furnace_data.clone())
+            .map_err(|e| Error::Write(format!("{e:?}")))?
+        {
+            return Err(Error::Refused("furnace seed data was not accepted"));
+        }
+        for (entity, expected) in [(chest, chest_data), (furnace, furnace_data)] {
+            let actual = entity
+                .data(host)
+                .ok_or(Error::Refused("seed block entity readback is unavailable"))?;
+            if expected
+                .iter()
+                .any(|(key, value)| actual.get(key) != Some(value))
+            {
+                return Err(Error::Refused(
+                    "seed inventory or ticking data differs after its write",
+                ));
+            }
+        }
+        let current = OWNER
+            .get_existing(&mut source.attachments(host), Holder::Level)?
+            .ok_or(Error::Refused(
+                "seed marker disappeared during the ordinary writes",
+            ))?;
+        if host.level(SOURCE) != Some(source)
+            || !source.in_place(host)
+            || record::encode(&current)? != marker
+        {
+            return Err(Error::Refused(
+                "seed callback changed its current ownership",
+            ));
+        }
+        for &position in &members {
+            let name = match position {
+                [0, 65, 0] => "minecraft:chest",
+                [1, 65, 0] => "minecraft:furnace",
+                _ => "minecraft:stone",
+            };
+            if source.block_state(host, position) != host.block_state_id(name) {
+                return Err(Error::Refused(
+                    "seed callback changed the selected canonical states",
+                ));
+            }
+        }
+        let mut record = state.record.clone().unwrap();
+        record.phase = Phase::LocalOwned;
+        save_record(host, source, record.clone())?;
+        let current = OWNER
+            .get_existing(&mut source.attachments(host), Holder::Level)?
+            .ok_or(Error::Refused("completed seed marker is missing"))?;
+        if record::encode(&current)? != record::encode(&record)? {
+            return Err(Error::Refused(
+                "completed seed marker differs after its write",
+            ));
+        }
+        state.record = Some(record);
+        state.initialization = Some(Initialization::PayloadBarrier);
+        state.last = "complete Source payload awaits its global checkpoint".into();
         Ok(())
     }
     fn project(&self, host: &mut dyn ServerHost, state: &mut State) -> Result<()> {
@@ -938,6 +1104,10 @@ impl Fixture {
         }
         if state.pending.is_some() {
             return self.finish_transfer(host, state);
+        }
+        if state.initialization.is_some() {
+            self.initialize(host, state)?;
+            return Ok(());
         }
         if state.checkpoint_pending {
             checkpoint(host, state)?;
@@ -1192,6 +1362,24 @@ impl Hooks for Fixture {
                     self.release(host, &mut state);
                 }
             }
+        }
+    }
+    fn level_tick_pre(&self, host: mod_api::HostSide<'_>, event: &mut mod_api::LevelTickPreEvent) {
+        let mod_api::HostSide::Server(host) = host else {
+            return;
+        };
+        let mut state = self.state.lock().unwrap();
+        if state.fenced
+            || state.initialization != Some(Initialization::Seed)
+            || state.source != Some(event.level)
+        {
+            return;
+        }
+        if let Err(error) = self.seed_in_source(host, &mut state, event.level) {
+            state.last = format!("Source seed callback refused: {error}");
+            state.fenced = true;
+            state.action = None;
+            self.release(host, &mut state);
         }
     }
     fn server_stopping(&self, host: &mut dyn ServerHost, _: &mut mod_api::ServerStoppingEvent) {
