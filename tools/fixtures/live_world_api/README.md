@@ -107,3 +107,8 @@ Provenance, exact inputs, formatting results and remaining blockers are recorded
 On restore, the fixture compares the exact saved CURRENT pose component bits and revision with
 the actual host sample, and requires previous=CURRENT settlement. It retains the historical
 publish receipt's previous pose in its persistent audit record; that old movement is not replayed.
+
+The example explicitly budgets 64 MiB for a transfer's complete common checkpoint afterimages,
+including already open covered worlds and player data. This is the host's bounded default
+checkpoint ceiling, not a promise that every existing save fits. Actual oversized snapshots
+refuse before Prepared; the example does not clear content or treat a planned epoch as success.

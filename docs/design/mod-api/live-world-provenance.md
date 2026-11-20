@@ -338,3 +338,50 @@ and the trusted external-pose policy row before the required explicit-base pr_re
 Their actual later execution and pr_ready's complete output must be retained separately;
 source presence or earlier lower/client checks do not establish those results. Normal SDK
 and interactive app/save acceptance remains a subsequent, separately identified local stage.
+
+
+## Explicit-base readiness attempt and bounded validation fixes
+
+The required `tools/pr_ready.py --base d4be68317b0c86f1409d8cce65d467ddd40f68ed
+--quick --verbose` was actually invoked on clean `ba3bc9`, with the shared target/home,
+incremental disabled, bounded jobs and dev/test debug information disabled. It finished
+nonzero with its source unchanged. Its static/tree/layer/format and doc selections passed;
+its first Python run used this host's unversioned Xcode Python 3.9.6, below CONTRIBUTING's
+prerequisite. That environment mistake is retained as a failed run, not a baseline or pass.
+The preserved Rust compiler remains the owner-pinned 1.99.1; the tool's calendar-derived
+warning about newer CI Rust does not explain or waive actual introduced diagnostics.
+
+The real full-target run exposed missing new hook types in the dispatch-only compile
+fixture, an internal export placed outside its required area fragment, and old no-projection
+mining/outline snippet assumptions. Those existing fixtures now account for the new surface
+while retaining their actual ordinary-path assertions. Runtime ownership/action claims still
+come from real Game tests. Hidden engine constructors/backends now explain their purpose and
+the borrowed level adapter is explicitly non-exhaustive. Clippy findings were corrected
+without suppressing checks. The focused modern-Python boundary/mining/outline selection and
+actual generated dispatch suite passed; their exact outputs remain separate receipts.
+
+The first selected Game unit run passed its other cases but failed the existing
+`a_non_unicode_package_folder_keeps_its_exact_path` at directory creation. The coordinator
+replayed the same binary both in the sandbox (OS permission refusal) and with authorized
+execution (host Illegal byte sequence), before package/API code. It verified that source
+file against the immutable base. This is a concrete host filesystem limitation; the test
+was neither changed nor called passed. Because Cargo stops that selection at its failure,
+remaining selected test crates must be executed explicitly if the final run stops there.
+
+A complete subsequent Python 3.14 sweep ran with fresh canonical temporary paths and homes.
+It exposed a remaining outline source-marker assumption, subsequently corrected with its
+real extracted-filter test passing. Other retained failures include missing Linux/GNU CI
+prerequisites, sandbox process/socket restrictions and sparse roadmap inputs. The coordinator
+expanded only the existing pinned worktree's roadmap data and supplied a real local ISC
+Darwin flock CLI as a normal tool input; its implementation was not read by this worker or
+incorporated in engine code. Standard system tool directories are restored in the final
+PATH. Unknown or separately reproduced prebuilt/tooling failures remain explicitly
+unclassified until supported; no broad Python or workspace pass follows from focused checks.
+
+The final public transfer row is extended to two real payload destinations, queued-close
+staleness before any first-destination mutation, common third-owner metadata and return.
+The independent example chooses an explicit bounded common-afterimage byte budget rather
+than assuming that the moved-cell payload alone determines checkpoint cost. These additions
+are coverage/configuration of the existing contract, not another ownership framework.
+Their final actual execution belongs to the next recorded Game artifact. All earlier
+failed runs, unchanged-source bindings and coordinator replay receipts remain historical.

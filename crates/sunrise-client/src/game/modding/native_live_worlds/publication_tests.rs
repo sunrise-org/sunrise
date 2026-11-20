@@ -45,8 +45,10 @@ fn trusted_external_pose_consumes_overlap_while_default_identity_and_step_guards
                     Err(Error::Obstructed)
                 );
                 assert_eq!(source.live_world(game).unwrap(), None);
-                let mut trusted = LiveWorldLimits::default();
-                trusted.publication = mod_api::LiveWorldPublication::ExternallyResolved;
+                let trusted = LiveWorldLimits {
+                    publication: mod_api::LiveWorldPublication::ExternallyResolved,
+                    ..Default::default()
+                };
                 assert_eq!(
                     source.project(game, parent, cells, pose, trusted),
                     Err(Error::Denied)

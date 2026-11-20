@@ -533,8 +533,7 @@ impl Fixture {
                 }
             })
             .collect();
-        let prepared =
-            source.prepare_transfer(host, &mappings, LiveWorldTransferLimits::default())?;
+        let prepared = source.prepare_transfer(host, &mappings, transfer_limits())?;
         next.phase = if capture {
             Phase::LocalOwned
         } else {
@@ -618,7 +617,7 @@ impl Fixture {
             LiveWorldTransferCell::new(world, world_cell(selected[0]), source, selected[0]),
             LiveWorldTransferCell::new(world, world_cell(selected[1]), world, occupied),
         ];
-        match source.prepare_transfer(host, &mappings, LiveWorldTransferLimits::default()) {
+        match source.prepare_transfer(host, &mappings, transfer_limits()) {
             Err(LiveWorldError::Obstructed) => {
                 if before != (source.revisions(host)?, world.revisions(host)?) {
                     return Err(Error::Refused(
@@ -935,5 +934,14 @@ impl Hooks for Fixture {
             }
         }
         self.release(host, &mut state);
+    }
+}
+
+// The byte ceiling covers the actual common world/player/metadata afterimages, not just
+// these few moved cells. This stays within the host's bounded common checkpoint ceiling.
+fn transfer_limits() -> LiveWorldTransferLimits {
+    LiveWorldTransferLimits {
+        bytes: 64 * 1024 * 1024,
+        ..Default::default()
     }
 }

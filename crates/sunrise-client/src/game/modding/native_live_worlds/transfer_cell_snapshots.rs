@@ -32,21 +32,21 @@ fn extras(chunk: &mut Chunk) -> &mut ChunkExtras {
             .get_or_insert_with(|| Arc::new(ChunkExtras::default())),
     )
 }
-fn chunk<'a>(
-    all: &'a BTreeMap<LevelRef, Vec<Arc<Chunk>>>,
+fn chunk(
+    all: &BTreeMap<LevelRef, Vec<Arc<Chunk>>>,
     level: LevelRef,
     p: Pos,
-) -> Result<&'a Chunk, Error> {
+) -> Result<&Chunk, Error> {
     all.get(&level)
         .and_then(|chunks| chunks.iter().find(|c| (c.x, c.z) == column(p)))
         .map(Arc::as_ref)
         .ok_or(Error::NotResident)
 }
-fn chunk_mut<'a>(
-    all: &'a mut BTreeMap<LevelRef, Vec<Arc<Chunk>>>,
+fn chunk_mut(
+    all: &mut BTreeMap<LevelRef, Vec<Arc<Chunk>>>,
     level: LevelRef,
     p: Pos,
-) -> Result<&'a mut Chunk, Error> {
+) -> Result<&mut Chunk, Error> {
     all.get_mut(&level)
         .and_then(|chunks| chunks.iter_mut().find(|c| (c.x, c.z) == column(p)))
         .map(Arc::make_mut)

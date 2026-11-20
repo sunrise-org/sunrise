@@ -8,6 +8,7 @@ use crate::*;
 /// runtime level owned by the calling enabled mod. Reads/decodes/defaults and writes share
 /// the existing Host transaction and exact target-level undo, without switching context.
 // no wire: caller-side borrowed adapter; its generated backend primitives cross the same native/wasm boundary.
+#[non_exhaustive]
 pub struct LevelAttachments<'a> {
     level: LevelRef,
     host: &'a mut dyn ServerHost,

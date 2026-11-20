@@ -202,10 +202,10 @@ impl Game<'_> {
         let kind = entity.map(BlockEntity::id);
         match mod_api::__private::game::transfer_parts_present(&canonical.name, kind) {
             Some(false) => {}
-            result => {
+            _result => {
                 #[cfg(test)]
                 eprintln!(
-                    "LIVE_WORLD_TRANSFER unsupported actual Parts lookup {result:?} for {}",
+                    "LIVE_WORLD_TRANSFER unsupported actual Parts lookup {_result:?} for {}",
                     canonical.name
                 );
                 return Err(Error::Unsupported);
@@ -409,13 +409,12 @@ impl Game<'_> {
             self.transfer_destination_empty(destination, cell.to)?;
             let witness = self
                 .source_cell_witness(source, cell.from)
-                .map_err(|error| {
+                .inspect_err(|_error| {
                     #[cfg(test)]
                     eprintln!(
-                        "LIVE_WORLD_TRANSFER actual source witness at {:?}: {error:?}",
+                        "LIVE_WORLD_TRANSFER actual source witness at {:?}: {_error:?}",
                         cell.from
                     );
-                    error
                 })?;
             for tag in witness
                 .modeled
@@ -450,7 +449,7 @@ impl Game<'_> {
                 return Err(Error::Budget);
             }
             moves.push(Move {
-                mapping: cell.clone(),
+                mapping: *cell,
                 source: witness,
             });
         }

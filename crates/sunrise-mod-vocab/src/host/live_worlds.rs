@@ -3,6 +3,7 @@
 use crate::*;
 
 /// Read boundary reached by projection handles.
+// hidden: generated handle backend; mods use the natural receiver methods.
 #[doc(hidden)]
 #[sunrise_mod_api_macros::host_area]
 pub trait LiveWorldsBackend {
@@ -76,6 +77,7 @@ pub trait LiveWorldsBackend {
 }
 
 /// Write boundary reached by level and projection handles.
+// hidden: generated handle backend; mods use the natural receiver methods.
 #[doc(hidden)]
 #[sunrise_mod_api_macros::host_area]
 pub trait LiveWorldsBackendMut {

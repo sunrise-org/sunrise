@@ -704,6 +704,7 @@ mod lookup_context_tests {
 mod worldgen_tests;
 
 /// Engine-only conservative admission query over the actual resolved Parts and factory table.
+// hidden: engine-only stock-handoff admission over the resolved Parts, not a mod service.
 #[doc(hidden)]
 pub fn transfer_parts_present(block_name: &str, be_type: Option<&str>) -> Option<bool> {
     GAME_PARTS.with_borrow(|lookup| {

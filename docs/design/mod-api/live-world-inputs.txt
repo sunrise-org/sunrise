@@ -67,6 +67,7 @@ crates/sunrise-client/src/game/modding/block_entity_tick_reply_tests.rs
 crates/sunrise-client/src/game/modding/decided_action.rs
 crates/sunrise-client/src/game/modding/mod_menu_decisions_tests.rs
 crates/sunrise-client/src/game/modding/mods/mod.rs
+crates/sunrise-client/src/game/modding/mods/runtime_files.rs
 crates/sunrise-client/src/game/modding/native_block_entity_draw.rs
 crates/sunrise-client/src/game/modding/native_block_entity_item_tests.rs
 crates/sunrise-client/src/game/modding/native_block_entity_refs.rs
@@ -210,8 +211,16 @@ crates/sunrise-core/src/ticks/transfer_tests.rs
 crates/sunrise-core/src/uuid.rs
 crates/sunrise-game/Cargo.toml
 crates/sunrise-java-properties/src/lib.rs
+crates/sunrise-mod-api-gen/dispatch-tests/build.rs
+crates/sunrise-mod-api-gen/dispatch-tests/src/fixtures/client_mining_predict.rs
+crates/sunrise-mod-api-gen/dispatch-tests/src/fixtures/item_fished.rs
+crates/sunrise-mod-api-gen/dispatch-tests/src/fixtures/live_world_admission.rs
+crates/sunrise-mod-api-gen/dispatch-tests/src/fixtures/shared.rs
+crates/sunrise-mod-api-gen/dispatch-tests/src/fixtures/use_item_on_block.rs
+crates/sunrise-mod-api-gen/dispatch-tests/src/lib.rs
 crates/sunrise-mod-api-gen/src/build.rs
 crates/sunrise-mod-api-gen/src/catalog.rs
+crates/sunrise-mod-api-gen/src/dispatch_fixtures.rs
 crates/sunrise-mod-api-gen/src/exports.rs
 crates/sunrise-mod-api-gen/src/game_modules.rs
 crates/sunrise-mod-api-gen/src/host.rs
@@ -272,6 +281,7 @@ crates/sunrise-mod-vocab/src/world/level_attachments.rs
 crates/sunrise-mod-vocab/src/world/live_world.rs
 crates/sunrise-mod-vocab/src/world/mod.rs
 crates/sunrise-mod-vocab/src/world/phase_refusal.rs
+crates/sunrise-mod-vocab/src/world/read_error.rs
 crates/sunrise-mod-vocab/src/world/runtime_levels.rs
 crates/sunrise-mod-vocab/src/world/ticket_controller.rs
 crates/sunrise-mod-vocab/src/world/types.rs
@@ -320,8 +330,14 @@ docs/modding/src/reference/sdk/05-commands.md
 docs/modding/src/reference/sdk/06-hosts.md
 docs/modding/src/reference/sdk/07-retention.md
 docs/modding/src/reference/sdk/08-native-build.md
+tests/test_block_highlight_hook.py
+tests/test_check_game_boot_tests.py
 tests/test_ci_concurrency.py
+tests/test_ci_rust_changes.py
+tests/test_mod_api_boundary.py
+tests/test_parity_runner.py
 tests/test_prebuilt_game.py
+tests/test_remote_mining.py
 tests/test_sdk_api_source.py
 tools/check_public_tree.py
 tools/ci/check_warnings.py
@@ -329,6 +345,7 @@ tools/ci/format_scan.py
 tools/ci/ignored-tests/README.md
 tools/ci/ignored-tests/daily-sunrise-client-live-worlds.txt
 tools/ci/nightly.py
+tools/ci/rust_changes.py
 tools/fixtures/live_world_api/AUTHORING-PROVENANCE.md
 tools/fixtures/live_world_api/README.md
 tools/fixtures/live_world_api/src/lib.rs

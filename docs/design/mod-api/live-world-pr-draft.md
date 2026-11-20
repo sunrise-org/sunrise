@@ -84,3 +84,12 @@ upstream submission readiness remain pending. Local sign-offs are authorship rec
 maintainer approval or completed human review. The provenance log identifies same-source AI
 helper drafts and coordinator-supplied generic Sunrise navigation observations. Nothing
 asserts clean-room provenance or approved redistribution eligibility.
+
+
+Readiness note for this offline draft: the explicit-base readiness command was invoked and
+its complete nonzero output is retained. A wrong initial Python selection was corrected;
+introduced API-boundary/fixture/lint defects were fixed without weakening their checks.
+This host also demonstrably cannot create the existing test's invalid UTF-8 directory name,
+and some Linux CI/tooling selections need unavailable host prerequisites. A passing focused
+suite is not reported as a passing whole readiness run. The final report must retain actual
+per-selection outcomes, remaining-crate execution and normal SDK/window evidence separately.

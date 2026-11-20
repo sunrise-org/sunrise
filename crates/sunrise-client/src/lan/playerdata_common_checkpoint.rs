@@ -209,13 +209,13 @@ impl Autosaves {
                 "common player FIFO crossed world-session roots; reset after recovery".into()
             });
         }
-        if failure.is_none() {
-            if let Some(root) = &self.common.observed_root {
-                match RootWitness::capture(root) {
-                    Ok(root) => self.common.root = Some(root),
-                    Err(error) => {
-                        failure = Some(format!("common player root refused: {error}"));
-                    }
+        if failure.is_none()
+            && let Some(root) = &self.common.observed_root
+        {
+            match RootWitness::capture(root) {
+                Ok(root) => self.common.root = Some(root),
+                Err(error) => {
+                    failure = Some(format!("common player root refused: {error}"));
                 }
             }
         }

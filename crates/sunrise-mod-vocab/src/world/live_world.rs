@@ -87,6 +87,7 @@ pub struct LiveWorldFootprint {
 }
 impl LiveWorldFootprint {
     /// Engine constructor for an admitted bounded footprint calculation.
+    // hidden: engine/Wire constructs admitted query values; host operations revalidate caller input.
     #[doc(hidden)]
     pub fn new(cells: u32, source_chunks: u32, retained_columns: u32, view_areas: u32) -> Self {
         Self {
@@ -112,6 +113,7 @@ pub struct LiveWorldSample {
 
 impl LiveWorldSample {
     /// Engine constructor for one coherent pair.
+    // hidden: engine/Wire constructs admitted query values; host operations revalidate caller input.
     #[doc(hidden)]
     pub fn new(previous: LiveWorldPose, current: LiveWorldPose, revision: u64) -> Self {
         Self {
@@ -144,6 +146,7 @@ pub struct LiveWorldHit {
 
 impl LiveWorldHit {
     /// Engine constructor; public data is never trusted without backend validation.
+    // hidden: engine/Wire constructs admitted query values; host operations revalidate caller input.
     #[doc(hidden)]
     pub fn new(
         world: LiveWorldRef,
@@ -187,6 +190,7 @@ pub struct LiveWorldCell {
 
 impl LiveWorldCell {
     /// Engine constructor over a real source cell.
+    // hidden: engine/Wire constructs admitted query values; host operations revalidate caller input.
     #[doc(hidden)]
     pub fn new(
         pos: [i32; 3],
@@ -220,6 +224,7 @@ pub struct LiveWorldPlacementCell {
 }
 impl LiveWorldPlacementCell {
     /// Engine constructor; hook inputs are a fixed decision, never another state selection.
+    // hidden: engine/Wire constructs admitted query values; host operations revalidate caller input.
     #[doc(hidden)]
     pub fn new(
         pos: [i32; 3],
@@ -322,6 +327,7 @@ pub struct LiveWorldSavedProjection {
 }
 impl LiveWorldSavedProjection {
     /// Engine constructor over fully checked metadata.
+    // hidden: engine/Wire constructs admitted query values; host operations revalidate caller input.
     #[doc(hidden)]
     pub fn new(
         destination: String,
@@ -363,6 +369,7 @@ pub struct LiveWorldLevelReceipt {
 }
 impl LiveWorldLevelReceipt {
     /// Engine constructor after common acknowledgment.
+    // hidden: engine/Wire constructs admitted query values; host operations revalidate caller input.
     #[doc(hidden)]
     pub fn new(
         level: crate::LevelRef,
@@ -393,6 +400,7 @@ pub struct LiveWorldSaveReceipt {
 }
 impl LiveWorldSaveReceipt {
     /// Engine constructor after common acknowledgment.
+    // hidden: engine/Wire constructs admitted query values; host operations revalidate caller input.
     #[doc(hidden)]
     pub fn new(barrier_epoch: u64, levels: Vec<LiveWorldLevelReceipt>) -> Self {
         Self {
@@ -468,6 +476,7 @@ pub struct LiveWorldTransferPending {
 }
 impl LiveWorldTransferPending {
     /// Engine constructor for a staged intention.
+    // hidden: engine/Wire constructs admitted query values; host operations revalidate caller input.
     #[doc(hidden)]
     pub fn new(planned_epoch: u64) -> Self {
         Self { planned_epoch }
@@ -488,6 +497,7 @@ pub struct LiveWorldTransferReceipt {
 }
 impl LiveWorldTransferReceipt {
     /// Engine constructor after common acknowledgment.
+    // hidden: engine/Wire constructs admitted query values; host operations revalidate caller input.
     #[doc(hidden)]
     pub fn new(
         barrier_epoch: u64,

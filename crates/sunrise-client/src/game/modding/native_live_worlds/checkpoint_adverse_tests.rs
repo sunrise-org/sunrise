@@ -277,13 +277,13 @@ impl Hooks for JoinTarget {
     ) -> mod_api::Flow {
         if event.kind == "minecraft:marker" && event.dimension == A && event.loaded_from_disk {
             self.joins.fetch_add(1, Ordering::SeqCst);
-            if self.armed.swap(false, Ordering::SeqCst) {
-                if let Some(id) = self.target {
-                    let level = host.level(id).unwrap();
-                    let result =
-                        PUBLICATION.set(&mut level.attachments(host), Holder::Level, metadata(91));
-                    self.results.lock().unwrap().push(result);
-                }
+            if self.armed.swap(false, Ordering::SeqCst)
+                && let Some(id) = self.target
+            {
+                let level = host.level(id).unwrap();
+                let result =
+                    PUBLICATION.set(&mut level.attachments(host), Holder::Level, metadata(91));
+                self.results.lock().unwrap().push(result);
             }
         }
         mod_api::Flow::Continue
@@ -1143,6 +1143,192 @@ fn public_transfer_refuses_second_destination_aborts_root_then_moves_and_returns
                     .is_none()
             );
             hot.cancel(game).unwrap();
+            // Two distinct payload destinations join one decision; C remains a third metadata owner.
+            let dormant = (game as &mut dyn ServerHost)
+                .runtime_levels()
+                .open(
+                    B,
+                    RuntimeLevel::new("minecraft:overworld", RuntimeGenerator::Void, 1022),
+                )
+                .unwrap();
+            game.apply_runtime_levels();
+            settle_transfer_columns(game, dormant);
+            game.enter_level(Dim::Overworld).unwrap();
+            let split = vec![
+                mod_api::LiveWorldTransferCell::new(source, [17, 64, 0], parent, [17, 64, 0]),
+                mod_api::LiveWorldTransferCell::new(source, [0, 64, 0], dormant, [0, 64, 0]),
+            ];
+            assert_actual_empty(game, parent, &[[17, 64, 0]]);
+            let before_source = actual_cell_images(game, source, &[[17, 64, 0], [0, 64, 0]]);
+            game.enter_level(Dim::from_id(B)).unwrap();
+            game.world.set(0, 64, 0, stone).unwrap();
+            game.enter_level(Dim::Overworld).unwrap();
+            let before_dest = actual_cell_images(game, dormant, &[[0, 64, 0]]);
+            let before_epoch = wal::read_epoch(root).unwrap();
+            let before_files = core_images(root, &[A, B, C, "minecraft:overworld"]);
+            let before_revisions =
+                [source, parent, dormant].map(|level| level.revisions(game).unwrap());
+            assert_eq!(
+                source.prepare_transfer(game, &split, mod_api::LiveWorldTransferLimits::default()),
+                Err(LiveWorldError::Obstructed)
+            );
+            assert_eq!(
+                actual_cell_images(game, source, &[[17, 64, 0], [0, 64, 0]]),
+                before_source
+            );
+            assert_actual_empty(game, parent, &[[17, 64, 0]]);
+            assert_eq!(
+                actual_cell_images(game, dormant, &[[0, 64, 0]]),
+                before_dest
+            );
+            assert_eq!(
+                [source, parent, dormant].map(|level| level.revisions(game).unwrap()),
+                before_revisions
+            );
+            assert_eq!(wal::read_epoch(root).unwrap(), before_epoch);
+            assert_eq!(
+                core_images(root, &[A, B, C, "minecraft:overworld"]),
+                before_files
+            );
+            game.enter_level(Dim::from_id(B)).unwrap();
+            game.world.set(0, 64, 0, game.world.air).unwrap();
+            game.enter_level(Dim::Overworld).unwrap();
+            let stale_destination = source
+                .prepare_transfer(game, &split, mod_api::LiveWorldTransferLimits::default())
+                .unwrap();
+            let before_epoch = wal::read_epoch(root).unwrap();
+            let before_files = core_images(root, &[A, B, C, "minecraft:overworld"]);
+            let before_revisions =
+                [source, parent, dormant].map(|level| level.revisions(game).unwrap());
+            (game as &mut dyn ServerHost)
+                .runtime_levels()
+                .unload(B)
+                .unwrap();
+            let refused = (game as &mut dyn ServerHost)
+                .transaction(|host, tx| stale_destination.stage(host, tx).map(|_| ()));
+            assert_eq!(refused, Err(LiveWorldError::Stale));
+            assert_eq!(
+                stale_destination.receipt(game),
+                Err(LiveWorldError::NotCommitted)
+            );
+            assert_eq!(
+                actual_cell_images(game, source, &[[17, 64, 0], [0, 64, 0]]),
+                before_source
+            );
+            assert_actual_empty(game, parent, &[[17, 64, 0]]);
+            assert_actual_empty(game, dormant, &[[0, 64, 0]]);
+            assert_eq!(
+                [source, parent].map(|level| level.revisions(game).unwrap()),
+                [before_revisions[0], before_revisions[1]]
+            );
+            assert_eq!(dormant.revisions(game), Err(mod_api::LevelReadError::Stale));
+            let actual = game.native_level_world(dormant).unwrap();
+            assert_eq!((actual.revision, actual.block_entities.content_revision()),
+                (before_revisions[2].block_revision, before_revisions[2].content_revision));
+            assert_eq!(wal::read_epoch(root).unwrap(), before_epoch);
+            assert_eq!(
+                core_images(root, &[A, B, C, "minecraft:overworld"]),
+                before_files
+            );
+            stale_destination.cancel(game).unwrap();
+            game.apply_runtime_levels();
+            assert_eq!(dormant.revisions(game), Err(mod_api::LevelReadError::Stale));
+            let destination_b = (game as &mut dyn ServerHost)
+                .runtime_levels()
+                .open(
+                    B,
+                    RuntimeLevel::new("minecraft:overworld", RuntimeGenerator::Void, 1022),
+                )
+                .unwrap();
+            game.apply_runtime_levels();
+            assert_ne!(destination_b, dormant);
+            settle_transfer_columns(game, destination_b);
+            game.enter_level(Dim::Overworld).unwrap();
+            let split = [
+                mod_api::LiveWorldTransferCell::new(source, [17, 64, 0], parent, [17, 64, 0]),
+                mod_api::LiveWorldTransferCell::new(source, [0, 64, 0], destination_b, [0, 64, 0]),
+            ];
+            let ready = source
+                .prepare_transfer(game, &split, mod_api::LiveWorldTransferLimits::default())
+                .unwrap();
+            let intention = (game as &mut dyn ServerHost)
+                .transaction(|host, tx| {
+                    let pending = ready.stage(host, tx).unwrap();
+                    PUBLICATION.set(&mut c.attachments(host), Holder::Level, metadata(84))?;
+                    Ok::<_, AttachmentError>(pending)
+                })
+                .unwrap();
+            let completed = ready.receipt(game).unwrap();
+            assert_eq!(completed.barrier_epoch, intention.planned_epoch);
+            assert_eq!(completed.moved_cells, 2);
+            assert_transfer_receipt_revisions(
+                game,
+                &completed,
+                &[source, parent, destination_b, c],
+            );
+            assert_eq!(wal::read_epoch(root).unwrap(), completed.barrier_epoch);
+            assert_actual_empty(game, source, &[[17, 64, 0], [0, 64, 0]]);
+            assert_eq!(
+                actual_cell_images(game, parent, &[[17, 64, 0]]),
+                vec![original[2].clone()]
+            );
+            assert_eq!(
+                actual_cell_images(game, destination_b, &[[0, 64, 0]]),
+                vec![original[0].clone()]
+            );
+            assert_saved_empty_metadata(game, root, c);
+            assert_eq!(
+                PUBLICATION
+                    .get_existing(&mut c.attachments(game), Holder::Level)
+                    .unwrap(),
+                Some(metadata(84))
+            );
+            let reverse = [
+                mod_api::LiveWorldTransferCell::new(parent, [17, 64, 0], source, [17, 64, 0]),
+                mod_api::LiveWorldTransferCell::new(destination_b, [0, 64, 0], source, [0, 64, 0]),
+            ];
+            let returning = source
+                .prepare_transfer(game, &reverse, mod_api::LiveWorldTransferLimits::default())
+                .unwrap();
+            (game as &mut dyn ServerHost)
+                .transaction(|host, tx| {
+                    returning.stage(host, tx).unwrap();
+                    PUBLICATION.set(&mut c.attachments(host), Holder::Level, metadata(85))
+                })
+                .unwrap();
+            let returned = returning.receipt(game).unwrap();
+            assert_eq!(returned.moved_cells, 2);
+            assert!(returned.barrier_epoch > completed.barrier_epoch);
+            assert_transfer_receipt_revisions(game, &returned, &[source, parent, destination_b, c]);
+            assert_eq!(wal::read_epoch(root).unwrap(), returned.barrier_epoch);
+            assert_eq!(
+                actual_cell_images(game, source, &[[17, 64, 0], [0, 64, 0]]),
+                before_source
+            );
+            assert_actual_empty(game, parent, &[[17, 64, 0]]);
+            assert_actual_empty(game, destination_b, &[[0, 64, 0]]);
+            assert_eq!(
+                PUBLICATION
+                    .get_existing(&mut c.attachments(game), Holder::Level)
+                    .unwrap(),
+                Some(metadata(85))
+            );
+            assert_saved_empty_metadata(game, root, c);
+            let Some(BlockEntity::Furnace(final_counter)) = game
+                .native_level_world(parent)
+                .unwrap()
+                .block_entities
+                .get(&(3, 64, 0))
+            else {
+                panic!("one live furnace owner remains in Parent");
+            };
+            assert_eq!(
+                final_counter.cooking_timer,
+                progress + 1,
+                "bulk metadata/lifecycle/save operations do not run another BE tick"
+            );
+            ready.cancel(game).unwrap();
+            returning.cancel(game).unwrap();
         },
     );
 }

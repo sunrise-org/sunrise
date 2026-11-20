@@ -2,6 +2,7 @@
 #![allow(unused_variables)]
 use crate::*;
 /// Generated backend for typed level attachment storage; use `LevelRef::attachments` with a typed key.
+// hidden: generated handle backend; mods use the natural receiver methods.
 #[doc(hidden)]
 #[sunrise_mod_api_macros::host_area]
 pub trait LevelAttachmentsBackendMut {

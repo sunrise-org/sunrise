@@ -299,6 +299,7 @@ pub struct LiveWorldRef {
 
 impl LiveWorldRef {
     /// Construct an engine handle; the backend validates every field and its owner.
+    // hidden: engine allocates a binding generation; mods obtain it from project/restore.
     #[doc(hidden)]
     pub fn new(source: LevelRef, generation: u64) -> Self {
         Self { source, generation }
@@ -308,6 +309,7 @@ impl LiveWorldRef {
         self.source
     }
     /// The generation of this binding, for engine tables.
+    // hidden: engine metadata and wire matching need the scoped binding generation.
     #[doc(hidden)]
     pub fn generation(self) -> u64 {
         self.generation
@@ -327,6 +329,7 @@ pub struct LevelRevisions {
 }
 impl LevelRevisions {
     /// Engine constructor over the actual existing World counters.
+    // hidden: engine reads the actual world counters; mods use LevelRef::revisions.
     #[doc(hidden)]
     pub fn new(block_revision: u64, content_revision: u64) -> Self {
         Self {
@@ -1871,6 +1874,7 @@ pub struct LiveWorldTransferRef {
 }
 impl LiveWorldTransferRef {
     /// Engine constructor; each operation revalidates identity and owner.
+    // hidden: engine issues session-bound prepared tokens after admission.
     #[doc(hidden)]
     pub fn new(epoch: WorldEpoch, generation: u64) -> Self {
         Self { epoch, generation }
