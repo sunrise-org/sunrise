@@ -37,6 +37,42 @@ pub(super) struct Replica {
     epoch: WorldEpoch,
     entry: Option<Entry>,
     observed: Option<(LevelRef, u64, [u8; 32])>,
+    /// Last coherent physical placement consumed by a local-player tick. It is independent
+    /// of the public pose pair, which inspection and actions continue to read unchanged.
+    contact: Option<ContactFrontier>,
+    /// Rendering and the player's camera interpolate the same completed client tick.
+    presentation: Option<Presentation>,
+}
+
+#[derive(Clone)]
+struct ContactFrontier {
+    pose: LiveWorldPose,
+    membership: u64,
+    resources: u64,
+    boxes: Arc<ColliderBoxes>,
+}
+
+#[derive(Clone)]
+struct Presentation {
+    previous: LiveWorldPose,
+    current: ContactFrontier,
+}
+
+impl ContactFrontier {
+    fn new(entry: &Entry, geometry: &Geometry) -> Self {
+        Self {
+            pose: entry.sample.current,
+            membership: entry.membership,
+            resources: geometry.resources,
+            boxes: geometry.boxes.clone(),
+        }
+    }
+
+    fn same_contact(&self, other: &Self) -> bool {
+        self.membership == other.membership
+            && self.resources == other.resources
+            && (Arc::ptr_eq(&self.boxes, &other.boxes) || self.boxes.boxes() == other.boxes.boxes())
+    }
 }
 
 impl Sync {
@@ -450,7 +486,10 @@ impl Game<'_> {
                         return Err(sunrise_protocol::Error::new("live world: owner changed"));
                     }
                 }
-                let old_entry = sync.replicas.remove(&id).and_then(|r| r.entry);
+                let (old_entry, contact, presentation) = sync
+                    .replicas
+                    .remove(&id)
+                    .map_or((None, None, None), |r| (r.entry, r.contact, r.presentation));
                 let chunks = cells
                     .iter()
                     .map(|p| (p[0] >> 4, p[2] >> 4))
@@ -474,6 +513,8 @@ impl Game<'_> {
                         epoch,
                         entry: old_entry,
                         observed: None,
+                        contact,
+                        presentation,
                     },
                 );
             }
@@ -524,11 +565,25 @@ impl Game<'_> {
         if self.native_lifecycle.epoch() != Some(replica.epoch)
             || self.dim.id() != replica.destination
         {
+            replica.contact = None;
+            replica.presentation = None;
             return None;
         }
-        let source = self.level(&replica.source)?;
-        let destination = self.level(&replica.destination)?;
-        let world = self.native_level_view_world(source)?;
+        let Some(source) = self.level(&replica.source) else {
+            replica.contact = None;
+            replica.presentation = None;
+            return None;
+        };
+        let Some(destination) = self.level(&replica.destination) else {
+            replica.contact = None;
+            replica.presentation = None;
+            return None;
+        };
+        let Some(world) = self.native_level_view_world(source) else {
+            replica.contact = None;
+            replica.presentation = None;
+            return None;
+        };
         let loaded = replica.chunks.iter().all(|p| world.chunks.contains_key(p));
         if loaded
             && replica
@@ -554,6 +609,9 @@ impl Game<'_> {
             .as_ref()
             .is_none_or(|e| e.handle.level() != source || e.destination != destination)
         {
+            // A first observation, new level epoch or rebound source starts settled.
+            replica.contact = None;
+            replica.presentation = None;
             replica.entry = Some(Entry {
                 handle: LiveWorldRef::new(source, id),
                 owner: "sunrise:live_worlds",
@@ -622,6 +680,82 @@ impl Game<'_> {
         Prepared::new(placed)
     }
 
+    /// The live projection colliders at the last coherent contact frontier, retaining the
+    /// ordinary entity colliders from `current`. Only a completed player tick advances it;
+    /// repeated rendering, picking and duplicate/coalesced packets cannot consume motion.
+    pub(in crate::game) fn client_projection_contact_start(&self, current: Prepared) -> Prepared {
+        let mut table = self.live_worlds.borrow_mut();
+        if table.sync.replicas.is_empty() {
+            return current;
+        }
+        let mut starts = BTreeMap::new();
+        for (&id, replica) in &mut table.sync.replicas {
+            let (collider, now) = {
+                let Some(entry) = self.replica_entry(id, replica) else {
+                    continue;
+                };
+                let Ok(geometry) = self.projection_geometry(entry) else {
+                    continue;
+                };
+                (entry.collider, ContactFrontier::new(entry, &geometry))
+            };
+            // Actual changed shapes, membership or resources invalidate old support. A state
+            // change with identical collision boxes (such as furnace lit) keeps its contact.
+            if let Some(previous) = replica
+                .contact
+                .as_ref()
+                .filter(|before| before.same_contact(&now))
+                && previous.pose != now.pose
+            {
+                starts.insert(collider, frame(previous.pose));
+            }
+        }
+        if starts.is_empty() {
+            return current;
+        }
+        Prepared::new(
+            current
+                .placed()
+                .map(|placed| Placed {
+                    id: placed.id,
+                    collider: starts.get(&placed.id).map_or_else(
+                        || placed.collider.clone(),
+                        |&start| OrientedCollider::new(start, placed.collider.boxes.clone()),
+                    ),
+                    exempt: placed.exempt.clone(),
+                })
+                .collect(),
+        )
+    }
+
+    /// Consume exactly the last coherent visible placement after its collided carry, including
+    /// a canceled or obstructed move. Frozen data retains its last coherent pose; an unseen new
+    /// binding and a returning source start settled. Public pose samples are never rewritten.
+    pub(in crate::game) fn client_projection_contact_complete(&self) {
+        let mut table = self.live_worlds.borrow_mut();
+        for (&id, replica) in &mut table.sync.replicas {
+            let next = {
+                let Some(entry) = self.replica_entry(id, replica) else {
+                    continue;
+                };
+                let Ok(geometry) = self.projection_geometry(entry) else {
+                    continue;
+                };
+                ContactFrontier::new(entry, &geometry)
+            };
+            let previous = replica
+                .contact
+                .as_ref()
+                .filter(|before| before.same_contact(&next))
+                .map_or(next.pose, |before| before.pose);
+            replica.presentation = Some(Presentation {
+                previous,
+                current: next.clone(),
+            });
+            replica.contact = Some(next);
+        }
+    }
+
     pub(super) fn client_projection_frame(&self, id: u32) -> Option<Frame> {
         let mut table = self.live_worlds.borrow_mut();
         for (&generation, replica) in &mut table.sync.replicas {
@@ -634,6 +768,28 @@ impl Game<'_> {
         None
     }
 
+    /// The completed client tick shared by visible models and the visual pick outline.
+    /// Looking it up never consumes motion or changes the authoritative hit/action sample.
+    pub(super) fn client_projection_draw_poses(
+        &self,
+        id: u64,
+        replica: &mut Replica,
+    ) -> Option<[LiveWorldPose; 2]> {
+        self.replica_entry(id, replica)?;
+        let entry = replica.entry.as_ref()?;
+        let geometry = self.projection_geometry(entry).ok()?;
+        let now = ContactFrontier::new(entry, &geometry);
+        // Packet reception never advances the visual tick ahead of the player's camera.
+        // A first or changed surface settles; idle completed ticks collapse both ends.
+        Some(
+            replica
+                .presentation
+                .as_ref()
+                .filter(|shown| shown.current.same_contact(&now))
+                .map_or([now.pose; 2], |shown| [shown.previous, shown.current.pose]),
+        )
+    }
+
     pub(super) fn client_projection_geometry(
         &self,
         camera: glam::DVec3,
@@ -642,9 +798,17 @@ impl Game<'_> {
     ) {
         let mut table = self.live_worlds.borrow_mut();
         for (&id, replica) in &mut table.sync.replicas {
-            if let Some(entry) = self.replica_entry(id, replica) {
-                self.draw_projection(entry, camera, partial, out);
-            }
+            let Some(poses) = self.client_projection_draw_poses(id, replica) else {
+                continue;
+            };
+            let Some(entry) = replica.entry.as_ref() else {
+                continue;
+            };
+            self.draw_projection(entry, poses, camera, partial, out);
         }
     }
 }
+
+#[cfg(test)]
+#[path = "sync_carry_tests.rs"]
+mod carry_tests;

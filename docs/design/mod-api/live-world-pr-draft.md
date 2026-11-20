@@ -27,7 +27,9 @@ player snapshots and one checkpoint epoch before ownership handoff. Ordinary sav
 checkpoints, streaming retirement and close use this same barrier once admitted. Recovery
 runs under the existing session lock before level/player/migration readers. Ambiguous publish
 or post-Prepared I/O failure fences the whole session until a fresh process recovers it.
-Closure Ok and a planned epoch are not durability receipts.
+Closure Ok and a planned epoch are not durability receipts. Normal shutdown takes a final
+common decision after the real leaving-player queue; post-acknowledgment SaveToFile mutation
+refuses/fences the closing cut. Direct independent flush admission remains enforced.
 
 Pose publication defaults to collision-checked bounded combined linear/angular sweeps. The
 explicit externally-resolved policy additionally requires the existing trusted server-mod
@@ -36,6 +38,15 @@ second dynamics solver or feeding normalization back into the caller. Identity, 
 residency, once-per-tick and bounded step/work admission still apply. Previous/current
 presentation settles while publication pauses and on restore; saved CURRENT bits and
 revision roundtrip exactly while historical previous samples remain caller audit data.
+
+The connected client consumes the last coherent contact once before its ordinary outgoing
+position and support-age report. A private completed-tick pair keeps emitted models, the
+visual pick outline and camera coherent under coalesced packets; it does not rewrite public
+samples or action authority. Actual local-box equivalence preserves support across a stock
+furnace property change. Viewed block/column updates now invalidate the existing World
+revision, while duplicate state and content/light-only packets do not invalidate geometry.
+Ordinary destination terrain uses its real World/position collision query, retaining strict
+Source admission and bounded residency/work checks.
 
 The supported action slice uses ordinary main-hand targeting, permission/reach checks,
 other-owner occlusion, typed prospective-state admission, stock block placement and continuing
@@ -53,10 +64,12 @@ Validation commands and exact source/binary/resource receipts are retained under
 specific fixes. Actual Game tests exercise prepared forward/return ownership, occupied-batch
 and codec-abort refusal, third-owner metadata, final/nonempty retirement, rotating persistence,
 OS write failure plus fresh-process recovery, ordinary menus/actions and client capacity.
-The last full family exposed an older stale-handle expectation inconsistent with the newly
-required retirement rollback; the corrected row requires exact binding/sample/member
-restoration. Final explicit-base pr_ready and the added trusted-pose admission row are
-separate execution gates whose complete receipts accompany the local source checkpoint.
+The corrected rollback row and the added trusted-pose admission gate have actual execution
+receipts. The follow-up final artifact additionally passes the complete live-world family,
+real normal-stop/late-notice cases, destination fluid/dynamic-position refusals, actual client
+carry/presentation and existing ordinary movement controls. The test emits real model/outline
+vertices and outgoing packets; this does not certify a rebuilt SDK application's GPU window.
+The historical explicit-base readiness failures remain retained.
 Filesystem/player queue and internal native/wasm generation checks are separately executed.
 Normal SDK loading, graphical mouse/window and moving-save restart remain separately identified
 owner-run stages; direct Game or source-only example evidence does not certify those routes.
@@ -68,10 +81,13 @@ motion, ordinary live stock containers/counter, explicit checkpoint/restore, pre
 and capture, and occupied-second-destination refusal. Its source presence is not a run claim.
 
 Performance evidence is an observational actual-Game empty/stable/BE-only cache account under
-one recorded profile/hardware/tick selection, not a causal old/new SDK benchmark. No active
-projection takes an empty-table branch; unchanged geometry and model caches survive ordinary
+one recorded profile/hardware/tick selection, not a causal old/new SDK benchmark. When no projection is active,
+the service takes its empty-table branch; unchanged geometry and model caches survive ordinary
 inventory-only updates. Retention, aggregate cells/boxes, view cover and swept contact work
-remain bounded.
+remain bounded. Active client combined placement indices still rebuild at multiple tick
+seams; neither zero allocation nor a new client speed improvement is claimed. The separate
+client cost account identifies those calls, box/reference retention and existing measurement
+routes. The earlier server timing receipt is not a benchmark of this changed client route.
 
 Proposed dependency boundary: review the common save/recovery and actual live-payload
 handoff together with the projection/action service that depends on them. The separate SDK

@@ -24,6 +24,12 @@ explicit integration; a dimension name alone proves neither.
 
 ## Experimental slice
 
+Normal shutdown finishes a final common checkpoint after actual leaving-player snapshots.
+A write made by a post-acknowledgment SaveToFile notice refuses the final cut and fences the
+session. Independent SaveDir flush remains refused while common leases are active; a clean
+fully closed level releases its leases. This is the ordinary server teardown route, not a
+caller promise to checkpoint before quitting.
+
 The first implementation adds catalog-generated native/wasm handles for binding a
 real runtime world, inspecting its authoritative cells, ray targeting, publishing
 revalidated external poses and retiring the projection. It uses the existing
@@ -33,8 +39,10 @@ previous projection. Source and destination residency are checked without loadin
 or generating chunks inside an API call. Source blocks retain their one ordinary
 inventory/ticker owner regardless of motion. Geometry and prepared model caches invalidate on source block and resource revisions,
 including while the source is parked. Inventory-only writes do not rebuild the static
-physics/model caches. Contextual and position-dependent shapes explicitly refuse;
-source special rendering is currently restricted to real chest lid contexts.
+physics/model caches. The Source slice refuses contextual and position-dependent shapes;
+ordinary destination terrain uses the existing actual World/position collision query with
+an empty entity context, preserving query errors and residency/work admission. Source special
+rendering is currently restricted to real chest lid contexts.
 
 A binding keeps its initial local pivot. Published poses with another logical pivot
 are reanchored without changing any physical point; returned samples use the binding's
@@ -67,6 +75,17 @@ witnesses and pose samples. Existing viewed-level packets own the client world's
 blocks and block entity updates. A client exposes a new sample only after its real
 viewed member states match the witness, and retains derived coherent caches while
 updates are incomplete. Equal-frame divergent messages refuse.
+
+A connected client consumes coherent contact motion once per local player tick, before its
+ordinary position/support-age report. Models and the visual pick outline use that completed
+client tick's private presentation pair, matching the camera even when network samples
+coalesce; public accepted samples and authoritative current hit/action geometry are unchanged.
+Late join and idle ticks settle presentation. Actual collision-equivalent state changes retain
+contact through immutable local-box equality, while membership/resources or real shape changes
+settle it. Viewed state/column mutations advance the existing World revision; duplicate state,
+block-entity-only and light-only updates leave block geometry valid. See the separate
+[client cost account](live-world-client-costs.md); cached shapes do not imply allocation-free
+combined placement indices.
 
 The explicit owner action methods re-clip from a real player's eye, check reach and
 ordinary-world/other-projection occlusion, and lend the source context without moving

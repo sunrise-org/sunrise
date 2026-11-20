@@ -339,6 +339,20 @@ impl Game<'_> {
         &mut self,
         extra: &[LevelRef],
     ) -> Result<mod_api::LiveWorldSaveReceipt, Error> {
+        self.checkpoint_live_world_levels_at_frontier(extra, false)
+    }
+    /// Final teardown has no next tick to save writes made by post-acknowledgment notices.
+    /// A changed closing frontier refuses and fences instead of reporting a clean shutdown.
+    pub(in crate::game) fn checkpoint_live_world_shutdown(
+        &mut self,
+    ) -> Result<mod_api::LiveWorldSaveReceipt, Error> {
+        self.checkpoint_live_world_levels_at_frontier(&[], true)
+    }
+    fn checkpoint_live_world_levels_at_frontier(
+        &mut self,
+        extra: &[LevelRef],
+        final_save: bool,
+    ) -> Result<mod_api::LiveWorldSaveReceipt, Error> {
         if self.live_world_session_failed() {
             return Err(Error::Storage);
         }
@@ -355,7 +369,7 @@ impl Game<'_> {
         }
         self.live_world_durability.saving = true;
         let result = self
-            .capture_live_world_checkpoint(extra, None)
+            .capture_live_world_checkpoint(extra, None, final_save)
             .map(|(receipt, _)| receipt);
         self.live_world_durability.saving = false;
         result
@@ -378,7 +392,7 @@ impl Game<'_> {
         }
         let levels: Vec<_> = plan.affected_columns().keys().copied().collect();
         self.live_world_durability.saving = true;
-        let result = self.capture_live_world_checkpoint(&levels, Some((plan, cells)));
+        let result = self.capture_live_world_checkpoint(&levels, Some((plan, cells)), false);
         self.live_world_durability.saving = false;
         result.map(|(saved, retired)| {
             mod_api::LiveWorldTransferReceipt::new(
@@ -396,6 +410,7 @@ impl Game<'_> {
             super::transfer_cells::PreparedCells,
             &[mod_api::LiveWorldTransferCell],
         )>,
+        final_save: bool,
     ) -> Result<(mod_api::LiveWorldSaveReceipt, Vec<LiveWorldRef>), Error> {
         for &level in extra {
             self.hold_live_world_level(level)?;
@@ -619,10 +634,62 @@ impl Game<'_> {
                 }
             }
         }
+        // Only final teardown needs a post-notice cut: ordinary saves can schedule another
+        // checkpoint on the next tick. Keep this bounded witness temporary, never pinning chunks.
+        let final_readsets = if final_save {
+            let captured = receipts
+                .iter()
+                .map(|row| self.checkpoint_readset(row.level, epoch))
+                .collect::<Result<Vec<_>, _>>();
+            match captured {
+                Ok(captured) => Some((
+                    captured,
+                    self.transactions.writes(),
+                    self.player_autosaves.deferred_generation(),
+                    self.live_world_durability.coverage_epoch,
+                )),
+                Err(error) => {
+                    self.fence_live_world_session();
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
         // SaveToFile notices belong after the common decision, once per actual final UUID.
         let directory = sunrise_client::lan::playerdata::directory(&root);
         for (uuid, name) in players.names {
             self.native_player_save_to_file(uuid, &name, &directory);
+        }
+        if let Some((readsets, writes, players, coverage)) = final_readsets {
+            let settled = (|| -> Result<(), Error> {
+                if self.transactions.writes() != writes
+                    || self.player_autosaves.deferred_generation() != players
+                    || self.live_world_durability.coverage_epoch != coverage
+                    || !self
+                        .player_autosaves
+                        .writes_finished()
+                        .map_err(|error| Self::checkpoint_storage("final player cut", error))?
+                {
+                    return Err(Error::Revision);
+                }
+                for before in &readsets {
+                    self.validate_checkpoint_readset(before, epoch)?;
+                }
+                if self
+                    .live_world_durability
+                    .members
+                    .values()
+                    .any(|member| member.save.live_world_barrier_pending())
+                {
+                    return Err(Error::Revision);
+                }
+                Ok(())
+            })();
+            if let Err(error) = settled {
+                self.fence_live_world_session();
+                return Err(error);
+            }
         }
         Ok((
             mod_api::LiveWorldSaveReceipt::new(epoch, receipts),

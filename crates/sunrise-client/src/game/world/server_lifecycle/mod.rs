@@ -195,6 +195,20 @@ impl Game<'_> {
         }
     }
 
+    /// After guest teardown, deferred player snapshots and callback writes still belong to the
+    /// common journal. Its synchronous writer/fsync path replaces an independent final flush.
+    fn finish_server_storage(&mut self) -> Result<()> {
+        if !self.live_world_durability_active() {
+            return self.save.flush();
+        }
+        if !self.world_adopted || self.session_lock.is_none() {
+            return Err("common final save requires an adopted locked world".into());
+        }
+        self.checkpoint_live_world_shutdown()
+            .map(|_| ())
+            .map_err(|error| format!("final common shutdown checkpoint refused: {error:?}").into())
+    }
+
     /// Complete teardown even if freeing beds or the final save fails. A failed
     /// open must never overwrite a world the server did not successfully adopt.
     /// The session lock is not that marker: it is installed before the prepared
@@ -244,7 +258,7 @@ impl Game<'_> {
         {
             result = Err(shutdown_panic(payload.as_ref()).into());
         }
-        match catch_unwind(AssertUnwindSafe(|| self.save.flush())) {
+        match catch_unwind(AssertUnwindSafe(|| self.finish_server_storage())) {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 if result.is_ok() {

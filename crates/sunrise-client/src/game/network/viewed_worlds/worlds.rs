@@ -101,6 +101,9 @@ impl ViewedWorld {
                 Ok(chunk) => {
                     let key = (p.x, p.z);
                     self.world.chunks.insert(key, Arc::new(chunk));
+                    // A full source column replaces its observed block-state contents. Live
+                    // projection coherence/shape/model caches use this world's own revision.
+                    self.world.revision = self.world.revision.wrapping_add(1);
                     self.unload_block_entities(key);
                     self.block_entities.insert(key, p.chunk.block_entities);
                     column_changed(&mut self.world, key);
@@ -109,7 +112,9 @@ impl ViewedWorld {
             },
             C::ForgetLevelChunk(p) => {
                 let key = (p.pos[0], p.pos[1]);
-                self.world.unload_chunk(key);
+                if self.world.unload_chunk(key).is_some() {
+                    self.world.revision = self.world.revision.wrapping_add(1);
+                }
                 self.unload_block_entities(key);
                 column_changed(&mut self.world, key);
             }
@@ -190,7 +195,12 @@ impl ViewedWorld {
     /// A server's block: a state the client lacks (a server with mods it lacks) reads as air,
     /// as in its chunks.
     fn set_block(&mut self, [x, y, z]: [i32; 3], state: i32) {
-        if self.world.set_stored(x, y, z, stored_state(state)) {
+        let state = stored_state(state);
+        let previous = self.world.block(x, y, z);
+        if self.world.set_stored(x, y, z, state) {
+            if previous != state {
+                self.world.revision = self.world.revision.wrapping_add(1);
+            }
             block_changed(&mut self.world, [x, y, z]);
         }
     }

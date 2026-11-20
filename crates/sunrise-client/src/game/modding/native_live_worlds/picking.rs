@@ -352,6 +352,10 @@ impl Game<'_> {
         let Some(replica) = table.sync.replicas.get_mut(&pick.handle.generation()) else {
             return Vec::new();
         };
+        let Some(poses) = self.client_projection_draw_poses(pick.handle.generation(), replica)
+        else {
+            return Vec::new();
+        };
         let Some(entry) = self.replica_entry(pick.handle.generation(), replica) else {
             return Vec::new();
         };
@@ -364,7 +368,7 @@ impl Game<'_> {
         let Ok(shape) = shape(self, world, pick.hit.cell) else {
             return Vec::new();
         };
-        let pose = frame(entry.sample.previous).interpolate(&frame(entry.sample.current), partial);
+        let pose = frame(poses[0]).interpolate(&frame(poses[1]), partial);
         shape
             .edges()
             .into_iter()

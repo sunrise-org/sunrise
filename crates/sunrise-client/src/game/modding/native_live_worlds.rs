@@ -266,6 +266,29 @@ fn shape(game: &Game<'_>, world: &World, pos: [i32; 3]) -> Result<VoxelShape, Er
     state_shape(game, state)
 }
 
+/// Ordinary parent terrain is queried in its actual World/position with no colliding entity.
+/// Its contextual/published geometry is not restricted to the carried source palette. Errors
+/// remain refusal, unlike convenience box helpers which default a failed query to empty.
+fn destination_shape(game: &Game<'_>, world: &World, pos: [i32; 3]) -> Result<VoxelShape, Error> {
+    if !world.shape.contains_y(pos[1]) || !world.is_loaded_at(pos[0], pos[1], pos[2]) {
+        return Err(Error::NotResident);
+    }
+    let state = world.block(pos[0], pos[1], pos[2]);
+    let mut scene = sunrise_client::collisions::SceneCollisions {
+        world,
+        binding: game.collision,
+        subject: None,
+    };
+    game.collision
+        .collision_shape_with_context(
+            &mut scene,
+            state,
+            BlockPos::new(pos[0], pos[1], pos[2]),
+            &sunrise_world::collision_context::CollisionContext::empty(false),
+        )
+        .map_err(|_| Error::Unsupported)
+}
+
 /// Context-free source shapes are admitted before an ordinary placement can consume a stack.
 fn state_shape(
     game: &Game<'_>,
@@ -1046,7 +1069,7 @@ impl Game<'_> {
                         return Err(Error::NotResident);
                     }
                     let pos = [x, y, z];
-                    let shape = shape(self, world, pos)?;
+                    let shape = destination_shape(self, world, pos)?;
                     boxes = boxes
                         .checked_add(shape.boxes().len())
                         .ok_or(Error::Budget)?;
@@ -1248,7 +1271,13 @@ impl Game<'_> {
             .values()
             .filter(|entry| entry.destination.dimension() == self.dim.key())
         {
-            self.draw_projection(entry, camera, partial, out);
+            self.draw_projection(
+                entry,
+                [entry.sample.previous, entry.sample.current],
+                camera,
+                partial,
+                out,
+            );
         }
     }
 
@@ -1313,6 +1342,7 @@ impl Game<'_> {
     fn draw_projection(
         &self,
         entry: &Entry,
+        poses: [LiveWorldPose; 2],
         camera: glam::DVec3,
         partial: f64,
         out: &mut Vec<Vertex>,
@@ -1320,8 +1350,8 @@ impl Game<'_> {
         let Some(world) = self.native_level_view_world(entry.handle.level()) else {
             return;
         };
-        let previous = frame(entry.sample.previous);
-        let current = frame(entry.sample.current);
+        let previous = frame(poses[0]);
+        let current = frame(poses[1]);
         let pose = previous.interpolate(&current, partial);
         let origin = pose.to_world(Vec3::ZERO);
         let axes = [

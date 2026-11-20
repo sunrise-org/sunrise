@@ -6302,6 +6302,11 @@ impl Game<'_> {
     }
 
     fn tick_remote_player(&mut self, running: bool, hold: bool) -> Result<()> {
+        // Packets are applied before this tick. The contact frontier is the last coherent
+        // placement this player has consumed, not the latest packet's previous sample.
+        let current = self.placed_moving_colliders();
+        let start = self.client_projection_contact_start(current);
+        let scope = sunrise_client_render::moving_colliders::Scope::enter(start.clone());
         // Inventory.tick's ItemStack.inventoryTick: the pop time runs down.
         if !hold {
             for pop in &mut self.hotbar_pop {
@@ -6357,7 +6362,15 @@ impl Game<'_> {
         if running {
             self.tick_remote_block_entities();
         }
-        if let Some(input) = sent? {
+        let sent = sent?;
+        drop(scope);
+        // The carried move uses the existing collided mover. Publish its actual result and
+        // its current support age in this tick's ordinary position report.
+        self.carry_pass(&start);
+        self.client_projection_contact_complete();
+        let current = self.placed_moving_colliders();
+        self.observe_carry_age(&current);
+        if let Some(input) = sent {
             self.remote_send_state(input);
         }
         Ok(())
@@ -7799,10 +7812,8 @@ impl Game<'_> {
                     r.position_sender
                         .update(pos, (yaw, pitch), on_ground, collision)
             {
-                // A server that sent colliders reads how old the copy carrying the player is.
-                if !r.colliders.is_empty()
-                    && let Some(hint) = r.carry_age.hint()
-                {
+                // Both ordinary entity colliders and live projections use this support hint.
+                if let Some(hint) = r.carry_age.hint() {
                     out.push(S::CustomPayload(
                         sunrise_protocol::packets::configuration::CustomPayload {
                             channel: sunrise_protocol::carry_age::CHANNEL.into(),

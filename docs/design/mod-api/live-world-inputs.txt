@@ -1,16 +1,18 @@
+# Authoring reference for native hook signature only: existing generated native example .sunrise/sdk/api/crates/sunrise-mod-vocab/generated/mod_api_generated.rs at prior a944 pin.
 # Authorized generated SDK inputs (no personal code): ../sdk-export/logs/api-source-check-a944.stderr.log
 # Authorized generated SDK inputs (no personal code): ../sdk-export/logs/api-source-check-a944.stdout.log
 # Baseline source: d4be68317b0c86f1409d8cce65d467ddd40f68ed.
+# Compiler/library component archives and prepared resources are authorized normal build/runtime inputs, not implementation research.
+# Coordinator supplied generic own-Sunrise navigation observations about the vanilla BE factory mapping and retirement revision; no foreign source was supplied.
 # Input ledger, paths relative to the authorized Sunrise development worktree.
 # Missing-path probes returned no content; no neighboring/reference folders were opened.
 # Navigation searches were limited to crates/, docs/, tools/ and the root instruction files.
-# These files were read fully, in excerpts, or as symbol-search matches.
 # Ninth backend inputs: own Sunrise storage/playerdata/tick/Parts/level and Game sources below.
 # Own authored helper inputs only: /private/tmp/sunrise-{storage,transfer-payload,playerdata,checkpoint-adverse}-drafts (manifests retained in evidence).
 # Own bounded diagnosis input: /private/tmp/sunrise-check7-diagnosis (missing-delete ordinary writer regression).
 # Own independent example: /private/tmp/sunrise-live-world-api-example/live_world_fixture/src; no generated SDK/pins read as implementation.
-# Coordinator supplied generic own-Sunrise navigation observations about the vanilla BE factory mapping and retirement revision; no foreign source was supplied.
-# Compiler/library component archives and prepared resources are authorized normal build/runtime inputs, not implementation research.
+# Post-SDK generic shutdown/destination audit: own source only; no personal outputs/source/coordinates read. Own source-only CLI procedure inputs retained in /private/tmp/sunrise-live-world-api-example/current-procedure.receipt.json.
+# These files were read fully, in excerpts, or as symbol-search matches.
 .githooks/pre-commit
 .github/workflows/prebuilt-game-build.yml
 AGENTS.md
@@ -29,6 +31,7 @@ crates/sunrise-client-render/src/block_entity_anim.rs
 crates/sunrise-client-render/src/block_entity_render.rs
 crates/sunrise-client-render/src/chunk.rs
 crates/sunrise-client-render/src/chunk/block_entity/mod_models.rs
+crates/sunrise-client-render/src/collisions.rs
 crates/sunrise-client-render/src/containers.rs
 crates/sunrise-client-render/src/crash.rs
 crates/sunrise-client-render/src/mesher.rs
@@ -105,6 +108,7 @@ crates/sunrise-client/src/game/modding/native_live_worlds/placement.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/publication_tests.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/retention.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/sync.rs
+crates/sunrise-client/src/game/modding/native_live_worlds/sync_carry_tests.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/transfer.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/transfer_cell_snapshot_tests.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/transfer_cell_snapshots.rs
@@ -121,10 +125,12 @@ crates/sunrise-client/src/game/modding/native_state_shapes.rs
 crates/sunrise-client/src/game/modding/native_tick_time.rs
 crates/sunrise-client/src/game/modding/native_viewed_levels.rs
 crates/sunrise-client/src/game/modding/native_world_read.rs
+crates/sunrise-client/src/game/native_hooks/base.rs
 crates/sunrise-client/src/game/native_hooks/client_pick.rs
 crates/sunrise-client/src/game/native_hooks/fire.rs
 crates/sunrise-client/src/game/native_hooks/live_world_admission.rs
 crates/sunrise-client/src/game/native_hooks/mod.rs
+crates/sunrise-client/src/game/native_hooks/on_destroyed_by_push_reaction_tests.rs
 crates/sunrise-client/src/game/native_hooks/placement_context.rs
 crates/sunrise-client/src/game/native_hooks/placement_context_tests.rs
 crates/sunrise-client/src/game/native_hooks/shared.rs
@@ -143,8 +149,11 @@ crates/sunrise-client/src/game/network/lan_crafting/lending_tests.rs
 crates/sunrise-client/src/game/network/lan_entities.rs
 crates/sunrise-client/src/game/network/lan_pickup.rs
 crates/sunrise-client/src/game/network/remote/client_level_tick.rs
+crates/sunrise-client/src/game/network/remote/fall_sound_tests.rs
 crates/sunrise-client/src/game/network/remote/interaction_actions.rs
 crates/sunrise-client/src/game/network/remote/mod.rs
+crates/sunrise-client/src/game/network/remote/rider_tick_tests.rs
+crates/sunrise-client/src/game/network/viewed_worlds/meshing.rs
 crates/sunrise-client/src/game/network/viewed_worlds/mod.rs
 crates/sunrise-client/src/game/network/viewed_worlds/routing.rs
 crates/sunrise-client/src/game/network/viewed_worlds/worlds.rs
@@ -156,6 +165,7 @@ crates/sunrise-client/src/game/runtime/transactions/decision_storage.rs
 crates/sunrise-client/src/game/runtime/transactions/entities.rs
 crates/sunrise-client/src/game/world/autosave.rs
 crates/sunrise-client/src/game/world/carrier_transfers.rs
+crates/sunrise-client/src/game/world/integrated.rs
 crates/sunrise-client/src/game/world/level_tick.rs
 crates/sunrise-client/src/game/world/levels.rs
 crates/sunrise-client/src/game/world/owner_link.rs
@@ -163,6 +173,8 @@ crates/sunrise-client/src/game/world/persist.rs
 crates/sunrise-client/src/game/world/runtime_levels.rs
 crates/sunrise-client/src/game/world/runtime_levels_tests.rs
 crates/sunrise-client/src/game/world/saving.rs
+crates/sunrise-client/src/game/world/server_lifecycle/mod.rs
+crates/sunrise-client/src/game/world/server_lifecycle/server_lifecycle_tests.rs
 crates/sunrise-client/src/game/world/view_pass.rs
 crates/sunrise-client/src/game/world/world_loading.rs
 crates/sunrise-client/src/game/world/world_session.rs
@@ -181,6 +193,7 @@ crates/sunrise-client/src/lan/viewed_levels/mod.rs
 crates/sunrise-client/src/lan/viewed_levels/tests.rs
 crates/sunrise-client/src/lib.rs
 crates/sunrise-client/src/menu.rs
+crates/sunrise-client/src/mod_content_tests.rs
 crates/sunrise-client/src/net.rs
 crates/sunrise-client/src/raw_payloads/engine.rs
 crates/sunrise-client/src/raw_payloads/engine_tests.rs
@@ -255,8 +268,10 @@ crates/sunrise-mod-vocab/src/exports/scene.rs
 crates/sunrise-mod-vocab/src/exports/sunrise_world.rs
 crates/sunrise-mod-vocab/src/hooks/level_tick_post.rs
 crates/sunrise-mod-vocab/src/hooks/level_tick_pre.rs
+crates/sunrise-mod-vocab/src/hooks/level_unload.rs
 crates/sunrise-mod-vocab/src/hooks/live_world_admission.rs
 crates/sunrise-mod-vocab/src/hooks/notes.rs
+crates/sunrise-mod-vocab/src/hooks/player_save_to_file.rs
 crates/sunrise-mod-vocab/src/hooks/server_tick.rs
 crates/sunrise-mod-vocab/src/hooks/world_drawn.rs
 crates/sunrise-mod-vocab/src/hooks_tests.rs
@@ -308,13 +323,20 @@ crates/sunrise-world/src/carrier/contact.rs
 crates/sunrise-world/src/carrier/model.rs
 crates/sunrise-world/src/carrier/region_strict.rs
 crates/sunrise-world/src/chunk.rs
+crates/sunrise-world/src/collision.rs
+crates/sunrise-world/src/collision_context.rs
 crates/sunrise-world/src/compression.rs
+crates/sunrise-world/src/dynamic_support.rs
+crates/sunrise-world/src/level/pistons.rs
 crates/sunrise-world/src/level/place.rs
 crates/sunrise-world/src/level/tick.rs
 crates/sunrise-world/src/level/ticks.rs
 crates/sunrise-world/src/level/ticks/transfer.rs
 crates/sunrise-world/src/level/ticks/transfer_tests.rs
 crates/sunrise-world/src/level/update.rs
+crates/sunrise-world/src/liquid_collision.rs
+crates/sunrise-world/src/piston_shape.rs
+crates/sunrise-world/src/powder_snow_collision.rs
 crates/sunrise-world/src/region.rs
 crates/sunrise-world/src/registry.rs
 crates/sunrise-world/src/tick_data.rs
@@ -349,6 +371,7 @@ tools/check_public_tree.py
 tools/ci/check_warnings.py
 tools/ci/format_scan.py
 tools/ci/ignored-tests/README.md
+tools/ci/ignored-tests/daily-sunrise-client-live-world-carry.txt
 tools/ci/ignored-tests/daily-sunrise-client-live-worlds.txt
 tools/ci/nightly.py
 tools/ci/rust_changes.py
@@ -357,6 +380,17 @@ tools/fixtures/live_world_api/README.md
 tools/fixtures/live_world_api/src/lib.rs
 tools/fixtures/live_world_api/src/record.rs
 tools/modding_sdk_tables.py
+tools/native_dylib_probe.py
 tools/pr_ready.py
 tools/prebuilt_game.py
 tools/sdk_api_source.py
+tools/test_block_particles_parity.py
+tools/test_delta_parity.py
+tools/test_density_parity.py
+tools/test_free_space_parity.py
+tools/test_geometry_parity.py
+tools/test_loot_mine_location_block_parity.py
+tools/test_material_condition_parity.py
+tools/test_piston_shape_parity.py
+tools/test_scattered_ore_parity.py
+tools/test_worldgen_parity.py

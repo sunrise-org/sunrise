@@ -420,3 +420,103 @@ aborted with a stack overflow before the live-world test names; that remains a n
 an invented cause. Both new live-world protocol selectors were then listed and executed on
 that exact binary successfully. The full and complementary readiness failures remain intact;
 none is replaced by the focused runtime or protocol results.
+
+## Post-SDK generic lifecycle and destination-context follow-up
+
+The coordinator reported that normal SDK generation, strict consumers and packaging passed
+for clean 860fd62195. That is separate from actual play. A later ordinary quit reported the
+common-flush refusal despite prior acknowledged checkpoints. No personal source, outputs,
+coordinates, poses or algorithms were supplied to this worker. The own-source trace found
+finish_server_save's unconditional independent flush after guest teardown while common
+SaveDir leases intentionally remain required. The candidate uses a final common decision
+after leaving-player snapshots and checks its post-notice cut; it never weakens direct flush
+admission or post-Prepared fencing. A real Game shutdown regression is authored for projected
+container/furnace preservation, a post-initial-save guest inventory update, late SaveToFile
+mutation refusal/fencing and the unchanged ordinary-world route. This is uncompiled candidate
+work at the time of this entry, not a successful shutdown or recovery claim.
+
+A separate generic source audit found ordinary destination terrain queried through the
+source-admission helper. The candidate calls Sunrise's existing actual World/position collision
+query with an empty entity context, preserving its Result instead of defaulting errors to air.
+Source admission remains conservative; residency and candidate/chunk/box admission stay in
+place. The actual Game candidates exercise water versus stone, positioned bamboo, unsupported
+water in Source, and budget/residency refusal with retry. Syntax/applicability checks alone do
+not certify them. An initially suspected client menu failure was cleared by the coordinator's
+longer asynchronous window probe; no client action fix or negotiation-defect claim followed.
+An independently observed standing-carry concern is assigned to a Sunrise-only source helper;
+its eventual draft and runtime evidence are separate from these two candidates.
+
+The carry helper read only Sunrise's own source, rules and authored design/fixture. Its final
+source-only v2 patch (SHA-256 dd94a102006a187796caa06b9ce217fc00a63bf956d5870841a933a3cac7d63e)
+was integrated for review. The trace distinguishes the last contact pose consumed by a client
+player tick from the latest network sample, and places the existing collided carry before
+the ordinary outgoing position/support-age report. Public samples remain unchanged. Its
+actual-client packet regression is authored, not yet executed; its source-only provenance
+and remaining graphical interpolation limits are retained separately. No personal source
+or solver values were supplied, and the helper's syntax/applicability checks are not runtime
+evidence.
+
+The first combined executable built successfully with its source unchanged. Its ordinary
+shutdown row then passed; the destination row passed its water child but stopped on an
+incorrect fixture assumption that default bamboo had registered positioned collision, and
+the client carry row stopped before carrying because its synthetic configuration omitted
+the viewed level's dimension-type registry. Both failures are retained. The destination
+fixture now uses an actual stock moving-piston entity in the ordinary owner and contrasts
+the same moving-piston state at a position without that entity. The source whitelist still
+refuses the dynamic state. Inspection of the already prepared collision tables found no
+declared shape-offset rows; no new reference source or exporter acquisition was involved.
+
+The helper's subsequent private presentation addendum (SHA-256
+820609cce9a0ce7ea6790f4a9acdb6d7fbd98ef4448de0c24f1cbec73e44dc62)
+was integrated after that run. It keeps client rendering on the completed local contact tick,
+without changing public samples or action authority, and compares actual immutable local
+collision boxes when a state witness changes. The extended actual-client candidate checks
+emitted camera-relative geometry, collision-equivalent furnace state changes and ordinary
+viewed chest data. These additions remain unexecuted at this entry.
+
+The extended client/configuration and real moving-piston destination candidates passed
+the subsequent type check with unchanged source. Before the next executable build, the
+helper's visual-outline amendment (SHA-256
+8ec6e0d1dedbcb1ba8d17e6017c5c2d6d2df36dbfb7e37ce6620b5702aba05e3)
+was integrated so visible models and the pick outline share the same private presentation
+pair. Picking and authoritative hit/action samples are unchanged. That additional visual
+route is pending compilation and execution at this entry.
+
+The next executable again passed the normal shutdown and all destination-context children.
+The client row passed the coalesced contact, emitted models/outline, packet ordering, idle,
+jump and sparse-hole checks, then failed the later furnace-state transition. Own-source
+diagnosis found that ordinary viewed BlockUpdate/column storage did not advance the existing
+World revision used by the observed-state/geometry/model caches. The helper independently
+confirmed this trace and supplied the narrow raw-store invalidation patch (SHA-256
+9805c6d3f522025e3fa093c6b5b2454ff858f936e841ed405e7e31f89ce9de27).
+It advances that existing revision on real state/column changes while retaining the viewed
+world's existing mesh path, and does not advance it for duplicate state, absent unload,
+block-entity-only or light-only data. No relighting/simulation route or second state owner
+was introduced. Its actual-client assertions remain pending the next executable.
+
+Source-only cost review also records that the current client route constructs combined
+projection placement indices more than once per tick, despite reusing actual shape/model
+caches and immutable box storage. No zero-allocation or new client timing improvement is
+claimed; the earlier server fixture measurements are not a benchmark of this changed route.
+
+The final follow-up artifact 648d0a91bc005ffd2b0411e46891b44aabe4942ade3cd7f62282181f8d4a3584
+built with its exact source unchanged. Actual execution passed the complete listed live-world
+family (new/ignored/pure selections), ordinary moving-collider carry, ordinary no-projection
+client fall/rider and negotiated view-cap controls. The client row also exercised duplicate
+state, BE-only, light-only and full column insertion/replacement/removal revision behavior.
+All commands, raw source snapshots, resource/environment bindings and stdout/stderr remain
+under post-sdk-fixes/build-3; failed check/build/runtime iterations were retained separately.
+This is not a normal SDK/window or client allocation/timing claim. Source-only helper cost
+account c00acdb609f56d14e73fbc8b8cef34f4d8e7457cf65903d58d646753e0f6df0a and delivered
+patch/receipt lineage are retained in the bounded evidence bundle; an unused resource-free
+alternative is explicitly not applied. Final format/changed-crate Clippy/public-tree outcomes
+will be appended after their actual execution.
+
+Final format_scan passed. Strict changed-crate Clippy (`sunrise-client --lib --tests`,
+`-D warnings`) passed with the complete frozen source unchanged and no Rust diagnostics.
+The indexed public-tree and explicit pre-commit-hook executions are recorded at the local
+commit boundary, rather than inferred from an unset global hook configuration. The earlier
+full explicit-base readiness failures remain nonpasses; this follow-up did not repeat the
+unmodified Linux/Python readiness universe or relabel it green. All source-only incidental
+search output stayed in Sunrise's own repository; no reference/other-engine/private port
+implementation was read or used.

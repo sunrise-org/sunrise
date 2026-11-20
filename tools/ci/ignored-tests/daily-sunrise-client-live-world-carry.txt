@@ -1,0 +1,1 @@
+sunrise-client game::native_live_worlds::sync::carry_tests::client_tick_consumes_coalesced_projection_contact_before_ordinary_position_report lib daily resources # Actual ordinary client tick, real viewed source packets, local connection and outgoing position/carry-age ordering.
