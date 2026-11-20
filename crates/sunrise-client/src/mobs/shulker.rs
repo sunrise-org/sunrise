@@ -51,7 +51,6 @@ pub fn peek_height_scale(m: &Mob) -> Option<f32> {
 
 pub fn register(m: &mut Mob) {
     m.no_gravity = true;
-    m.yaw = 0.0;
     m.body_yaw = 0.0;
     m.previous_body_yaw = 0.0;
     if m.extra.color == 0 && m.extra.variant == 0 {
@@ -521,12 +520,10 @@ pub fn keep_eased_peek(slot: &mut Mob, old: &Mob) {
     slot.anim.v[PEEK] = old.anim.v[PEEK];
     slot.anim.vo[PEEK] = old.anim.vo[PEEK];
 }
-/// `Shulker.tick` additions: stay still and square on its block, then
-/// [`shell_tick`].
+/// `Shulker.tick` additions: stay square on its block, then [`shell_tick`]. Only
+/// `Shulker.finalizeSpawn` sets the yaw (0), so a loaded yaw is kept.
 pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
-    m.velocity = Vec3::ZERO;
     m.body_yaw = 0.0;
-    m.yaw = 0.0;
     m.head_pitch = 0.0;
     shell_tick(m, w, events);
 }
@@ -534,6 +531,8 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 /// rides nothing keeps a face (or teleports), and the lid eases toward its
 /// raw peek, pushing whatever it opens into.
 pub fn shell_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    // `Shulker.getDeltaMovement` is always zero and `setDeltaMovement` does nothing.
+    m.velocity = Vec3::ZERO;
     let p = block_pos(m);
     if m.extra.mount.is_none() && !can_stay_at(m, w, p, m.extra.variant3) {
         match attachable(m, w, p) {
@@ -1455,6 +1454,84 @@ mod tests {
 #[cfg(test)]
 mod saved_bytes_tests {
     use super::*;
+
+    fn shulker_types() -> std::collections::HashMap<String, std::sync::Arc<crate::mobs::MobType>> {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let k = std::sync::Arc::make_mut(&mut kind);
+        k.id = "minecraft:shulker".into();
+        k.species = Species::Shulker;
+        [("minecraft:shulker".into(), kind)].into()
+    }
+
+    /// `Shulker.getDeltaMovement` is always zero, so a loaded `Motion` is dropped, and only
+    /// `finalizeSpawn` sets the yaw: a loaded `Rotation` keeps its yaw.
+    #[test]
+    fn a_loaded_shulker_has_no_motion_and_keeps_its_yaw() {
+        use crate::entity_nbt::mob_from_nbt;
+        let tag = sunrise_core::nbt::parse_snbt(
+            r#"{id:"minecraft:shulker",Pos:[0.5d,64d,0.5d],NoAI:1b,Motion:[0.1d,0.25d,-0.3d],Rotation:[45f,10f]}"#,
+        )
+        .unwrap()
+        .0;
+        let m = mob_from_nbt(&tag, &shulker_types(), 1, None).unwrap();
+        assert_eq!(m.velocity, Vec3::ZERO);
+        assert_eq!(m.yaw, 45.0);
+    }
+
+    /// A NoAI shulker in flowing water: the current never moves its motion off zero, and its
+    /// loaded yaw stays.
+    #[test]
+    #[ignore = "daily"]
+    fn a_noai_shulker_in_flowing_water_keeps_zero_motion() {
+        use std::sync::Arc;
+        let ran = super::super::world::with_built_test_world(
+            &[],
+            |world, registry| {
+                world
+                    .chunks
+                    .insert((0, 0), Arc::new(crate::chunk::Chunk::empty(0, 0)));
+                let stone = registry.default_state("minecraft:stone").unwrap();
+                use sunrise_core::nbt::Tag;
+                let flowing = registry
+                    .saved_state_id(&Tag::compound([
+                        ("id", Tag::String("minecraft:water".into())),
+                        (
+                            "properties",
+                            Tag::compound([("level", Tag::String("3".into()))]),
+                        ),
+                    ]))
+                    .unwrap();
+                for x in 0..8 {
+                    for z in 0..8 {
+                        world.set(x, 63, z, stone).unwrap();
+                    }
+                }
+                // A wall on one side, so the flow out of the other three does not cancel.
+                world.set(4, 64, 4, flowing).unwrap();
+                world.set(5, 64, 4, stone).unwrap();
+            },
+            |w, types| {
+                let kind = Arc::new(types.types["minecraft:shulker"].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(4.5, 64.0, 4.5), 45.0);
+                m.no_ai = true;
+                m.persistent = true;
+                m.velocity = Vec3::new(0.1, 0.25, -0.3);
+                let (mut level, mut events) = (crate::health::TestLevel::new(0), Vec::new());
+                for _ in 0..5 {
+                    assert!(super::super::ai::tick(
+                        &mut m,
+                        w,
+                        &mut level.level(),
+                        &mut events
+                    ));
+                    assert!(m.fluids.in_water);
+                    assert_eq!(m.velocity, Vec3::ZERO);
+                }
+                assert_eq!(m.yaw, 45.0);
+            },
+        );
+        assert!(ran, "vanilla data is missing");
+    }
 
     /// `Shulker.readAdditionalSaveData`: `AttachFace` is
     /// `Direction.LEGACY_ID_CODEC` (`from3DDataValue` wraps the id through

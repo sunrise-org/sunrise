@@ -2528,6 +2528,8 @@ fn mob_from_nbt_at(
         m.extra.counter = number(tag.get("still_timeout")).unwrap_or(0) as i32;
     }
     if m.species() == crate::mobs::Species::Shulker {
+        // `Shulker.setDeltaMovement` ignores the loaded `Motion`.
+        m.velocity = Vec3::ZERO;
         m.extra.variant3 = (number(tag.get("AttachFace")).unwrap_or(0) as i8 % 6).unsigned_abs();
         m.extra.counter = number(tag.get("Peek")).map_or(0, |v| v as i8 as i32);
         m.extra.color = number(tag.get("Color")).map_or(16, |v| v as i8 as u8);

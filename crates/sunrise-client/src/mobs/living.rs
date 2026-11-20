@@ -1213,8 +1213,12 @@ impl Mob {
             .filter(|(id, _)| self.extra.mount == Some(*id));
         self.fluids = self.fluid_interaction(w, boat.map(|(_, b)| b));
         self.fluids.boat = boat;
-        // EntityFluidInteraction.applyCurrentTo: the flow pushes the mob.
-        if (self.fluids.in_water || self.fluids.in_lava) && self.pushed_by_fluid() {
+        // EntityFluidInteraction.applyCurrentTo: the flow pushes the mob, but
+        // `Shulker.setDeltaMovement` drops the push.
+        if (self.fluids.in_water || self.fluids.in_lava)
+            && self.pushed_by_fluid()
+            && self.species() != super::Species::Shulker
+        {
             self.velocity = w.pushed_by_currents(self.bounds(), self.velocity);
         }
         if self.fluids.in_water {
