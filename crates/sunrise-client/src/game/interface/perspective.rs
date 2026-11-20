@@ -3,8 +3,9 @@
 //! `getMaxZoom`), and the local player drawn as a model: in third person
 //! and in the inventory (`InventoryScreen.extractEntityInInventoryFollowsMouse`).
 use super::{Game, Screen, native_mob_draw::PlayerRender, shoulders::shoulder_variants};
-use mod_api::Hand;
+use mod_api::{__private::ResolvedPlayerLayerTexture, Hand, HookId, PlayerLayer, PlayerLayerView};
 use std::{
+    collections::HashMap,
     io,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -868,9 +869,10 @@ impl Game<'_> {
         // AvatarRenderer.shouldRenderLayers: a spectator draws no layers.
         if sunrise_client::mobs::render::layers_shown(m) {
             let chest = self.armor[1].as_ref().map(|s| &*s.item);
+            let draw = self.player_layer_draw(m, chest, true, PlayerLayerView::World);
             // CapeLayer: no cape on an invisible player (`isInvisible`, whoever looks).
             if !self.own_invisible() && !hidden_layers.contains(mod_api::StockEntityLayer::Cape) {
-                self.player_cape_geometry(m, chest, camera, alpha as f32, packed, out);
+                self.player_cape_geometry(m, &draw, camera, alpha as f32, packed, out);
             }
             self.player_ears_geometry(
                 m,
@@ -881,7 +883,7 @@ impl Game<'_> {
                 out,
             );
             if !hidden_layers.contains(mod_api::StockEntityLayer::Wings) {
-                self.player_elytra_geometry(m, chest, camera, alpha as f32, packed, out);
+                self.player_elytra_geometry(m, &draw, camera, alpha as f32, packed, out);
             }
             self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
             self.shoulder_parrots_geometry(m, camera, alpha as f32, packed, out);
@@ -997,8 +999,9 @@ impl Game<'_> {
             }
         });
         let chest = self.armor[1].as_ref().map(|s| &*s.item);
+        let draw = self.player_layer_draw(&m, chest, true, PlayerLayerView::InventoryPreview);
         if !self.own_invisible() {
-            self.player_cape_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
+            self.player_cape_geometry(&m, &draw, camera, 1.0, 240 | 240 << 8, &mut verts);
         }
         self.player_ears_geometry(
             &m,
@@ -1012,7 +1015,7 @@ impl Game<'_> {
         // wings' faces show from both sides (the elytra texture is empty on
         // the face that looks at the body).
         let wings_start = verts.len();
-        self.player_elytra_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
+        self.player_elytra_geometry(&m, &draw, camera, 1.0, 240 | 240 << 8, &mut verts);
         let wings = wings_start..verts.len();
         self.shoulder_parrots_geometry(&m, camera, 1.0, 240 | 240 << 8, &mut verts);
         self.held_item_geometry(
@@ -1059,31 +1062,98 @@ impl Game<'_> {
     }
 }
 
+#[cfg(test)]
+#[path = "perspective/player_layer_tests.rs"]
+mod player_layer_tests;
+
+type ChestLayers = HashMap<String, Vec<super::equipment_piece::EquipmentAssetLayer>>;
+
+/// The chest equipment and view shared by the two built-in player layers in one draw.
+pub(super) struct PlayerLayerDraw<'a> {
+    stack: Option<&'a sunrise_client::items::ItemStack>,
+    chest_item: Option<&'a str>,
+    chest: Option<&'a ChestLayers>,
+    uses_prototype: bool,
+    view: PlayerLayerView,
+    local: bool,
+    resolve: bool,
+}
+
 impl Game<'_> {
-    /// `WingsLayer` for a player wearing `chest`.
+    pub(super) fn player_layer_draw<'a>(
+        &'a self,
+        mob: &'a Mob,
+        chest: Option<&'a str>,
+        local: bool,
+        view: PlayerLayerView,
+    ) -> PlayerLayerDraw<'a> {
+        let stack = mob
+            .extra
+            .slot_stack(sunrise_items::equipment::CHEST)
+            .filter(|s| chest == Some(&*s.item));
+        let (wings_chest, uses_prototype) = self.worn_chest_layers(chest, stack, self.items());
+        PlayerLayerDraw {
+            stack,
+            chest_item: chest,
+            chest: wings_chest,
+            uses_prototype,
+            view,
+            local,
+            resolve: mod_api::__private::listened(HookId::ResolvePlayerLayer)
+                && sunrise_client::mobs::render::layers_shown(mob),
+        }
+    }
+
+    /// The worn chest stack's equipment asset (`WingsLayer` and `CapeLayer.hasLayer`).
+    pub(super) fn worn_chest_layers(
+        &self,
+        chest: Option<&str>,
+        stack: Option<&sunrise_client::items::ItemStack>,
+        items: &sunrise_client::items::Items,
+    ) -> (Option<&ChestLayers>, bool) {
+        if let Some(override_) = stack.and_then(sunrise_client::item_sync::equippable_override) {
+            let layers = override_
+                .filter(|e| e.slot == "chest")
+                .and_then(|e| e.asset_id)
+                .and_then(|asset| self.armor_stand_assets.equipment.get(&asset));
+            return (layers, false);
+        }
+        (self.prototype_chest_layers(chest, items), true)
+    }
+
+    fn prototype_chest_layers(
+        &self,
+        chest: Option<&str>,
+        items: &sunrise_client::items::Items,
+    ) -> Option<&ChestLayers> {
+        let info = items.get(chest?)?;
+        let asset = info
+            .equip_asset
+            .as_deref()
+            .filter(|_| info.equip_slot.as_deref() == Some("chest"))?;
+        self.armor_stand_assets.equipment.get(asset)
+    }
+
+    /// `WingsLayer` for a player wearing the draw's chest equipment.
     pub(super) fn player_elytra_geometry(
         &self,
         m: &Mob,
-        chest: Option<&str>,
+        draw: &PlayerLayerDraw<'_>,
         camera: glam::DVec3,
         partial: f32,
         light: u32,
         out: &mut Vec<sunrise_client_render::render_geometry::Vertex>,
     ) {
-        let stack = m
-            .extra
-            .slot_stack(sunrise_items::equipment::CHEST)
-            .filter(|s| chest == Some(&*s.item));
         self.wings_geometry(
-            chest,
-            stack,
-            m.cape.as_deref(),
+            draw.chest,
+            draw.stack,
+            Some((m, draw)),
             false,
             sunrise_client::mobs::render::base_transform(m, partial, camera),
             m.extra.elytra.angles(partial),
             m.extra.crouching,
             light,
-            self.wings_overlay(stack),
+            self.wings_overlay(draw.stack),
             out,
         );
     }
@@ -1101,16 +1171,16 @@ impl Game<'_> {
     }
     /// `WingsLayer.submit` for any wearer: the wings of `chest`'s equipment
     /// asset on `base` (the wearer's model transform), `baby` for the baby
-    /// elytra model. `cape` is a player's own cape texture, which has its
-    /// elytra (`WingsLayer.getPlayerElytraTexture`). `stack` is the worn
+    /// elytra model. For a player, the profile can supply a texture
+    /// (`WingsLayer.getPlayerElytraTexture`). `stack` is the worn
     /// stack when known: an OptiFine CIT elytra rule for it replaces the
     /// texture, the cape's too, as OptiFine's `LayerElytra` does.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn wings_geometry(
         &self,
-        chest: Option<&str>,
+        chest: Option<&ChestLayers>,
         stack: Option<&sunrise_client::items::ItemStack>,
-        cape: Option<&str>,
+        player: Option<(&Mob, &PlayerLayerDraw<'_>)>,
         baby: bool,
         base: glam::Mat4,
         angles: [f32; 3],
@@ -1119,38 +1189,39 @@ impl Game<'_> {
         overlay: u32,
         out: &mut Vec<sunrise_client_render::render_geometry::Vertex>,
     ) {
-        // The worn stack's own `equippable`, for the chest slot, with an asset
-        // (getEquipmentIfRenderable: anything else counts as nothing worn).
-        let equippable = match stack {
-            Some(s) => sunrise_client::item_sync::equippable(s, self.items()),
-            None => chest
-                .and_then(|item| sunrise_client::item_sync::item_equippable(item, self.items())),
-        };
-        let Some(asset) = equippable
-            .filter(|e| e.slot == "chest")
-            .and_then(|e| e.asset_id)
-        else {
-            return;
-        };
         let assets = &self.armor_stand_assets;
-        let Some(layer) = assets
-            .equipment
-            .get(&asset)
-            .and_then(|k| k.get("wings"))
-            .and_then(|layers| layers.first())
-        else {
-            return;
-        };
-        let sprites = &self.gui.atlas.sprites;
-        let rule = stack.and_then(|s| self.cit_worn_rule(sunrise_client::cit::Kind::Elytra, s));
-        let rect = sunrise_client::cit_armor::wings(rule, cape, |s| sprites.get(s));
-        let (Some(model), Some(rect)) = (
+        let (Some(layer), Some(model)) = (
+            chest
+                .and_then(|k| k.get("wings"))
+                .and_then(|layers| layers.first()),
             assets
                 .player
                 .get(if baby { "elytra_baby" } else { "elytra" }),
-            rect.or_else(|| sprites.get(&layer.texture)),
         ) else {
             return;
+        };
+        let sprites = &self.gui.atlas.sprites;
+        let choice = match player {
+            Some((mob, draw)) if draw.resolve => {
+                self.resolve_player_layer_texture(mob.id, draw.local, draw.view, PlayerLayer::Wings)
+            }
+            _ => ResolvedPlayerLayerTexture::Keep,
+        };
+        let cape = if matches!(choice, ResolvedPlayerLayerTexture::Equipment) {
+            None
+        } else {
+            player.and_then(|(mob, _)| mob.cape.as_deref())
+        };
+        let uv = if let ResolvedPlayerLayerTexture::Texture(uv) = choice {
+            uv
+        } else {
+            let rule = stack.and_then(|s| self.cit_worn_rule(sunrise_client::cit::Kind::Elytra, s));
+            let Some(rect) = sunrise_client::cit_armor::wings(rule, cape, |s| sprites.get(s))
+                .or_else(|| sprites.get(&layer.texture))
+            else {
+                return;
+            };
+            [rect.u0, rect.v0, rect.u1, rect.v1]
         };
         let base = base * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 0.125));
         let pose = |part: &sunrise_client::mobs::Part| {
@@ -1164,16 +1235,11 @@ impl Game<'_> {
             }
             p
         };
-        sunrise_client::mobs::render_model(
-            model,
-            base,
-            &pose,
-            [rect.u0, rect.v0, rect.u1, rect.v1],
-            light,
-            overlay,
-            out,
-        );
-        // The elytra texture's OptiFine emissive overlay (not a cape's), full bright.
+        sunrise_client::mobs::render_model(model, base, &pose, uv, light, overlay, out);
+        // The elytra texture's OptiFine emissive overlay (not a cape's or mod image's).
+        if matches!(choice, ResolvedPlayerLayerTexture::Texture(_)) {
+            return;
+        }
         let glow = cape
             .and_then(|c| sprites.get(c))
             .is_none()
@@ -1207,52 +1273,55 @@ impl Game<'_> {
     pub(super) fn player_cape_geometry(
         &self,
         m: &Mob,
-        chest: Option<&str>,
+        draw: &PlayerLayerDraw<'_>,
         camera: glam::DVec3,
         partial: f32,
         light: u32,
         out: &mut Vec<sunrise_client_render::render_geometry::Vertex>,
     ) {
-        let Some(rect) = m
-            .cape
-            .as_deref()
-            .and_then(|c| self.gui.atlas.sprites.get(c))
-        else {
-            return;
-        };
         if m.is_invisible() {
             return;
         }
-        // CapeLayer.hasLayer: the worn stack's own `equippable` asset.
-        let items = self.res.items();
-        let equippable = match m
-            .extra
-            .slot_stack(sunrise_items::equipment::CHEST)
-            .filter(|s| chest == Some(&*s.item))
-        {
-            Some(s) => sunrise_client::item_sync::equippable(s, items),
-            None => chest.and_then(|item| sunrise_client::item_sync::item_equippable(item, items)),
-        };
-        let layers = equippable
-            .filter(|e| e.slot == "chest")
-            .and_then(|e| e.asset_id)
-            .and_then(|asset| self.armor_stand_assets.equipment.get(&asset));
-        if layers.is_some_and(|k| k.contains_key("wings")) {
+        // PlayerModelPart.CAPE is bit 0, both in local options and in synced model parts.
+        let resolve = draw.resolve && m.extra.hidden_model_parts & 1 == 0;
+        let profile = m
+            .cape
+            .as_deref()
+            .and_then(|c| self.gui.atlas.sprites.get(c));
+        if !resolve && profile.is_none() {
             return;
         }
+        // Both layers share the stack override. Only inherited equipment can
+        // differ between the wings' world table and the cape's client table.
+        let chest = if draw.uses_prototype && !std::ptr::eq(self.items(), self.res.items()) {
+            self.prototype_chest_layers(draw.chest_item, self.res.items())
+        } else {
+            draw.chest
+        };
+        if chest.is_some_and(|k| k.contains_key("wings")) {
+            return;
+        }
+        let Some(model) = m.kind.layer("player#cape") else {
+            return;
+        };
+        let choice = if resolve {
+            self.resolve_player_layer_texture(m.id, draw.local, draw.view, PlayerLayer::Cape)
+        } else {
+            ResolvedPlayerLayerTexture::Keep
+        };
+        let uv = if let ResolvedPlayerLayerTexture::Texture(uv) = choice {
+            uv
+        } else {
+            let Some(rect) = profile else {
+                return;
+            };
+            [rect.u0, rect.v0, rect.u1, rect.v1]
+        };
         let mut base = sunrise_client::mobs::render::base_transform(m, partial, camera);
-        if layers.is_some_and(|k| k.contains_key("humanoid")) {
+        if chest.is_some_and(|k| k.contains_key("humanoid")) {
             base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, -0.053125, 0.06875));
         }
-        sunrise_client::mobs::render::cape(
-            m,
-            partial,
-            base,
-            [rect.u0, rect.v0, rect.u1, rect.v1],
-            light,
-            self,
-            out,
-        );
+        sunrise_client::mobs::render::cape(m, model, partial, base, uv, light, self, out);
     }
     /// `Deadmau5EarsLayer` (`AbstractClientPlayer.showExtraEars`): the ears
     /// of a player whose profile name is `deadmau5`, in the player's skin.

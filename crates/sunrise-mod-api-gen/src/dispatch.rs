@@ -285,6 +285,8 @@ pub(super) fn emit<'a>(
             crate::catalog::validate_stack_count_output(name, output.as_ref().map(|(_, ty)| *ty))
                 .map_err(|error| error.to_string())?;
         }
+        let staged_collect = contract == Contract::Collect && hook.isolate;
+        let staged = fresh_name("staged", &mut used);
         let collect_cancel = contract == Contract::Collect
             && hook.cancellable == Some(true)
             && args.iter().any(|(name, ty)| {
@@ -582,7 +584,13 @@ pub(super) fn emit<'a>(
                 {
                     surfaces.push(name.clone());
                 }
-                if hook.isolate && !rollback_pointee_is_copy(&field_ty) {
+                if staged_collect && Some(name.as_str()) != out {
+                    return Err(format!(
+                        "{}: a staged collect hook can only write its output",
+                        hook.name
+                    ));
+                }
+                if hook.isolate && !staged_collect && !rollback_pointee_is_copy(&field_ty) {
                     return Err(format!(
                         "{}: isolate rolls a listener's writes back to the requested values; \
                          its mutable argument {name} must be a Copy primitive or a fixed array \
@@ -595,7 +603,9 @@ pub(super) fn emit<'a>(
                 }
                 rollback.push((name.clone(), true));
             }
-            let visibility = if event_type == "ApplyEffectTickEvent" && name == "changes" {
+            let visibility = if (event_type == "ApplyEffectTickEvent" && name == "changes")
+                || (staged_collect && Some(name.as_str()) == out)
+            {
                 "pub(super)"
             } else {
                 "pub"
@@ -604,6 +614,12 @@ pub(super) fn emit<'a>(
                 "{visibility} {name}: {},\n",
                 field.to_token_stream()
             ));
+            if scalar && staged_collect {
+                return Err(format!(
+                    "{}: a staged collect hook cannot write scalar arguments",
+                    hook.name
+                ));
+            }
             if scalar {
                 inits.push(format!("{name}: *{name}"));
                 write_back.push_str(&format!("*{name} = {event}.{name};"));
@@ -613,6 +629,8 @@ pub(super) fn emit<'a>(
                 inits.push(format!("{name}: {name}.map(ModBlockEntityView::new)"));
             } else if batch_entry.is_some() {
                 inits.push(format!("{name}: &mut {batch}"));
+            } else if staged_collect && Some(name.as_str()) == out {
+                inits.push(format!("{name}: &mut {staged}"));
             } else if hook.event_per_listener
                 && matches!(field_ty, Type::Reference(ref reference) if reference.mutability.is_some())
             {
@@ -1145,7 +1163,7 @@ pub(super) fn emit<'a>(
         // The #2414 ruling an isolated cancel hook carries: a listener that unwinds keeps the
         // **requested** outputs — not one an earlier listener had proposed — is skipped by this
         // hook for the session, and no later listener runs on this invocation.
-        let (isolate_snapshot, isolate_restore) = if hook.isolate {
+        let (isolate_snapshot, isolate_restore) = if hook.isolate && mod_cancel {
             let snapshot = rollback
                 .iter()
                 .map(|(name, by_reference)| {
@@ -1217,6 +1235,24 @@ pub(super) fn emit<'a>(
                     "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, owner) in super::listening(HookId::{hook_id}) {{ if owner.id != {event}.{owner} {{ continue; }} let {mod_item} = {entered}.enter(owner, \"{name}\"); {} }} }}",
                     call(&mod_item, "break"),
                     owner = hook.owner.as_deref().unwrap(),
+                ),
+            ),
+            None if staged_collect => (
+                String::new(),
+                format!(
+                    "let mut {entered} = super::runtime::ListenerScope::new();
+                     for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{
+                         if super::runtime::poisoned(HookId::{hook_id}, {mod_entry}.id) {{ continue; }}
+                         let {mod_item} = {entered}.enter({mod_entry}, \"{name}\");
+                         let mut {staged} = {o}.__stage({mod_entry}.id);
+                         {local_event}
+                         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::runtime::refusable(contained, || {mod_item}.{name}({invoke})))) {{
+                             Ok(Ok(())) => *{o} = {staged},
+                             Ok(Err(refusal)) => {{ refusal.report(); super::runtime::poison(HookId::{hook_id}, {mod_entry}.id); }}
+                             Err(_) => super::runtime::poison(HookId::{hook_id}, {mod_entry}.id),
+                         }}
+                     }}",
+                    o = out.unwrap()
                 ),
             ),
             None if mod_cancel && hook.isolate => (

@@ -67,8 +67,8 @@ pub(crate) struct Installed {
 
 impl Installed {
     pub(crate) fn new(mods: Mods) -> Self {
-        // Each hook's subscribers are ordered once here: by the priority their `#[listener]`
-        // gives, then in dependency order.
+        // Order subscribers once at installation. Most hooks sort by priority first;
+        // the player-layer decision stays in dependency order so dependents get the final say.
         let subscriptions = mods.iter().enumerate().flat_map(|(index, entry)| {
             let listeners = entry.hooks.listeners();
             entry.hooks.subscribed().iter().flatten().map(move |hook| {
@@ -80,7 +80,10 @@ impl Installed {
                 sunrise_mod_runtime::subscribers::Subscription {
                     index,
                     hook: *hook as usize,
-                    priority: listener.map_or(0, |listener| listener.priority),
+                    priority: match hook {
+                        HookId::ResolvePlayerLayer => 0,
+                        _ => listener.map_or(0, |listener| listener.priority),
+                    },
                     receives_cancelled: listener.is_some_and(|listener| listener.receive_cancelled),
                 }
             })

@@ -283,6 +283,19 @@ impl DynamicTextures {
         self.geometry_revision = self.geometry_revision.wrapping_add(1);
         Ok(())
     }
+    /// The calling mod's image in this atlas, resolved directly from its published slot.
+    /// Unlike a sprite name lookup, this never finds a resource pack's image of the same name.
+    pub fn owned_region(
+        &self,
+        pool: Option<&Pool>,
+        owner: Option<&str>,
+        id: &Identifier,
+    ) -> Result<Rect, DynamicTextureError> {
+        owned(owner, id)?;
+        let pool = pool.ok_or(DynamicTextureError::Unavailable)?;
+        let image = self.images.get(id).ok_or(DynamicTextureError::Unknown)?;
+        Ok(pool.rect(image.class, image.slot, image.size))
+    }
     /// The dimensions of a live image, if this id names one.
     pub fn size(&self, id: &Identifier) -> Option<[u32; 2]> {
         self.images.get(id).map(|image| image.size)

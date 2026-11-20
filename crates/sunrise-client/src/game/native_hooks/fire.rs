@@ -3,6 +3,6 @@
 use super::mod_api_host::FireOddsLevel;
 use super::*;
 use crate::game::{native_level_signals::ReadLevel, native_surface::FrictionView};
-use mod_api::BlockFace;
+use mod_api::{BlockFace, EntityUuid, PlayerLayer, PlayerLayerSelection, PlayerLayerView};
 
 include!(concat!(env!("OUT_DIR"), "/mod_api_fire_generated.rs"));

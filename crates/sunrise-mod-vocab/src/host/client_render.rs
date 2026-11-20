@@ -62,6 +62,9 @@ pub trait ClientRenderClientHost {
     /// [`gui_sprite`](Self::gui_sprite) draw and find it as they do any GUI sprite, from the next
     /// frame on. It lasts, through resource reloads, until
     /// [`free_dynamic_texture`](Self::free_dynamic_texture) or the game's end.
+    /// For [`Hooks::resolve_player_layer`], upload a 64×32 image (or integer upscale)
+    /// matching the cape or wings UV layout, then borrow its id as
+    /// [`PlayerLayerChoice::UseTexture`] during the draw.
     ///
     /// Refused by name, with nothing changed and nothing allocated, as [`DynamicTextureError`]
     /// lists: `Unavailable` when the atlas has no pool, `NotOwned` for an id outside the mod's

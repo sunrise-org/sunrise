@@ -218,22 +218,26 @@ pub struct Equippable {
 /// `stack.get(DataComponents.EQUIPPABLE)`: the item's own, replaced or removed
 /// by the saved components (a command's, a save's), then by the server's patch.
 pub fn equippable(stack: &ItemStack, items: &crate::items::Items) -> Option<Equippable> {
-    let mut out = item_equippable(&stack.item, items);
-    let Some(data) = stack.data() else {
-        return out;
-    };
+    equippable_override(stack).unwrap_or_else(|| item_equippable(&stack.item, items))
+}
+
+/// The stack's override of its prototype `equippable`: `None` inherits the prototype,
+/// while `Some(None)` explicitly leaves no usable component.
+pub fn equippable_override(stack: &ItemStack) -> Option<Option<Equippable>> {
+    let data = stack.data()?;
+    let mut out = None;
     if data.other("!minecraft:equippable").is_some() {
-        out = None;
+        out = Some(None);
     } else if let Some(e) = data.other("minecraft:equippable") {
         let string = |key: &str| match e.get(key) {
             Some(Tag::String(s)) => Some(s.to_string_lossy()),
             _ => None,
         };
-        out = string("slot").map(|slot| Equippable {
+        out = Some(string("slot").map(|slot| Equippable {
             slot,
             asset_id: string("asset_id").map(namespaced),
             camera_overlay: string("camera_overlay").map(namespaced),
-        });
+        }));
     }
     let Some((added, removed)) = data
         .wire
@@ -243,11 +247,11 @@ pub fn equippable(stack: &ItemStack, items: &crate::items::Items) -> Option<Equi
         return out;
     };
     if removed.contains(&component::EQUIPPABLE) {
-        out = None;
+        out = Some(None);
     }
     for (kind, c) in &added {
         if let (component::EQUIPPABLE, Component::Raw(bytes)) = (*kind, c) {
-            out = decode_equippable(bytes);
+            out = Some(decode_equippable(bytes));
         }
     }
     out

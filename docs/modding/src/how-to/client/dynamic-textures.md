@@ -100,6 +100,18 @@ Every call answers `Result<_, DynamicTextureError>`, and a refused call changes 
 
 Match `DynamicTextureError` non-exhaustively.
 
+## Cape and wings textures
+
+Upload an image in a mutable client hook before selecting it in
+[`resolve_player_layer`](entity-layers.md#choose-a-built-in-cape-or-wings-texture).
+The built-in cape and wings use a 64×32 UV layout; use that layout or a
+whole-number upscale, such as 128×64. Keep the `Identifier` and borrow it
+from the draw hook. `PlayerLayerRefusal` distinguishes an incompatible layout,
+a wrong-layer choice, and a texture refusal (including an image another mod
+owns, a missing or freed image, or an unavailable atlas). The read-only draw
+hook neither uploads pixels nor changes the image; the game resolves the
+currently published atlas slot on each accepted choice.
+
 ## Inline images in chat and signs
 
 Implement `Hooks::substitute_inline_images` to display atlas sprites in chat history and on

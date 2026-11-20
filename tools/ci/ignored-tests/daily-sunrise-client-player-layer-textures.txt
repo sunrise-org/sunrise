@@ -1,0 +1,7 @@
+sunrise-client game::perspective::player_layer_tests::a_remote_players_capeless_draw_gets_only_its_own_replacement lib daily child-process
+sunrise-client game::perspective::player_layer_tests::hidden_world_layers_skip_geometry_and_texture_callbacks lib daily child-process
+sunrise-client game::perspective::player_layer_tests::no_listener_keeps_the_profile_cape_and_does_not_add_one lib daily child-process
+sunrise-client game::perspective::player_layer_tests::only_eligible_layers_of_an_uncanceled_avatar_are_asked lib daily child-process
+sunrise-client game::perspective::player_layer_tests::refusal_and_listener_failure_keep_the_latest_accepted_choice lib daily child-process
+sunrise-client game::perspective::player_layer_tests::wings_choose_their_own_texture_or_fall_back_to_equipment lib daily child-process
+sunrise-client game::perspective::player_layer_tests::world_inventory_and_creative_use_separate_draws lib daily child-process

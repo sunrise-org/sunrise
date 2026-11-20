@@ -6,6 +6,39 @@ backpack, something held or worn. This is the counterpart of NeoForge 26.3's
 a player model, and the game draws it over every entity of that target in view, after its model and
 the layers before it.
 
+## Choose a built-in cape or wings texture
+
+Use `Hooks::resolve_player_layer` to select a texture without adding a layer or
+changing its geometry. The event gives the player's UUID (`player`), whether
+it is `local`, the `view` (`World` or `InventoryPreview`, including creative),
+and the `layer` (`Cape` or `Wings`). For example, to replace only the local
+player's world cape, keep an uploaded texture id in `self.cape`:
+
+```rust,ignore
+use mod_api::*;
+
+fn resolve_player_layer(&self, _host: &dyn ClientHost, event: &mut ResolvePlayerLayerEvent<'_, '_>) {
+    if event.local && event.view == PlayerLayerView::World && event.layer == PlayerLayer::Cape {
+        let _ = event.choose(PlayerLayerChoice::UseTexture(&self.cape));
+    }
+}
+```
+
+`UseTexture` needs a [live dynamic texture](dynamic-textures.md#cape-and-wings-textures)
+owned by the calling mod. `Keep` restores the normal choice; not answering leaves
+an earlier choice alone. Wings can also choose `UseEquipmentTexture` to bypass
+the profile texture without hiding the wings. The last accepted choice in
+dependency order wins, regardless of listener priority. A refusal or a failed listener does not undo
+an earlier listener's accepted choice.
+
+Each choice applies to one layer in one draw. A cape choice does not affect
+wings, and the world choice does not carry into either inventory. A cape can
+be supplied when the profile has none, but the hook cannot make ineligible
+layers draw: spectator, cape visibility and worn equipment rules still apply.
+Wings still require worn wing equipment. Canceling the whole draw or hiding
+one of these layers with the [stock layer mask](#hiding-a-stock-layer) suppresses
+its texture callback as well as its geometry.
+
 ## 1. Write the layer
 
 A layer implements `EntityRenderLayer`. Its `submit` gets the entity's frame, a humanoid model's posed

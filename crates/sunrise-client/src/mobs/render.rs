@@ -1603,6 +1603,7 @@ pub fn render_skinned(
 #[allow(clippy::too_many_arguments)]
 pub fn cape(
     m: &Mob,
+    model: &super::Part,
     alpha: f32,
     base: glam::Mat4,
     uv: [f32; 4],
@@ -1610,9 +1611,6 @@ pub fn cape(
     data: &dyn RenderDataSource,
     out: &mut Vec<Vertex>,
 ) {
-    let Some(model) = m.kind.layer("player#cape") else {
-        return;
-    };
     let s = anim::state(m, alpha).observed(m, data.humanoid_setup());
     let mut poses = Poses::new(model);
     anim::setup(m, &s, &mut poses, &data.mob_data().animations);
