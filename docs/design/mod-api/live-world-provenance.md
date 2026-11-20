@@ -408,3 +408,15 @@ failed with the deep evidence TMPDIR and sandbox bind restrictions. Its exact ex
 and test passed with fresh short temporary paths under authorized local execution outside
 the sandbox, without changing the test. Both failed and successful environment receipts are
 retained. Cargo's stop still requires executing the remaining package selection explicitly.
+
+Those complementary selections were subsequently executed through every remaining package
+and integration target, using no-fail-fast for the last selection. The unchanged renderer
+crash-report assertions failed because their captured stacks lacked the required source-file
+details under the recorded debug-zero profile; exact source equality with the base is retained,
+but it is not a baseline behavior pass. A package-only debug-information rerun is separate
+evidence. The world selection also reached an existing invalid-UTF-8 directory creation and
+received the same concrete host Illegal byte sequence error. The complete protocol unit target
+aborted with a stack overflow before the live-world test names; that remains a nonpass without
+an invented cause. Both new live-world protocol selectors were then listed and executed on
+that exact binary successfully. The full and complementary readiness failures remain intact;
+none is replaced by the focused runtime or protocol results.

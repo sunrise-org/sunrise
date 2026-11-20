@@ -30,6 +30,7 @@ crates/sunrise-client-render/src/block_entity_render.rs
 crates/sunrise-client-render/src/chunk.rs
 crates/sunrise-client-render/src/chunk/block_entity/mod_models.rs
 crates/sunrise-client-render/src/containers.rs
+crates/sunrise-client-render/src/crash.rs
 crates/sunrise-client-render/src/mesher.rs
 crates/sunrise-client-render/src/moving_colliders.rs
 crates/sunrise-client-render/src/render_geometry.rs
