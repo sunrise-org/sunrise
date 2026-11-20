@@ -272,8 +272,12 @@ fn breaker_context_is_target_only_and_does_not_escape_its_level_call() {
         game.with_level(|_, level, _| {
             assert!(level.drop_breaker_at.is_none());
             level.drop_breaker_at = Some(target);
-            level.drop_resources_now(neighbor, state);
-            level.drop_resources_now(target, state);
+            level.drop_resources_now(
+                neighbor,
+                state,
+                sunrise_world::level::DropCause::NeighbourUpdate,
+            );
+            level.drop_resources_now(target, state, sunrise_world::level::DropCause::Unspecified);
         });
         dropped(game, "minecraft:chorus_flower");
         game.with_level(|_, level, _| assert!(level.drop_breaker_at.is_none()));

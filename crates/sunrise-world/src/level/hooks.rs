@@ -107,7 +107,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     if self.can_survive(state, pos) {
                         self.wire_update_power(pos, state, orientation, false);
                     } else {
-                        self.drop_resources(state, pos);
+                        self.drop_resources(state, pos, super::DropCause::NeighbourUpdate);
                         self.remove_block(pos, false);
                     }
                 }
@@ -385,7 +385,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     let base_pos = rel(pos, b.facing(state).opposite());
                     let base = self.state(base_pos);
                     if self.piston_head_fitting_base(state, base) {
-                        self.destroy_block(base_pos, true, super::flags::UPDATE_LIMIT);
+                        self.destroy_block_with_cause(
+                            base_pos,
+                            true,
+                            super::flags::UPDATE_LIMIT,
+                            super::DropCause::NeighbourUpdate,
+                        );
                     }
                 }
                 Class::Lectern => {
@@ -682,7 +687,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         {
                             continue;
                         }
-                        self.drop_resources(state, pos);
+                        self.drop_resources(state, pos, super::DropCause::NeighbourUpdate);
                         self.set_block_and_update(pos, b.air());
                     }
                     true

@@ -24,6 +24,58 @@ struct GivenBack {
     next: usize,
 }
 
+pub(super) fn orb_award_area(at: [f64; 3]) -> Aabb {
+    let centre = Vec3::new(at[0], at[1], at[2]);
+    let half = Vec3::new(0.5, 0.5, 0.5);
+    Aabb::new(centre.subtract(half), centre.add_vector(half))
+}
+
+/// The part of an existing orb an award can change. Also the transaction before-image.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct OrbFields {
+    value: i32,
+    count: u32,
+    age: i32,
+}
+
+impl OrbFields {
+    pub(super) fn read(orb: &ExperienceOrb) -> Self {
+        Self {
+            value: orb.value,
+            count: orb.count,
+            age: orb.age,
+        }
+    }
+
+    pub(super) fn write(self, orb: &mut ExperienceOrb) {
+        (orb.value, orb.count, orb.age) = (self.value, self.count, self.age);
+    }
+
+    fn awarded(self, mut result: Self) -> Option<Self> {
+        // A merge listener's value/count write is the merged orb. With no
+        // write the save representation must still hold the increment.
+        if (result.value, result.count) == (self.value, self.count) {
+            if result.count >= crate::orb_limits::MAX_COUNT {
+                return None;
+            }
+            result.count += 1;
+        }
+        result.age = 0;
+        Some(result)
+    }
+}
+
+struct OrbAwardPreview<'a, 'g> {
+    game: &'a mut Game<'g>,
+    outer: Option<(Dim, ExperienceOrb)>,
+}
+
+impl Drop for OrbAwardPreview<'_, '_> {
+    fn drop(&mut self) {
+        self.game.orb_award_target = self.outer.take();
+    }
+}
+
 impl Game<'_> {
     pub(super) fn tick_items(&mut self) {
         let mut round = self.item_update_round();
@@ -445,9 +497,7 @@ impl Game<'_> {
     }
     /// `tryMergeToExisting`: true when an orb took the new one.
     pub(super) fn merge_new_orb(&mut self, at: [f64; 3], value: u32, merge_id: i32) -> bool {
-        let centre = Vec3::new(at[0], at[1], at[2]);
-        let half = Vec3::new(0.5, 0.5, 0.5);
-        let area = Aabb::new(centre.subtract(half), centre.add_vector(half));
+        let area = orb_award_area(at);
         // A server's orbs are its own; a LAN or server guest only shows them.
         if self.remote.is_none() {
             for i in 0..self.orbs.len() {
@@ -456,30 +506,47 @@ impl Game<'_> {
                     continue;
                 }
                 let vanilla = o.can_merge(merge_id as u32, value as i32);
-                let (join, id, count, age) = (o.join, o.id, o.count, o.age);
-                let orb_value = o.value;
-                self.journal_orb_merge(join, (orb_value, count, age));
-                if !self.orb_merges(id, orb_value, count, 0, value as i32, 1, vanilla) {
-                    self.restore_orb(join, orb_value, count, age);
-                    continue;
-                }
+                let (join, id) = (o.join, o.id);
+                let before = OrbFields::read(o);
+                self.journal_orb_merge(join, before);
+                let accepted =
+                    self.orb_merges(id, before.value, before.count, 0, value as i32, 1, vanilla);
                 let Some(i) = self.orbs.locate(join) else {
                     continue;
                 };
-                let o = &mut self.orbs[i];
-                // A mod's write in the merge hook is the merged orb; else one more in its count.
-                if (o.value, o.count) == (orb_value, count) {
-                    if count >= crate::orb_limits::MAX_COUNT {
-                        continue;
-                    }
-                    o.count += 1;
+                if accepted && let Some(after) = before.awarded(OrbFields::read(&self.orbs[i])) {
+                    after.write(&mut self.orbs[i]);
+                    return true;
                 }
-                o.age = 0;
-                return true;
+                before.write(&mut self.orbs[i]);
             }
         }
         false
     }
+    /// Decide a blast's merge at the award site, but keep its writes on the
+    /// candidate until the block's final drop decision. The orb API sees the
+    /// projected target, including one from an earlier, still-pending award.
+    pub(super) fn preview_orb_award(
+        &mut self,
+        target: ExperienceOrb,
+        value: u32,
+        merge_id: i32,
+    ) -> Option<OrbFields> {
+        let before = OrbFields::read(&target);
+        let vanilla = target.can_merge(merge_id as u32, value as i32);
+        let id = target.id;
+        let outer = self.orb_award_target.replace((self.dim, target));
+        let preview = OrbAwardPreview { game: self, outer };
+        if !preview
+            .game
+            .orb_merges(id, before.value, before.count, 0, value as i32, 1, vanilla)
+        {
+            return None;
+        }
+        let (_, target) = preview.game.orb_award_target.as_ref().unwrap();
+        before.awarded(OrbFields::read(target))
+    }
+
     /// Puts back what a merge hook may have written to the orb `join`: a refused merge
     /// leaves both orbs as they were.
     fn restore_orb(&mut self, join: crate::join_seq::JoinSeq, value: i32, count: u32, age: i32) {
@@ -609,6 +676,16 @@ impl Game<'_> {
     /// points against `roughly` is turned round, and the orb starts half its
     /// size (0.25) along `roughly`, unstuck if it collides there.
     pub(super) fn add_orb_toward(&mut self, at: [f64; 3], roughly: [f64; 3], value: u32) {
+        let orb = self.prepare_orb(at, roughly, value);
+        self.publish_orb(orb);
+    }
+
+    pub(super) fn prepare_orb(
+        &mut self,
+        at: [f64; 3],
+        roughly: [f64; 3],
+        value: u32,
+    ) -> ExperienceOrb {
         let len_sqr = roughly.iter().map(|v| v * v).sum::<f64>();
         // Vec3.normalize: a vector shorter than 1e-5 has no direction.
         let len = len_sqr.sqrt();
@@ -631,7 +708,7 @@ impl Game<'_> {
             velocity = Vec3::new(-velocity.x, -velocity.y, -velocity.z);
         }
         self.next_entity += 1;
-        self.orbs.push(ExperienceOrb {
+        ExperienceOrb {
             attachment_lifetime: Default::default(),
             fall_distance: 0.0,
             rotation: [0.0, 0.0],
@@ -651,8 +728,12 @@ impl Game<'_> {
             air: 300,
             following: None,
             fire_ticks: 0,
-        });
+        }
+    }
+
+    pub(super) fn publish_orb(&mut self, orb: ExperienceOrb) {
         // ServerLevel.addFreshEntity.
+        self.orbs.push(orb);
         self.native_joins_flush(false, 0);
     }
     /// The orbs' tick, but for the movement: that is `run_ordered_ticks`'s,

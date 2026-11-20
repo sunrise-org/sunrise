@@ -187,7 +187,13 @@ impl Game<'_> {
         }
         let drops = match write.broken() {
             Some(broken) => self.with_level(|b, level, ticks| {
-                b.drop_resources(level, ticks, write.pos, broken);
+                b.drop_resources(
+                    level,
+                    ticks,
+                    write.pos,
+                    broken,
+                    sunrise_world::level::DropCause::Fluid,
+                );
                 std::mem::take(level.spill)
             }),
             None => Spill::default(),

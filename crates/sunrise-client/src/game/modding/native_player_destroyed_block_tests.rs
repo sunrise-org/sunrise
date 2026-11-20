@@ -583,12 +583,6 @@ fn block_drops_reads_the_chest_a_players_break_removed_and_the_handle_goes_stale
             game.with_level(|_, level, _| {
                 assert!(mod_api::LevelHost::block_entity_data(level, stale).is_none());
             });
-            assert!(
-                game.world
-                    .block_entities
-                    .broken_generation(&(chest[0], chest[1], chest[2]))
-                    .is_none()
-            );
 
             // A block with no block entity gives none.
             let dirt = [8, 64, 4];
@@ -636,9 +630,9 @@ fn block_drops_names_the_mob_that_broke_the_block() {
                 .default_state("minecraft:oak_leaves")
                 .unwrap();
             game.world.set(9, 64, 4, leaves).unwrap();
-            game.entity_block_dropped([9, 64, 4], leaves, Some(51), Vec::new());
+            game.entity_block_dropped([9, 64, 4], leaves, Some(51), Vec::new(), None);
             game.world.set(10, 64, 4, leaves).unwrap();
-            game.entity_block_dropped([10, 64, 4], leaves, None, Vec::new());
+            game.entity_block_dropped([10, 64, 4], leaves, None, Vec::new(), None);
             let heard = std::mem::take(&mut *seen.lock().unwrap());
             assert_eq!(heard.len(), 2);
             assert_eq!((heard[0].0, heard[0].1), (None, Some(ravager)));
@@ -686,12 +680,6 @@ fn block_drops_holds_nothing_after_a_listener_panics() {
             game.with_level(|_, level, _| {
                 assert!(mod_api::LevelHost::block_entity_data(level, stale).is_none());
             });
-            assert!(
-                game.world
-                    .block_entities
-                    .broken_generation(&(chest[0], chest[1], chest[2]))
-                    .is_none()
-            );
         });
     });
 }

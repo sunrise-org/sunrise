@@ -595,10 +595,9 @@ pub(super) fn emit<'a>(
                 }
                 rollback.push((name.clone(), true));
             }
-            let visibility = if event_type == "ApplyEffectTickEvent" && name == "changes" {
-                "pub(super)"
-            } else {
-                "pub"
+            let visibility = match (event_type.as_str(), name.as_str()) {
+                ("ApplyEffectTickEvent", "changes") | ("BlockDropsEvent", "cause") => "pub(super)",
+                _ => "pub",
             };
             fields.push_str(&format!(
                 "{visibility} {name}: {},\n",

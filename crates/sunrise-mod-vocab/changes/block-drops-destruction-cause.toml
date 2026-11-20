@@ -1,0 +1,3 @@
+ids = ["hook:block_drops", "hook:block_drops.cause", "handle:BlockDropsEvent::cause", "type:BlockDestructionCause", "type:LevelDestructionCause"]
+summary = "BlockDropsEvent reports the destruction cause and a callback-scoped outgoing block entity snapshot, including for explosions."
+migrate = "Rebuild for hook version 3. Call cause() for the destruction route, and read block_entity data only during the callback. Blast source and causing entity are in the cause, not breaker_entity."

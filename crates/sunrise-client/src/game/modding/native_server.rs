@@ -1866,8 +1866,15 @@ impl Game<'_> {
         {
             return Vec::new();
         }
+        let target = self
+            .orb_award_target
+            .as_ref()
+            .filter(|(dim, _)| *dim == self.dim)
+            .map(|(_, orb)| orb);
         self.orbs
             .iter()
+            .map(|orb| target.filter(|target| target.id == orb.id).unwrap_or(orb))
+            .chain(target.filter(|target| !target.join.is_joined()))
             .filter(|o| o.count > 0)
             .map(|o| mod_api::ExperienceOrb {
                 id: o.id,
@@ -1906,8 +1913,18 @@ impl Game<'_> {
         let Ok(age) = age.map(i32::try_from).transpose() else {
             return false;
         };
-        let Some(orb) = self.orbs.iter_mut().find(|o| o.id == id) else {
-            return false;
+        let target = self
+            .orb_award_target
+            .as_mut()
+            .filter(|(dim, orb)| *dim == self.dim && orb.id == id);
+        let orb = match target {
+            Some((_, orb)) => orb,
+            None => {
+                let Some(orb) = self.orbs.iter_mut().find(|o| o.id == id) else {
+                    return false;
+                };
+                orb
+            }
         };
         orb.value = value.unwrap_or(orb.value);
         orb.count = count.unwrap_or(orb.count);

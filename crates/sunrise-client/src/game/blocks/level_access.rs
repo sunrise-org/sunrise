@@ -1166,8 +1166,8 @@ impl LevelAccess for GameLevel<'_> {
             // Block.dropResources draws its loot and spots right away.
             // `popResource` only drops server-side (`!level.isClientSide`):
             // a client's moveBlocks (a piston's block event) skips it.
-            LevelEvent::DropResources { pos, state } if !self.client_side => {
-                self.drop_resources_now(pos, state)
+            LevelEvent::DropResources { pos, state, cause } if !self.client_side => {
+                self.drop_resources_now(pos, state, cause)
             }
             LevelEvent::DropResources { .. } => {}
             // `ClientLevel.playSeededSound` plays only when the excluded

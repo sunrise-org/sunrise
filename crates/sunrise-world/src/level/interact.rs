@@ -296,7 +296,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     self.game_event(pos, "minecraft:eat");
                     let cake = b.default_of(b.named.cake);
                     self.set_block_and_update(pos, table.set_int(cake, p.bites, 1));
-                    self.drop_resources(state, pos);
+                    self.drop_resources(state, pos, super::DropCause::Unspecified);
                     Success
                 }
                 Class::Composter => {

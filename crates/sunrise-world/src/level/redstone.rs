@@ -536,7 +536,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if self.can_survive(state, pos) {
             self.diode_check_tick_on_neighbor(pos, state);
         } else {
-            self.drop_resources(state, pos);
+            self.drop_resources(state, pos, super::DropCause::NeighbourUpdate);
             self.remove_block(pos, false);
             for direction in Direction::ALL {
                 self.update_neighbors_at(rel(pos, direction), block);

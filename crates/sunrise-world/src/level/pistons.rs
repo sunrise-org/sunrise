@@ -707,7 +707,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let mut to_update = Vec::with_capacity(to_push.len() + to_destroy.len());
         for pos in to_destroy.iter().rev() {
             let state = self.state(*pos);
-            self.drop_resources(state, *pos);
+            self.drop_resources(state, *pos, super::DropCause::Piston);
             // The client's copy plays the destroy effect itself (the
             // server sends no 2001 for piston moves).
             let fire = b.is_block(state, b.named.fire) || b.is_block(state, b.named.soul_fire);

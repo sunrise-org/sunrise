@@ -395,7 +395,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 _ => false,
             };
         if remove {
-            self.drop_resources(state, pos);
+            self.drop_resources(state, pos, super::DropCause::NeighbourUpdate);
             self.remove_block(pos, moved);
             return;
         }

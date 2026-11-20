@@ -313,7 +313,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 // not a `LiquidBlock`, and breaking it first spills break particles and a
                 // `block_destroy` a sculk sensor hears.
                 if replaced.is_some() {
-                    self.destroy_block(pos, true, super::flags::UPDATE_LIMIT);
+                    self.destroy_block_with_cause(
+                        pos,
+                        true,
+                        super::flags::UPDATE_LIMIT,
+                        super::DropCause::Fluid,
+                    );
                 }
                 if set
                     && !self.set_block(pos, source, super::flags::UPDATE_ALL_IMMEDIATE)

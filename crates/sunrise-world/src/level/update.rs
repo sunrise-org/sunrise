@@ -491,13 +491,23 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     /// `Level.destroyBlock(pos, dropResources, null, limit)`.
     pub fn destroy_block(&mut self, pos: BlockPos, drop: bool, limit: i32) -> bool {
+        self.destroy_block_with_cause(pos, drop, limit, super::DropCause::Unspecified)
+    }
+
+    pub(super) fn destroy_block_with_cause(
+        &mut self,
+        pos: BlockPos,
+        drop: bool,
+        limit: i32,
+        cause: super::DropCause,
+    ) -> bool {
         let state = self.state(pos);
         if self.b.is_air(state) {
             return false;
         }
         self.destroy_particles(pos, state);
         if drop {
-            self.drop_resources(state, pos);
+            self.drop_resources(state, pos, cause);
         }
         let fluid = self.fluid_at(pos);
         let legacy = self.b.legacy_block(fluid);
@@ -516,7 +526,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.level_event(2001, pos, state.0 as i32);
         }
     }
-    pub fn drop_resources(&mut self, state: BlockStateId, pos: BlockPos) {
+    pub fn drop_resources(&mut self, state: BlockStateId, pos: BlockPos, cause: super::DropCause) {
         // `MovingPistonBlock.getDrops`: a moving piston's loot is the loot of
         // the block it carries.
         // shortcut: the carried block's `spawnAfterBreak` experience comes with
@@ -528,7 +538,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return;
         };
         if self.level.game_rules().block_drops {
-            self.emit(LevelEvent::DropResources { pos, state });
+            self.emit(LevelEvent::DropResources { pos, state, cause });
         }
     }
     /// `Block.updateOrDestroy`.
@@ -542,7 +552,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     ) {
         if new != old {
             if self.b.is_air(new) {
-                self.destroy_block(pos, update_flags & flags::UPDATE_SUPPRESS_DROPS == 0, limit);
+                self.destroy_block_with_cause(
+                    pos,
+                    update_flags & flags::UPDATE_SUPPRESS_DROPS == 0,
+                    limit,
+                    super::DropCause::NeighbourUpdate,
+                );
             } else {
                 self.set_block_limit(
                     pos,

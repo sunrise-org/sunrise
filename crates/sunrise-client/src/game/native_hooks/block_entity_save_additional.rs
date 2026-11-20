@@ -9,7 +9,7 @@ use sunrise_mod_runtime::attachments::ATTACHMENTS_KEY;
 fn save_additional(
     level: LevelRef,
     pos: Pos,
-    generation: Option<u64>,
+    generation: impl FnOnce() -> Option<u64>,
     kind: &str,
     tag: &Compound,
     fire: impl FnOnce(BlockEntityTypeKey, BlockEntityRef, &mut Compound),
@@ -20,7 +20,7 @@ fn save_additional(
         return None;
     }
     let id = mod_api::__private::block_entity_type_key(kind)?;
-    let generation = generation?;
+    let generation = generation()?;
     let entity =
         mod_api::__private::game::block_entity_ref(level, [pos.0, pos.1, pos.2], generation);
     // The raw attachment field stays available for the disk overlay (including
@@ -90,10 +90,19 @@ impl Game<'_> {
             && let Some(level) = self.level(self.dim.id())
         {
             let host = ReadLevel { game: self, level };
-            save_additional(level, pos, generation, kind, tag, |id, entity, tag| {
-                let pos = [pos.0, pos.1, pos.2];
-                mod_api::dispatch_block_entity_save_additional(&host, id, entity, pos, level, tag);
-            })
+            save_additional(
+                level,
+                pos,
+                || generation,
+                kind,
+                tag,
+                |id, entity, tag| {
+                    let pos = [pos.0, pos.1, pos.2];
+                    mod_api::dispatch_block_entity_save_additional(
+                        &host, id, entity, pos, level, tag,
+                    );
+                },
+            )
         } else {
             None
         }
@@ -146,32 +155,32 @@ impl GameLevel<'_> {
         entity: &BlockEntity,
         block: &str,
     ) -> Tag {
-        block_entity_encode::encode_with(
-            pos,
-            entity,
-            block,
-            Default::default(),
-            self.items,
-            |kind, tag| {
-                if self.native_authoritative
-                    && let Some(level) = self.api_level
-                {
-                    save_additional(
-                        level,
-                        pos,
-                        self.world.block_entities.generation(&pos),
-                        kind,
-                        tag,
-                        |id, entity, tag| {
-                            let pos = [pos.0, pos.1, pos.2];
-                            self.native_block_entity_save_additional(id, entity, pos, level, tag);
-                        },
-                    )
-                } else {
-                    None
-                }
-            },
-        )
+        self.encode_loot_block_entity(pos, entity, block, Default::default(), || {
+            self.world.block_entities.generation(&pos)
+        })
+    }
+
+    /// Encode the outgoing owner with its own position metadata and serializer identity.
+    pub(in crate::game) fn encode_loot_block_entity(
+        &self,
+        pos: Pos,
+        entity: &BlockEntity,
+        block: &str,
+        extra: block_entity_encode::DataFields<'_>,
+        generation: impl FnOnce() -> Option<u64>,
+    ) -> Tag {
+        block_entity_encode::encode_with(pos, entity, block, extra, self.items, |kind, tag| {
+            if self.native_authoritative
+                && let Some(level) = self.api_level
+            {
+                save_additional(level, pos, generation, kind, tag, |id, entity, tag| {
+                    let pos = [pos.0, pos.1, pos.2];
+                    self.native_block_entity_save_additional(id, entity, pos, level, tag);
+                })
+            } else {
+                None
+            }
+        })
     }
 
     pub(in crate::game) fn native_block_entity_save_additional(

@@ -217,7 +217,7 @@ pub(super) struct Level {
     /// Each item entity's stack before this transaction first wrote it.
     item_entities: HashMap<u32, ItemStack>,
     /// The merge fields of resident experience orbs before the first award touched them.
-    orbs: HashMap<crate::join_seq::JoinSeq, (i32, u32, i32)>,
+    orb_merges: HashMap<crate::join_seq::JoinSeq, super::item_entities::OrbFields>,
     /// Each detached station before the first click wrote it, by connection and owner.
     stations: HashMap<(u32, decision::MenuId), super::lan_stations::GuestStation>,
     /// Each guest's menu storage before this transaction first wrote it, by connection.
@@ -696,9 +696,6 @@ impl Game<'_> {
                 for (id, kept) in level.item_entities {
                     outer.item_entities.entry(id).or_insert(kept);
                 }
-                for (join, kept) in level.orbs {
-                    outer.orbs.entry(join).or_insert(kept);
-                }
                 for (key, kept) in level.stations {
                     outer.stations.entry(key).or_insert(kept);
                 }
@@ -735,7 +732,12 @@ impl Game<'_> {
                 match (level.dimension)
                     .and_then(|dim| entities::open_in(&mut self.transactions, dim))
                 {
-                    Some(enclosing) => enclosing.lifetimes.merge(lifetimes),
+                    Some(enclosing) => {
+                        enclosing.lifetimes.merge(lifetimes);
+                        for (join, kept) in level.orb_merges {
+                            enclosing.orb_merges.entry(join).or_insert(kept);
+                        }
+                    }
                     None => self.commit_entity_journal(lifetimes, |_| {}),
                 }
             }
@@ -1235,15 +1237,6 @@ impl Game<'_> {
                 .get_or_insert_with(|| (*self.world.random).clone());
         }
     }
-    pub(super) fn journal_orb_merge(
-        &mut self,
-        join: crate::join_seq::JoinSeq,
-        fields: (i32, u32, i32),
-    ) {
-        if let Some(level) = self.transactions.last_mut() {
-            level.orbs.entry(join).or_insert(fields);
-        }
-    }
     pub(super) fn journal_station_click(
         &mut self,
         conn: u32,
@@ -1518,11 +1511,26 @@ impl Game<'_> {
             }
         }
     }
+    pub(super) fn journal_orb_merge(
+        &mut self,
+        join: crate::join_seq::JoinSeq,
+        before: super::item_entities::OrbFields,
+    ) {
+        if let Some(level) = entities::open_in(&mut self.transactions, self.dim) {
+            level.orb_merges.entry(join).or_insert(before);
+        }
+    }
+
     fn roll_back(&mut self, mut level: Level) {
         self.roll_back_in_flight(&mut level);
         self.scratch_roll_back(std::mem::take(&mut level.scratch_kept));
         // Discard deferred effects before undoing tentative action storage.
         level.after.clear();
+        for (join, fields) in level.orb_merges {
+            if let Some(i) = self.orbs.locate(join) {
+                fields.write(&mut self.orbs[i]);
+            }
+        }
         // Restore slots and undo only their recorded modifier edits. Explicit
         // attribute writes survive an abort, and no item query runs here.
         let equipment = std::mem::take(&mut level.equipment);
@@ -1689,12 +1697,6 @@ impl Game<'_> {
         for (id, kept) in level.item_entities {
             if let Some(e) = self.dropped.iter_mut().find(|e| e.id == id) {
                 e.stack = kept;
-            }
-        }
-        for (join, kept) in level.orbs {
-            if let Some(i) = self.orbs.locate(join) {
-                let orb = &mut self.orbs[i];
-                (orb.value, orb.count, orb.age) = kept;
             }
         }
         if let Some(host) = self.lan.as_mut() {

@@ -703,7 +703,7 @@ impl Game<'_> {
         }
         self.insert_spawned_mob(mob)
     }
-    fn create_mob_reason(
+    pub(in crate::game) fn create_mob_reason(
         &mut self,
         kind: &str,
         at: [f64; 3],
@@ -764,7 +764,7 @@ impl Game<'_> {
         Some(mob)
     }
 
-    fn insert_spawned_mob(&mut self, mob: Mob) -> Option<u32> {
+    pub(in crate::game) fn insert_spawned_mob(&mut self, mob: Mob) -> Option<u32> {
         let id = mob.id;
         self.mobs.push(mob);
         self.native_mobs_joined(self.mobs.len() - 1, false);
@@ -3385,9 +3385,16 @@ impl Game<'_> {
                     }
                     if drop {
                         let entity = by.or(breaker);
-                        let mut drops = self.roll_block_loot(pos, old, entity, Default::default());
+                        let source = self.block_loot_source(pos, old);
+                        let mut drops = self.roll_block_loot_with_source(
+                            pos,
+                            old,
+                            entity,
+                            Default::default(),
+                            source.as_deref(),
+                        );
                         self.native_block_loot(pos, old, None, None, None, &mut drops);
-                        let dropped = self.entity_block_dropped(pos, old, entity, drops);
+                        let dropped = self.entity_block_dropped(pos, old, entity, drops, source);
                         let canceled = dropped.canceled;
                         self.spawn_block_drops(pos, dropped);
                         // InfestedBlock.spawnAfterBreak runs after the drops,
@@ -5293,7 +5300,11 @@ impl Game<'_> {
             {
                 // `ChorusFlowerBlock.onProjectileHit` supplies the projectile,
                 // even when it has no owner, as the direct block's loot entity.
-                let _ = self.destroy_block_by(pos, Some(p.id));
+                let _ = self.destroy_block_by(
+                    pos,
+                    Some(p.id),
+                    sunrise_world::level::DropCause::Unspecified,
+                );
                 return;
             }
             "minecraft:chorus_flower" => {}
@@ -5318,7 +5329,7 @@ impl Game<'_> {
             }
             _ => return,
         }
-        let _ = self.destroy_block_by(pos, entity);
+        let _ = self.destroy_block_by(pos, entity, sunrise_world::level::DropCause::Unspecified);
     }
     /// What an arrow's tick asked for: its particles and sounds.
     pub(in crate::game) fn arrow_event(
@@ -6356,13 +6367,6 @@ impl Game<'_> {
                 Hit::None => {}
             },
             (ProjectileKind::LargeFireball { power }, hit) => {
-                // Fireball explosions are caused by the shooter. A direct hit
-                // on the player takes `projectile_owner`, so read the owner
-                // from the fireball.
-                let owner = match p.owner {
-                    Some(Who::Mob(id)) => Some(id),
-                    _ => None,
-                };
                 if let Hit::Entity { who, .. } = hit {
                     match who {
                         Who::Player => {
@@ -6398,11 +6402,18 @@ impl Game<'_> {
                         }
                     }
                 }
-                self.combat.explosion_owner = owner;
+                // Explosion.getIndirectSourceEntity: the projectile's living owner,
+                // including the player who deflected it, is the cause of the blast.
+                let outer_blast = self.take_blast_state();
+                match p.owner {
+                    Some(Who::Player) => self.set_blast_owner(p.owner, p.guest),
+                    Some(Who::Mob(id)) if self.mobs.iter().any(|m| m.id == id && !m.removed) => {
+                        self.combat.explosion_owner = Some(id);
+                    }
+                    _ => {}
+                }
                 self.combat.explosion_in_water = p.touching_water;
-                // The blast's source names the owner, so a dragon it kills
-                // remembers the player who shot it.
-                self.set_blast_by_player(p.owner == Some(Who::Player));
+                self.set_blast_by_player(self.combat.blast_owner_player);
                 // LargeFireball.onHit: the fire follows
                 // `EventHooks.canEntityGrief(level, getOwner())`, so a mod's
                 // answer for whoever owns the fireball decides: the ghast that
@@ -6417,10 +6428,8 @@ impl Game<'_> {
                         .with_silence(self.entity_silent(p.id))
                         .with_entity(p.id, "minecraft:fireball"),
                 );
-                self.combat.explosion_direct = None;
                 self.set_blast_by_player(false);
-                self.combat.explosion_owner = None;
-                self.combat.explosion_in_water = false;
+                self.restore_blast_state(outer_blast);
                 result?;
             }
             // AbstractThrownPotion.onHit, then onHitAsPotion from the stack it

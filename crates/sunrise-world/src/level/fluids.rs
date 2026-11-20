@@ -467,7 +467,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         // Asked after the write, as vanilla asks it.
         if drain.drained && !self.can_survive(state, pos) {
-            self.destroy_block(pos, true, 512);
+            self.destroy_block_with_cause(pos, true, 512, super::DropCause::Fluid);
         }
         true
     }
@@ -788,7 +788,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 if lava {
                     self.level_event(1501, pos, 0);
                 } else {
-                    self.drop_resources(state, pos);
+                    self.drop_resources(state, pos, super::DropCause::Fluid);
                 }
             }
             let legacy = b.legacy_block(target);

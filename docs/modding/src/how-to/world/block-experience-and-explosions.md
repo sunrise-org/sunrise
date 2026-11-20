@@ -16,19 +16,33 @@ for spawners). An explicit global override is applied as given. `block_drops` se
 Level and mob breaks use the shared resource-drop path. A canceled player break
 or a break that does not harvest produces no award.
 
-`block_drops(level, event)` hears the drops after that. Besides the breaking
-player's UUID (`breaker`) and the `tool`, it carries `breaker_entity`, the
-entity that broke the block (the player, or the mob whose own break of it is
-running: a ravager's), and `block_entity`, the block's block entity.
-`breaker_entity` is not set when no entity broke the block (a piston, water, a
-neighbour update, `/setblock destroy`) or for explosions. `block_entity` is set
-whenever the block has one at that moment, whoever broke it, and not for
-explosions, whose blocks are gone before the event. A player's break removes the
-block entity from the world first, so its saved data, taken before the removal
-(its `CustomName` too: copy a chest's name onto its drop), is held through the
-event: `level.block_entity_data(entity)` reads it and, as with `exp_drop`, a
-stale handle is refused. The data is released when the event ends, also if a
-listener panics; keep nothing from it but what you copied.
+`block_drops(level, event)` is the final decision after loot and item entity
+preparation. It fires once per drop-eligible block, even for an empty loot roll.
+`event.cause()` distinguishes `PlayerBreak`, `MobBreak`, `Level` (piston, fluid,
+neighbour update, command or unspecified) and `Explosion`. The blast carries
+its radius and separate optional `direct_source` and `causing_entity` handles.
+Neither is a blast block's `breaker_entity`. `breaker` is the actual player
+breaker's UUID, `breaker_entity` is the breaker when present, and `tool` is
+the tool used, if any.
+
+`event.block_entity` is a read-only snapshot reference to the outgoing entity,
+if any, even if the block was already removed. `level.block_entity_data(entity)`
+reads the payload captured for the loot roll, including admitted
+`block_entity_save_additional` output and fields such as `CustomName`, without
+identity metadata. Reads return `None` after dispatch, including on unwind,
+without loading a chunk. Copy the needed data in the listener.
+
+Edit `drops` and `experience`, or cancel to suppress them and the block's
+`spawnAfterBreak` effects. Invalid output (including an invalid stack, nonfinite
+position or velocity, or XP or pickup delay outside the nonnegative Java `int`
+range) leaves the entire original decision intact. Destruction and separate
+removal spills are not canceled. The host is read-only; accepted outputs are
+published by the enclosing write and do not leak on abort.
+
+A blast's listeners see one block's share of any merged item entity. Canceling
+one block leaves the others' shares intact; unchanged shares rejoin the original
+entity. Blast experience starts at the vanilla amount: the block samples it
+when the causing entity is a player, otherwise it starts at zero.
 
 ## Explosions
 
@@ -41,7 +55,7 @@ center, radius, fire, interaction, damage type, source and owner.
 The engine writes air after the callback, including when the callback
 replaced the block. Vanilla's separate `wasExploded` behavior follows removal.
 Air, spared blocks, canceled explosions and explosions that keep blocks produce
-no callback. The initial explosion experience amount is zero.
+no callback.
 
 `explosion_resistance(level, event)` answers `Some(resistance)` to replace the
 block's own explosion resistance against `event.explosion`, as a ray of the
@@ -60,8 +74,9 @@ still primes. Both queries get a read-only level host and the same
 `ExplosionStart` as `on_block_exploded`; `None` leaves the answer to another
 attached part and then vanilla.
 
-Every method on this page routes through prepared per-block subscriptions.
-Unsubscribed blocks build no callback context. A native `exp_drop` panic
+Block part methods route through their prepared per-block subscriptions. The
+global `block_drops` hook only retains callback snapshots and blast contributions
+when subscribed. A native `exp_drop` panic
 unwinds before the engine applies its answer. A native
 `on_block_exploded` panic is contained and reported as
 `on_block_exploded callback failed: {error}`; block removal continues. A panic

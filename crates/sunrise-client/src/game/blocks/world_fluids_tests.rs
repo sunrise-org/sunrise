@@ -177,12 +177,13 @@ impl mod_api::Hooks for SeenBlocks {
     fn block_drops(
         &self,
         host: &dyn mod_api::LevelHost,
-        _: &mut mod_api::BlockDropsEvent<'_>,
+        event: &mut mod_api::BlockDropsEvent<'_>,
     ) -> mod_api::Flow {
         let block = host
             .block_state(AT)
             .and_then(|state| host.state_block(state).map(str::to_owned));
         self.0.lock().unwrap().push(block);
+        event.experience = 5;
         if self.1 {
             mod_api::Flow::Cancel
         } else {
@@ -224,10 +225,13 @@ fn a_drop_listener_sees_the_old_block_and_an_abort_undoes_the_loot_it_unpacked()
                     pending_loot: Some(loot),
                 },
             );
+            let counts = (game.dropped.len(), game.orbs.len());
             let root = game.transaction_open();
             let water = key("minecraft:water");
             assert!(game.level_place_fluid(level, AT, water, None, false, root.transaction()));
+            assert_eq!((game.dropped.len(), game.orbs.len()), counts);
             game.transaction_close(&root, false);
+            assert_eq!((game.dropped.len(), game.orbs.len()), counts);
             // The listener ran while the broken block was still there.
             assert_eq!(
                 *seen.lock().unwrap(),

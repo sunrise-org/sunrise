@@ -339,6 +339,16 @@ pub enum LevelSoundSource {
     Blocks,
 }
 
+/// The level operation that requested dropped resources.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropCause {
+    Piston,
+    Fluid,
+    NeighbourUpdate,
+    Command,
+    Unspecified,
+}
+
 /// Side effects reported to the caller, in vanilla call order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LevelEvent {
@@ -370,7 +380,11 @@ pub enum LevelEvent {
     },
     /// `Block.dropResources(state, level, pos)`: the caller evaluates the
     /// block's loot table (no tool, no breaker) and pops the items.
-    DropResources { pos: BlockPos, state: BlockStateId },
+    DropResources {
+        pos: BlockPos,
+        state: BlockStateId,
+        cause: DropCause,
+    },
     /// `FallingBlockEntity.fall`: the block at `pos` was already replaced by its
     /// fluid's legacy block; the caller spawns and simulates a falling-block
     /// entity carrying `state` and calls [`Behaviours::falling_block_landed`]
@@ -1662,6 +1676,18 @@ impl Behaviours {
         self.sim(level, ticks)
             .destroy_block(pos, drop, flags::UPDATE_LIMIT)
     }
+    /// Destroy a block with an explicit reason for the drop path.
+    pub fn destroy_block_with_cause<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        drop: bool,
+        cause: DropCause,
+    ) -> bool {
+        self.sim(level, ticks)
+            .destroy_block_with_cause(pos, drop, flags::UPDATE_LIMIT, cause)
+    }
     /// `Block.dropResources(state, level, pos)`: the loot of `state` at `pos`, with what the
     /// block entity there copies into it, as `destroy_block` drops it (nothing under
     /// `doTileDrops` false), without touching the block.
@@ -1671,8 +1697,9 @@ impl Behaviours {
         ticks: &mut Ticks,
         pos: BlockPos,
         state: BlockStateId,
+        cause: DropCause,
     ) {
-        self.sim(level, ticks).drop_resources(state, pos);
+        self.sim(level, ticks).drop_resources(state, pos, cause);
     }
     /// A player breaking a block (`playerWillDestroy` + `Level.destroyBlock`
     /// without drops; the caller handles the player's loot/tool). Double

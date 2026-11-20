@@ -126,7 +126,7 @@ fn a_cactus_flower_follows_a_shulker_boxs_live_support_shape() {
     );
     assert!(
         w.level.events.iter().any(
-            |e| matches!(e, LevelEvent::DropResources { pos, state } if *pos == flower_pos && *state == flower)
+            |e| matches!(e, LevelEvent::DropResources { pos, state, .. } if *pos == flower_pos && *state == flower)
         ),
         "the popped flower drops itself: {:?}",
         w.level.events

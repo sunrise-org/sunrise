@@ -72,7 +72,7 @@ fn a_broken_moving_piston_drops_the_block_it_carries() {
         .events
         .iter()
         .filter_map(|e| match e {
-            LevelEvent::DropResources { pos, state } => Some((*pos, *state)),
+            LevelEvent::DropResources { pos, state, .. } => Some((*pos, *state)),
             _ => None,
         })
         .collect();

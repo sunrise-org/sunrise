@@ -4201,8 +4201,40 @@ fn update_shape_hook_can_answer_for_the_block() {
     );
     assert_eq!(level.block_state(pos), b.air());
     assert!(level.inner.events.iter().any(
-        |e| matches!(e, LevelEvent::DropResources { pos: p, state } if *p == pos && *state == fence)
+        |e| matches!(e, LevelEvent::DropResources { pos: p, state, .. } if *p == pos && *state == fence)
     ));
+}
+
+#[test]
+#[ignore = "daily"]
+fn collision_and_scheduled_support_loss_keep_distinct_drop_causes() {
+    let f = fixture().expect("prepared level resources");
+    let b = &f.behaviours;
+    let pos = BlockPos::new(1, 64, 1);
+    for (block, expected) in [
+        ("minecraft:lily_pad", DropCause::Unspecified),
+        ("minecraft:cactus", DropCause::NeighbourUpdate),
+        ("minecraft:pale_hanging_moss", DropCause::NeighbourUpdate),
+    ] {
+        let mut level = TestLevel::new(b);
+        let mut ticks = Ticks::new(0);
+        let state = f.registry.default_state(block).unwrap();
+        level.set_raw(pos, state);
+        match block {
+            "minecraft:lily_pad" => b.boat_inside(&mut level, &mut ticks, pos),
+            _ => b.scheduled_block_tick(&mut level, &mut ticks, pos),
+        }
+        let drops: Vec<_> = level
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                LevelEvent::DropResources { pos, state, cause } => Some((*pos, *state, *cause)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drops, [(pos, state, expected)], "{block}");
+        assert_eq!(level.block_state(pos), b.air(), "{block}");
+    }
 }
 
 #[test]
@@ -4715,7 +4747,7 @@ fn survive_hooks_answer_for_the_block() {
     );
     assert_eq!(level.block_state(pos), b.air());
     assert!(level.inner.events.iter().any(
-        |e| matches!(e, LevelEvent::DropResources { pos: p, state } if *p == pos && *state == dandelion)
+        |e| matches!(e, LevelEvent::DropResources { pos: p, state, .. } if *p == pos && *state == dandelion)
     ));
 
     // canSurvive answered for the block itself wins over its own rule, either way.

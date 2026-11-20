@@ -276,9 +276,56 @@ pub enum SupportType {
     Rigid,
 }
 
+/// What caused a block to enter the final `block_drops` decision.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum BlockDestructionCause {
+    /// A player's harvest, including a break made through a player handle.
+    PlayerBreak,
+    /// A mob's own block break.
+    MobBreak,
+    /// Level-side destruction, without an owning player or mob break.
+    Level(LevelDestructionCause),
+    /// A blast. The direct source and causing entity are independent;
+    /// either may be absent, and neither is reported as the block's breaker.
+    Explosion {
+        /// The blast radius, whether or not the blast uses loot decay.
+        radius: f32,
+        /// The entity the blast came directly from (for example, primed TNT).
+        direct_source: Option<crate::EntityRef>,
+        /// The entity that caused the blast (for example, the TNT's owner).
+        causing_entity: Option<crate::EntityRef>,
+    },
+}
+
+/// The level operation responsible for a block's destruction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LevelDestructionCause {
+    /// A piston destroyed an obstructing block.
+    Piston,
+    /// A flow or fluid placement displaced the block.
+    Fluid,
+    /// A neighbour update invalidated the block.
+    NeighbourUpdate,
+    /// A command explicitly requested destruction.
+    Command,
+    /// The caller did not supply a more specific reason.
+    Unspecified,
+}
+
+impl BlockDropsEvent<'_> {
+    /// The destruction route supplied by the caller, shared unchanged by all listeners.
+    pub fn cause(&self) -> BlockDestructionCause {
+        self.cause
+    }
+}
+
 /// One block entity in an open level, identified by its lifecycle generation.
 /// Removal, replacement or chunk reload invalidates the handle, even at the same
 /// position. In-place data edits and temporary tick take/put preserve identity.
+/// The outgoing `block_drops` snapshot is readable only through the callback's
+/// [`LevelHost::block_entity_data`] and is stale after the callback.
 /// Stale handles read as `None`; Result-returning methods report `Stale`.
 #[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: its fields are private, so mods cannot build or destructure it

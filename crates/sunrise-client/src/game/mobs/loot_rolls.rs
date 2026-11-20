@@ -235,7 +235,7 @@ impl Game<'_> {
         CallerLoot {
             place: sunrise_world::loot::LootPlace {
                 origin,
-                ..self.loot_place_at([0.0; 3], None)
+                ..self.loot_place_at([0.0; 3])
             },
             query: std::rc::Rc::new(sunrise_world::loot::query::LootQuery::new(None, tool)),
         }

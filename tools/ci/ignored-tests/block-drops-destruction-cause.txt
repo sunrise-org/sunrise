@@ -1,0 +1,6 @@
+sunrise-client game::explosion::tests::no_op_block_drops_preserves_blast_xp_when_a_merge_is_refused lib daily resources
+sunrise-client game::explosion::tests::reflected_large_fireball_names_its_player_and_awards_block_experience lib daily resources
+sunrise-client game::native_hooks::block_entity_save_additional_tests::tests::final_drops_read_the_same_outgoing_serializer_across_destruction_routes lib daily resources
+sunrise-client game::spill::tests::aborting_a_block_break_restores_a_merged_experience_orb lib daily resources
+sunrise-client game::spill::tests::block_drops_rejects_invalid_edits_as_one_decision lib daily resources
+sunrise-world level::tests::collision_and_scheduled_support_loss_keep_distinct_drop_causes lib daily resources

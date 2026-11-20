@@ -1,7 +1,7 @@
 //! Scheduled block ticks (`BlockBehaviour.tick`), random ticks
 //! (`BlockBehaviour.randomTick`) and the per-tick drivers.
 use super::{
-    Behaviours, LevelAccess, LevelEvent, Sim, Spread, Ticks,
+    Behaviours, DropCause, LevelAccess, LevelEvent, Sim, Spread, Ticks,
     classes::Class,
     data::state_flags,
     update::{HORIZONTAL, above, below, rel},
@@ -37,7 +37,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 | Class::GrowingPlant
                 | Class::SugarCane => {
                     if !self.can_survive(state, pos) {
-                        self.destroy_block(pos, true, 512);
+                        self.destroy_block_with_cause(pos, true, 512, DropCause::NeighbourUpdate);
                     }
                 }
                 Class::HangingMoss => {
@@ -45,7 +45,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     if !(self.multiface_can_attach_at(above(pos), Direction::Up)
                         || b.is_block(above_state, block))
                     {
-                        self.destroy_block(pos, true, 512);
+                        self.destroy_block_with_cause(pos, true, 512, DropCause::NeighbourUpdate);
                     }
                 }
                 Class::BasePressurePlate => {
@@ -394,7 +394,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         if !self.level.allow_leaves_decay(pos) {
                             continue;
                         }
-                        self.drop_resources(state, pos);
+                        self.drop_resources(state, pos, super::DropCause::Unspecified);
                         self.remove_block(pos, false);
                     }
                 }
@@ -453,7 +453,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         if !self.level.allow_block_fade(pos, state, b.air()) {
                             continue;
                         }
-                        self.drop_resources(state, pos);
+                        self.drop_resources(state, pos, super::DropCause::Unspecified);
                         self.remove_block(pos, false);
                         self.game_event(pos, "minecraft:block_destroy");
                     }
