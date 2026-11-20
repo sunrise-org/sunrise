@@ -2,12 +2,13 @@
 //! The caller supplies kinematic poses. There is no physics solver or external native library.
 mod record;
 
+use mod_api::text::TextContent;
 use mod_api::{
     self, AttachmentError, BlockUpdateFlags, Compound, Holder, Hooks, HostTransaction,
     LevelReadError, LevelRef, LiveWorldError, LiveWorldLimits, LiveWorldPose, LiveWorldRecovery,
     LiveWorldRef, LiveWorldSaveReceipt, LiveWorldTransferCell, LiveWorldTransferLimits,
     LiveWorldTransferReceipt, LiveWorldTransferRef, Registrar, RuntimeGenerator, RuntimeLevel,
-    ServerHost, Tag, Text, TextContent, TicketController, TicketOwner,
+    ServerHost, Tag, Text, TicketController, TicketOwner,
 };
 use record::{OWNER, Phase, Record};
 use std::sync::{Mutex, OnceLock};

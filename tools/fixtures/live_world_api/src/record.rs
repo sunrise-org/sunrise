@@ -1,6 +1,7 @@
 //! Same-source persistent marker and caller receipt metadata, through the ordinary attachment API.
 use mod_api::{
-    AttachmentCodec, AttachmentError, AttachmentType, Compound, LiveWorldPose, LiveWorldSample, Tag,
+    AttachmentCodec, AttachmentError, AttachmentType, Compound, JavaString, LiveWorldPose,
+    LiveWorldSample, Tag,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,7 +102,8 @@ fn decode(value: &Compound) -> std::result::Result<Record, AttachmentError> {
     if !matches!(value.get(&"version".into()), Some(Tag::Int(1))) {
         return Err(bad());
     }
-    if !matches!(value.get(&"source".into()), Some(Tag::String(id)) if id == super::SOURCE) {
+    if !matches!(value.get(&"source".into()), Some(Tag::String(id)) if id == &JavaString::from(super::SOURCE))
+    {
         return Err(bad());
     }
     let phase = match value.get(&"phase".into()) {
