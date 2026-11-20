@@ -3,6 +3,7 @@
 sunrise-client game::advancements::icons::tests::advancement_icons_reach_local_and_remote_ui_surfaces lib daily game-boot
 sunrise-client game::api_values::loot_values::query_tests::queried_ability_parts_grant_and_deny lib daily game-boot
 sunrise-client game::api_values::read_stack_tests::draw_consumers_render_nonresident_stacks lib daily game-boot
+sunrise-client game::books::agent_book_key_tests::an_agents_modifiers_held_in_an_open_book_reach_its_shortcuts lib daily resources
 sunrise-client game::commands::modprofile::tests::modprofile_state_and_report_side_effects lib daily child-process
 sunrise-client game::commands::selector_bounds_tests::actual_selector_uses_body_overlap_but_distance_stays_at_the_origin lib daily game-boot
 sunrise-client game::commands::world_cmds::allay_owner_damage_tests::allay_owner_adapters_compare_the_actual_player_uuid lib daily game-boot
@@ -159,6 +160,7 @@ sunrise-client game::native_server::network_settings_tests::server_settings_foll
 sunrise-client game::native_structure_placement::tests::a_carried_structure_places_its_blocks_block_entity_and_entity lib daily resources
 sunrise-client game::native_structure_placement::tests::a_chunk_the_template_covers_that_is_not_loaded_refuses_and_places_nothing lib daily resources
 sunrise-client game::natural_spawning::tests::spawn_candidates_match_the_uncached_union_while_players_move lib daily slow
+sunrise-client game::pad::parity_tests::an_agents_release_keeps_the_sneak_the_pad_holds lib daily resources
 sunrise-client game::rectangular_recipe_remainder_tests::rectangular_recipe_for_preserves_two_custom_remainder_cells lib daily resources
 sunrise-client game::remote::interaction_event_tests::mapping_press_tests::a_callback_click_survives_until_the_next_tick lib daily resources
 sunrise-client game::remote::interaction_event_tests::mapping_press_tests::a_screen_drops_the_clicks_and_holds_nothing lib daily resources

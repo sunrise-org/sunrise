@@ -107,6 +107,26 @@ fn a_keyboard_release_keeps_the_sneak_the_pad_went_on_to_hold() {
 
 #[test]
 #[ignore = "daily"]
+fn an_agents_release_keeps_the_sneak_the_pad_holds() {
+    playing(|game| {
+        game.settings.controller.toggle_sneak = false;
+        let shift = KeyCode::ShiftLeft;
+        // As `key shift down` does: the physical modifier, then the agent's press.
+        game.press_modifier_key(shift, true);
+        game.control_key_down(shift, shift).unwrap();
+        pad_press(game, Button::RightStick, "key.sneak");
+        // As `key shift up` does: the physical modifier goes first, then the agent's release.
+        game.press_modifier_key(shift, false);
+        game.control_key_up(shift);
+        game.physical_keys.remove(&shift);
+        assert!(game.keys.held(Action::Sneak), "R3 is still down");
+        pad_release(game, Button::RightStick);
+        assert!(!game.keys.held(Action::Sneak), "both let go");
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn pad_smooth_camera_binding_toggles_the_cinematic_camera() {
     playing(|game| {
         game.settings

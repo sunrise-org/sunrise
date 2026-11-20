@@ -638,7 +638,7 @@ impl Game<'_> {
     /// selection and moves the payment itself (`setSelectionHint`, `tryMoveItems`), so its
     /// result and the clicks after it are its own; a server is then told
     /// (ServerboundSelectTradePacket) and does the same.
-    fn try_move_items(&mut self, index: usize) {
+    pub(in crate::game) fn try_move_items(&mut self, index: usize) {
         self.menu_session(|menu, env, _| {
             menu.merchant_select(env, index);
             Some(true)

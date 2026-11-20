@@ -24,6 +24,7 @@ import net.minecraft.client.Options;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.tutorial.Tutorial;
+import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.phys.HitResult;
 import org.lwjgl.sdl.SDLEvents;
@@ -43,7 +44,7 @@ import org.lwjgl.sdl.SDLVideo;
  * the next tick: its first tick sends the command /wire-mark, which marks it in the capture. It prints
  * "[VanillaTickScript] done NAME" when the scenario's ticks have run. "where" prints the position.
  *
- * Lines (sunrise-ctl's words): key NAME down|up|tap, mouse left|right down|up|click, look YAW PITCH,
+ * Lines (sunrise-ctl's words): key NAME down|up|tap, mouse left|right down|up|click, look YAW PITCH, mouse-move DX DY, menu-button N,
  * click-slot SLOT [right] [shift] (the menu's slot id), command TEXT, close.
  */
 public final class VanillaTickScript {
@@ -63,6 +64,7 @@ public final class VanillaTickScript {
         KEYS.put("q", InputConstants.KEY_Q);
         KEYS.put("f", InputConstants.KEY_F);
         KEYS.put("esc", InputConstants.KEY_ESCAPE);
+        KEYS.put("l", InputConstants.KEY_L);
         for (int i = 1; i <= 9; i++) {
             KEYS.put(Integer.toString(i), InputConstants.KEY_1 + i - 1);
         }
@@ -284,6 +286,12 @@ public final class VanillaTickScript {
                     }
                     return;
                 }
+                if (down && w[1].equals("esc")) {
+                    // KeyboardHandler.keyPress: Escape with no screen open pauses (Minecraft.pauseGame), which
+                    // opens the pause screen; Escape is no key mapping.
+                    mc.pauseGame(false);
+                    return;
+                }
                 if (down) {
                     KeyMapping.set(key, true);
                     KeyMapping.click(key);
@@ -293,7 +301,11 @@ public final class VanillaTickScript {
                 }
             }
             case "mouse" -> {
-                InputConstants.Key key = InputConstants.Type.MOUSE.getOrCreate(w[1].equals("left") ? InputConstants.MOUSE_BUTTON_LEFT : InputConstants.MOUSE_BUTTON_RIGHT);
+                InputConstants.Key key = InputConstants.Type.MOUSE.getOrCreate(switch (w[1]) {
+                    case "left" -> InputConstants.MOUSE_BUTTON_LEFT;
+                    case "middle" -> InputConstants.MOUSE_BUTTON_MIDDLE;
+                    default -> InputConstants.MOUSE_BUTTON_RIGHT;
+                });
                 if (screen != null) {
                     return;
                 }
@@ -313,18 +325,103 @@ public final class VanillaTickScript {
                 pick.setAccessible(true);
                 pick.invoke(mc, 1.0F);
             }
+            case "menu-button" -> {
+                // A station screen's button (a stonecutter's recipe, a loom's pattern): the screen asks the menu
+                // (clickMenuButton) and, when it took the press, handleInventoryButtonClick sends it.
+                int button = Integer.parseInt(w[1]);
+                AbstractContainerMenu menu = mc.player.containerMenu;
+                if (menu.clickMenuButton(mc.player, button)) {
+                    mc.gameMode.handleInventoryButtonClick(menu.containerId, button);
+                }
+            }
+            case "mouse-move" -> {
+                // MouseHandler.onMove with the pointer grabbed in an active window: the frame's
+                // handleAccumulatedMovement turns the player (turnPlayer: the sensitivity's scale, then
+                // Entity.turn), after the tick, as a real mouse's motion between frames does. Under Xvfb the
+                // window may not hold the focus or the grab, so the script gives it both.
+                MouseHandler mouse = mc.mouseHandler;
+                for (String name : new String[] {"accumulatedDX", "accumulatedDY"}) {
+                    Field field = MouseHandler.class.getDeclaredField(name);
+                    field.setAccessible(true);
+                    double delta = Double.parseDouble(name.endsWith("X") ? w[1] : w[2]);
+                    field.setDouble(mouse, field.getDouble(mouse) + delta);
+                }
+                Field grabbed = MouseHandler.class.getDeclaredField("mouseGrabbed");
+                grabbed.setAccessible(true);
+                grabbed.setBoolean(mouse, true);
+                Field focused = com.mojang.blaze3d.platform.Window.class.getDeclaredField("focused");
+                focused.setAccessible(true);
+                focused.setBoolean(mc.getWindow(), true);
+            }
             case "click-slot" -> {
+                // click-slot SLOT [right] [shift] [INPUT] [bBUTTON]: INPUT a ContainerInput name, slot -999
+                // outside the menu.
                 int slot = Integer.parseInt(w[1]);
-                boolean right = List.of(w).contains("right");
-                boolean shift = List.of(w).contains("shift");
-                mc.gameMode.handleContainerInput(mc.player.containerMenu.containerId, slot, right ? 1 : 0,
-                        shift ? ContainerInput.QUICK_MOVE : ContainerInput.PICKUP, mc.player);
+                List<String> rest = List.of(w).subList(2, w.length);
+                ContainerInput input = rest.contains("shift") ? ContainerInput.QUICK_MOVE : ContainerInput.PICKUP;
+                int button = rest.contains("right") ? 1 : 0;
+                for (String word : rest) {
+                    for (ContainerInput named : ContainerInput.values()) {
+                        if (named.name().equals(word)) {
+                            input = named;
+                        }
+                    }
+                    if (word.matches("b-?[0-9]+")) {
+                        button = Integer.parseInt(word.substring(1));
+                    }
+                }
+                mc.gameMode.handleContainerInput(mc.player.containerMenu.containerId, slot, button, input, mc.player);
             }
             case "command" -> mc.player.connection.sendCommand(String.join(" ", List.of(w).subList(1, w.length)));
+            case "respawn" -> {
+                // DeathScreen's respawn button: LocalPlayer.respawn (ServerboundClientCommand PERFORM_RESPAWN).
+                if (mc.player != null && mc.player.isDeadOrDying()) {
+                    mc.player.respawn();
+                }
+            }
+            case "chat" -> {
+                // ChatScreen.handleChatInput: a line starting with / is a command, the rest is chat.
+                String text = String.join(" ", List.of(w).subList(1, w.length)).trim();
+                if (text.startsWith("/")) {
+                    mc.player.connection.sendCommand(text.substring(1));
+                } else if (!text.isEmpty()) {
+                    mc.player.connection.sendChat(text);
+                }
+            }
             case "close" -> {
                 if (screen != null) {
                     screen.onClose();
                 }
+            }
+            case "select-trade" -> {
+                // A merchant screen's offer button (MerchantScreen.postButtonClick): the shown offer, then the
+                // menu's setSelectionHint and tryMoveItems on this client, then ServerboundSelectTradePacket.
+                int offer = Integer.parseInt(w[1]);
+                if (screen instanceof net.minecraft.client.gui.screens.inventory.MerchantScreen) {
+                    java.lang.reflect.Field shop = screen.getClass().getDeclaredField("shopItem");
+                    shop.setAccessible(true);
+                    shop.setInt(screen, offer);
+                    Method press = screen.getClass().getDeclaredMethod("postButtonClick");
+                    press.setAccessible(true);
+                    press.invoke(screen);
+                }
+            }
+            case "beacon" -> {
+                // BeaconScreen's confirm button with primary power `w[1]` and no secondary (BeaconConfirmButton.onPress).
+                if (screen instanceof net.minecraft.client.gui.screens.inventory.BeaconScreen) {
+                    var effect = net.minecraft.core.registries.BuiltInRegistries.MOB_EFFECT
+                        .get(net.minecraft.resources.Identifier.withDefaultNamespace(w[1])).orElseThrow();
+                    mc.getConnection().send(new net.minecraft.network.protocol.game.ServerboundSetBeaconPacket(
+                        java.util.Optional.<net.minecraft.core.Holder<net.minecraft.world.effect.MobEffect>>of(effect),
+                        java.util.Optional.empty()));
+                    mc.player.closeContainer();
+                }
+            }
+            case "open-stats" -> {
+                // PauseScreen's Statistics button: the StatsScreen over the pause menu, whose init asks the server
+                // for the stats; Escape goes back to the pause menu.
+                Screen back = screen != null ? screen : new net.minecraft.client.gui.screens.PauseScreen(true);
+                mc.gui.setScreen(new net.minecraft.client.gui.screens.achievement.StatsScreen(back, mc.player.getStats()));
             }
             default -> System.out.println(TAG + "unknown line: " + String.join(" ", w));
         }

@@ -29,7 +29,7 @@ impl Game<'_> {
         if let [(Some(slot), button, input)] = ops {
             self.crafter_slot_clicked(*slot, *button, *input);
         }
-        let (container, menu) = self.remote_menu();
+        let menu = self.remote_menu().1;
         let mut clicks = Vec::with_capacity(ops.len());
         for &(slot, button, input) in ops {
             let slot = match slot {
@@ -41,6 +41,13 @@ impl Game<'_> {
             };
             clicks.push((slot, button, input));
         }
+        self.remote_menu_clicks(&clicks);
+        true
+    }
+    /// `MultiPlayerGameMode.handleContainerInput` for clicks on the open menu's own slots
+    /// (-999 outside it): predicted, sent, and the main hand swung for a throw.
+    pub(in crate::game) fn remote_menu_clicks(&mut self, clicks: &[(i16, i32, Input)]) {
+        let container = self.remote_menu().0;
         // Unpredicted: nothing changed, the carried stack as it is.
         let mut sent: Vec<Predicted> = clicks
             .iter()
@@ -49,7 +56,7 @@ impl Game<'_> {
         let mut threw = false;
         // The engine's slot indices are the menu's own, as on the network.
         self.menu_session(|m, env, _| {
-            let Some((predicted, dropped)) = predict_clicks(m, env, &clicks) else {
+            let Some((predicted, dropped)) = predict_clicks(m, env, clicks) else {
                 // The server throws on it too: nothing is predicted.
                 return Some(false);
             };
@@ -63,7 +70,6 @@ impl Game<'_> {
         if threw {
             self.swing_hand(Hand::Main, SwingAnimation::DEFAULT);
         }
-        true
     }
     /// A QUICK_MOVE on the server's open menu with nothing predicted: the
     /// client's slots stay as they are and every slot it moved comes back from

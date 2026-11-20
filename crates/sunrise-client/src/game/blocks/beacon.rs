@@ -501,7 +501,7 @@ impl Game<'_> {
         }
         false
     }
-    fn close_beacon_screen(&mut self) {
+    pub(in crate::game) fn close_beacon_screen(&mut self) {
         self.close_container();
         self.set_screen(super::Screen::Playing);
         self.capture(true);
@@ -509,7 +509,7 @@ impl Game<'_> {
     /// `BeaconMenu.updateEffects`: spend the payment and set the powers. On
     /// a server, `BeaconScreen`'s confirm button sends them
     /// (`ServerboundSetBeaconPacket`) and the server's menu does it.
-    fn confirm_beacon(&mut self, sel: [Option<usize>; 2]) {
+    pub(in crate::game) fn confirm_beacon(&mut self, sel: [Option<usize>; 2]) {
         if self.remote.is_some() {
             let id = |e: Option<usize>| e.and_then(|e| self.remote_effect_network_id(EFFECTS[e].0));
             let (primary, secondary) = (id(sel[0]), id(sel[1]));

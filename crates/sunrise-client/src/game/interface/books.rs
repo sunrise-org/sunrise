@@ -2196,3 +2196,45 @@ mod link_cursor_tests {
         assert_eq!(link_cursor(&hover_only), None);
     }
 }
+#[cfg(test)]
+mod agent_book_key_tests {
+    use super::super::game_tests::tests::server_game;
+    use super::BookScreen;
+    use crate::game::event_loop::EventLoopCtl;
+    use sunrise_client::items::ItemStack;
+    use winit::event_loop::ControlFlow;
+
+    struct NoLoop;
+    impl EventLoopCtl for NoLoop {
+        fn exit(&self) {}
+        fn set_control_flow(&self, _: ControlFlow) {}
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn an_agents_modifiers_held_in_an_open_book_reach_its_shortcuts() {
+        let mut resources = None;
+        let mut game = server_game(&mut resources);
+        let mut stack = ItemStack::new("minecraft:writable_book", 1);
+        stack.data_mut().writable_pages = vec!["hello".into()];
+        let screen = game.book_screen(&stack).unwrap();
+        game.open_book(screen);
+        let edit = if cfg!(target_os = "macos") {
+            "super"
+        } else {
+            "control"
+        };
+        game.replay_line(&format!("key {edit} down"), &NoLoop);
+        game.replay_line("key a tap", &NoLoop);
+        game.replay_line(&format!("key {edit} up"), &NoLoop);
+        let Some(BookScreen::Edit { page_edit, .. }) = game.book.as_ref() else {
+            panic!("the book stays open");
+        };
+        assert_ne!(page_edit.cursor, page_edit.highlight, "Select All");
+        game.replay_line("key shift down", &NoLoop);
+        assert!(game.has_shift_down(), "the selection reads the held Shift");
+        game.replay_line("key shift up", &NoLoop);
+        game.replay_line("key shift tap", &NoLoop);
+        assert!(!game.has_shift_down(), "a tap lets the modifier go");
+    }
+}
