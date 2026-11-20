@@ -1790,6 +1790,8 @@ struct Game<'a> {
     collider_placements: native_colliders::Placements,
     /// Runtime levels projected as sparse moving local worlds.
     live_worlds: std::cell::RefCell<native_live_worlds::LiveWorlds>,
+    /// Common save coverage and a sticky post-Prepared session fence.
+    live_world_durability: native_live_worlds::Durability,
     collider_histories: native_colliders::Histories,
     entity_initialization: entity_initialization::EntityInitialization,
     /// Typed per-level membership follows dimensions, not the temporary world swap.
@@ -6459,6 +6461,12 @@ impl Game<'_> {
         &mut self,
         prepared: world_loading::PreparedWorld,
     ) -> Result<functions::PackStack> {
+        self.admit_live_world_session()?;
+        if self.player_autosaves.common_required() && !self.player_autosaves.writes_finished()? {
+            return Err("the previous world still has an unacknowledged common player save".into());
+        }
+        // PreparedWorld owns a newly recovered SessionLock. Never reuse an old queue identity.
+        self.player_autosaves = Default::default();
         self.reset_tutorial();
         // Another world: its generator, not the last one's Density line.
         self.debug_density.borrow_mut().clear();
@@ -6480,6 +6488,9 @@ impl Game<'_> {
         let dim = Dim::from_id(&level.dimension);
         self.level_shapes = shapes;
         self.world_root = save_root.clone();
+        // PreparedWorld holds the new SessionLock and completed recovery before any reader.
+        self.live_world_durability.reset_for_recovered_world();
+        self.read_integrated_live_world_properties();
         // The root moves before the prepared level is installed. Until then a
         // final save must not run: the lock below only marks tag tables.
         self.world_adopted = false;
@@ -11210,6 +11221,7 @@ impl<'a> Game<'a> {
             collider_changes: Vec::new(),
             collider_placements: Default::default(),
             live_worlds: Default::default(),
+            live_world_durability: Default::default(),
             collider_histories: Default::default(),
             entity_initialization: Default::default(),
             attachment_indexes: Default::default(),

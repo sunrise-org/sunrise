@@ -590,7 +590,7 @@ fn authenticated_projection_packets_keep_real_source_menus_and_refuse_stale_acti
     );
 }
 
-// These tests are draft runtime coverage; none has been executed by this worker.
+// Genuine negotiated guest requests and ordinary continuing menu/action contexts.
 fn negotiated_probe_sender(player: mod_api::PlayerRef) -> sunrise_client::lan::PlayerSender {
     use sunrise_client::{
         lan::PlayerSender,

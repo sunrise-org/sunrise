@@ -1422,25 +1422,48 @@ impl Game<'_> {
     /// into the level (`/data`) and both its files (`playerdata::save_owner`),
     /// anyone else into their own file.
     pub(super) fn save_guest(&mut self, guest: &mut sunrise_client::lan::guest::Guest) {
+        if self.live_world_session_failed() {
+            return;
+        }
         if !guest.participates_in_player_simulation() {
             return;
         }
         // A proxy released this record to another server, which now owns saving it.
         if guest.placed && !guest.released && !self.crash_save.excludes(guest.conn) {
-            let _ = self.finish_player_autosaves(true);
-            if self
-                .lan
-                .as_ref()
-                .and_then(|host| host.owner.as_ref())
-                .is_some_and(|o| o.uuid == guest.uuid)
-            {
-                playerdata::save_owner(guest, &mut self.level, &self.world_root, self.res.items());
-            } else {
+            if self.player_autosaves.common_required() {
+                if self
+                    .lan
+                    .as_ref()
+                    .and_then(|host| host.owner.as_ref())
+                    .is_some_and(|owner| owner.uuid == guest.uuid)
+                {
+                    self.level.player_uuid = Some(playerdata::uuid_ints(guest.uuid));
+                    playerdata::store(guest, &mut self.level, None);
+                }
+                // Preserve this exact snapshot even after the actual disconnected Guest leaves the hub.
                 self.player_autosaves
-                    .save_after(guest, &self.world_root, self.res.items());
+                    .enqueue(guest, &self.world_root, self.res.items());
+            } else {
+                let _ = self.finish_player_autosaves(true);
+                if self
+                    .lan
+                    .as_ref()
+                    .and_then(|host| host.owner.as_ref())
+                    .is_some_and(|o| o.uuid == guest.uuid)
+                {
+                    playerdata::save_owner(
+                        guest,
+                        &mut self.level,
+                        &self.world_root,
+                        self.res.items(),
+                    );
+                } else {
+                    self.player_autosaves
+                        .save_after(guest, &self.world_root, self.res.items());
+                }
+                let directory = playerdata::directory(&self.world_root);
+                self.native_player_save_to_file(guest.uuid, &guest.name, &directory);
             }
-            let directory = playerdata::directory(&self.world_root);
-            self.native_player_save_to_file(guest.uuid, &guest.name, &directory);
         }
         if let Some(host) = self.lan.as_ref() {
             self.save_guest_records(host, guest);

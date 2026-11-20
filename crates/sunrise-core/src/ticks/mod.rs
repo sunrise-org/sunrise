@@ -1,6 +1,10 @@
 //! Scheduled block/fluid tick machinery for Java Edition 26.3. Type IDs identify
 //! registry-owned types; each block/fluid registry uses its own LevelTicks.
+mod transfer;
+pub use transfer::{TransferOccurrence, TransferTickError, TransferTicks};
 mod generation;
+#[cfg(test)]
+mod transfer_tests;
 pub use generation::{
     ProtoChunkTicks, TickContainerAccess, WorldGenTickAccess, WorldGenTickContainers,
 };

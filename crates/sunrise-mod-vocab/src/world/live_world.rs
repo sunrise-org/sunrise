@@ -48,6 +48,8 @@ pub struct LiveWorldLimits {
     pub translation: f64,
     /// Maximum angular change in one published pose; default five degrees.
     pub rotation_degrees: f64,
+    /// Admission policy; externally resolved poses require explicit server owner authorization.
+    pub publication: LiveWorldPublication,
     /// Maximum conservative contact-kernel subintervals per pose; default 32.
     pub motion_steps: u32,
 }
@@ -65,6 +67,7 @@ impl Default for LiveWorldLimits {
             translation: 1.0,
             rotation_degrees: 5.0,
             motion_steps: 32,
+            publication: LiveWorldPublication::CollisionChecked,
         }
     }
 }
@@ -231,33 +234,6 @@ impl LiveWorldPlacementCell {
     }
 }
 
-/// Receipt returned only after the real level save barrier and durable projection metadata.
-#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
-#[non_exhaustive]
-pub struct LiveWorldCheckpoint {
-    /// Persistent source runtime-level identity, independent of a world-open handle.
-    pub source: String,
-    /// The binding generation saved by this barrier.
-    pub generation: u64,
-    /// The accepted pose revision saved by this barrier.
-    pub pose_revision: u64,
-    /// The source's block revision at the barrier.
-    pub source_revision: u64,
-}
-
-impl LiveWorldCheckpoint {
-    /// Engine constructor for a completed barrier.
-    #[doc(hidden)]
-    pub fn new(source: String, generation: u64, pose_revision: u64, source_revision: u64) -> Self {
-        Self {
-            source,
-            generation,
-            pose_revision,
-            source_revision,
-        }
-    }
-}
-
 /// A projection refusal; failed calls preserve the last accepted state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
 #[non_exhaustive]
@@ -292,10 +268,238 @@ pub enum LiveWorldError {
     Storage,
     /// No projection checkpoint exists. Corrupt or unreadable data returns Storage.
     NotSaved,
+    /// No durable commit receipt exists because this preparation was canceled or aborted.
+    NotCommitted,
+    /// Earlier experimental disk metadata requires explicit validated recovery migration.
+    MigrationRequired,
 }
 
 impl crate::NoBackend for LiveWorldError {
     fn no_backend() -> Self {
         Self::Unavailable
+    }
+}
+
+/// How an accepted externally supplied pose is admitted; neither policy integrates dynamics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum LiveWorldPublication {
+    /// The host conservatively checks the complete bounded rigid sweep against terrain.
+    CollisionChecked,
+    /// An explicitly authorized server owner supplies an already resolved rigid pose.
+    /// Identity, residency, finite values, work/step budgets and player contacts still apply.
+    ExternallyResolved,
+}
+
+/// Explicit recovery state for earlier local experimental disk data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum LiveWorldRecovery {
+    /// The exact current-format saved descriptor is ready for ordinary residency preflight.
+    Ready,
+    /// Earlier experimental metadata must be migrated explicitly with originals retained.
+    ExperimentalMigrationRequired,
+}
+
+/// Saved membership/residency metadata only; this never exposes a second inventory authority.
+#[derive(Clone, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct LiveWorldSavedProjection {
+    /// Persistent ordinary destination level id.
+    pub destination: String,
+    /// Distinct actual saved member columns to ticket before attempting restore.
+    pub source_chunks: Vec<[i32; 2]>,
+    /// Saved membership size.
+    pub member_cells: u32,
+    /// Checked ordinary terrain retention cover cost.
+    pub retained_columns: u32,
+    /// Saved operational budgets and publication policy.
+    pub limits: LiveWorldLimits,
+    /// Common durable epoch that includes this descriptor.
+    pub barrier_epoch: u64,
+    /// Whether explicit recovery migration is required before restore.
+    pub recovery: LiveWorldRecovery,
+}
+impl LiveWorldSavedProjection {
+    /// Engine constructor over fully checked metadata.
+    #[doc(hidden)]
+    pub fn new(
+        destination: String,
+        source_chunks: Vec<[i32; 2]>,
+        member_cells: u32,
+        retained_columns: u32,
+        limits: LiveWorldLimits,
+        barrier_epoch: u64,
+        recovery: LiveWorldRecovery,
+    ) -> Self {
+        Self {
+            destination,
+            source_chunks,
+            member_cells,
+            retained_columns,
+            limits,
+            barrier_epoch,
+            recovery,
+        }
+    }
+}
+
+/// One actual covered level at a completed common save decision.
+#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct LiveWorldLevelReceipt {
+    /// Exact current world/open generation.
+    pub level: crate::LevelRef,
+    /// Saved actual World's block epoch.
+    pub block_revision: u64,
+    /// Saved actual block-entity content epoch.
+    pub content_revision: u64,
+    /// Current binding, if any.
+    pub binding: Option<LiveWorldRef>,
+    /// Saved retired binding identity; never a fabricated moved-cell receipt.
+    pub retired_generation: Option<u64>,
+    /// Actual remaining member count at retirement, valid only through its checked source readset.
+    pub retired_members: Option<u32>,
+}
+impl LiveWorldLevelReceipt {
+    /// Engine constructor after common acknowledgment.
+    #[doc(hidden)]
+    pub fn new(
+        level: crate::LevelRef,
+        block_revision: u64,
+        content_revision: u64,
+        binding: Option<LiveWorldRef>,
+        retired_generation: Option<u64>,
+        retired_members: Option<u32>,
+    ) -> Self {
+        Self {
+            level,
+            block_revision,
+            content_revision,
+            binding,
+            retired_generation,
+            retired_members,
+        }
+    }
+}
+/// Durable common acknowledgment. Only listed levels are covered.
+#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct LiveWorldSaveReceipt {
+    /// World-root checked monotone durable epoch.
+    pub barrier_epoch: u64,
+    /// Actual payload, pose, binding and persistent attachment coverage union.
+    pub levels: Vec<LiveWorldLevelReceipt>,
+}
+impl LiveWorldSaveReceipt {
+    /// Engine constructor after common acknowledgment.
+    #[doc(hidden)]
+    pub fn new(barrier_epoch: u64, levels: Vec<LiveWorldLevelReceipt>) -> Self {
+        Self {
+            barrier_epoch,
+            levels,
+        }
+    }
+}
+/// One exact source/destination mapping; no payload is stored in caller-owned data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct LiveWorldTransferCell {
+    /// Actual source level.
+    pub source: crate::LevelRef,
+    /// Actual source cell.
+    pub from: [i32; 3],
+    /// Actual destination level.
+    pub destination: crate::LevelRef,
+    /// Actual empty destination cell.
+    pub to: [i32; 3],
+}
+impl LiveWorldTransferCell {
+    /// Describe one untrusted mapping for the host's complete preflight.
+    pub fn new(
+        source: crate::LevelRef,
+        from: [i32; 3],
+        destination: crate::LevelRef,
+        to: [i32; 3],
+    ) -> Self {
+        Self {
+            source,
+            from,
+            destination,
+            to,
+        }
+    }
+}
+/// Caller-selected work ceilings, independently checked against host and common-WAL quotas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+// exhaustive: callers supply the whole quota set
+pub struct LiveWorldTransferLimits {
+    /// Mapped cells.
+    pub cells: u32,
+    /// Distinct actual levels including persistent attachment coverage.
+    pub levels: u32,
+    /// Distinct affected columns.
+    pub chunks: u32,
+    /// Source collision boxes.
+    pub boxes: u32,
+    /// Actual preserved schedule occurrences.
+    pub scheduled_ticks: u32,
+    /// Complete serialized common decision byte ceiling.
+    pub bytes: u64,
+}
+impl Default for LiveWorldTransferLimits {
+    fn default() -> Self {
+        Self {
+            cells: 4096,
+            levels: 16,
+            chunks: 128,
+            boxes: 32768,
+            scheduled_ticks: 65536,
+            bytes: 16 << 20,
+        }
+    }
+}
+/// A staged root-close intention; this does not prove a durable commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct LiveWorldTransferPending {
+    /// Planned common epoch; only receipt() can confirm completion.
+    pub planned_epoch: u64,
+}
+impl LiveWorldTransferPending {
+    /// Engine constructor for a staged intention.
+    #[doc(hidden)]
+    pub fn new(planned_epoch: u64) -> Self {
+        Self { planned_epoch }
+    }
+}
+/// A completed transfer at one common durable decision.
+#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct LiveWorldTransferReceipt {
+    /// Acknowledged common epoch.
+    pub barrier_epoch: u64,
+    /// Actual mapped ownership handoffs.
+    pub moved_cells: u32,
+    /// Actual covered levels, including third-level persistent metadata writes.
+    pub levels: Vec<LiveWorldLevelReceipt>,
+    /// Binding identities retired by this decision.
+    pub retired_bindings: Vec<LiveWorldRef>,
+}
+impl LiveWorldTransferReceipt {
+    /// Engine constructor after common acknowledgment.
+    #[doc(hidden)]
+    pub fn new(
+        barrier_epoch: u64,
+        moved_cells: u32,
+        levels: Vec<LiveWorldLevelReceipt>,
+        retired_bindings: Vec<LiveWorldRef>,
+    ) -> Self {
+        Self {
+            barrier_epoch,
+            moved_cells,
+            levels,
+            retired_bindings,
+        }
     }
 }

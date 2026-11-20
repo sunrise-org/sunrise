@@ -605,7 +605,10 @@ impl Game<'_> {
     /// The mod running, if it is one and a server world is open: who a runtime level request
     /// belongs to.
     pub(in crate::game) fn runtime_caller(&self) -> Result<&'static str, RuntimeLevelError> {
-        if !self.is_logical_server() || self.native_lifecycle.epoch().is_none() {
+        if self.live_world_session_failed()
+            || !self.is_logical_server()
+            || self.native_lifecycle.epoch().is_none()
+        {
             return Err(RuntimeLevelError::Unavailable);
         }
         mod_api::content::crash::current_native_mod().ok_or(RuntimeLevelError::Unavailable)
@@ -658,6 +661,20 @@ impl Game<'_> {
             RuntimeGenerator::Noise => return Err(RuntimeLevelError::NoiseUnsupported),
             RuntimeGenerator::Flat | RuntimeGenerator::Void | RuntimeGenerator::Mod(_) => {}
             _ => return Err(RuntimeLevelError::UnknownGenerator),
+        }
+        if self.player_autosaves.common_required()
+            && !self.levels.runtime.holds(id)
+            && self.live_world_common_level_count()
+                + self
+                    .levels
+                    .runtime
+                    .entries
+                    .values()
+                    .filter(|e| e.state == State::Opening)
+                    .count()
+                >= 64
+        {
+            return Err(RuntimeLevelError::CapReached);
         }
         let generation = self.levels.runtime.queue_open(owner, id, level)?;
         let epoch = self

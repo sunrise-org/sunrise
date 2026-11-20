@@ -1,5 +1,9 @@
 //! Per-level mutable simulation state: scheduled block and fluid ticks plus the
 //! in-flight neighbour-update queue and the random-tick position generator.
+mod transfer;
+#[cfg(test)]
+mod transfer_tests;
+
 use super::{states::BlockId, update::NeighborUpdater};
 use crate::fluid::FluidKind;
 use sunrise_core::fast_hash::FxHashMap;

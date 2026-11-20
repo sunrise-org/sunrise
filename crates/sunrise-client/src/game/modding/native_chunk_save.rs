@@ -104,7 +104,8 @@ impl Game<'_> {
     pub(super) fn save_chunks_eagerly(&mut self) {
         // No world open (`world_root` is set by `finish_open_world`): the save
         // is `Game::new`'s placeholder under the working directory.
-        if self.world.carrier_fences.is_broken()
+        if self.save.live_world_barrier_required()
+            || self.world.carrier_fences.is_broken()
             || self.remote.is_some()
             || self.world_root.as_os_str().is_empty()
             || self.agent.hold_server

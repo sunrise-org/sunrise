@@ -148,6 +148,9 @@ impl Game<'_> {
     }
     pub(in crate::game) fn finish_projection_placement(&mut self, plan: PreparedMembership) {
         let source = plan.handle.level();
+        self.journal_projection_binding(source);
+        self.dirty_live_world_level(source)
+            .expect("an admitted projection retains its source save lease");
         let table = self.live_worlds.get_mut();
         if let Some(entry) = table.entries.get_mut(&plan.handle.generation()) {
             entry.cells = plan.cells;
@@ -163,6 +166,26 @@ impl Game<'_> {
         self.refresh_live_world_retention(source);
     }
     pub(in crate::game) fn projection_block_removed(&mut self, pos: [i32; 3]) {
+        let affected: Vec<_> = self
+            .live_worlds
+            .borrow()
+            .entries
+            .values()
+            .filter(|entry| {
+                entry.handle.level().dimension() == self.dim.key()
+                    && entry.cells.binary_search(&pos).is_ok()
+            })
+            .map(|entry| (entry.handle, entry.cells.len()))
+            .collect();
+        for &(handle, count) in &affected {
+            self.journal_projection_binding(handle.level());
+            self.dirty_live_world_level(handle.level())
+                .expect("an admitted projection retains its source save lease");
+            if count == 1 {
+                self.record_projection_retirement(handle, 0)
+                    .expect("the real final member still has its source owner");
+            }
+        }
         let last: Vec<_> = self
             .live_worlds
             .borrow()

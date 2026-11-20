@@ -30,7 +30,9 @@ fn retention_footprint(
 }
 impl Game<'_> {
     pub(in crate::game) fn live_world_lifecycle_current(&self, level: LevelRef) -> bool {
-        self.level_handle_current(level) && !self.levels.runtime.is_closing(level.dimension_id())
+        !self.live_world_session_failed()
+            && self.level_handle_current(level)
+            && !self.levels.runtime.is_closing(level.dimension_id())
     }
 
     pub(super) fn refresh_live_world_retention(&mut self, source: LevelRef) {
@@ -69,6 +71,15 @@ impl Game<'_> {
         for source in sources {
             self.refresh_live_world_retention(source);
         }
+        self.live_world_durability
+            .members
+            .retain(|level, _| level.dimension() != dim.key());
+        self.live_world_durability
+            .dirty
+            .retain(|level| level.dimension() != dim.key());
+        self.live_world_durability
+            .retired
+            .retain(|level, _| level.dimension() != dim.key());
     }
 }
 

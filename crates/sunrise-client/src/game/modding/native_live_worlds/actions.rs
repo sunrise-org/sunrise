@@ -338,6 +338,9 @@ impl Game<'_> {
         hit: LiveWorldHit,
         into_inventory: bool,
     ) -> Result<bool, Error> {
+        if self.transaction_current().is_some() {
+            return Err(Error::Busy);
+        }
         self.projection_entry(handle)?;
         self.live_world_destroy_block_resolved(handle, player, hit, into_inventory)
     }

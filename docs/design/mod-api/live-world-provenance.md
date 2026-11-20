@@ -233,3 +233,108 @@ checkpoint. Neither the existing metadata save nor the successful source transac
 is represented as atomic durable cross-owner transfer. Multi-source publication rollback,
 exact rotating persistence, actual prepared transfer/recovery, normal native/wasm packaging,
 window input and measurement remain distinct required gates.
+
+
+## Common durable ownership continuation
+
+The next batch integrates the same-source WAL, SaveDir gate, immutable player Snapshot
+queue, actual payload/schedule handoff and Game frontier/fence drafts. Their original
+source-only parser results remain original handoff receipts; subsequent lead integration
+and executed tests are separately bound. A later bounded helper exclusively integrated and
+tested the three lower playerdata files; all Game orchestration stayed lead-owned. Its
+first resource-less run skipped old resource branches, then the exact final binary reran
+with the approved resources and empty stderr. The observed Game-discovery build-script
+inputs were archived, so this is lower-layer evidence, not a full-tree SDK claim.
+
+The coordinator supplied generic Sunrise-only source-navigation observations, including
+that vanilla BE membership uses a validated template/factory rather than mod-declared
+`type_for`, and that a retirement receipt must compare its actual post-handoff revision.
+The coordinator has a broader prior context; these observations do not establish clean-room
+or approved upstream provenance. No foreign implementation or personal simulation source
+was supplied or consulted. The recorded development base remains unchanged.
+
+Actual lower runs exercised journal recovery after torn selected region data/header, strict
+unselected-sector and external-stream witnesses, pre-Prepared readset refusal, empty-level
+metadata and the immutable player queue. Later Game attempts exposed a missing-region delete
+acknowledgment bug: the ordinary writer correctly leaves a never-existing empty Entities
+region absent, while the witness reader had demanded a file. The correction accepts absence
+only when the original region never existed and every selected afterimage is deletion; any
+expected payload or formerly existing region stays strict. A dedicated actual ordinary
+SaveDir writer regression accompanies that fix. Newly added lower rows still require their
+final focused execution; prior passing lower receipts do not cover later edits by inference.
+
+The actual Game `durable-backend/check-7` batch failed all selected rows. Later batches
+retained each failure and correction rather than changing prior status. `check-9` and
+`check-10` each passed the other selected cases but failed the public transfer row, first at
+vanilla factory admission, then at a saved-tick sentinel. Ordinary chunk registration
+retains Some(empty) without registering an unpack wait; rejecting that empty sentinel made
+valid empty destinations permanently Busy. Capture/install now distinguish no work from a
+real nonempty pending list. The actual core ownership tests include empty source/destination
+sentinels, import and exactly-once execution while preserving nonempty pending refusal and
+queued/held duplicate behavior. An instrument-only fixture privacy error in `check-12`
+remains a compile failure, not runtime evidence.
+
+`check-13` reached the first real journaled three-cell payload handoff and third-owner
+metadata, then failed its retirement-count assertion because receipt code compared to the
+pre-transfer revision. `check-14` exercised forward/reverse payload handoff and the dry slab
+lifecycle, then exposed an inconsistent synthetic hot-furnace seed (unlit block with a
+burning BE). That fixture was corrected to the corresponding real stock LIT state; ordinary
+furnace behavior was unchanged. The complete exact public transfer case passed in `check-15`:
+occupied second destination full refusal, codec-root abort, actual shared receipt/metadata,
+real inventory/counter preservation, both transfer directions, dry nonfull state and a hot
+furnace's next-global-tick progress with one owner.
+
+The full `check-15` family passed all but the older action row's stale-handle expectation;
+client viewed-level capacity and parked readiness passed. The refusal already preserved
+blocks/player state. The new required binding journal also correctly restored callback
+retirement on that refused ordinary transaction, so the old expectation of permanent Stale
+was inconsistent with the new atomic contract. The updated row requires exact sample,
+binding and membership restoration. Its final execution, the narrow trusted-pose admission
+row and the required explicit-base pr_ready run remain separate pending gates until their
+actual receipts exist. No failed family is retrospectively marked green.
+
+The actual OS write-refusal Game test demonstrated a durable Prepared record, immediate
+session fencing, no following ticker/save publication, and another process recovering before
+ordinary source World/BE loading. The rotating checkpoint/reopen row preserves saved CURRENT
+component bits and revision across repeated cycles, with previous=CURRENT settlement. This
+is distinct from preserving the historical previous sample in opaque caller audit metadata.
+The cache account is observational on one recorded fast profile/aarch64 macOS run with
+paused ordinary server turns and exact geometry-cache identity across BE-only changes. It
+is not a matched before/after benchmark or a completed interactive-window test.
+
+The independent authored native/wasm example is retained under tools/fixtures/live_world_api
+without generated manifests, self-commit pins, SDK source or binaries. It reuses the one
+existing isolated application/save and a fresh fixture namespace, preflights every reserved
+parent cell before any marker/seed, verifies exact restore semantics and reads actual sample
+and encoded metadata back after root close before advancing caller state. Normal SDK
+compilation, loading, mouse/window and moving-save full restart remain owner-coordinated
+separate gates; this source-only artifact is not their pass claim.
+
+The owner supplied exact stable wasm std and rust-src components as ordinary build inputs;
+coordinator receipts bind their official checksums and unchanged compiler/compiled-library
+hashes. No std/dependency implementation was opened for algorithm research. One helper used
+the existing owner-provided opaque environment launcher, recorded its target override before
+Cargo, and corrected that inside its child; its source was not opened. Lead builds invoke the
+preserved compiler/Cargo directly, sharing the one assigned cache and target.
+
+Current experimental disk-v1 preservation is an explicit retained-original developer recovery
+operation, authorized by the owner. It introduces no old mod API alias, shim or old-symbol
+fallback. Earlier JSON cannot retroactively recover lost floating bits. AI authorship, local
+signoff limits, pending human DCO/eligibility/review, claim/spec approval and no-public-action
+status remain exactly as recorded above.
+
+
+The final frozen lower snapshot `durable-backend/final-lower` compiled with no source changes
+during the build. Its actual filesystem selection passed all rows, including the newly added
+migration-original, expected-missing strictness and actual ordinary-writer missing-delete
+regressions. Its full playerdata selection reran with real resources and empty stderr; the
+explicitly ignored large aggregate row remains unexecuted. Native and wasm vocabulary/API
+checks both completed successfully against that same frozen source. Exact commands, target,
+compiler/resource and binary hashes live in that snapshot's structured receipts. These are
+internal generator/lower-layer checks, not normal generated-project or graphical loader proof.
+
+The pre-commit source checkpoint deliberately adds the corrected exact rollback assertion
+and the trusted external-pose policy row before the required explicit-base pr_ready build.
+Their actual later execution and pr_ready's complete output must be retained separately;
+source presence or earlier lower/client checks do not establish those results. Normal SDK
+and interactive app/save acceptance remains a subsequent, separately identified local stage.

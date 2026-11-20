@@ -140,6 +140,9 @@ impl Game<'_> {
         }
     }
     pub(super) fn update_world(&mut self) {
+        if self.live_world_session_failed() {
+            return;
+        }
         if let Err(e) = sunrise_client::spans::time("poll_remote", || self.poll_remote()) {
             log::warn!("Sunrise: {e}");
         }
@@ -214,7 +217,14 @@ impl Game<'_> {
                 }
             }
         });
-        let (commit, protos) = self.streaming.prepare_commit(&mut self.world, plan);
+        let (commit, protos) = if self.save.live_world_barrier_required() {
+            match self.checkpoint_live_world_streaming(plan) {
+                Ok(admitted) => admitted,
+                Err(plan) => self.streaming.prepare_commit(&mut self.world, plan),
+            }
+        } else {
+            self.streaming.prepare_commit(&mut self.world, plan)
+        };
         self.native_proto_snapshots(&protos);
         self.streaming.submit_protos(protos);
         let (uploads, unloaded) = sunrise_client::spans::time("streaming", || {

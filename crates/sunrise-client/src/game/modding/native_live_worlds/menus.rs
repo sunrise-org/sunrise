@@ -532,3 +532,14 @@ impl Game<'_> {
             .flatten()
     }
 }
+
+impl Game<'_> {
+    pub(super) fn projection_has_open_menu(&self, handle: LiveWorldRef) -> bool {
+        let table = self.live_worlds.borrow();
+        table.menus.values().any(|m| m.handle == handle)
+            || table
+                .pending_opens
+                .values()
+                .any(|p| p.action.handle == handle && !p.canceled)
+    }
+}

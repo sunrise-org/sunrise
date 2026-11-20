@@ -1,63 +1,86 @@
 > 🤖 Opened by OWNER_LOGIN's AI agent
 
-OFFLINE DRAFT ONLY. No PR or claim was opened. Replace OWNER_LOGIN only before
-an owner-authorized eventual submission.
+OFFLINE DRAFT ONLY. No issue claim, PR, comment, push or publication was made.
+Replace OWNER_LOGIN only before an owner-authorized eventual submission.
 
 Refs #1022
 
-AI-authored local experiment. Human DCO eligibility, human review, maintainers' claim/spec
-approval and upstream submission readiness remain pending. A local Git sign-off is not
-maintainer approval or proof of any of those decisions. The development base remains the
-recorded `d4be683`; no latest-main compatibility is asserted. Related SDK-tool experiments
-are a separate extraction/reconciliation concern, not part of this feature PR scope.
+This AI-authored local experiment gives a mod-owned runtime Void level a sparse moving
+projection while retaining its actual chunks, block entities, inventory, attachments and
+ordinary scheduler as the sole live owners. The generated native/wasm handle surface exposes
+checked membership, real state/shape and content revisions, transformed action witnesses,
+externally supplied poses, prepared transfer tokens and common save receipts. It remains
+based on d4be683; no current-main compatibility or complete #1022 implementation is asserted.
 
-- [x] feature
-- [ ] parity
-- [ ] breaking
+The runtime-level route supplies real source contexts for ordinary stock chest/furnace use
+and ticking. Extending the private carrier would retain its snapshot format and narrower
+coordinates without providing those contexts. This change reuses the carrier's existing
+bounded contact kernel, moving collider/carry path, prepared model geometry, ordinary viewed
+levels, actions, menus, storage and catalog generators. It adds no simulation dependency,
+rigid-body integrator, mod-specific algorithm or second inventory store.
 
-This local experimental foundation binds an actual mod-owned runtime Void level
-to a sparse moving projection. Its ordinary block entities, inventories,
-attachments, schedules and server contexts remain authoritative. External pose
-samples use the existing bounded contact kernel and moving-collider/carry route;
-local model faces are cached by source block/resource revisions.
+A host root groups accepted pose, binding and owned targeted level-attachment changes in
+memory, with exact before-image rollback. A prepared multi-level cell mapping stages in one
+root and reports completion only through its actual receipt. The common checksummed journal
+captures source/destination chunk payloads, entities, caller metadata, binding/tombstone data,
+player snapshots and one checkpoint epoch before ownership handoff. Ordinary saves, explicit
+checkpoints, streaming retirement and close use this same barrier once admitted. Recovery
+runs under the existing session lock before level/player/migration readers. Ambiguous publish
+or post-Prepared I/O failure fences the whole session until a fresh process recovers it.
+Closure Ok and a planned epoch are not durability receipts.
 
-Layer: engine extension point and generated platform handles. No new simulation
-dependency, content identifier, dynamics integrator or game/launcher installation.
-Source inputs and pending upstream coordination are recorded in
-`live-world-provenance.md`. This is not an upstream spec-approval or clean-room
-claim. The complete issue acceptance scene has not passed.
+Pose publication defaults to collision-checked bounded combined linear/angular sweeps. The
+explicit externally-resolved policy additionally requires the existing trusted server-mod
+configuration. It consumes a caller's finite checked pose without clamping it, adding a
+second dynamics solver or feeding normalization back into the caller. Identity, generation,
+residency, once-per-tick and bounded step/work admission still apply. Previous/current
+presentation settles while publication pauses and on restore; saved CURRENT bits and
+revision roundtrip exactly while historical previous samples remain caller audit data.
 
-Validation: the existing contact-kernel regressions and added coupled-motion tests
-passed. Shared core geometry tests passed, including a stationary nonzero pivot
-and independent midpoint direction. The actual Game fixture target compiled and
-listed the intended cases, and the isolated `native_live_world` selection passed:
-real multi-chunk source ownership, chest/furnace ticking, metadata checkpoint,
-real source close/reopen and projection regeneration, typed placement admission,
-callback inventory rollback, other-owner occlusion and ordinary break membership.
-Earlier failed attempts and their causes remain recorded in the provenance log.
-The protocol codec's bounded synthetic-input test is a separate gate.
-
-This dependent slice includes negotiated client metadata over actual viewed worlds,
-ordinary client main-hand targeting, authenticated guest block-item placement and continuing
-stock chest/furnace menus. Actual Game regressions exercise stale tokens, source-frame
-menu slots/progress/openers, physical translated/rotated blockers, callback inventory and
-selection changes, lifecycle cleanup, ordinary scheduler activation and an outer-transaction
-use refusal before screen/cursor effects. The client Game accepts the advertised viewed-level
-slots and refuses one beyond the cap; the real hub separately preserves an older client's cap.
-Targeted level attachment/pose rollback and real unbound-level read revisions are tested.
-Exact source/binary/command bindings and earlier failures live in the local evidence bundle;
-these results do not establish a genuine graphical window or a completed issue milestone.
-
+The supported action slice uses ordinary main-hand targeting, permission/reach checks,
+other-owner occlusion, typed prospective-state admission, stock block placement and continuing
+chest/furnace menu synchronization. It retains physical bodies in the destination and uses
+transformed source hit/eye contexts. Stale callback decisions refuse without replay.
 Progressive survival mining, automatic off-hand fallthrough and specialized recipe/button
-packets refuse. Full process restart, window rendering, native/wasm independent fixture loading,
-ordinary-save journal, atomic binding metadata and prepared cross-owner transfer/return remain
-required. The current projection checkpoint is not an atomic cross-owner/autosave journal.
-The proposed external-resolved publication mode is not part of this compiled checkpoint.
+packets refuse. Transfers accept the explicitly checked stock state/BE slice, including dry
+state-invariant slabs; pending work, alien Parts/codecs, unknown position-sensitive payload,
+fluids and unsupported block entities refuse before destruction. Nested projected levels and
+open-menu transfers refuse. Configurable checked i32 coordinates and operation quotas are
+separate from default operating budgets and negotiated client view capacity.
 
-Tried in game: resource-backed Game/runtime and client-routing fixtures passed; actual
-mouse/window and normally packaged independent native/wasm fixture evidence remains pending.
+Validation commands and exact source/binary/resource receipts are retained under
+.local/live-world-evidence/. The provenance record preserves failed iterations and their
+specific fixes. Actual Game tests exercise prepared forward/return ownership, occupied-batch
+and codec-abort refusal, third-owner metadata, final/nonempty retirement, rotating persistence,
+OS write failure plus fresh-process recovery, ordinary menus/actions and client capacity.
+The last full family exposed an older stale-handle expectation inconsistent with the newly
+required retirement rollback; the corrected row requires exact binding/sample/member
+restoration. Final explicit-base pr_ready and the added trusted-pose admission row are
+separate execution gates whose complete receipts accompany the local source checkpoint.
+Filesystem/player queue and internal native/wasm generation checks are separately executed.
+Normal SDK loading, graphical mouse/window and moving-save restart remain separately identified
+owner-run stages; direct Game or source-only example evidence does not certify those routes.
 
-Performance: no projection means an empty-table branch. Stable local collision
-geometry and prepared model faces are cached on source block/resource revisions;
-normal inventory-only changes do not rebuild those caches. Per-owner and
-aggregate reservations constrain active memory and contact work.
+The canonical independent example lives in tools/fixtures/live_world_api, with no generated
+self-referential SDK manifest, pin or binary. Normal tool-generated native/wasm projects use
+that source in one existing isolated application/save. It demonstrates prescribed kinematic
+motion, ordinary live stock containers/counter, explicit checkpoint/restore, prepared return
+and capture, and occupied-second-destination refusal. Its source presence is not a run claim.
+
+Performance evidence is an observational actual-Game empty/stable/BE-only cache account under
+one recorded profile/hardware/tick selection, not a causal old/new SDK benchmark. No active
+projection takes an empty-table branch; unchanged geometry and model caches survive ordinary
+inventory-only updates. Retention, aggregate cells/boxes, view cover and swept contact work
+remain bounded.
+
+Proposed dependency boundary: review the common save/recovery and actual live-payload
+handoff together with the projection/action service that depends on them. The separate SDK
+export-tool experiments require reconciliation with newer official overlapping work; they
+are not a unique upstream fix proposal. Record exact pr_ready costs, failures and limits;
+do not convert an unrelated or reproduced failure into a pass.
+
+Human DCO eligibility, human source/review decisions, maintainers' claim/spec approval and
+upstream submission readiness remain pending. Local sign-offs are authorship records, not
+maintainer approval or completed human review. The provenance log identifies same-source AI
+helper drafts and coordinator-supplied generic Sunrise navigation observations. Nothing
+asserts clean-room provenance or approved redistribution eligibility.

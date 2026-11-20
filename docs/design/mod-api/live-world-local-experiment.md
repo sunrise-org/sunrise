@@ -96,20 +96,76 @@ transfer, client tracking and graphical tests actually ran. Declared API shape,
 geometry tests, and direct tests of the real Game are different evidence.
 No #1022 completion claim follows from this slice.
 
-## Follow-up contracts required for enablement
+## Common ownership and save frontier
 
-Prepared multi-dimension transfer must durably journal both source and destination
-before either ownership change. Binding creation/removal/membership must join the
-same durable metadata frontier before any broader transaction claim. The supported ordinary
-action and menu route above still needs genuine window/mouse validation and an independently
-packaged native/wasm fixture; API calls and a constructed client Game do not prove that scene.
-A vanilla display or marker is not an ownership substitute. Late
-join, paused/ticket-refused source contexts, parked save and recovery need tests
-on integrated, LAN and dedicated runtime paths. Unsupported routes refuse instead
-of pretending a copied block/inventory is live.
+`LevelRef::prepare_transfer` reads a bounded mapping of real source/destination cells across
+open owned runtime levels and ordinary levels. Preparation checks every source witness and
+empty destination before destruction; one occupied or unavailable later destination refuses
+the entire mapping. Tokens retain optimistic read witnesses, not live inventory payloads.
+`stage` belongs to the exact current root transaction; `commit` owns a root when none exists.
+The root can include owned targeted Level attachments on a third unbound source. A planned
+epoch and closure Ok are intentions. Only `receipt` proves the common durable decision.
 
-The initial explicit checkpoint is a real save barrier followed by projection metadata.
-It is not an atomic cross-owner or autosave journal. Before enablement, the journal must
-cover ordinary saves and their failure windows as well as explicit checkpoints, source
-attachments and prepared transfer/return recovery. Missing metadata is typed NotSaved;
-corrupt/storage refusals never silently initialize another scene.
+Transfer admission is confined to a global server frontier, outside lifted guests, source
+menu scopes, BE ticks and per-level scheduler passes. Pending real saved work, callbacks,
+menus, alien serializers/Parts, unknown position-sensitive data and unsupported state/BE
+contexts refuse before mutation. The supported payload slice includes conservative plain
+stock blocks, dry state-invariant slabs and actual single stock chest/furnace models. An
+empty saved-tick sentinel has no work to unpack; a nonempty saved list still waits for the
+ordinary first-ticking frontier. Existing core queued/held occurrences keep multiplicity,
+relative delay, priority and checked imported order. No second scheduler is introduced.
+
+The common journal prepares actual ordinary chunk/entity snapshots, source/destination
+payload afterimages, level attachments, projection/tombstone metadata, selected actual player
+snapshots and one checkpoint epoch before publishing either ownership change. Existing
+SaveDir writers publish these frozen records. Full region allocation headers and unselected
+sector/external-stream witnesses protect unrelated contents. Recovery runs under the existing
+SessionLock before migration, level/player readers or ordinary SaveDir creation. Ambiguous
+publication and post-Prepared failure fence the actual Game session, including ticker,
+actions, networking, autosave and close; a caller cannot ignore Storage and continue a
+partially committed world. A fresh recovered process is required.
+
+Once common player mode begins it lasts for that recovered session, including an aborted
+first binding and final retirement. Ordinary autosave, explicit checkpoint, close and held
+streaming retirements use the same group. Targeted metadata joins the actual root readset;
+late callback changes refuse before Prepared without replaying the callback. Offline player
+file moves and arrival effects that cannot join the supported group refuse before mutation.
+The configured common record/byte/open-level ceilings are operational restrictions; no
+unbounded snapshot is silently accepted.
+
+Pure pose/binding/metadata roots commit coherently in memory and retain dirty gated coverage;
+they do not serialize every world on every pose step. Exact root cancellation restores each
+source's previous/current sample, revision, per-tick publication marker and targeted opaque
+attachment beforeimage. The existing void transaction close cannot report every generic
+error through its closure value. A caller must verify actual accepted samples and metadata
+after close before advancing its own state, then use a completed checkpoint or transfer
+receipt for durability.
+
+New persistence encodes accepted pose components as IEEE bits. Restore preserves saved CURRENT
+and revision exactly, settles previous=CURRENT, and does not replay historical motion. The
+saved descriptor exposes authoritative bounded membership/source residency requirements before
+binding restore; callers use ordinary scoped tickets and wait for actual readiness. Missing
+alone is NotSaved. Earlier experimental disk records require an explicit developer recovery
+migration that retains original bytes; this is data preservation authorized for this local
+experiment, not a mod API alias or compatibility layer. Legacy JSON cannot recover precision
+already lost by its earlier float encoding.
+
+`CollisionChecked` is the default publication policy. `ExternallyResolved` requires the
+existing server property `sunrise-live-world-external-pose-owners` to list the trusted owner.
+The latter consumes externally resolved finite poses without solving, clamping or silently
+correcting ordinary stabilization overlap. Identity, generation, residency, once-per-tick and
+bounded motion/contact-consumer checks remain in force. The engine never feeds a canonical
+host sample back into the caller's dynamics state. Nested projected destinations refuse.
+
+## Remaining acceptance boundaries
+
+The source tree retains an independent public native/wasm example under
+`tools/fixtures/live_world_api`; generated SDK pins and binaries stay outside it. The normal
+tool-generated projects must compile and load against the exact coherent build, and execute
+in the one existing isolated review app/save. Genuine window rendering, physical crosshair/
+mouse/menu input and full process moving-save/restart are separate gates from direct Game
+and constructed-client routing tests. Late join and dedicated/LAN behavior are bounded by
+the actual recorded routes; unsupported routes refuse instead of inventing a live owner.
+The provenance/evidence records identify actual execution and failures. No #1022 completion,
+upstream approval, complete block/BE support or latest-main compatibility follows from this
+local experiment.

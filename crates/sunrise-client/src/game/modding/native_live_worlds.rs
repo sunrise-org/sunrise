@@ -2,26 +2,42 @@
 //! Blocks, inventories, schedules and attachments stay in the real source level.
 //! This table contains only membership, pose samples and derived collision geometry.
 use super::{Game, api_values::TryIntoApi as _};
+#[path = "native_live_worlds/durability.rs"]
+mod durability;
+pub(in crate::game) use durability::Durability;
+#[path = "native_live_worlds/binding_journal.rs"]
+mod binding_journal;
+pub(in crate::game) use binding_journal::KeptProjectionBinding;
 #[path = "native_live_worlds/actions.rs"]
 mod actions;
+#[path = "native_live_worlds/checkpoint.rs"]
+mod checkpoint;
 #[path = "native_live_worlds/inspection.rs"]
 mod inspection;
 #[path = "native_live_worlds/menus.rs"]
 mod menus;
 #[path = "native_live_worlds/obstruction.rs"]
 pub(in crate::game) mod obstruction;
+#[path = "native_live_worlds/persistence_codec.rs"]
+mod persistence_codec;
 #[path = "native_live_worlds/picking.rs"]
 mod picking;
 #[path = "native_live_worlds/placement.rs"]
 mod placement;
+#[cfg(test)]
+#[path = "native_live_worlds/publication_tests.rs"]
+mod publication_tests;
 #[path = "native_live_worlds/retention.rs"]
 mod retention;
 #[path = "native_live_worlds/sync.rs"]
 mod sync;
+#[path = "native_live_worlds/transfer.rs"]
+mod transfer;
+#[path = "native_live_worlds/transfer_cells.rs"]
+mod transfer_cells;
 use mod_api::{
-    ColliderBox, LevelRef, LiveWorldCell, LiveWorldCheckpoint, LiveWorldError as Error,
-    LiveWorldFootprint, LiveWorldHit, LiveWorldLimits, LiveWorldPose, LiveWorldRef,
-    LiveWorldSample,
+    ColliderBox, LevelRef, LiveWorldCell, LiveWorldError as Error, LiveWorldFootprint,
+    LiveWorldHit, LiveWorldLimits, LiveWorldPose, LiveWorldRef, LiveWorldSample,
 };
 use sha2::{Digest as _, Sha256};
 use std::{
@@ -50,6 +66,7 @@ pub(in crate::game) struct LiveWorlds {
     sequence: u64,
     entries: BTreeMap<u64, Entry>,
     quotas: Quotas,
+    external_pose_owners: BTreeSet<String>,
     sync: sync::Sync,
     action: Option<actions::ProjectedAction>,
     building: Option<Rc<obstruction::Building>>,
@@ -97,6 +114,7 @@ impl LiveWorlds {
     }
 }
 
+#[derive(Clone)]
 struct Entry {
     handle: LiveWorldRef,
     owner: &'static str,
@@ -324,7 +342,29 @@ impl Game<'_> {
         &mut self,
         property: impl Fn(&str) -> Option<String>,
     ) {
-        let quotas = &mut self.live_worlds.get_mut().quotas;
+        let authorized = property("sunrise-live-world-external-pose-owners").unwrap_or_default();
+        let owners: Vec<_> = authorized
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        let valid = owners.len() <= 64
+            && owners.iter().all(|owner| {
+                owner.len() <= 128
+                    && owner.bytes().all(|c| {
+                        c.is_ascii_lowercase()
+                            || c.is_ascii_digit()
+                            || matches!(c, b'_' | b'-' | b'.')
+                    })
+            });
+        let table = self.live_worlds.get_mut();
+        table.external_pose_owners.clear();
+        if valid {
+            table
+                .external_pose_owners
+                .extend(owners.into_iter().map(str::to_owned));
+        }
+        let quotas = &mut table.quotas;
         for (name, value, ceiling) in [
             (
                 "sunrise-live-world-owner-cells",
@@ -612,7 +652,22 @@ impl Game<'_> {
         pose: LiveWorldPose,
         limits: LiveWorldLimits,
     ) -> Result<LiveWorldRef, Error> {
+        self.project_cells_with_cover(level, destination, cells, pose, limits, None)
+    }
+    fn project_cells_with_cover(
+        &mut self,
+        level: LevelRef,
+        destination: LevelRef,
+        cells: &[[i32; 3]],
+        pose: LiveWorldPose,
+        limits: LiveWorldLimits,
+        cover: Option<Vec<sunrise_client::lan::viewed_levels::areas::ChunkArea>>,
+    ) -> Result<LiveWorldRef, Error> {
         let owner = self.projection_owner()?;
+        if destination.generation() != 0 {
+            return Err(Error::Unsupported);
+        }
+        self.check_live_world_publication(owner, limits.publication)?;
         if level == destination
             || !self.level_handle_current(level)
             || !self.levels.runtime.owned_void(level.dimension_id(), owner)
@@ -621,7 +676,18 @@ impl Game<'_> {
         }
         self.native_level_world(destination).ok_or(Error::Stale)?;
         let cells = checked_cells(cells, limits)?;
-        let stream_areas = sync::stream_areas(level, &cells)?;
+        let source_world = self.native_level_world(level).ok_or(Error::NotResident)?;
+        if cells.is_empty()
+            || cells
+                .iter()
+                .any(|p| source_world.block(p[0], p[1], p[2]) == source_world.air)
+        {
+            return Err(Error::Invalid);
+        }
+        let stream_areas = match cover {
+            Some(areas) => areas,
+            None => sync::stream_areas(level, &cells)?,
+        };
         self.check_projection_views(destination, &stream_areas)?;
         checked_pose(pose)?;
         {
@@ -694,21 +760,30 @@ impl Game<'_> {
         let obstacles =
             self.projection_obstacles(&entry, &geometry, &placement, Vec3::ZERO, 0.0)?;
         // A zero translation only reports penetration, without interpreting touching as blocked.
-        let check = geometry
-            .contact
-            .translate_step(
-                &placement,
-                Vec3::ZERO,
-                &obstacles,
-                &ContactBudget {
-                    boxes: limits.boxes as usize,
-                    iterations: limits.contacts as usize,
-                },
+        let checked = if limits.publication == mod_api::LiveWorldPublication::CollisionChecked {
+            Some(
+                geometry
+                    .contact
+                    .translate_step(
+                        &placement,
+                        Vec3::ZERO,
+                        &obstacles,
+                        &ContactBudget {
+                            boxes: limits.boxes as usize,
+                            iterations: limits.contacts as usize,
+                        },
+                    )
+                    .map_err(|_| Error::Budget)?,
             )
-            .map_err(|_| Error::Budget)?;
-        if check.fraction < 1.0 {
+        } else {
+            None
+        };
+        if checked.is_some_and(|check| check.fraction < 1.0) {
             return Err(Error::Obstructed);
         }
+        self.journal_projection_binding(level);
+        self.dirty_live_world_level(level)?;
+        self.live_world_durability.retired.remove(&level);
         self.next_entity += 1;
         let mut table = self.live_worlds.borrow_mut();
         table.next = generation;
@@ -729,6 +804,7 @@ impl Game<'_> {
         }
         let result = {
             let entry = self.projection_entry(handle)?;
+            self.check_live_world_publication(entry.owner, entry.limits.publication)?;
             if entry.sample.revision != expected_revision
                 || entry.accepted_tick == Some(self.live_worlds.borrow().sequence)
                 || entry.carrying
@@ -805,7 +881,15 @@ impl Game<'_> {
                 iterations: (entry.limits.contacts / intervals) as usize,
             };
             let mut intermediate = before;
-            for _ in 0..intervals {
+            let checked_intervals =
+                if entry.limits.publication == mod_api::LiveWorldPublication::CollisionChecked {
+                    intervals
+                } else {
+                    0
+                };
+            // ExternallyResolved consumes the authorized owner's contact-resolved sample. Candidate
+            // residency/shape/step/work admission above remains; no second dynamics or pose clamp runs.
+            for _ in 0..checked_intervals {
                 let axis = if sine > 0.0 {
                     vector([relative[1], relative[2], relative[3]])
                 } else {
@@ -852,198 +936,46 @@ impl Game<'_> {
         Ok(result)
     }
 
-    fn projection_metadata_path(&self, source: LevelRef) -> Result<std::path::PathBuf, Error> {
-        let folder = sunrise_client::save::dimension_dir(&self.world_root, source.dimension_id());
-        let data = folder.join("data");
-        match std::fs::symlink_metadata(&data) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-                return Err(Error::Storage);
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return Err(Error::Storage),
-        }
-        let path = data.join("sunrise_live_world_projection.json");
-        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err(Error::Storage);
-        }
-        Ok(path)
-    }
-
-    pub(super) fn live_world_checkpoint(
+    pub(super) fn level_checkpoint(
         &mut self,
-        handle: LiveWorldRef,
-    ) -> Result<LiveWorldCheckpoint, Error> {
-        let (sample, source_revision, source_attachments, encoded) = {
-            let entry = self.projection_entry(handle)?;
-            let source_revision = self
-                .native_level_world(handle.level())
-                .ok_or(Error::Stale)?
-                .revision;
-            let pose = |p: LiveWorldPose| serde_json::json!({"translation":p.translation,"pivot":p.pivot,"rotation":p.rotation});
-            let limits = entry.limits;
-            let value = serde_json::json!({"schema":1,"owner":entry.owner,"source":handle.level().dimension_id(),
-                "destination":entry.destination.dimension_id(),"generation":handle.generation(),
-                "pose_revision":entry.sample.revision,"pose":pose(entry.sample.current),"cells":entry.cells,
-                "limits":{"min":limits.min,"max":limits.max,"cells":limits.cells,"chunks":limits.chunks,
-                    "boxes":limits.boxes,"contacts":limits.contacts,"candidates":limits.candidates,"translation":limits.translation,"rotation_degrees":limits.rotation_degrees,"motion_steps":limits.motion_steps}});
-            let encoded = serde_json::to_vec(&value).map_err(|_| Error::Storage)?;
-            if encoded.len() > 16 * 1024 * 1024 {
-                return Err(Error::Budget);
-            }
-            (
-                entry.sample,
-                source_revision,
-                self.native_level_world(handle.level())
-                    .ok_or(Error::Stale)?
-                    .attachments
-                    .to_nbt(),
-                encoded,
-            )
-        };
-        // This is the existing real chunk/entity/attachment/schedule save, not a parallel inventory store.
-        self.save_game_with(true).map_err(|_| Error::Storage)?;
-        {
-            let entry = self.projection_entry(handle)?;
-            if entry.sample != sample
-                || self
-                    .native_level_world(handle.level())
-                    .ok_or(Error::Stale)?
-                    .revision
-                    != source_revision
-                || self
-                    .native_level_world(handle.level())
-                    .ok_or(Error::Stale)?
-                    .attachments
-                    .to_nbt()
-                    != source_attachments
-            {
-                return Err(Error::Revision);
-            }
+        level: LevelRef,
+    ) -> Result<mod_api::LiveWorldSaveReceipt, Error> {
+        let owner = self.projection_owner()?;
+        if !self.live_world_lifecycle_current(level) {
+            return Err(Error::Stale);
         }
-        let path = self.projection_metadata_path(handle.level())?;
-        // Reads never create directories: only the completed real save barrier may publish metadata.
-        std::fs::create_dir_all(path.parent().ok_or(Error::Storage)?)
-            .map_err(|_| Error::Storage)?;
-        sunrise_server_files::durable::write(&path, &encoded).map_err(|_| Error::Storage)?;
-        Ok(LiveWorldCheckpoint::new(
-            handle.level().dimension_id().to_owned(),
-            handle.generation(),
-            sample.revision,
-            source_revision,
-        ))
+        if level.generation() != 0 && self.levels.runtime.owner_of(level.dimension_id()) != owner {
+            return Err(Error::Denied);
+        }
+        let mut receipt = self.checkpoint_live_world_levels(&[level])?;
+        receipt.levels.retain(|row| {
+            row.level.generation() == 0
+                || self.levels.runtime.owner_of(row.level.dimension_id()) == owner
+        });
+        Ok(receipt)
     }
-
+    pub(super) fn level_saved_projection(
+        &self,
+        level: LevelRef,
+    ) -> Result<mod_api::LiveWorldSavedProjection, Error> {
+        self.saved_projection_descriptor(level)
+    }
     pub(super) fn level_restore_projection(
         &mut self,
         level: LevelRef,
     ) -> Result<LiveWorldRef, Error> {
-        use std::io::Read as _;
-        let owner = self.projection_owner()?;
-        if !self.levels.runtime.owned_void(level.dimension_id(), owner)
-            || !self.level_handle_current(level)
-        {
-            return Err(Error::NotLocalWorld);
-        }
-        if self.level_live_world(level)?.is_some() {
-            return Err(Error::AlreadyBound);
-        }
-        let path = self.projection_metadata_path(level)?;
-        let file = std::fs::File::open(path).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                Error::NotSaved
-            } else {
-                Error::Storage
-            }
-        })?;
-        let mut bytes = Vec::new();
-        file.take(16 * 1024 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| Error::Storage)?;
-        if bytes.len() > 16 * 1024 * 1024 {
-            return Err(Error::Budget);
-        }
-        let value: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|_| Error::Storage)?;
-        if value["schema"].as_u64() != Some(1) {
-            return Err(Error::Unsupported);
-        }
-        if value["owner"].as_str() != Some(owner)
-            || value["source"].as_str() != Some(level.dimension_id())
-        {
-            return Err(Error::Stale);
-        }
-        let destination = value["destination"]
-            .as_str()
-            .and_then(|id| self.level(id))
-            .ok_or(Error::NotResident)?;
-        let generation = value["generation"].as_u64().ok_or(Error::Storage)?;
-        let revision = value["pose_revision"].as_u64().ok_or(Error::Storage)?;
-        let p = &value["pose"];
-        let pose = LiveWorldPose {
-            translation: serde_json::from_value(p["translation"].clone())
-                .map_err(|_| Error::Storage)?,
-            pivot: serde_json::from_value(p["pivot"].clone()).map_err(|_| Error::Storage)?,
-            rotation: serde_json::from_value(p["rotation"].clone()).map_err(|_| Error::Storage)?,
-        };
-        let l = &value["limits"];
-        let u32_at = |key: &str| {
-            l[key]
-                .as_u64()
-                .and_then(|v| u32::try_from(v).ok())
-                .ok_or(Error::Storage)
-        };
-        let limits = LiveWorldLimits {
-            min: serde_json::from_value(l["min"].clone()).map_err(|_| Error::Storage)?,
-            max: serde_json::from_value(l["max"].clone()).map_err(|_| Error::Storage)?,
-            cells: u32_at("cells")?,
-            chunks: u32_at("chunks")?,
-            boxes: u32_at("boxes")?,
-            contacts: u32_at("contacts")?,
-            candidates: u32_at("candidates")?,
-            translation: l["translation"].as_f64().ok_or(Error::Storage)?,
-            rotation_degrees: l["rotation_degrees"].as_f64().ok_or(Error::Storage)?,
-            motion_steps: u32_at("motion_steps")?,
-        };
-        let list = value["cells"].as_array().ok_or(Error::Storage)?;
-        if list.len() > 65536 {
-            return Err(Error::Budget);
-        }
-        let cells = list
-            .iter()
-            .map(|v| serde_json::from_value(v.clone()).map_err(|_| Error::Storage))
-            .collect::<Result<Vec<[i32; 3]>, _>>()?;
-        // Decode and validate everything before changing the generation or publishing any binding.
-        checked_cells(&cells, limits)?;
-        checked_pose(pose)?;
-        if generation == u64::MAX {
-            return Err(Error::Budget);
-        }
-        {
-            let mut table = self.live_worlds.borrow_mut();
-            table.next = table.next.max(generation);
-        }
-        let handle = self.level_project(level, destination, &cells, pose, limits)?;
-        self.live_worlds
-            .borrow_mut()
-            .entries
-            .get_mut(&handle.generation())
-            .ok_or(Error::Stale)?
-            .sample
-            .revision = revision;
-        Ok(handle)
+        self.restore_saved_projection(level)
     }
 
     pub(super) fn live_world_retire(&mut self, handle: LiveWorldRef) -> Result<(), Error> {
         self.projection_entry(handle)?;
-        if !self.projection_action_transaction_allowed(handle.level()) {
+        if self.transaction_current().is_some() && self.projection_has_open_menu(handle) {
             return Err(Error::Busy);
         }
         self.close_projection_menus(handle)?;
-        let path = self.projection_metadata_path(handle.level())?;
-        if path.exists() {
-            sunrise_server_files::durable::remove(&path).map_err(|_| Error::Storage)?;
-        }
+        let members = self.projection_entry(handle)?.cells.len() as u32;
+        self.journal_projection_binding(handle.level());
+        self.record_projection_retirement(handle, members)?;
         self.live_worlds
             .borrow_mut()
             .entries
@@ -1489,3 +1421,89 @@ mod tests {
         assert!(matches!(checked_pose(invalid), Err(Error::Invalid)));
     }
 }
+
+impl Game<'_> {
+    fn transfer_level_parts(
+        &self,
+        level: LevelRef,
+    ) -> Option<(&World, &sunrise_world::level::Ticks)> {
+        if !self.live_world_lifecycle_current(level) {
+            return None;
+        }
+        if self.dim.key() == level.dimension() {
+            Some((&self.world, &self.block_ticks))
+        } else {
+            self.levels.parked_transfer_parts(level.dimension_id())
+        }
+    }
+    fn transfer_level_parts_mut(
+        &mut self,
+        level: LevelRef,
+    ) -> Option<(&mut World, &mut sunrise_world::level::Ticks)> {
+        if !self.live_world_lifecycle_current(level) {
+            return None;
+        }
+        if self.dim.key() == level.dimension() {
+            Some((&mut self.world, &mut self.block_ticks))
+        } else {
+            self.levels.parked_transfer_parts_mut(level.dimension_id())
+        }
+    }
+}
+
+impl Game<'_> {
+    fn check_live_world_publication(
+        &self,
+        owner: &str,
+        policy: mod_api::LiveWorldPublication,
+    ) -> Result<(), Error> {
+        match policy {
+            mod_api::LiveWorldPublication::CollisionChecked => Ok(()),
+            mod_api::LiveWorldPublication::ExternallyResolved
+                if self
+                    .live_worlds
+                    .borrow()
+                    .external_pose_owners
+                    .contains(owner) =>
+            {
+                Ok(())
+            }
+            _ => Err(Error::Denied),
+        }
+    }
+    /// Integrated servers read only the existing game-directory server properties, without
+    /// normalizing, creating or saving that file. Dedicated startup already uses its ordinary parser.
+    pub(in crate::game) fn read_integrated_live_world_properties(&mut self) {
+        if self.options.execution_role.is_dedicated_server() {
+            return;
+        }
+        let read = || -> Option<sunrise_java_properties::Properties> {
+            use std::io::Read as _;
+            let path = std::env::current_dir().ok()?.join("server.properties");
+            let metadata = std::fs::symlink_metadata(&path).ok()?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 65536 {
+                return None;
+            }
+            let mut bytes = Vec::with_capacity(metadata.len() as usize);
+            std::fs::File::open(path)
+                .ok()?
+                .take(65537)
+                .read_to_end(&mut bytes)
+                .ok()?;
+            if bytes.len() > 65536 {
+                return None;
+            }
+            sunrise_java_properties::Properties::load_file(&bytes).ok()
+        };
+        let properties = read();
+        self.read_runtime_level_cap(|key| properties.as_ref().and_then(|p| p.get(key)));
+    }
+}
+
+#[cfg(test)]
+#[path = "native_live_worlds/perf_tests.rs"]
+mod perf_tests;
+
+#[cfg(test)]
+#[path = "native_live_worlds/fence_tests.rs"]
+mod fence_tests;

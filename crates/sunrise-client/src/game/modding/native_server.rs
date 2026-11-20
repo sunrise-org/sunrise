@@ -1359,6 +1359,9 @@ impl Game<'_> {
     /// Sends `packet` to that player, also when they are the acting player
     /// (their packets then go after the hook); false when they aren't on.
     pub(super) fn native_send(&mut self, uuid: u128, packet: C) -> bool {
+        if self.live_world_session_failed() {
+            return false;
+        }
         self.native_send_all(uuid, vec![packet])
     }
     fn native_send_all(&mut self, uuid: u128, packets: Vec<C>) -> bool {
@@ -1661,6 +1664,9 @@ impl Game<'_> {
     }
     /// A system line in every player's chat and the server's log.
     pub(super) fn native_broadcast(&self, mut line: Text) {
+        if self.live_world_session_failed() {
+            return;
+        }
         let mut cancel = false;
         self.native_broadcast_message(&mut line, &mut cancel);
         if cancel {
@@ -1686,7 +1692,10 @@ impl Game<'_> {
     /// about (empty and 0 for no one), `message` is the line (`§` codes colour it).
     /// Only on a dedicated server; false elsewhere and for an empty message.
     pub(super) fn native_server_event(&self, name: &str, uuid: u128, message: &str) -> bool {
-        if !self.is_dedicated_server() || message.trim().is_empty() {
+        if self.live_world_session_failed()
+            || !self.is_dedicated_server()
+            || message.trim().is_empty()
+        {
             return false;
         }
         super::dedicated::events::record("announce", name, uuid, json!({ "message": message }));
@@ -1695,6 +1704,9 @@ impl Game<'_> {
     /// A command's success feedback, routed to its originating source using
     /// vanilla's silence, send-command-feedback and block/cart track-output rules.
     pub(super) fn native_feedback(&mut self, line: Text) {
+        if self.live_world_session_failed() {
+            return;
+        }
         let source = self.command_source.unwrap_or_else(|| self.player_source());
         self.with_source(
             super::commands::execute::Source {

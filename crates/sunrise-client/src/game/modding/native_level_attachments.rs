@@ -18,6 +18,7 @@ impl Game<'_> {
             .runtime_caller()
             .map_err(|_| AttachmentError::MissingHolder)?;
         if level.dimension() == self.dim.key() {
+            self.journal_owned_level_attachments(level);
             return self.attachment_map(Holder::Level, access);
         }
         if self.levels.runtime.owner_of(level.dimension_id()) != owner {

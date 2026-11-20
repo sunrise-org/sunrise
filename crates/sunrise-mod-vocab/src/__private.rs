@@ -262,6 +262,7 @@ pub mod built {
 
 /// What the game reads of handles and calls on the API's own types.
 pub mod game {
+    pub use crate::parts::transfer_parts_present;
     include!(concat!(env!("OUT_DIR"), "/mod_api_exports_private_game.rs"));
     use crate::*;
     use std::fmt::Debug;

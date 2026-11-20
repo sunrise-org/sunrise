@@ -994,6 +994,12 @@ impl Game<'_> {
             return Ok(());
         }
         if target != self.dim {
+            if self.player_autosaves.common_required()
+                && !self.levels.parked.contains_key(&target)
+                && self.live_world_common_level_count() >= 64
+            {
+                return Err("common checkpoint level budget exhausted".into());
+            }
             let (mut p, opened) = match self.levels.parked.remove(&target) {
                 Some(p) => (p, false),
                 None => (self.open_level(target)?, true),
@@ -1207,7 +1213,11 @@ impl Game<'_> {
     /// run. The native server tick hook brackets it (`ServerTickStart` before
     /// the first level, `ServerTickEnd` after the last).
     pub(super) fn tick_server(&mut self, paused: bool) -> Result<()> {
-        self.with_residency_tick(|game| game.tick_server_body(paused))
+        self.admit_live_world_session()?;
+        self.live_world_tick_enter();
+        let result = self.with_residency_tick(|game| game.tick_server_body(paused));
+        self.live_world_tick_leave();
+        result
     }
 
     fn tick_server_body(&mut self, paused: bool) -> Result<()> {
@@ -1251,6 +1261,8 @@ impl Game<'_> {
             let _span = sunrise_client::spans::guard("mods_server_tick_start");
             self.native_lifecycle_server_tick_start(running);
         }
+        self.admit_live_world_session()?;
+        self.live_world_tick_levels();
         let observe_level =
             running.is_some() && (self.serving.is_some() || self.options.dedicated.is_some());
         let dims = self.levels_to_tick();
@@ -1285,10 +1297,12 @@ impl Game<'_> {
             if observe_level && let Some(level) = self.level(dim.id()) {
                 self.native_level_tick_pre(level);
             }
+            self.admit_live_world_session()?;
             sunrise_client::spans::time("dedicated_streaming", || {
                 self.update_dedicated_streaming();
             });
             sunrise_client::spans::time("update_world", || self.update_world());
+            self.admit_live_world_session()?;
             let tick_span = sunrise_client::spans::guard("level_tick");
             // This level's moving colliders, solid to its movers for this tick only.
             let colliders = self.placed_moving_colliders();
@@ -1317,6 +1331,7 @@ impl Game<'_> {
                 )
             });
             drop(history);
+            self.admit_live_world_session()?;
             // Then the bodies standing on a collider that moved are carried with it.
             self.live_world_end_level();
             if result.is_ok() && !paused {
@@ -1371,6 +1386,8 @@ impl Game<'_> {
             self.native_lifecycle.cancel_server_tick();
         }
         result?;
+        self.admit_live_world_session()?;
+        self.live_world_tick_end_frontier();
         // The levels mods asked to open or close: now that no level is in the middle of a tick.
         self.apply_runtime_levels();
         let closed = {
@@ -1387,6 +1404,8 @@ impl Game<'_> {
             let _span = sunrise_client::spans::guard("mods_server_tick_end");
             self.native_lifecycle_server_tick_end(paused);
         }
+        self.admit_live_world_session()?;
+        self.service_live_world_saves()?;
         Ok(())
     }
 
@@ -1600,6 +1619,12 @@ impl Game<'_> {
         }
         let chunks: Vec<_> = self.world.chunks.values().cloned().collect();
         self.native_chunks_unloaded(&chunks);
+        if self.live_world_durability_active()
+            && let Err(error) = self.checkpoint_live_world_levels(&[])
+        {
+            self.enter_level(back)?;
+            return Err(format!("common unload save refused: {error:?}").into());
+        }
         // Its entities' attachments are saved with them; they leave memory too.
         for id in self.persist.uuids.keys() {
             self.entity_attachments.remove(id);
@@ -1634,6 +1659,19 @@ impl Game<'_> {
         }
         self.bind_dimension_attachments(dim);
         self.levels.heard_open.push(dim);
+        if self.player_autosaves.common_required()
+            && let Some(level) = self.level(dim.id())
+            && self.hold_live_world_level(level).is_err()
+        {
+            self.fence_live_world_session();
+            return;
+        }
+        if let Some(source) = self.level(dim.id())
+            && self.remember_saved_projection_retirement(source).is_err()
+        {
+            self.fence_live_world_session();
+            return;
+        }
         self.native_level_load(dim.id());
         self.validate_mod_chunk_tickets(dim);
     }
@@ -2428,5 +2466,27 @@ impl Game<'_> {
         self.update_totem_ready();
         span("tick_command_extras", || self.tick_command_extras());
         self.tick_world(running)
+    }
+}
+
+impl Levels {
+    pub(super) fn parked_save_of(&self, id: &str) -> Option<Arc<SaveDir>> {
+        self.parked_of(id).map(|level| level.save.clone())
+    }
+    pub(super) fn fence_live_world_saves(&self) {
+        for level in self.parked.values() {
+            level.save.fail_live_world_save();
+        }
+    }
+    pub(super) fn parked_transfer_parts(&self, id: &str) -> Option<(&World, &Ticks)> {
+        self.parked_of(id)
+            .map(|level| (&level.world, &level.block_ticks))
+    }
+    pub(super) fn parked_transfer_parts_mut(
+        &mut self,
+        id: &str,
+    ) -> Option<(&mut World, &mut Ticks)> {
+        self.parked_mut_of(id)
+            .map(|level| (&mut level.world, &mut level.block_ticks))
     }
 }

@@ -220,14 +220,22 @@ impl Game<'_> {
             return Err("the same inventory".into());
         }
         // A just-disconnected player can already be absent from the hub.
-        // Drain before reading or replacing their offline file.
-        let _ = self.finish_player_autosaves(true);
+        // A common-mode queue is read/acknowledged by the shared frontier, never drained to disk here.
+        let common = self.player_autosaves.common_required();
+        if !common {
+            let _ = self.finish_player_autosaves(true);
+        }
         let a = self.native_inventory_side(from_uuid)?;
         let b = if from_uuid == to_uuid {
             None
         } else {
             Some(self.native_inventory_side(to_uuid)?)
         };
+        if common && (matches!(a, Side::File(_)) || matches!(b, Some(Side::File(_)))) {
+            return Err(
+                "offline player inventory writes require an independent player checkpoint".into(),
+            );
+        }
         if matches!(a, Side::File(_)) && matches!(b, Some(Side::File(_))) {
             return Err("both players are away".into());
         }

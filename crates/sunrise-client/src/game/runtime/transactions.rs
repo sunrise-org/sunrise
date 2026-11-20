@@ -203,12 +203,15 @@ pub(super) struct Level {
     attachments: HashMap<Holder, KeptAttachments>,
     /// Exact accepted motion samples and per-tick admission state before each first publication.
     projection_poses: HashMap<u64, super::native_live_worlds::KeptProjectionPose>,
+    projection_bindings:
+        HashMap<mod_api::LevelRef, super::native_live_worlds::KeptProjectionBinding>,
     /// Explicit owned parked level holders, never keyed by current-level-relative Holder::Level.
     owned_level_attachments: HashMap<mod_api::LevelRef, KeptAttachments>,
     /// Held once this transaction reaches an attachment map, until it closes: the save
     /// admission gate (`passes_settled`) refuses a save while a map may hold tentative
     /// values, which only the root commit makes saveable.
     save_gate: Option<sunrise_client::join_seq::visibility::PassLease>,
+    common_checkpointed: bool,
     /// Each chunk's unsaved mark and save queue entry before this transaction first reached an
     /// attachment map in it: an abort puts them back, so a chunk only a tentative write marked
     /// is clean again.
@@ -426,6 +429,40 @@ fn frame_token() -> u64 {
 }
 
 impl Level {
+    /// This bounded common decision supports pose/binding and persistent Level attachments only.
+    /// General entity/block/item effects still use their existing transaction route.
+    fn common_metadata_only(&self, game: &Game<'_>) -> bool {
+        self.block_entities.is_empty()
+            && self.removed_block_entities.is_empty()
+            && self.slots.is_empty()
+            && self.blocks.is_empty()
+            && self.level_random.is_none()
+            && self.composter_randoms.is_empty()
+            && self.biomes.is_empty()
+            && self.players.is_empty()
+            && self.ender_items.is_empty()
+            && self.player_health.is_empty()
+            && self.mob_health.is_empty()
+            && self.entities.is_empty()
+            && self.equipment.is_empty()
+            && self.modifier_changes.is_empty()
+            && self.mob_lengths.is_empty()
+            && self.item_entities.is_empty()
+            && self.menus.is_empty()
+            && self.board.is_none()
+            && self.attachments.keys().all(|h| *h == Holder::Level)
+            && self.chunk_marks.is_empty()
+            && self.new_maps.is_empty()
+            && self.after.is_empty()
+            && self.actions.common_is_empty()
+            && self.action.is_none()
+            && self.scratch.is_empty()
+            && self.scratch_kept.is_empty()
+            && self.lifetimes.common_is_unchanged(game)
+            && self.travelled.is_empty()
+            && self.departed.is_empty()
+            && self.in_flight.is_empty()
+    }
     /// Keeps chested mob `id`'s item list's length, `len`, before `entity_slots` grows it, if
     /// this transaction hasn't yet.
     pub(super) fn keep_mob_length(&mut self, id: u32, len: usize) {
@@ -536,7 +573,7 @@ impl Game<'_> {
     /// at the root makes them final and tells the world; otherwise every storage it wrote goes
     /// back to how it was. Nothing happens with none open.
     fn close_storage_transaction(&mut self, commit: bool) {
-        let Some(level) = self.transactions.pop() else {
+        let Some(mut level) = self.transactions.pop() else {
             return;
         };
         let closing = if self.transactions.is_empty() {
@@ -551,6 +588,25 @@ impl Game<'_> {
         // The root's own close, not one a root-commit listener opened: what the transactions
         // removed is final now, so it retires (`defer_retirement`).
         let root = self.transactions.is_empty() && outer.is_none();
+        let mut commit = commit;
+        if root {
+            let staged = self.has_staged_live_world_transfer(level.token);
+            if staged {
+                let eligible = level.common_metadata_only(self);
+                // The owned root remains here until the decision. A pre-Prepared failure can restore
+                // every before-image; no borrowed attachment/player/BE pass may stay lifted.
+                drop(level.save_gate.take());
+                let admitted = commit && eligible && self.retain_live_world_root_coverage(&level);
+                let decision = self
+                    .finish_live_world_transfer_root(level.token, admitted)
+                    .map(|_| ());
+                commit = decision.is_ok();
+                level.common_checkpointed = commit;
+                if let Err(error) = decision {
+                    log::warn!("Sunrise: common root decision refused: {error:?}");
+                }
+            }
+        }
         let guard = ClosingPhase { game: self, outer };
         #[cfg(test)]
         guard
@@ -560,6 +616,39 @@ impl Game<'_> {
         if root {
             guard.game.world.block_entities.publish_retirement();
         }
+    }
+    /// Associate the complete persistent Level write set with one future common save decision.
+    /// Ordinary attachment access with no live-world service stays on its existing save path.
+    fn retain_live_world_root_coverage(&mut self, level: &Level) -> bool {
+        if !self.live_world_durability_active()
+            && level.owned_level_attachments.is_empty()
+            && level.projection_poses.is_empty()
+            && level.projection_bindings.is_empty()
+        {
+            return true;
+        }
+        let mut targets = std::collections::BTreeSet::new();
+        targets.extend(level.projection_bindings.keys().copied());
+        for &generation in level.projection_poses.keys() {
+            if let Some(source) = self.projection_level_for_generation(generation) {
+                targets.insert(source);
+            }
+        }
+        for (&target, kept) in &level.owned_level_attachments {
+            if self
+                .native_level_world(target)
+                .is_some_and(|world| world.attachments.to_nbt() != kept.contents.to_nbt())
+            {
+                targets.insert(target);
+            }
+        }
+        if let Some(kept) = level.attachments.get(&Holder::Level)
+            && self.world.attachments.to_nbt() != kept.contents.to_nbt()
+            && let Some(target) = self.level(self.dim.id())
+        {
+            targets.insert(target);
+        }
+        self.retain_live_world_root_targets(&targets).is_ok()
     }
     /// What closing `level` does, with the closing phase already set.
     fn close_level(&mut self, mut level: Level, commit: bool) {
@@ -575,10 +664,17 @@ impl Game<'_> {
             Some(self.dim),
             "transaction closed in a different level"
         );
+        let commit = commit
+            && (level.common_checkpointed
+                || !self.transactions.is_empty()
+                || self.retain_live_world_root_coverage(&level));
         let lifetimes = std::mem::take(&mut level.lifetimes);
         match (commit, self.transactions.last_mut()) {
             (true, Some(outer)) => {
                 outer.actions.merge(level.actions);
+                for (source, kept) in level.projection_bindings {
+                    outer.projection_bindings.entry(source).or_insert(kept);
+                }
                 for (generation, kept) in level.projection_poses {
                     outer.projection_poses.entry(generation).or_insert(kept);
                 }
@@ -785,6 +881,23 @@ impl Game<'_> {
             .block_entities
             .entry(pos)
             .or_insert_with(|| Kept::capture(&self.world, &self.hoppers, pos));
+    }
+    pub(in crate::game) fn journal_projection_binding(&mut self, source: mod_api::LevelRef) {
+        if self
+            .transactions
+            .last()
+            .is_none_or(|level| level.projection_bindings.contains_key(&source))
+        {
+            return;
+        }
+        let kept = self.capture_projection_binding(source);
+        self.transactions.writes = self.transactions.writes.wrapping_add(1);
+        if let Some(level) = self.transactions.last_mut() {
+            level
+                .save_gate
+                .get_or_insert_with(sunrise_client::join_seq::visibility::PassLease::enter);
+            level.projection_bindings.insert(source, kept);
+        }
     }
     pub(in crate::game) fn journal_projection_pose(&mut self, handle: mod_api::LiveWorldRef) {
         self.transactions.writes = self.transactions.writes.wrapping_add(1);
@@ -1625,6 +1738,10 @@ impl Game<'_> {
                     map.unbind_index();
                 }
             }
+        }
+        // Restore retired/replaced metadata first, then each older accepted-pose before-image.
+        for kept in level.projection_bindings.into_values() {
+            self.restore_projection_binding(kept);
         }
         for kept in level.projection_poses.into_values() {
             self.restore_projection_pose(kept);

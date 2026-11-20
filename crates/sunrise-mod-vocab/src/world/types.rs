@@ -10,7 +10,7 @@ pub struct UnresolvedFluid(pub(crate) u64);
 /// A dimension (`minecraft:the_nether`), as the game's table numbers it: a `LevelRef`'s identity.
 /// A key stays the same dimension until the game exits; `key.id(host)` gives the name.
 // no wire: decoding validates the u32 slot with DimensionKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 // exhaustive: its field is private, so only the game's table creates a key
 pub struct DimensionKey(pub(crate) u32);
 
@@ -220,7 +220,9 @@ pub struct ExplosionStart<'a> {
 }
 
 /// One server world open or client level; it rejects a previous world's handles.
-#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(
+    sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct WorldEpoch(pub(crate) u64);
 
@@ -336,7 +338,9 @@ impl LevelRevisions {
 
 /// A level of the open world, by its dimension (`minecraft:the_nether`).
 /// `Host::level` makes one, and `entity.level(host)` gives an entity's.
-#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(
+    sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct LevelRef {
     pub(crate) epoch: WorldEpoch,
@@ -1856,4 +1860,27 @@ pub struct ObjectiveRef {
 pub struct TeamRef {
     pub(crate) epoch: WorldEpoch,
     pub(crate) id: u64,
+}
+
+/// An owner-bound prepared transfer in this world session; no payload lives in this handle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
+// exhaustive: only the host creates a prepared transfer identity
+pub struct LiveWorldTransferRef {
+    pub(crate) epoch: WorldEpoch,
+    pub(crate) generation: u64,
+}
+impl LiveWorldTransferRef {
+    /// Engine constructor; each operation revalidates identity and owner.
+    #[doc(hidden)]
+    pub fn new(epoch: WorldEpoch, generation: u64) -> Self {
+        Self { epoch, generation }
+    }
+    /// The world session that prepared this batch.
+    pub fn epoch(self) -> WorldEpoch {
+        self.epoch
+    }
+    /// Its session-local monotone identity.
+    pub fn generation(self) -> u64 {
+        self.generation
+    }
 }

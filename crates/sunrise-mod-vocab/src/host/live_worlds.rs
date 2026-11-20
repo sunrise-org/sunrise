@@ -32,7 +32,7 @@ pub trait LiveWorldsBackend {
     ) -> Result<LiveWorldSample, LiveWorldError>;
     /// Side: server.
     /// Read each sparse member's actual block state, collision shape and live entity handle.
-    /// Air members are retained in the membership list and have empty collision geometry.
+    /// Successful ordinary removal updates the sparse membership.
     #[access(WorldOnly)]
     fn live_world_cells(
         &self,
@@ -57,6 +57,22 @@ pub trait LiveWorldsBackend {
         live_world: LiveWorldRef,
         hit: LiveWorldHit,
     ) -> Result<(), LiveWorldError>;
+    /// Side: server.
+    /// Read bounded saved membership/residency requirements without loading or reserving chunks.
+    /// Earlier experimental data explicitly reports migration required; missing alone is NotSaved.
+    #[access(WorldOnly)]
+    fn level_saved_projection(
+        &self,
+        level: LevelRef,
+    ) -> Result<LiveWorldSavedProjection, LiveWorldError>;
+    /// Side: server.
+    /// Actual completed common decision, Busy while staged, NotCommitted for an unstaged or canceled
+    /// root. Old-world, foreign and evicted bounded token identities refuse. No cell payload is copied.
+    #[access(WorldOnly)]
+    fn live_world_transfer_receipt(
+        &self,
+        transfer: LiveWorldTransferRef,
+    ) -> Result<LiveWorldTransferReceipt, LiveWorldError>;
 }
 
 /// Write boundary reached by level and projection handles.
@@ -67,7 +83,9 @@ pub trait LiveWorldsBackendMut {
     /// Bind this mod's open Void runtime world to `destination`, with an explicit sparse
     /// list of local cells. The blocks, inventories, tickers, attachments and schedules
     /// remain their one real level instances. No source or destination block is rewritten.
-    /// Requires resident cells and a checked collision-free starting pose. One binding per
+    /// Requires resident cells and a starting pose admitted by the explicit publication policy.
+    /// CollisionChecked is the default; ExternallyResolved requires trusted server-owner configuration.
+    /// One binding per
     /// local world, subject to server per-owner and aggregate reservations; never disguises a vanilla entity as the owner.
     #[access(WorldOnly)]
     fn level_project(
@@ -81,7 +99,9 @@ pub trait LiveWorldsBackendMut {
     /// Side: server.
     /// Publish an externally simulated pose with optimistic revision validation.
     /// The caller supplies finite bounded translation/rotation/work budgets. The
-    /// engine checks the swept real shapes and commits only a completely clear step.
+    /// CollisionChecked checks swept real shapes and commits only a completely clear step.
+    /// Explicit trusted ExternallyResolved consumes the caller's resolved pose without a second
+    /// dynamics solver or correction; identity/residency and bounded motion/work still apply.
     /// Linear motion of the binding's fixed local pivot and shortest angular motion are checked
     /// continuously together. Equivalent caller pivot representations are reanchored without
     /// moving any physical point; returned samples use the binding's pivot.
@@ -120,14 +140,12 @@ pub trait LiveWorldsBackendMut {
         hand: Hand,
     ) -> Result<bool, LiveWorldError>;
     /// Side: server.
-    /// Save the actual source/destination levels through their existing disk barriers, then
-    /// durably publish this projection's metadata. Refuses inside lifted save/transaction
-    /// contexts and if a callback changes the recorded revisions during the barrier.
+    /// Save one checked common decision over actual level data and the entire pending persistent
+    /// root write group. Only listed receipt members are durable. Refuses tentative or mid-level
+    /// contexts; ambiguous/post-Prepared storage failure fences the session until recovery.
     #[access(WorldOnly)]
-    fn live_world_checkpoint(
-        &mut self,
-        live_world: LiveWorldRef,
-    ) -> Result<LiveWorldCheckpoint, LiveWorldError>;
+    fn level_checkpoint(&mut self, level: LevelRef)
+    -> Result<LiveWorldSaveReceipt, LiveWorldError>;
     /// Side: server.
     /// Restore this caller's saved binding after opening its real source and destination
     /// levels and making the member chunks resident. Parsing is bounded and all normal
@@ -136,8 +154,58 @@ pub trait LiveWorldsBackendMut {
     fn level_restore_projection(&mut self, level: LevelRef)
     -> Result<LiveWorldRef, LiveWorldError>;
     /// Side: server.
+    /// Explicit local-development migration of this service's earlier experimental disk-v1 data.
+    /// Preserves the exact original descriptor and all live contents in the common durable decision;
+    /// no automatic reseed or old mod API compatibility is provided.
+    #[access(WorldOnly)]
+    fn level_migrate_projection(
+        &mut self,
+        level: LevelRef,
+    ) -> Result<LiveWorldSavedProjection, LiveWorldError>;
+    /// Side: server.
+    /// Prepare a bounded multi-level move over genuine resident blocks, live block entities and
+    /// settled schedules. All destinations must be empty; an occupied/unloaded later mapping
+    /// refuses the entire selection before any source destruction. Only this mod's runtime worlds
+    /// and ordinary server levels are admitted. No ticker runs at the completed global frontier.
+    /// This initial stock-payload slice refuses custom chunk load/save or block-entity additional
+    /// serializers before selection, preserving strict live/durable inventory agreement.
+    #[access(WorldOnly)]
+    fn level_prepare_transfer(
+        &mut self,
+        level: LevelRef,
+        cells: &[LiveWorldTransferCell],
+        limits: LiveWorldTransferLimits,
+    ) -> Result<LiveWorldTransferRef, LiveWorldError>;
+    /// Side: server.
+    /// Stage one prepared batch in the exact current root transaction. Writes remain deferred until
+    /// root close. Pose/binding and persistent owned Level attachments may join that decision,
+    /// including a third unbound level; other transaction effects refuse before Prepared.
+    /// The planned epoch is an intention, not a completion receipt.
+    #[access(WorldOnly)]
+    fn live_world_transfer_stage(
+        &mut self,
+        transfer: LiveWorldTransferRef,
+        tx: &Transaction,
+    ) -> Result<LiveWorldTransferPending, LiveWorldError>;
+    /// Side: server.
+    /// Own a root transaction for this batch; an existing transaction refuses Busy. The returned
+    /// receipt follows the common journal acknowledgment, actual live owner handoff and revalidation.
+    #[access(WorldOnly)]
+    fn live_world_transfer_commit(
+        &mut self,
+        transfer: LiveWorldTransferRef,
+    ) -> Result<LiveWorldTransferReceipt, LiveWorldError>;
+    /// Side: server.
+    /// Dispose this caller's unstaged token or completed receipt. A staged root still owns its token.
+    #[access(WorldOnly)]
+    fn live_world_transfer_cancel(
+        &mut self,
+        transfer: LiveWorldTransferRef,
+    ) -> Result<(), LiveWorldError>;
+    /// Side: server.
     /// Remove only this projection, preserving the local world's blocks and saved data.
-    /// An old handle cannot become current again. This is not disassembly or deletion.
+    /// Committed retirement cannot revive an old handle. A canceled Host root restores its
+    /// exact binding beforeimage. This is not disassembly or deletion.
     #[access(WorldOnly)]
     fn live_world_retire(&mut self, live_world: LiveWorldRef) -> Result<(), LiveWorldError>;
 }

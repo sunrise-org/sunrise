@@ -36,6 +36,18 @@ pub(in crate::game) struct Journal {
 }
 
 impl Journal {
+    pub(in crate::game) fn common_is_empty(&self) -> bool {
+        self.menus.is_empty() && self.owners.is_empty() && {
+            #[cfg(test)]
+            {
+                self.after.is_empty()
+            }
+            #[cfg(not(test))]
+            {
+                true
+            }
+        }
+    }
     pub(super) fn keep(&mut self, menu: &Menu) {
         self.menus.entry(menu.id).or_insert_with(|| KeptMenu {
             menu: menu.clone(),

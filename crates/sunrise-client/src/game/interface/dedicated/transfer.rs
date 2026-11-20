@@ -300,6 +300,9 @@ impl Game<'_> {
     /// the player is on disk here. When the file cannot be written the player stays held and
     /// imported: the proxy can confirm again or drop it.
     fn place_arrival(&mut self, uuid: u128, id: u128) -> Result<bool, String> {
+        if self.player_autosaves.common_required() {
+            return Err("arrival confirmation requires a common player checkpoint".into());
+        }
         self.lan
             .as_ref()
             .expect("server host is present")

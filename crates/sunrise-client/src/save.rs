@@ -15,7 +15,16 @@
 //! `level.dat`) are migrated on open.
 use crate::mod_chunk_tickets::{ModTicket, ModTickets, TicketOwner};
 mod backpressure;
+#[doc(hidden)]
+pub mod live_world_journal;
+mod live_world_save_gate;
+mod live_world_save_snapshot;
 use compression_pool::{CompressedWrite, compress_records};
+use live_world_save_gate::LiveWorldGate;
+#[doc(hidden)]
+pub use live_world_save_gate::LiveWorldSaveLease;
+#[doc(hidden)]
+pub use live_world_save_snapshot::FrozenLevelSave;
 pub mod biome_regions;
 pub mod block_entity_encode;
 mod block_entity_order;
@@ -2397,6 +2406,7 @@ pub struct SaveDir {
     sequence: AtomicU64,
     disk: OnceLock<Arc<chunk_disk::DiskRuntime>>,
     writer: Mutex<Option<Writer>>,
+    live_world_gate: Arc<Mutex<LiveWorldGate>>,
     outstanding: Arc<Outstanding>,
     /// Set by `Persistent` before the first load.
     pub tables: OnceLock<Arc<SaveTables>>,
@@ -2542,13 +2552,10 @@ impl SaveDir {
         {
             return Ok(());
         }
-        write_dat(
-            &path,
-            Tag::compound([
-                ("data", Tag::Compound(data)),
-                ("DataVersion", Tag::Int(DATA_VERSION)),
-            ]),
-        )
+        self.write_or_defer_attachments(Tag::compound([
+            ("data", Tag::Compound(data)),
+            ("DataVersion", Tag::Int(DATA_VERSION)),
+        ]))
     }
 
     fn attachments_path(&self) -> PathBuf {
@@ -2570,6 +2577,7 @@ impl SaveDir {
             sequence: AtomicU64::new(0),
             disk: OnceLock::new(),
             writer: Mutex::new(None),
+            live_world_gate: Default::default(),
             outstanding: Default::default(),
             tables: OnceLock::new(),
             professions: Default::default(),
@@ -5146,6 +5154,15 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     }
     fn proto_heap_bytes(&self, proto: &crate::streaming::Proto) -> ([usize; 6], [usize; 16]) {
         self.inner.proto_heap_bytes(proto)
+    }
+    fn live_world_barrier_required(&self) -> bool {
+        self.save.live_world_barrier_required()
+    }
+    fn live_world_barrier_pending(&self) -> bool {
+        self.save.live_world_barrier_pending()
+    }
+    fn request_live_world_barrier(&self) {
+        self.save.request_live_world_barrier();
     }
     fn save_protos(&self, protos: &[&crate::streaming::Proto]) {
         self.save

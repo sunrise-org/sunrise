@@ -16,7 +16,7 @@ pub(super) struct Writer {
 pub(super) struct QueuedWrite {
     pub(super) key: (i32, i32),
     pub(super) record: Record,
-    seq: u64,
+    pub(super) seq: u64,
 }
 
 impl QueuedWrite {
@@ -62,6 +62,34 @@ impl SaveDir {
         self.queue(Folder::of(folder), records, wait)
     }
     pub(super) fn queue(
+        &self,
+        folder: Folder,
+        records: Vec<((i32, i32), Record)>,
+        wait: bool,
+    ) -> Result<()> {
+        // Keep this guard through independent admission/flush so a first lease cannot race it.
+        let mut gate = self
+            .live_world_gate
+            .lock()
+            .map_err(|_| "live-world gate poisoned")?;
+        gate.check()?;
+        if gate.required() {
+            let keys: Vec<_> = records.iter().map(|(key, _)| *key).collect();
+            let result = self.defer_live_world_records(&mut gate, folder, records);
+            if result.is_err() {
+                self.note_refused_saves(folder, &keys);
+                gate.refuse();
+            }
+            result?;
+            if wait {
+                return Err("save deferred until the common live-world checkpoint".into());
+            }
+            return Ok(());
+        }
+        self.queue_unfenced(folder, records, wait)
+    }
+    // Only the ordinary gate and the exact frozen Prepared writer may call this implementation.
+    pub(super) fn queue_unfenced(
         &self,
         folder: Folder,
         records: Vec<((i32, i32), Record)>,
@@ -136,7 +164,7 @@ impl SaveDir {
             }
         }
         if wait {
-            self.flush()?;
+            self.flush_writer()?;
         }
         Ok(())
     }
@@ -241,6 +269,17 @@ impl SaveDir {
     }
     /// Wait until every queued write is on disk.
     pub fn flush(&self) -> Result<()> {
+        let gate = self
+            .live_world_gate
+            .lock()
+            .map_err(|_| "live-world gate poisoned")?;
+        gate.check()?;
+        if gate.required() {
+            return Err("flush requires the common live-world checkpoint".into());
+        }
+        self.flush_writer()
+    }
+    pub(super) fn flush_writer(&self) -> Result<()> {
         let mut count = self
             .outstanding
             .count
@@ -286,6 +325,14 @@ impl SaveDir {
     /// Poll durability without holding up the event loop. Errors remain visible
     /// to every waiter, including a later synchronous shutdown.
     pub fn writes_finished(&self) -> Result<bool> {
+        let gate = self
+            .live_world_gate
+            .lock()
+            .map_err(|_| "live-world gate poisoned")?;
+        gate.check()?;
+        if gate.required() {
+            return Ok(false);
+        }
         let count = self
             .outstanding
             .count

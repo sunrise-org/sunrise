@@ -48,6 +48,10 @@ impl Game<'_> {
     }
 
     pub(super) fn save_game_metadata(&mut self) -> Result<()> {
+        let common = self.player_autosaves.common_required();
+        if common {
+            self.validate_common_metadata_profile()?;
+        }
         self.save_maps();
         self.save_random_sequences();
         self.save_fight();
@@ -63,15 +67,22 @@ impl Game<'_> {
         // Level::write can synchronously replace the integrated owner file.
         let _ = self.finish_player_autosaves(true);
         let stored_owner = self.store_owner();
-        write_level_for_role(
-            &mut self.level,
-            &self.world_root,
-            self.options.execution_role,
-            self.res.items(),
-            self.crash_save.keep_owner_file,
-        )?;
+        if common {
+            self.validate_common_metadata_profile()?;
+            // The prior common decision owns player files. Preserve the exact existing profile
+            // selector; this metadata write cannot name a new or stale unselected owner file.
+            self.level.write_keeping_player(&self.world_root)?;
+        } else {
+            write_level_for_role(
+                &mut self.level,
+                &self.world_root,
+                self.options.execution_role,
+                self.res.items(),
+                self.crash_save.keep_owner_file,
+            )?;
+        }
         // PlayerEvent.SaveToFile for the owner, once level.dat is written.
-        if let Some((uuid, name)) = stored_owner {
+        if !common && let Some((uuid, name)) = stored_owner {
             let directory = sunrise_client::lan::playerdata::directory(&self.world_root);
             self.native_player_save_to_file(uuid, &name, &directory);
         }
@@ -79,7 +90,8 @@ impl Game<'_> {
         // their own file (`PlayerDataStorage.save`); the owner is also in the
         // file level.dat names, which is the one it loads from
         // (`playerdata::load_owner`).
-        if self.options.execution_role == execution_role::ExecutionRole::DedicatedServer
+        if !common
+            && self.options.execution_role == execution_role::ExecutionRole::DedicatedServer
             && let Some(host) = self.lan.as_mut()
         {
             // The vehicle tree goes into a player's file when they leave
@@ -122,6 +134,28 @@ impl Game<'_> {
         Ok(())
     }
 
+    pub(in crate::game) fn finish_common_game_save(
+        &mut self,
+        receipt: &mod_api::LiveWorldSaveReceipt,
+        wait: bool,
+    ) -> Result<()> {
+        let back = self.dim;
+        for row in &receipt.levels {
+            self.enter_level(super::Dim::from_id(row.level.dimension_id()))?;
+            self.save_border();
+            self.save_chunk_tickets()?;
+            self.save_raids();
+            self.native_level_save(self.dim.id());
+            self.admit_live_world_session()?;
+        }
+        if self.dim != back {
+            self.enter_level(back)?;
+        }
+        self.save_game_metadata()?;
+        self.native_world_saved(wait);
+        self.admit_live_world_session()
+    }
+
     /// The autosave doesn't `wait` for the chunks to be on disk: every
     /// generated chunk is saved, hundreds at a time, encoded and written on
     /// the region writer meanwhile.
@@ -130,6 +164,20 @@ impl Game<'_> {
             return Ok(());
         }
         self.admit_level_save()?;
+        if self.live_world_durability_active() {
+            if !self.live_world_commit_frontier() {
+                if wait {
+                    return Err("common save requires a completed server frontier".into());
+                }
+                self.request_live_world_save();
+                return Ok(());
+            }
+            let receipt = self
+                .checkpoint_live_world_levels(&[])
+                .map_err(|error| format!("common save refused: {error:?}"))?;
+            self.finish_common_game_save(&receipt, wait)?;
+            return Ok(());
+        }
         // `DedicatedServer.saveAllChunks` tells the management protocol's clients when a save starts and when
         // it ends without failing, for every save: the command, the autosave, the pause.
         let dedicated = self.is_dedicated_server();
@@ -150,6 +198,7 @@ impl Game<'_> {
 
 impl Game<'_> {
     pub(super) fn admit_level_save(&self) -> Result<()> {
+        self.admit_live_world_session()?;
         // A carrier transfer that broke after `prepared` stopped the
         // session (`carrier_stop_session`): its recovery replays the
         // affected regions from the disk state the transfer itself

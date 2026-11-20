@@ -174,7 +174,7 @@ impl Game<'_> {
 
     /// Snapshot before absolute pose samples; source chunks continue on the ordinary view protocol.
     pub(in crate::game) fn flush_live_world_sync(&mut self) {
-        if !self.is_logical_server() {
+        if !self.is_logical_server() || self.live_world_session_failed() {
             return;
         }
         if !sunrise_client::join_seq::visibility::passes_settled() {

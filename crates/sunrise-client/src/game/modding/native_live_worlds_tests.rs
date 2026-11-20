@@ -76,8 +76,21 @@ fn owner() -> mod_api::content::crash::ModGuard {
 fn prepare(game: &mut Game<'_>) -> mod_api::LevelRef {
     prepare_named(game, "live_fixture:local")
 }
-fn prepare_named(game: &mut Game<'_>, id: &str) -> mod_api::LevelRef {
+pub(super) fn prepare_named(game: &mut Game<'_>, id: &str) -> mod_api::LevelRef {
+    if game.session_lock.is_none() {
+        std::fs::create_dir_all(&game.world_root).unwrap();
+        game.session_lock =
+            Some(sunrise_client::save::SessionLock::acquire(&game.world_root).unwrap());
+        game.save = Arc::new(sunrise_client::save::SaveDir::new(
+            sunrise_client::save::dimension_dir(&game.world_root, game.dim.id()),
+            game.world.shape,
+            Some(Default::default()),
+        ));
+    }
     game.options.dedicated = Some(Vec::new());
+    super::native_entity_refs::tests::resolve_parts(game).unwrap();
+    super::mods::register_block_entity_types(&game.options.resources, &[]).unwrap();
+    game.refresh_loop_context().unwrap();
     let level = game
         .runtime_level_open(
             id,
@@ -168,6 +181,13 @@ fn runtime_projection_keeps_real_multichunk_inventory_ticker_and_sparse_shapes()
                     mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
                 let scratch = tempfile::tempdir().unwrap();
                 game.world_root = scratch.path().to_path_buf();
+                game.session_lock =
+                    Some(sunrise_client::save::SessionLock::acquire(&game.world_root).unwrap());
+                game.save = Arc::new(sunrise_client::save::SaveDir::new(
+                    sunrise_client::save::dimension_dir(&game.world_root, "minecraft:overworld"),
+                    game.world.shape,
+                    Some(Default::default()),
+                ));
                 let _owner = owner();
                 let source = prepare(game);
                 let destination = game.level("minecraft:overworld").unwrap();
@@ -338,8 +358,15 @@ fn runtime_projection_keeps_real_multichunk_inventory_ticker_and_sparse_shapes()
                     game.world.block_entities.get(&(0, 64, 0)).is_none(),
                     "no destination copy of the local inventory"
                 );
-                let checkpoint = projection.checkpoint(game).unwrap();
-                assert_eq!(checkpoint.source, "live_fixture:local");
+                let saved_sample = projection.sample(game).unwrap();
+                let checkpoint = source.checkpoint(game).unwrap();
+                let saved_receipt = checkpoint
+                    .levels
+                    .iter()
+                    .find(|row| row.level == source)
+                    .unwrap();
+                assert_eq!(saved_receipt.binding, Some(projection));
+                assert!(checkpoint.barrier_epoch > 0);
                 // Actual source close retires its binding and reservations, without a manual table reset.
                 assert!(projection.sample(game).is_ok());
                 game.runtime_level_unload("live_fixture:local").unwrap();
@@ -386,7 +413,45 @@ fn runtime_projection_keeps_real_multichunk_inventory_ticker_and_sparse_shapes()
                 game.tick_world(false).unwrap();
                 assert!(game.live_world_tick_ready(reopened, [0, 64, 0]));
                 game.enter_level(Dim::Overworld).unwrap();
-                let restored = reopened.restore_projection(game).unwrap();
+                let mut restored = reopened.restore_projection(game).unwrap();
+                let sample = restored.sample(game).unwrap();
+                assert_eq!(
+                    sample.current.translation.map(f64::to_bits),
+                    saved_sample.current.translation.map(f64::to_bits)
+                );
+                assert_eq!(
+                    sample.current.pivot.map(f64::to_bits),
+                    saved_sample.current.pivot.map(f64::to_bits)
+                );
+                assert_eq!(
+                    sample.current.rotation.map(f64::to_bits),
+                    saved_sample.current.rotation.map(f64::to_bits)
+                );
+                assert_eq!(sample.revision, saved_sample.revision);
+                assert_eq!(
+                    sample.previous, sample.current,
+                    "reopen settles presentation rather than replaying historical motion"
+                );
+                for _ in 0..2 {
+                    reopened.checkpoint(game).unwrap();
+                    restored.retire(game).unwrap();
+                    restored = reopened.restore_projection(game).unwrap();
+                    let again = restored.sample(game).unwrap();
+                    assert_eq!(
+                        again.current.rotation.map(f64::to_bits),
+                        saved_sample.current.rotation.map(f64::to_bits)
+                    );
+                    assert_eq!(
+                        again.current.translation.map(f64::to_bits),
+                        saved_sample.current.translation.map(f64::to_bits)
+                    );
+                    assert_eq!(
+                        again.current.pivot.map(f64::to_bits),
+                        saved_sample.current.pivot.map(f64::to_bits)
+                    );
+                    assert_eq!(again.revision, saved_sample.revision);
+                    assert_eq!(again.previous, again.current);
+                }
                 assert_ne!(restored, projection);
                 assert_eq!(
                     restored.sample(game).unwrap().current.translation,
@@ -432,8 +497,8 @@ fn runtime_projection_keeps_real_multichunk_inventory_ticker_and_sparse_shapes()
                 assert_eq!(game.control_live_worlds(None)["projection_count"], 0);
                 eprintln!(
                     "LIVE_WORLD_EVIDENCE {}",
-                    serde_json::json!({"source":checkpoint.source,
-                "generation":checkpoint.generation,"pose_revision":checkpoint.pose_revision,"source_revision":checkpoint.source_revision,
+                    serde_json::json!({"source":source.dimension_id(),
+                "barrier_epoch":checkpoint.barrier_epoch,"generation":projection.generation(),"source_revision":saved_receipt.block_revision,
                 "cells":[[0,64,0],[1,64,0],[17,64,0]],"inventory_count":7,"counter":41,
                 "sparse_gap_missed":true,"client_render":"separate_route_pending","restored_generation":restored.generation()})
                 );
@@ -597,6 +662,13 @@ fn native_live_world_ordinary_actions_admit_revalidate_and_update_real_membershi
                     .clip(game, eye, [27.5, 64.9, 10.5])
                     .unwrap()
                     .unwrap();
+                let before_retirement = projection.sample(game).unwrap();
+                let members_before_retirement: Vec<_> = projection
+                    .cells(game)
+                    .unwrap()
+                    .iter()
+                    .map(|cell| cell.pos)
+                    .collect();
                 policy.store(3, Ordering::Relaxed);
                 assert_eq!(
                     projection.destroy_block(game, player, final_hit, false),
@@ -607,7 +679,21 @@ fn native_live_world_ordinary_actions_admit_revalidate_and_update_real_membershi
                     !game.res.behaviours().is_air(world.block(17, 64, 0)),
                     "retirement callback cannot remove old target"
                 );
-                assert_eq!(projection.sample(game), Err(LiveWorldError::Stale));
+                assert_eq!(
+                    projection.sample(game),
+                    Ok(before_retirement),
+                    "refused ordinary transaction restores callback retirement exactly"
+                );
+                assert_eq!(source.live_world(game).unwrap(), Some(projection));
+                assert_eq!(
+                    projection
+                        .cells(game)
+                        .unwrap()
+                        .iter()
+                        .map(|cell| cell.pos)
+                        .collect::<Vec<_>>(),
+                    members_before_retirement
+                );
                 assert_eq!(game.dim, Dim::Overworld);
                 assert_eq!(
                     game.player.as_ref().unwrap().position,
@@ -661,6 +747,22 @@ impl Hooks for SchedulerFixture {
             return;
         };
         let source = host.level("live_scheduler:local").unwrap();
+        let parent = host.level("minecraft:overworld").unwrap();
+        // A source that already ticked must not hand a live BE to a later level in this
+        // same ordinary scheduler pass. The global-frontier service refuses before capture.
+        assert_eq!(
+            source.prepare_transfer(
+                host,
+                &[mod_api::LiveWorldTransferCell::new(
+                    source,
+                    [1, 64, 0],
+                    parent,
+                    [2, 64, 0],
+                )],
+                mod_api::LiveWorldTransferLimits::default()
+            ),
+            Err(LiveWorldError::Busy),
+        );
         if event.level.dimension_id() == "live_scheduler:local"
             || event.level.dimension_id() == "minecraft:overworld"
         {
@@ -1084,3 +1186,6 @@ fn publication_and_owned_parked_metadata_abort_together_and_allow_same_tick_retr
         },
     );
 }
+
+#[path = "native_live_worlds/checkpoint_adverse_tests.rs"]
+mod checkpoint_adverse_tests;

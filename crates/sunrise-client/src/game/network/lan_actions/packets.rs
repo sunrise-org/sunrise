@@ -130,6 +130,9 @@ impl Game<'_> {
 
     /// A packet from a guest that the hub does not handle itself.
     pub(in crate::game) fn lan_guest_packet(&mut self, conn: u32, packet: S) {
+        if self.live_world_session_failed() {
+            return;
+        }
         let menu_packet = matches!(
             &packet,
             S::ContainerClick(_)
