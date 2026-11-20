@@ -224,10 +224,10 @@ ChunkStep.getAccumulatedRadiusOf	inline	crates/sunrise-client-render/src/streami
 ChunkStep.Builder	skip:java		builder for chunk steps
 ChunkIOErrorReporter.createMisplacedChunkReport	skip:other		report text for a chunk saved at another position; Sunrise logs its own load error
 RecreatingSimpleRegionStorage	skip:java		close: Rust closes the file on drop
-RegionFileStorage.cache	port	crates/sunrise-client/src/save.rs::cached_region
+RegionFileStorage.cache	port	crates/sunrise-client/src/save/region.rs::cached_region
 RegionFileStorage.close	skip:java		files close on drop
 RegionFileStorage.flush	port	crates/sunrise-world/src/region.rs::RegionFile::sync
-RegionFileStorage.getRegionFile	port	crates/sunrise-client/src/save.rs::cached_region
+RegionFileStorage.getRegionFile	port	crates/sunrise-client/src/save/region.rs::cached_region
 RegionFileStorage.read	port	crates/sunrise-world/src/region.rs::RegionFile::read
-RegionFileStorage.scanChunk	port	crates/sunrise-client/src/save.rs::read_region_record
+RegionFileStorage.scanChunk	port	crates/sunrise-client/src/save/region.rs::read_region_record
 RegionFileStorage.write	port	crates/sunrise-world/src/region.rs::RegionFile::write

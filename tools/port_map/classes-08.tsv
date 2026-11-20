@@ -22,7 +22,7 @@ MapId.addToTooltip	port	crates/sunrise-client/src/item_tooltip.rs::PlayerHeadNam
 MapIndex.getNextMapId	port	crates/sunrise-client/src/game/blocks/maps/mod.rs::Game::next_map_id
 DerivedLevelData	skip:debug		crash report category
 LevelData	skip:debug		crash report category
-LevelStorageSource.createAccess	port	crates/sunrise-client/src/save.rs::SessionLock::acquire	gap: minor: takes the folder's session lock; there is no separate access object
+LevelStorageSource.createAccess	port	crates/sunrise-client/src/save/session.rs::SessionLock::acquire	gap: minor: takes the folder's session lock; there is no separate access object
 LevelStorageSource.createDefault	skip:java		factory for the source with its symlink validator
 LevelStorageSource.findLevelCandidates	inline	crates/sunrise-client/src/title.rs::list_worlds	folders with a readable level.dat
 LevelStorageSource.getFileModificationTime	inline	crates/sunrise-client/src/title.rs::list_worlds	level.dat mtime, used when LastPlayed is absent
