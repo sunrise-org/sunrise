@@ -72,6 +72,7 @@ OUT_DIR file checked by the generator before writing it.
 | `runtime.rs::MODS_SWITCHED` | `std::sync::atomic::AtomicU64` | dispatch table | Counts changes to the per-mod enabled bits it sits beside; read through the host's capability provider table, never by a guest's own copy. |
 | `runtime.rs::TEST_MODS` | `std::cell::Cell<Option<&'staticInstalled>>` | dispatch table | Thread-local dispatch inventory for isolated engine tests. |
 | `wire/static_strings.rs::intern::STRINGS` | `OnceLock<Mutex<HashSet<&'staticstr>>>` | immutable cache | Bounded interning for decoded static strings; entries are immutable, shared by value, and never evicted. |
+| `world/mod_logger.rs::SINK` | `OnceLock<Sink>` | set-once socket | The game installs its logging callbacks once at startup; the writer, queues and flood state stay in the game logger. |
 | `world/phase_refusal.rs::SCOPE` | `Cell<Option<Scope>>` | reentrancy guard | Per-thread record of the mod and hook whose listener call is in flight and whether a refusal has latched, which the gate reads to contain a wrong-phase Host call. |
 | `world/phase_refusal.rs::report::LOGGED` | `OnceLock<Mutex<HashSet<(&'staticstr,&'staticstr)>>>` | reentrancy guard | Process-wide set of the (mod, operation) pairs whose refusal has been logged, so a refusing hook names the operation once and not on every call. |
 | `world/server_reload.rs::first::ID` | `LazyLock<Identifier>` | immutable cache | Immutable vanilla reload-boundary identifier, allocated once and shared by anchor declarations. |

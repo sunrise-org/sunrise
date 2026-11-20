@@ -28,6 +28,46 @@ corrected, is a warning: `cx.warn("mymod.warn.no_jei", &["jei"])` inside `Hooks:
 - A mod keeps its first 16 warnings; later ones are dropped. The key and each argument are cut as
   refusal reasons are, to 4096 UTF-8 bytes at a character boundary.
 
+## Runtime logging
+
+Get a `ModLogger` from `cx.logger()` in `Hooks::register` and keep it in your hooks or Parts.
+The game binds the logger to your manifest ID. It writes to the existing game log on both the
+client and dedicated server, without going through your crate's `log` or `tracing` dependency.
+
+```rust
+use mod_api::{Hooks, LogLevel, ModLogger, Registrar, RegistrationContext, ServerHost, ServerStartedEvent};
+use std::sync::OnceLock;
+
+#[derive(Default)]
+struct Diagnostics {
+    logger: OnceLock<ModLogger>,
+}
+
+#[mod_api::sunrise_mod]
+impl Hooks for Diagnostics {
+    fn register(&self, _: &mut dyn Registrar, cx: &RegistrationContext) {
+        let _ = self.logger.set(cx.logger());
+    }
+
+    fn server_started(&self, _: &mut dyn ServerHost, _: &mut ServerStartedEvent) {
+        if let Some(logger) = self.logger.get()
+            && logger.enabled(LogLevel::Info)
+        {
+            logger.log(LogLevel::Info, format_args!("Recipe diagnostics are ready"));
+        }
+    }
+}
+```
+
+INFO, WARN and ERROR are enabled by default. `enabled` lets you skip computing expensive
+arguments. `log` returns `LogOutcome::Queued` when the writer accepts the record (not when
+it reaches disk), `Filtered` for the level filter or warning/error flood limit, or
+`Unavailable` if the game log cannot accept it. Filtered records are not formatted.
+
+Logging is independent of registration and world writes: rolling either back does not retract
+a queued record. Use `cx.warn` instead if the Mods screen should show an attributed loading
+warning. Runtime log records are not sent to chat.
+
 ## Native startup and hook panics
 
 The launcher supplies ordered mod IDs and hook factories to the installed game's

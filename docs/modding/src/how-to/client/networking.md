@@ -73,7 +73,8 @@ struct Counter {
 
 static REPLY: OnceLock<ToClient<Counter>> = OnceLock::new();
 
-fn register(r: &mut dyn Registrar) {
+fn register(r: &mut dyn Registrar, cx: &RegistrationContext) {
+    let logger = cx.logger();
     let mut payloads = r.payload_handlers();
     let mut view = payloads.registrar("1");
     // The server answers each counter with the next one.
@@ -84,7 +85,10 @@ fn register(r: &mut dyn Registrar) {
     });
     let reply = view.play_to_client_typed::<Counter>(
         PayloadId("example:count_reply".into()),
-        |value, _| Ok(log::info!("server counted {}", value.counter.0)),
+        move |value, _| {
+            logger.log(LogLevel::Info, format_args!("server counted {}", value.counter.0));
+            Ok(())
+        },
     );
     let _ = REPLY.set(reply);
 }

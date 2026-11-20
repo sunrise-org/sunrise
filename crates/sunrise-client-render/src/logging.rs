@@ -6,16 +6,23 @@
 //! keeps 7 archives a day, the newest with the highest index.
 //!
 //! Messages go through the `log` facade. Sunrise's own still print their plain text on stderr,
-//! as they did before the log existed. Other crates, including native mods and their helper
-//! crates, reach the file through INFO too, with their target prefixed to identify the source.
+//! as they did before the log existed. Other crates using the game's facade reach the file
+//! through INFO, with their target prefixed. The native mod API submits directly to this same
+//! writer with the manifest ID, not through a mod's own copy of the facade.
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, mpsc};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local, NaiveDate};
+use mod_api::LogOutcome;
 
 /// DefaultRolloverStrategy's default `max`: archives kept for one date.
 pub const MAX_ARCHIVES_PER_DAY: u32 = 7;
@@ -274,6 +281,18 @@ enum Out {
     Flush(mpsc::SyncSender<()>),
 }
 
+/// Owns the only receiver and clears availability even if its thread unwinds or fails to start.
+struct WriterInbox {
+    receiver: mpsc::Receiver<Out>,
+    file_available: Arc<AtomicBool>,
+}
+
+impl Drop for WriterInbox {
+    fn drop(&mut self) {
+        self.file_available.store(false, Ordering::Relaxed);
+    }
+}
+
 /// The file side of the log, on its own thread: a line costs the thread that logs it a
 /// format and a channel send, never a write that can wait (a full stderr pipe, a slow disk):
 /// written on the game thread, a line could hold the tick for milliseconds while the CPU sat
@@ -286,9 +305,9 @@ struct Writer {
 }
 
 impl Writer {
-    fn run(mut self, out: mpsc::Receiver<Out>) {
+    fn run(mut self, inbox: WriterInbox) {
         let stderr = io::stderr();
-        for msg in out {
+        for msg in &inbox.receiver {
             match msg {
                 Out::Write {
                     date,
@@ -333,6 +352,7 @@ struct Logger {
     /// What the main thread is called in the log: "Render thread", or "Server thread" for the
     /// dedicated server, as in vanilla.
     main_thread: &'static str,
+    file_available: Arc<AtomicBool>,
     floods: Mutex<Floods>,
 }
 
@@ -351,7 +371,7 @@ enum Gate {
 /// Warnings and errors per line of code, in windows of [`FLOOD_WINDOW`].
 #[derive(Default)]
 struct Floods {
-    sites: HashMap<(String, u32), Flood>,
+    sites: HashMap<(Option<&'static str>, Cow<'static, str>, u32), Flood>,
 }
 
 struct Flood {
@@ -361,8 +381,14 @@ struct Flood {
 }
 
 impl Floods {
-    fn gate(&mut self, file: &str, line: u32, now: Instant) -> Gate {
-        let flood = self.sites.entry((file.to_owned(), line)).or_insert(Flood {
+    fn gate(
+        &mut self,
+        mod_id: Option<&'static str>,
+        file: Cow<'static, str>,
+        line: u32,
+        now: Instant,
+    ) -> Gate {
+        let flood = self.sites.entry((mod_id, file, line)).or_insert(Flood {
             since: now,
             written: 0,
             left_out: 0,
@@ -478,6 +504,7 @@ fn ours(target: &str) -> bool {
 /// repeat timer on each press and the removed timer's last event still arrives ("Received an
 /// event for non-existence source"). Neither crate has a release without it.
 const ERRORS_ONLY: &[&str] = &["calloop"];
+const DEFAULT_LEVEL: log::Level = log::Level::Info;
 
 impl log::Log for Logger {
     fn enabled(&self, meta: &log::Metadata) -> bool {
@@ -489,58 +516,14 @@ impl log::Log for Logger {
         }) {
             log::Level::Error
         } else {
-            log::Level::Info
+            DEFAULT_LEVEL
         };
         meta.level() <= floor
     }
 
     fn log(&self, record: &log::Record) {
-        if !self.enabled(record.metadata()) {
-            return;
-        }
-        let sunrise = ours(record.target());
-        let message = if sunrise {
-            record.args().to_string()
-        } else {
-            format!("[{}] {}", record.target(), record.args())
-        };
-        let current = std::thread::current();
-        let thread = match current.name() {
-            Some("main") => self.main_thread,
-            Some(name) => name,
-            None => "unnamed",
-        };
-        let gate = if record.level() <= log::Level::Warn {
-            let mut floods = self.floods.lock().unwrap_or_else(|e| e.into_inner());
-            floods.gate(
-                record.file().unwrap_or(record.target()),
-                record.line().unwrap_or(0),
-                Instant::now(),
-            )
-        } else {
-            Gate::Write { left_out: 0 }
-        };
-        let level = record.level();
-        match gate {
-            Gate::Skip => return,
-            Gate::Write { left_out } if left_out > 0 => self.write(
-                thread,
-                level,
-                &format!(
-                    "{left_out} more lines like the next one were not logged in the last minute"
-                ),
-            ),
-            _ => {}
-        }
-        let stderr = sunrise.then(|| message.clone());
-        tap(thread, level, &message);
-        self.send(thread, level, &message, stderr);
-        if gate == Gate::Last {
-            self.write(
-                thread,
-                level,
-                &format!("{FLOOD_LINES} lines like this one in a minute: the next ones are counted, not logged"),
-            );
+        if self.enabled(record.metadata()) {
+            self.enqueue(record, None);
         }
     }
 
@@ -554,11 +537,130 @@ impl log::Log for Logger {
 }
 
 impl Logger {
-    fn write(&self, thread: &str, level: log::Level, message: &str) {
-        self.send(thread, level, message, None);
+    fn new(main_thread: &'static str, has_file: bool) -> (Self, WriterInbox) {
+        let (out, receiver) = mpsc::channel();
+        let file_available = Arc::new(AtomicBool::new(has_file));
+        (
+            Self {
+                out,
+                recent: Mutex::default(),
+                main_thread,
+                file_available: Arc::clone(&file_available),
+                floods: Mutex::default(),
+            },
+            WriterInbox {
+                receiver,
+                file_available,
+            },
+        )
     }
 
-    fn send(&self, thread: &str, level: log::Level, message: &str, stderr: Option<String>) {
+    fn mod_enabled(&self, level: log::Level) -> bool {
+        self.file_available.load(Ordering::Relaxed) && level <= DEFAULT_LEVEL
+    }
+
+    fn log_mod(
+        &self,
+        id: &'static str,
+        level: log::Level,
+        message: std::fmt::Arguments<'_>,
+        site: &'static std::panic::Location<'static>,
+    ) -> LogOutcome {
+        if !self.file_available.load(Ordering::Relaxed) {
+            return LogOutcome::Unavailable;
+        }
+        if level > DEFAULT_LEVEL {
+            return LogOutcome::Filtered;
+        }
+        self.enqueue(
+            &log::Record::builder()
+                .args(message)
+                .level(level)
+                .target(id)
+                .file_static(Some(site.file()))
+                .line(Some(site.line()))
+                .build(),
+            Some(id),
+        )
+    }
+
+    fn enqueue(&self, record: &log::Record, mod_id: Option<&'static str>) -> LogOutcome {
+        let level = record.level();
+        let gate = if level <= log::Level::Warn {
+            let mut floods = self.floods.lock().unwrap_or_else(|e| e.into_inner());
+            floods.gate(
+                mod_id,
+                record.file_static().map_or_else(
+                    || Cow::Owned(record.file().unwrap_or(record.target()).to_owned()),
+                    Cow::Borrowed,
+                ),
+                record.line().unwrap_or(0),
+                Instant::now(),
+            )
+        } else {
+            Gate::Write { left_out: 0 }
+        };
+        if gate == Gate::Skip {
+            return LogOutcome::Filtered;
+        }
+        let current = std::thread::current();
+        let thread = match current.name() {
+            Some("main") => self.main_thread,
+            Some(name) => name,
+            None => "unnamed",
+        };
+        if let Gate::Write { left_out } = gate
+            && left_out > 0
+        {
+            self.send(
+                thread,
+                level,
+                &format!(
+                    "{left_out} more lines like the next one were not logged in the last minute"
+                ),
+                None,
+                mod_id.is_some(),
+            );
+        }
+        let sunrise = mod_id.is_none() && ours(record.target());
+        let message = if sunrise {
+            record.args().to_string()
+        } else {
+            format!("[{}] {}", record.target(), record.args())
+        };
+        let stderr = sunrise.then(|| message.clone());
+        let queued = self.send(thread, level, &message, stderr, mod_id.is_some());
+        if queued || mod_id.is_none() {
+            tap(thread, level, &message);
+        }
+        if gate == Gate::Last && (queued || mod_id.is_none()) {
+            self.send(
+                thread,
+                level,
+                &format!("{FLOOD_LINES} lines like this one in a minute: the next ones are counted, not logged"),
+                None,
+                mod_id.is_some(),
+            );
+        }
+        if queued {
+            LogOutcome::Queued
+        } else {
+            LogOutcome::Unavailable
+        }
+    }
+
+    fn write(&self, thread: &str, level: log::Level, message: &str) {
+        self.send(thread, level, message, None, false);
+    }
+
+    fn send(
+        &self,
+        thread: &str,
+        level: log::Level,
+        message: &str,
+        stderr: Option<String>,
+        require_queue: bool,
+    ) -> bool {
         let now = Local::now();
         // As log4j writes a multi-line message: the pattern once, the rest as it is.
         let lines: Vec<String> = message
@@ -572,27 +674,37 @@ impl Logger {
                 }
             })
             .collect();
-        {
-            let mut recent = self.recent.lock().unwrap_or_else(|e| e.into_inner());
-            for line in &lines {
-                if recent.len() == RECENT {
-                    recent.pop_front();
-                }
-                recent.push_back(line.clone());
-            }
-        }
-        let msg = Out::Write {
+        let tail: smallvec::SmallVec<[String; 1]> = lines
+            .iter()
+            .skip(lines.len().saturating_sub(RECENT))
+            .cloned()
+            .collect();
+        let mut recent = self.recent.lock().unwrap_or_else(|e| e.into_inner());
+        let result = self.out.send(Out::Write {
             date: now.date_naive(),
             lines,
             stderr,
-        };
-        if let Err(mpsc::SendError(Out::Write {
-            stderr: Some(message),
-            ..
-        })) = self.out.send(msg)
-        {
-            // No writer (it could not start): the terminal still gets Sunrise's messages.
-            eprintln!("{message}");
+        });
+        if result.is_ok() || !require_queue {
+            for line in tail {
+                if recent.len() == RECENT {
+                    recent.pop_front();
+                }
+                recent.push_back(line);
+            }
+        }
+        drop(recent);
+        match result {
+            Ok(()) => true,
+            Err(mpsc::SendError(Out::Write {
+                stderr: Some(message),
+                ..
+            })) => {
+                // Without a writer the terminal still gets Sunrise's messages.
+                eprintln!("{message}");
+                false
+            }
+            Err(_) => false,
         }
     }
 }
@@ -619,7 +731,7 @@ pub fn init(home: &Path, main_thread: &'static str) {
         }
     };
     let logger = LOGGER.get_or_init(|| {
-        let (out, receive) = mpsc::channel();
+        let (logger, inbox) = Logger::new(main_thread, file.is_some());
         let writer = Writer {
             file,
             dir,
@@ -627,20 +739,23 @@ pub fn init(home: &Path, main_thread: &'static str) {
         };
         if let Err(e) = std::thread::Builder::new()
             .name("Log writer".into())
-            .spawn(move || writer.run(receive))
+            .spawn(move || writer.run(inbox))
         {
             eprintln!("Sunrise: could not start the log writer: {e}");
         }
-        Logger {
-            out,
-            recent: Mutex::new(VecDeque::new()),
-            main_thread,
-            floods: Mutex::new(Floods::default()),
-        }
+        logger
     });
     if log::set_logger(logger).is_ok() {
-        log::set_max_level(log::LevelFilter::Info);
+        log::set_max_level(DEFAULT_LEVEL.to_level_filter());
     }
+    mod_api::__private::game::install_mod_log_sink(
+        |level| LOGGER.get().is_some_and(|logger| logger.mod_enabled(level)),
+        |id, level, message, site| {
+            LOGGER.get().map_or(LogOutcome::Unavailable, |logger| {
+                logger.log_mod(id, level, message, site)
+            })
+        },
+    );
 }
 
 /// A line in the log from code that prints it elsewhere itself (the dedicated server console).
@@ -771,19 +886,13 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("sunrise-native-log-test-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let (out, receive) = mpsc::channel();
         let writer = Writer {
             file: Some(open_latest(&dir).unwrap().unwrap()),
             dir: dir.clone(),
             date: Local::now().date_naive(),
         };
-        let handle = std::thread::spawn(move || writer.run(receive));
-        let logger = Logger {
-            out,
-            recent: Mutex::new(VecDeque::new()),
-            main_thread: "Render thread",
-            floods: Mutex::new(Floods::default()),
-        };
+        let (logger, inbox) = Logger::new("Render thread", true);
+        let handle = std::thread::spawn(move || writer.run(inbox));
         for (target, level, message) in [
             ("meridian_sunrise::save", log::Level::Warn, "save failed"),
             ("meridian_core::map", log::Level::Info, "map opened"),
@@ -826,13 +935,8 @@ mod tests {
     #[test]
     fn sunrise_stderr_and_external_file_records_stay_separate() {
         use log::Log;
-        let (out, receive) = mpsc::channel();
-        let logger = Logger {
-            out,
-            recent: Mutex::new(VecDeque::new()),
-            main_thread: "Render thread",
-            floods: Mutex::new(Floods::default()),
-        };
+        let (logger, inbox) = Logger::new("Render thread", true);
+        let receive = &inbox.receiver;
         for target in ["sunrise_client::game", "meridian_core", "wgpu_hal::vulkan"] {
             logger.log(
                 &log::Record::builder()
@@ -858,6 +962,93 @@ mod tests {
         }
     }
 
+    struct MustNotFormat;
+
+    impl std::fmt::Display for MustNotFormat {
+        fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            panic!("a filtered or unavailable log must not format its message")
+        }
+    }
+
+    #[test]
+    fn a_level_filtered_mod_record_is_not_formatted_or_queued() {
+        let (logger, inbox) = Logger::new("Render thread", true);
+        assert_eq!(
+            logger.log_mod(
+                "example",
+                log::Level::Debug,
+                format_args!("{MustNotFormat}"),
+                std::panic::Location::caller(),
+            ),
+            LogOutcome::Filtered
+        );
+        assert!(inbox.receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn mod_logging_refuses_a_writer_without_a_log_file() {
+        let (logger, inbox) = Logger::new("Render thread", false);
+        assert!(!logger.mod_enabled(log::Level::Error));
+        assert_eq!(
+            logger.log_mod(
+                "example",
+                log::Level::Error,
+                format_args!("{MustNotFormat}"),
+                std::panic::Location::caller(),
+            ),
+            LogOutcome::Unavailable
+        );
+        assert!(inbox.receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn mod_logging_refuses_a_disconnected_writer_before_filtering_or_formatting() {
+        let (logger, inbox) = Logger::new("Render thread", true);
+        assert!(logger.mod_enabled(log::Level::Error));
+        drop(inbox);
+        assert!(!logger.mod_enabled(log::Level::Error));
+        for level in [log::Level::Error, log::Level::Debug] {
+            assert_eq!(
+                logger.log_mod(
+                    "example",
+                    level,
+                    format_args!("{MustNotFormat}"),
+                    std::panic::Location::caller(),
+                ),
+                LogOutcome::Unavailable
+            );
+        }
+        assert!(logger.recent.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mod_warnings_and_errors_share_a_flood_budget_per_mod_and_call_site() {
+        let (logger, inbox) = Logger::new("Render thread", true);
+        let receive = &inbox.receiver;
+        let site = std::panic::Location::caller();
+        for _ in 0..100 {
+            assert_eq!(
+                logger.log_mod("alpha", log::Level::Warn, format_args!("warning"), site),
+                LogOutcome::Queued
+            );
+        }
+        assert_eq!(
+            logger.log_mod(
+                "alpha",
+                log::Level::Error,
+                format_args!("{MustNotFormat}"),
+                site
+            ),
+            LogOutcome::Filtered
+        );
+        assert_eq!(
+            logger.log_mod("beta", log::Level::Error, format_args!("last error"), site),
+            LogOutcome::Queued
+        );
+        // 100 alpha records, the existing flood notice, and one beta record.
+        assert_eq!(receive.try_iter().count(), 102);
+    }
+
     #[test]
     fn a_player_dir_keeps_the_shared_files_in_the_game_folder() {
         let (game, player) = (Path::new("/games/shared"), Path::new("/games/players/alex"));
@@ -876,7 +1067,14 @@ mod tests {
     fn a_warning_repeated_every_packet_is_counted_past_a_hundred_a_minute() {
         let (mut floods, start) = (Floods::default(), Instant::now());
         let gates: Vec<Gate> = (0..140)
-            .map(|i| floods.gate("lan_vehicles.rs", 345, start + Duration::from_millis(i * 7)))
+            .map(|i| {
+                floods.gate(
+                    None,
+                    "lan_vehicles.rs".into(),
+                    345,
+                    start + Duration::from_millis(i * 7),
+                )
+            })
             .collect();
         assert!(
             gates[..99]
@@ -887,16 +1085,16 @@ mod tests {
         assert!(gates[100..].iter().all(|g| *g == Gate::Skip));
         // Another line of code has its own count.
         assert_eq!(
-            floods.gate("lan_vehicles.rs", 330, start),
+            floods.gate(None, "lan_vehicles.rs".into(), 330, start),
             Gate::Write { left_out: 0 }
         );
         // The next minute writes again, and says how many were left out.
         assert_eq!(
-            floods.gate("lan_vehicles.rs", 345, start + FLOOD_WINDOW),
+            floods.gate(None, "lan_vehicles.rs".into(), 345, start + FLOOD_WINDOW),
             Gate::Write { left_out: 40 }
         );
         assert_eq!(
-            floods.gate("lan_vehicles.rs", 345, start + FLOOD_WINDOW),
+            floods.gate(None, "lan_vehicles.rs".into(), 345, start + FLOOD_WINDOW),
             Gate::Write { left_out: 0 }
         );
     }

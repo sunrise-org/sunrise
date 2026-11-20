@@ -240,10 +240,11 @@ pub(crate) fn register_all(
     // default phase is World.
     let _phase = crate::__private::PhaseOwner::scope(crate::__private::ModPhase::Registration);
     let _scope = RestoreKeys(REGISTERING_KEYS.replace(Some(registrar.registry_keys.clone())));
-    for (index, hooks) in mod_vocab::__private::entered_registration(mods, "register").enumerate() {
+    for (index, (hooks, context)) in
+        mod_vocab::__private::entered_registration(mods, "register").enumerate()
+    {
         registrar.mod_id = mod_vocab::__private::parts_installation::mod_entry_id(&mods[index]);
         registrar.mod_index = index;
-        let context = crate::RegistrationContext::new();
         let rollback = registrar.registration_checkpoint();
         hooks.register(&mut registrar, &context);
         registrar.warnings.extend(

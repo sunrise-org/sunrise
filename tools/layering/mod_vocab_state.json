@@ -184,6 +184,11 @@
     "category": "immutable cache",
     "reason": "Bounded interning for decoded static strings; entries are immutable, shared by value, and never evicted."
   },
+  "world/mod_logger.rs::SINK": {
+    "type": "OnceLock<Sink>",
+    "category": "set-once socket",
+    "reason": "The game installs its logging callbacks once at startup; the writer, queues and flood state stay in the game logger."
+  },
   "world/phase_refusal.rs::SCOPE": {
     "type": "Cell<Option<Scope>>",
     "category": "reentrancy guard",

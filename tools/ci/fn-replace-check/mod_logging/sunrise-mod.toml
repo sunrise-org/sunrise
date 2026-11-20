@@ -1,0 +1,12 @@
+id = "fnr_log_alpha"
+name = "SDK runtime logging fixture"
+version = "0.1.0"
+description = "Checks runtime logging using the manifest ID, not the Rust crate name"
+authors = []
+api = "0.2"
+side = "both"
+
+[native]
+game = "26.3"
+sunrise = "HEAD"
+mixins = "MIXINS"

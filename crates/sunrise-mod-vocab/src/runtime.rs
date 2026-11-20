@@ -325,18 +325,23 @@ pub(crate) fn content_owner_index(id: &str) -> Option<usize> {
     }
 }
 
-/// `mods` in order, each marked as running `hook` until the next one is (or the loop ends), so a
-/// panic in it names the mod. The generated dispatch loops over it.
+/// Registration callbacks in the loader's order, each with a context bound to its entry.
+/// Each mod is marked as running `hook` until the next one is (or the loop ends), so a panic names it.
 pub fn entered_registration<'a>(
     mods: &'a [ModEntry],
     hook: &'static str,
-) -> impl Iterator<Item = &'a dyn Hooks> + 'a {
+) -> impl Iterator<Item = (&'a dyn Hooks, RegistrationContext)> + 'a {
     Entered {
         mods: mods.iter(),
         hook,
         guard: None,
         scope: None,
     }
+    .map(|entry| {
+        let mut context = RegistrationContext::new();
+        context.native_mod_id = Some(entry.id);
+        (&*entry.hooks, context)
+    })
 }
 
 pub(crate) fn entered(
@@ -441,7 +446,7 @@ pub(crate) struct Entered<'a> {
 }
 
 impl<'a> Iterator for Entered<'a> {
-    type Item = &'a dyn Hooks;
+    type Item = &'a ModEntry;
 
     fn next(&mut self) -> Option<Self::Item> {
         // The last mod's mark goes first, so the next one's puts back what was there before.
@@ -456,7 +461,7 @@ impl<'a> Iterator for Entered<'a> {
                     part: None,
                 }),
         );
-        Some(&*entry.hooks)
+        Some(entry)
     }
 }
 

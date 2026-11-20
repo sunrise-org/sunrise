@@ -620,6 +620,7 @@ impl std::error::Error for RegistrationReadError {}
 // exhaustive: its fields are private, so mods cannot build or destructure it
 // no wire: the phase context owns local registration state and the startup screen.
 pub struct RegistrationContext {
+    pub(crate) native_mod_id: Option<&'static str>,
     pub(crate) mods: LoadedMods,
     pub(crate) data: Option<RegistrationData>,
     pub(crate) declaration_refusals: std::sync::Mutex<Vec<String>>,
@@ -638,6 +639,7 @@ impl RegistrationContext {
         let instance_dir = data.as_ref().map(|data| data.instance_dir.clone());
         let runtime = data.as_ref().map(|data| data.runtime.clone());
         Self {
+            native_mod_id: None,
             mods: LoadedMods::new(),
             data,
             declaration_refusals: Default::default(),
