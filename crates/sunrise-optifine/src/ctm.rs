@@ -280,9 +280,7 @@ impl Rule {
     /// The tests that depend on where the face is, not on what it is. `face` is a [`faces`] bit;
     /// `name` is the block entity's custom name, if it has one.
     pub fn applies_at(&self, face: u8, y: i32, biome: &str, name: Option<&str>) -> bool {
-        self.rule.faces & face != 0
-            && self.rule.heights.as_ref().is_none_or(|h| h.contains(y))
-            && self.rule.biomes.as_ref().is_none_or(|b| b.matches(biome))
+        self.rule.applies_at(face, y, || Some(biome))
             && self
                 .name
                 .as_ref()

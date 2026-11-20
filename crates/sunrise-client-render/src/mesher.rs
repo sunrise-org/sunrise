@@ -2406,6 +2406,8 @@ impl Mesher<'_> {
         interior_leaf: bool,
     ) {
         let q = &face.quad;
+        let ctm_face = CtmFace::from_direction_index(q.facing as u8)
+            .expect("a model quad faces one of the six directions");
         // A quad's own light (a model's glowing part) may raise the tier; whether it
         // shines all over stays the block's.
         let tier = (state.tier & !WHOLE).max(hdr_tier("", q.light[0])) | state.tier & WHOLE;
@@ -2475,7 +2477,7 @@ impl Mesher<'_> {
             fusion.pick(
                 rule,
                 id,
-                CtmFace::ALL[q.facing as usize],
+                ctm_face,
                 q.tint_index,
                 neighbour,
                 |s| {
@@ -2496,7 +2498,7 @@ impl Mesher<'_> {
             connected.pick(
                 id,
                 face.layer as u16,
-                CtmFace::ALL[q.facing as usize],
+                ctm_face,
                 [world.x, world.y, world.z],
                 neighbour,
                 |s| self.tables.full_faces[s as usize],
@@ -2504,7 +2506,7 @@ impl Mesher<'_> {
                 // A pane's tiles are drawn with the cube's UVs (below), so that is its texture.
                 || {
                     if state.pane {
-                        Some(CtmAxes::cube(CtmFace::ALL[q.facing as usize]))
+                        Some(CtmAxes::cube(ctm_face))
                     } else {
                         CtmAxes::texture(&q.positions, &q.uv)
                     }

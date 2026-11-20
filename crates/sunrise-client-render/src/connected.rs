@@ -715,14 +715,7 @@ impl ConnectedTextures {
         let rule = &r.rule;
         // `Rule::applies_at`, with the biome looked up only for rules that test one. Rules with
         // a custom name are not loaded.
-        if rule.faces & face.bit() == 0
-            || rule.heights.as_ref().is_some_and(|h| !h.contains(pos[1]))
-        {
-            return None;
-        }
-        if let Some(biomes) = &rule.biomes
-            && !biome().is_some_and(|b| biomes.matches(b))
-        {
+        if !rule.applies_at(face.bit(), pos[1], biome) {
             return None;
         }
         let info = self.states.get(state as usize).copied().unwrap_or_default();
@@ -821,7 +814,7 @@ impl ConnectedTextures {
                 // `cover`, a neighbour does not join when the block in front of it, on the
                 // face's side, joins too and has a full face toward it.
                 let tested = sheet.table.tested();
-                let toward = 1 << (face as u8 ^ 1);
+                let toward = face.opposite().bit();
                 let mut mask = 0;
                 for (bit, offset) in geometry::offsets(axes) {
                     if tested & bit == 0 || !joins(offset) {

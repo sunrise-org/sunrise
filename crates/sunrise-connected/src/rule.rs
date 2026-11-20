@@ -135,14 +135,16 @@ pub enum Orient {
 
 /// Bits of [`Rule::faces`], by `Direction` order: down, up, north, south, west, east.
 pub mod faces {
-    pub const DOWN: u8 = 1;
-    pub const UP: u8 = 2;
-    pub const NORTH: u8 = 4;
-    pub const SOUTH: u8 = 8;
-    pub const WEST: u8 = 16;
-    pub const EAST: u8 = 32;
+    use crate::Face;
+
+    pub const DOWN: u8 = Face::Down.bit();
+    pub const UP: u8 = Face::Up.bit();
+    pub const NORTH: u8 = Face::North.bit();
+    pub const SOUTH: u8 = Face::South.bit();
+    pub const WEST: u8 = Face::West.bit();
+    pub const EAST: u8 = Face::East.bit();
     pub const SIDES: u8 = NORTH | SOUTH | WEST | EAST;
-    pub const ALL: u8 = 63;
+    pub const ALL: u8 = DOWN | UP | NORTH | SOUTH | WEST | EAST;
 }
 
 /// A block, and the values its state properties must have: `oak_log` with `axis` `x` or `y`.
@@ -271,6 +273,22 @@ impl Rule {
             prioritize: false,
             table: Some(sheet),
         }
+    }
+
+    /// Whether the rule applies to `face_bit` (a [`faces`] bit) at altitude `y` in the biome
+    /// `biome` returns. The biome is looked up only when the rule tests one.
+    pub fn applies_at<'a>(
+        &self,
+        face_bit: u8,
+        y: i32,
+        biome: impl FnOnce() -> Option<&'a str>,
+    ) -> bool {
+        self.faces & face_bit != 0
+            && self.heights.as_ref().is_none_or(|h| h.contains(y))
+            && self
+                .biomes
+                .as_ref()
+                .is_none_or(|ids| biome().is_some_and(|name| ids.matches(name)))
     }
 
     /// The rule names this block state (`state` answers its properties).

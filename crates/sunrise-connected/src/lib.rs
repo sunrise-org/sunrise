@@ -85,7 +85,44 @@ impl Face {
     pub const fn bit(self) -> u8 {
         1 << self as u8
     }
+
+    /// The face across the block: down and up, north and south, west and east.
+    pub const fn opposite(self) -> Face {
+        match self {
+            Face::Down => Face::Up,
+            Face::Up => Face::Down,
+            Face::North => Face::South,
+            Face::South => Face::North,
+            Face::West => Face::East,
+            Face::East => Face::West,
+        }
+    }
+
+    /// The face at `Direction` ordinal `index` (the position [`Self::bit`] shifts by), if any.
+    pub const fn from_direction_index(index: u8) -> Option<Face> {
+        match index {
+            0 => Some(Face::Down),
+            1 => Some(Face::Up),
+            2 => Some(Face::North),
+            3 => Some(Face::South),
+            4 => Some(Face::West),
+            5 => Some(Face::East),
+            _ => None,
+        }
+    }
 }
+
+// The enum is in `Direction` order, the order `bit()` and the consumers' per-face arrays use:
+// reordering it must fail to compile instead of silently drawing the wrong face.
+const _: () = {
+    assert!(Face::ALL.len() == 6);
+    assert!(Face::Down as u8 == 0);
+    assert!(Face::Up as u8 == 1);
+    assert!(Face::North as u8 == 2);
+    assert!(Face::South as u8 == 3);
+    assert!(Face::West as u8 == 4);
+    assert!(Face::East as u8 == 5);
+};
 
 /// A block state's `axis`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -427,7 +464,7 @@ pub fn repeat_index(pos: Vec3, axes: Axes, width: u32, height: u32) -> usize {
 pub fn symmetric_face(face: Face, symmetry: Symmetry) -> Face {
     match symmetry {
         Symmetry::None => face,
-        Symmetry::Opposite => Face::ALL[face as usize & !1],
+        Symmetry::Opposite => face.opposite(),
         Symmetry::All => Face::Down,
     }
 }
@@ -644,6 +681,127 @@ mod tests {
             })
             .count();
         assert!(differs > 20, "{differs}");
+    }
+
+    #[test]
+    fn faces_follow_direction_ordinals() {
+        for (index, face) in Face::ALL.into_iter().enumerate() {
+            let index = index as u8;
+            assert_eq!(face as u8, index, "{face:?}");
+            assert_eq!(Face::from_direction_index(index), Some(face), "{face:?}");
+            assert_eq!(face.bit(), 1 << index, "{face:?}");
+        }
+        assert_eq!(Face::from_direction_index(6), None);
+        assert_eq!(Face::from_direction_index(u8::MAX), None);
+    }
+
+    #[test]
+    fn opposite_faces_are_across_the_block() {
+        for face in Face::ALL {
+            let opposite = face.opposite();
+            assert_ne!(face, opposite, "{face:?}");
+            assert_eq!(opposite.opposite(), face, "{face:?}");
+            assert_eq!(opposite.normal(), neg(face.normal()), "{face:?}");
+            assert_eq!(symmetric_face(face, Symmetry::Opposite), opposite);
+        }
+    }
+
+    #[test]
+    fn offsets_stay_in_each_faces_plane() {
+        for face in Face::ALL {
+            let normal = face.normal();
+            let axes = [
+                Axes::cube(face),
+                Axes::column(face, Axis::X),
+                Axes::column(face, Axis::Y),
+                Axes::column(face, Axis::Z),
+            ];
+            for axes in axes {
+                let entries = offsets(axes);
+                assert_eq!(entries.len(), 8, "{face:?}");
+                for (i, &(bit, offset)) in entries.iter().enumerate() {
+                    assert_eq!(bit, 1 << i, "{face:?}");
+                    assert_ne!(offset, [0; 3], "{face:?}");
+                    assert_eq!(dot(normal, offset), 0, "{face:?} {offset:?}");
+                    for &(_, other) in &entries[..i] {
+                        assert_ne!(offset, other, "{face:?} {offset:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_mask_has_a_ctm_tile_from_the_template() {
+        for &tile in &TEMPLATE {
+            assert_eq!(reduce(tile), tile, "{tile:#010b}");
+        }
+        for mask in 0..=u8::MAX {
+            let tile = ctm_index(mask);
+            assert!(tile < TEMPLATE.len(), "{mask:#010b} -> {tile}");
+            assert_eq!(TEMPLATE[tile], reduce(mask), "{mask:#010b} -> {tile}");
+        }
+    }
+
+    #[test]
+    fn reduce_keeps_only_the_corners_whose_sides_join() {
+        let corners = [(UR, U | R), (DR, D | R), (DL, D | L), (UL, U | L)];
+        for mask in 0..=u8::MAX {
+            let reduced = reduce(mask);
+            assert_eq!(reduce(reduced), reduced, "{mask:#010b}");
+            assert_eq!(
+                reduced & (U | R | D | L),
+                mask & (U | R | D | L),
+                "{mask:#010b}"
+            );
+            for (corner, sides) in corners {
+                assert_eq!(
+                    reduced & corner != 0,
+                    mask & corner != 0 && mask & sides == sides,
+                    "{mask:#010b}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repeat_stays_inside_the_pattern() {
+        let positions = [[0, 0, 0], [-3, 5, 7], [i32::MIN, i32::MAX, -1]];
+        for face in Face::ALL {
+            for axes in [Axes::cube(face), Axes::column(face, Axis::X)] {
+                for width in [0, 1, 2, 3] {
+                    for height in [0, 1, 2, 5] {
+                        let count = width.max(1) as usize * height.max(1) as usize;
+                        for pos in positions {
+                            let index = repeat_index(pos, axes, width, height);
+                            assert!(
+                                index < count,
+                                "{face:?} {pos:?} {width}x{height} -> {index}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn random_index_stays_inside_the_tiles() {
+        let weights: [&[u32]; 5] = [&[], &[0], &[0, 0], &[1, 1, 1, 1], &[3, 1, 0, 2]];
+        for count in 1..=8 {
+            for weights in weights {
+                for loops in [0, 3] {
+                    for x in [-17, 0, 1, 99] {
+                        let index = random_index([x, 5, -3], Face::East, loops, weights, count);
+                        assert!(index < count, "{weights:?} {count} -> {index}");
+                    }
+                }
+            }
+        }
+        // No tile to pick: still a usable index for the one-tile fallback.
+        for weights in weights {
+            assert_eq!(random_index([0, 0, 0], Face::Down, 0, weights, 0), 0);
+        }
     }
 
     #[test]
