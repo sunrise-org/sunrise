@@ -1,0 +1,1 @@
+sunrise-client game::stand_low_health_tests::a_stand_breaks_on_low_health_only_through_damage_and_a_dead_one_goes_at_twenty lib daily resources
