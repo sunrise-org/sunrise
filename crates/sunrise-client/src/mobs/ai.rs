@@ -2251,7 +2251,8 @@ fn base_tick(
         if m.fire_immune() {
             m.fire_ticks = 0;
         } else {
-            if m.fire_ticks % 20 == 0 && !m.fluids.in_lava {
+            // `Entity.isInLava` is false on the first tick, so a mob loaded in lava burns then.
+            if m.fire_ticks % 20 == 0 && (m.first_tick || !m.fluids.in_lava) {
                 m.damage(level, 1.0, Damage::of(DamageKind::OnFire));
                 // Entity.baseTick's hurt teleports before later contact is
                 // checked, so the old spot's fire cannot ignite the landing.
@@ -6474,6 +6475,33 @@ mod burn_and_rose_tests {
             }
             world.set(0, 64, 0, state).unwrap();
         }
+    }
+
+    /// `Entity.baseTick`'s burn asks `isInLava`, which is false on an entity's first tick: a
+    /// pig loaded in lava with `Fire` a multiple of 20 takes the burn first (`HurtTime` 10,
+    /// then counted down to 9), and the lava's own hit later that tick lands inside it. With
+    /// `Fire:21` the burn waits and only the lava hurts it, after the countdown (10).
+    #[test]
+    #[ignore = "daily"]
+    fn a_mob_loaded_in_lava_burns_on_its_first_tick() {
+        let ran = crate::mobs::world::with_built_test_world(
+            &[],
+            build_with("minecraft:lava"),
+            |w, types| {
+                for (fire, hurt_time) in [(20, 9), (21, 10)] {
+                    let kind = Arc::new(types.types["minecraft:pig"].clone());
+                    let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                    register(&mut m);
+                    m.no_ai = true;
+                    m.fire_ticks = fire;
+                    assert!(m.first_tick);
+                    let (mut lr, mut events) = (crate::health::TestLevel::new(0), Vec::new());
+                    assert!(tick(&mut m, w, &mut lr.level(), &mut events));
+                    assert_eq!(m.hurt_time, hurt_time, "Fire:{fire}");
+                }
+            },
+        );
+        assert!(ran, "vanilla data is missing");
     }
 
     fn golem(types: &crate::mobs::MobTypes) -> Mob {

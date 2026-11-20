@@ -90,6 +90,7 @@ sunrise-client-lib mobs::ai::attack_sound_tests::a_dolphins_blow_plays_its_attac
 sunrise-client-lib mobs::ai::bed_wake_tests::a_sleeper_without_ai_still_stands_when_its_bed_is_gone lib daily resources
 sunrise-client-lib mobs::ai::burn_and_rose_tests::a_burning_zombie_in_powder_snow_breaks_the_block_and_is_put_out lib daily resources
 sunrise-client-lib mobs::ai::burn_and_rose_tests::a_mob_falling_past_a_wither_rose_gets_wither_and_one_beside_it_does_not lib daily resources
+sunrise-client-lib mobs::ai::burn_and_rose_tests::a_mob_loaded_in_lava_burns_on_its_first_tick lib daily resources
 sunrise-client-lib mobs::ai::burn_and_rose_tests::powder_snow_keeps_a_zombie_from_burning_in_daylight lib daily resources
 sunrise-client-lib mobs::ai::burn_and_rose_tests::wither_rose_applies_wither_whatever_the_hit_timer_and_local_difficulty lib daily resources
 sunrise-client-lib mobs::ai::cramming_tests::a_ridden_horse_is_not_counted_for_cramming lib daily resources
