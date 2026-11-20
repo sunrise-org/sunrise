@@ -14,11 +14,12 @@ pub trait NetworkClientHost {
     /// Adds `line` to this client's chat HUD and history (vanilla's
     /// `ChatComponent.addClientSystemMessage`): it shows here only, so
     /// nothing is sent to the server. The Chat option's server-message filter
-    /// doesn't hide it (`GuiMessageSource.SYSTEM_CLIENT`), and
-    /// `client_chat_received` is not told: vanilla fires that event from
-    /// `ChatListener` for lines the server sent, not for lines the client adds
-    /// itself. Returns an error if the text exceeds the boundary's size or
-    /// nesting limits; rejected text is not added.
+    /// doesn't hide it (`GuiMessageSource.SYSTEM_CLIENT`). The
+    /// `client_local_chat_line_pre` hook can edit or cancel it, with or
+    /// without a connection. It does not fire `client_chat_received`, which
+    /// is for lines from the server. Inside a transaction, a line that is
+    /// allowed through is added only on commit. Invalid input returns
+    /// `TextFormError` and is never added; cancellation is not an error.
     #[access(WorldOnly)]
     fn chat_line(&mut self, line: Text) -> Result<(), TextFormError>;
     /// Side: client.

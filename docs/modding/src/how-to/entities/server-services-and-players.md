@@ -24,10 +24,52 @@ world. These services are unavailable on `Host`, `ClientHost` and restricted
 level hosts. Block and fluid scheduling uses `LevelTicksHost`;
 `tick_stats()` belongs to `ServerHost`.
 
+## Local and received chat
+
 On a client, `host.chat_line(Text::literal("Local notice"))?` adds a line only to
-the local chat HUD and history. It sends no packet and does not fire
-`client_chat_received`. Handle its `Result<(), mod_api::TextFormError>`: text
-exceeding the boundary's size or nesting limits is refused before reaching the HUD.
+the local chat HUD and history. It sends no packet and rejects invalid text with
+`TextFormError`. An accepted insertion inside a transaction is published only
+when that transaction commits.
+
+Listen to `client_local_chat_line_pre` to filter or decorate locally inserted
+lines from the game or other mods, with or without a server connection. It runs
+after the Chat option's visibility check, but before the line is logged or
+added to the HUD and history. `event.source()` reports the visibility category:
+`Client` notices bypass the server message filter and `Server` notices do not.
+Neither category identifies a sender or signature. The listener gets a shared
+`ClientHost`, so it cannot insert another chat line.
+
+This native listener bolds client notices without changing their contents.
+Return `Flow::Cancel` (or set `event.cancelled`) to suppress a line instead.
+An invalid edit leaves the original in place unless the line was cancelled.
+Lines whose click actions cannot cross the mod text boundary, such as the
+file link in the default screenshot notice, bypass the hook.
+
+```rust,no_run
+use mod_api::{ClientHost, ClientLocalChatLinePreEvent, Flow, Hooks, LocalChatSource};
+
+#[derive(Default)]
+struct DecorateChat;
+
+#[mod_api::sunrise_mod]
+impl Hooks for DecorateChat {
+    fn client_local_chat_line_pre(
+        &self,
+        _host: &dyn ClientHost,
+        event: &mut ClientLocalChatLinePreEvent<'_>,
+    ) -> Flow {
+        if event.source() == LocalChatSource::Client {
+            event.message_mut().style.bold = Some(true);
+        }
+        Flow::Continue
+    }
+}
+```
+
+Use `client_chat_received` for chat from a server. It is a separate hook at
+`ChatListener`; decorating a received line does not change its signature or
+trust status. Neither redrawing nor rewrapping existing chat fires the local
+insertion hook.
 
 ## Running a command as an entity
 

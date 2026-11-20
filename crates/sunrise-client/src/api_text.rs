@@ -380,9 +380,15 @@ fn node(source: Source<'_>) -> Result<Node<'_>, Error> {
     }
     Ok(node)
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CaptureMode {
+    Inspect,
+    Edit,
+}
+
 // Plan borrowed topology completely before cloning any data. Array aliases and
 // a single native span stay at the same logical component depth.
-fn plan(root: Source<'_>) -> Result<Vec<Node<'_>>, Error> {
+fn plan(root: Source<'_>, mode: CaptureMode) -> Result<Vec<Node<'_>>, Error> {
     enum Work<'a> {
         Enter(Source<'a>, usize),
         Finish(Node<'a>),
@@ -395,6 +401,19 @@ fn plan(root: Source<'_>) -> Result<Vec<Node<'_>>, Error> {
             Work::Enter(source, depth) => {
                 if depth > mod_api::text::MAX_TEXT_DEPTH {
                     return Err(Error::TooDeep);
+                }
+                // Some trusted actions are only identifiable on the rendered spans:
+                // Profiler, for example, serializes as an ordinary run_command.
+                if mode == CaptureMode::Edit
+                    && let Source::Engine(text) = source
+                    && text.spans.iter().any(|span| {
+                        matches!(
+                            span.style.click,
+                            Some(engine::ClickEvent::OpenFile(_) | engine::ClickEvent::Profiler(_))
+                        )
+                    })
+                {
+                    return Err(Error::Unavailable);
                 }
                 let node = node(source)?;
                 let children: Vec<_> = node
@@ -617,7 +636,7 @@ fn native_click(click: engine::ClickEvent) -> Result<Option<TextClick>, Error> {
         E::OpenFile(_) | E::Profiler(_) => return Ok(None),
     }))
 }
-fn captured_style(node: &Node<'_>) -> Result<TextStyle, Error> {
+fn captured_style(node: &Node<'_>, mode: CaptureMode) -> Result<TextStyle, Error> {
     let mut style = TextStyle::default();
     match node.style {
         Style::Empty => {}
@@ -631,7 +650,12 @@ fn captured_style(node: &Node<'_>) -> Result<TextStyle, Error> {
             style.obfuscated = s.obfuscated;
             style.font = s.font.clone();
             style.insertion = s.insertion.clone();
-            style.click = s.click.clone().map(native_click).transpose()?.flatten();
+            if let Some(click) = &s.click {
+                style.click = native_click(click.clone())?;
+                if mode == CaptureMode::Edit && style.click.is_none() {
+                    return Err(Error::Unavailable);
+                }
+            }
         }
         Style::Json(fields) => {
             style.color = fields
@@ -652,14 +676,19 @@ fn captured_style(node: &Node<'_>) -> Result<TextStyle, Error> {
                 .get("insertion")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
-            style.click = component::style_event_object(fields, "click_event", "clickEvent")
-                .map(component::parse_click_event)
-                .transpose()
-                .map_err(error)?
-                .flatten()
-                .map(native_click)
-                .transpose()?
-                .flatten();
+            if let Some(event) = component::style_event_object(fields, "click_event", "clickEvent")
+            {
+                style.click = component::parse_click_event(event)
+                    .map_err(error)?
+                    .map(native_click)
+                    .transpose()?
+                    .flatten();
+                // In particular this excludes open_file on a translation argument,
+                // even when the active language does not display that argument.
+                if mode == CaptureMode::Edit && style.click.is_none() {
+                    return Err(Error::Unavailable);
+                }
+            }
         }
     }
     style.hover = match &node.hover {
@@ -721,7 +750,7 @@ fn captured_style(node: &Node<'_>) -> Result<TextStyle, Error> {
     }
     Ok(style)
 }
-fn captured_shallow(node: &Node<'_>) -> Result<Text, Error> {
+fn captured_shallow(node: &Node<'_>, mode: CaptureMode) -> Result<Text, Error> {
     let meta = node
         .fields
         .map(|fields| {
@@ -800,7 +829,7 @@ fn captured_shallow(node: &Node<'_>) -> Result<Text, Error> {
             meta.insert("score".into(), score);
         }
     }
-    text.style = captured_style(node)?;
+    text.style = captured_style(node, mode)?;
     Ok(text)
 }
 fn attach(text: &mut Text, relation: TextRelation, child: Text) {
@@ -830,8 +859,8 @@ fn attach(text: &mut Text, relation: TextRelation, child: Text) {
         _ => unreachable!("component visitor supplied an unknown relation"),
     }
 }
-fn capture(root: Source<'_>) -> Result<Text, Error> {
-    let nodes = plan(root)?;
+fn capture(root: Source<'_>, mode: CaptureMode) -> Result<Text, Error> {
+    let nodes = plan(root, mode)?;
     let mut ready: HashMap<Key, Text> = HashMap::new();
     for node in nodes {
         let mut text = if node.merge {
@@ -840,11 +869,11 @@ fn capture(root: Source<'_>) -> Result<Text, Error> {
                 .map(|(child, _, _)| ready.remove(&child.key()).expect("child was built"))
                 .unwrap_or_default()
         } else {
-            match captured_shallow(&node) {
+            match captured_shallow(&node, mode) {
                 Ok(value) => value,
                 Err(error) => {
                     for text in ready.into_values() {
-                        discard_api_text(text);
+                        text.discard();
                     }
                     return Err(error);
                 }
@@ -862,7 +891,7 @@ fn capture(root: Source<'_>) -> Result<Text, Error> {
     Ok(ready.remove(&root.key()).expect("root was built"))
 }
 pub fn captured_text(value: &Value) -> Result<Text, Error> {
-    capture(Source::Json(value))
+    capture(Source::Json(value), CaptureMode::Inspect)
 }
 /// A span's hover as a mod reads it (`GuiGraphicsExtractor.componentHoverEffect`'s style): the
 /// same capture as the span's own, from the style's text, item or entity hover.
@@ -871,62 +900,22 @@ pub fn style_hover(style: &engine::Style) -> Option<TextHover> {
         return None;
     }
     let span = engine::Span::new(String::new(), style.clone());
-    capture(Source::Span(&span)).ok()?.style.hover.take()
+    capture(Source::Span(&span), CaptureMode::Inspect)
+        .ok()?
+        .style
+        .hover
+        .take()
 }
 /// Capture an engine text without losing structured content or style.
 pub fn to_api(text: &engine::Text) -> Result<Text, TextFormError> {
-    capture(Source::Engine(text))
+    capture(Source::Engine(text), CaptureMode::Inspect)
 }
 
-fn discard_api_text(root: Text) {
-    let mut pending = vec![root];
-    while let Some(mut text) = pending.pop() {
-        pending.append(&mut text.children);
-        nbt::discard_tag(text.metadata);
-        nbt::discard_tag(text.style.metadata);
-        match text.content {
-            TextContent::Translatable { arguments, .. } => pending.extend(arguments),
-            TextContent::Selector { separator, .. } | TextContent::Nbt { separator, .. } => {
-                pending.extend(separator.map(|t| *t))
-            }
-            TextContent::Object(object) => {
-                let fallback = match object {
-                    TextObject::Player {
-                        profile, fallback, ..
-                    } => {
-                        nbt::discard_tag(profile.metadata);
-                        for property in profile.properties {
-                            nbt::discard_tag(property.metadata);
-                        }
-                        fallback
-                    }
-                    TextObject::Atlas { fallback, .. } => fallback,
-                };
-                pending.extend(fallback.map(|t| *t));
-            }
-            _ => {}
-        }
-        match text.style.hover {
-            Some(TextHover::Text(t)) => pending.push(*t),
-            Some(TextHover::Entity { name, .. }) => pending.extend(name.map(|t| *t)),
-            Some(TextHover::Item {
-                components: Some(tag),
-                ..
-            }) => nbt::discard_tag(tag),
-            _ => {}
-        }
-        #[allow(clippy::single_match)] // TODO(#2273): rewrite as `if let`.
-        match text.style.click {
-            Some(
-                TextClick::ShowDialog(tag)
-                | TextClick::Custom {
-                    payload: Some(tag), ..
-                },
-            ) => nbt::discard_tag(tag),
-            _ => {}
-        }
-    }
+/// Capture a component for editing only if its click actions can cross the API boundary.
+pub fn to_api_for_edit(text: &engine::Text) -> Result<Text, TextFormError> {
+    capture(Source::Engine(text), CaptureMode::Edit)
 }
+
 fn api_nodes(root: &Text) -> Vec<&Text> {
     let mut work = vec![(root, false)];
     let mut nodes = Vec::new();
@@ -1443,6 +1432,24 @@ mod text_capture_tests {
         let component = engine.component();
         assert!(component.get("click_event").is_none());
         assert!(component["extra"][0].get("clickEvent").is_none());
+    }
+
+    #[test]
+    fn edit_capture_refuses_a_file_link_in_an_unrendered_argument() {
+        use sunrise_client_core::text::{ClickEvent, Style};
+
+        let link = EngineText::styled(
+            "capture.png",
+            Style {
+                click: Some(ClickEvent::OpenFile("capture.png".into())),
+                ..Default::default()
+            },
+        );
+        // Without %s, this link is retained in the component but not in any span.
+        let notice = EngineText::translate_with_fallback("test.no_argument", "Saved", &[link]);
+        assert!(notice.spans.iter().all(|span| span.style.click.is_none()));
+        assert!(notice.try_into_api().is_ok());
+        assert!(super::to_api_for_edit(&notice).is_err());
     }
 
     #[test]

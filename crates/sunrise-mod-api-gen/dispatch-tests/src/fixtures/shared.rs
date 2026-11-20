@@ -55,7 +55,7 @@ struct BlockEntityDraw(Vec<u32>);
 use serde_json::{Map, Value};
 use stubs::*;
 #[derive(Clone)]
-struct Text;
+pub(super) struct Text;
 #[derive(Clone)]
 struct ScreenshotImage;
 #[derive(Debug, PartialEq)]

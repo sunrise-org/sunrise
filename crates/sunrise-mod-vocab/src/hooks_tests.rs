@@ -12,6 +12,95 @@ fn chat_line_exposes_text_conversion_failure() {
 }
 
 #[test]
+fn local_chat_rollback_preserves_a_deep_edit_for_later_listeners() {
+    const DEPTH: usize = 32_768;
+    struct DeepEdit;
+    #[mod_api::__subscriptions]
+    impl Hooks for DeepEdit {
+        #[listener(priority = 10)]
+        fn client_local_chat_line_pre(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut ClientLocalChatLinePreEvent<'_>,
+        ) -> Flow {
+            let mut tree = Text::literal("leaf");
+            for _ in 0..DEPTH {
+                let mut parent = Text::literal("");
+                parent.style.hover = Some(TextHover::Text(Box::new(tree)));
+                tree = parent;
+            }
+            *event.message_mut() = tree;
+            Flow::Continue
+        }
+    }
+
+    struct Unwind;
+    #[mod_api::__subscriptions]
+    impl Hooks for Unwind {
+        fn client_local_chat_line_pre(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut ClientLocalChatLinePreEvent<'_>,
+        ) -> Flow {
+            event.message_mut().style.bold = Some(true);
+            event.cancelled = true;
+            panic!("fixture rolls back this listener");
+        }
+    }
+
+    struct Observe;
+    #[mod_api::__subscriptions]
+    impl Hooks for Observe {
+        #[listener(priority = -10)]
+        fn client_local_chat_line_pre(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut ClientLocalChatLinePreEvent<'_>,
+        ) -> Flow {
+            let mut node = event.message();
+            let mut depth = 0;
+            while let Some(TextHover::Text(child)) = &node.style.hover {
+                node = child;
+                depth += 1;
+            }
+            assert_eq!(depth, DEPTH);
+            assert_eq!(
+                node.content,
+                crate::text::TextContent::Literal("leaf".into())
+            );
+            assert_eq!(event.message().style.bold, None);
+            event.message_mut().style.italic = Some(true);
+            Flow::Cancel
+        }
+    }
+
+    crate::testing::with_dispatch(
+        vec![
+            ModEntry::new("chat-deep-edit", Box::new(DeepEdit)),
+            ModEntry::new("chat-unwind", Box::new(Unwind)),
+            ModEntry::new("chat-observe", Box::new(Observe)),
+        ]
+        .into(),
+        || {
+            let mut message = Text::literal("original");
+            let mut cancel = false;
+            dispatch_client_local_chat_line_pre(
+                &FakeHost::new(),
+                super::calls::ClientLocalChatLinePreCall {
+                    source: LocalChatSource::Client,
+                    message: &mut message,
+                    cancel: &mut cancel,
+                },
+            );
+            let italic = message.style.italic;
+            message.discard();
+            assert!(cancel);
+            assert_eq!(italic, Some(true));
+        },
+    );
+}
+
+#[test]
 #[ignore = "optimized hot-hook microbenchmark"]
 fn subscriber_tick_benchmark() {
     use std::{hint::black_box, time::Instant};

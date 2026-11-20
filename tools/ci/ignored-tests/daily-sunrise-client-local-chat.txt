@@ -1,0 +1,10 @@
+sunrise-client game::remote::tests::local_chat_line_tests::a_failed_listener_discards_only_its_own_edits lib daily resources
+sunrise-client game::remote::tests::local_chat_line_tests::a_game_line_that_cannot_cross_the_boundary_is_still_shown lib daily resources
+sunrise-client game::remote::tests::local_chat_line_tests::decorates_a_game_notice_without_a_connection lib daily resources
+sunrise-client game::remote::tests::local_chat_line_tests::hud_only_notices_keep_their_local_accounting lib daily resources
+sunrise-client game::remote::tests::local_chat_line_tests::intercepts_another_mods_notice_once_while_connected lib daily resources
+sunrise-client game::remote::tests::local_chat_line_tests::invalid_host_input_is_refused_before_insertion lib daily resources
+sunrise-client game::remote::tests::local_chat_line_tests::invalid_replacement_keeps_original lib daily resources
+sunrise-client game::remote::tests::local_chat_line_tests::listener_order_and_cancellation_control_history_and_accounting lib daily resources
+sunrise-client game::remote::tests::local_chat_line_tests::received_chat_and_signature_deletion_bypass_the_local_hook lib daily resources
+sunrise-client game::remote::tests::local_chat_line_tests::transaction_rollback_discards_a_staged_local_notice lib daily resources

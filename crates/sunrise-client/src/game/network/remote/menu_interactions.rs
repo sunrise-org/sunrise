@@ -451,12 +451,9 @@ impl Game<'_> {
             _ => {
                 // Unsupported menu: tell the server we closed it.
                 self.remote_reject_container(p.container);
-                self.add_chat_line(
-                    sunrise_client::text::Text::literal(format!(
-                        "(Sunrise cannot show {menu} screens yet)"
-                    )),
-                    sunrise_client::chat::ChatSource::Client,
-                );
+                self.chat_line(sunrise_client::text::Text::literal(format!(
+                    "(Sunrise cannot show {menu} screens yet)"
+                )));
                 return;
             }
         };

@@ -871,7 +871,12 @@ fn boundary_arguments(
             if outer_type(&arg.ty, "Option") && path.path.segments.last().is_some_and(|segment|
                 matches!(&segment.arguments, syn::PathArguments::AngleBracketed(args)
                     if matches!(args.args.first(), Some(syn::GenericArgument::Type(ty)) if is_borrowed_stack(ty)))));
-        let conversion = if text {
+        let conversion = if outer_type(&arg.ty, "Text") {
+            // This argument is owned and may be arbitrarily deep even when conversion refuses it.
+            format!(
+                "{{ let converted = {name}.try_into_engine(&()); {name}.discard(); converted }}"
+            )
+        } else if text {
             format!("{name}.try_into_engine(&())")
         } else if optional_read_stack {
             format!("{name}.map(crate::game::api_values::stack_value).transpose()")

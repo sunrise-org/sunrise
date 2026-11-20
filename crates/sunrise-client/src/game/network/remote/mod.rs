@@ -1990,9 +1990,9 @@ impl Game<'_> {
         self.to_network(s).map(|s| Hashed::create(&s, &names))
     }
 
-    /// A line in the connection's chat, with its styles, click and hover
-    /// events (ChatComponent.addMessage). The lines the Chat option hides
-    /// are dropped there (its `visibleMessageFilter`).
+    /// Publish an unsigned system line to the HUD and, when connected, its
+    /// chat accounting (ChatComponent.addMessage). Received system chat and
+    /// committed local notices both use this path.
     pub(super) fn add_chat_line(
         &mut self,
         content: sunrise_client::text::Text,
@@ -2013,7 +2013,7 @@ impl Game<'_> {
         if !self.ui.chat.shows(source) {
             return false;
         }
-        let text = content.plain();
+        let text = self.remote.as_ref().map(|_| content.plain());
         let focused = self.screen == Screen::Chat;
         if source == sunrise_client::chat::ChatSource::Player {
             self.ui.chat.add_signed(
@@ -2037,7 +2037,7 @@ impl Game<'_> {
                 focused,
             );
         }
-        if let Some(r) = self.remote.as_mut() {
+        if let Some((r, text)) = self.remote.as_mut().zip(text) {
             r.chat.push((text, Instant::now()));
             r.chat_received += 1;
             if r.chat.len() > 100 {
@@ -10807,6 +10807,9 @@ pub(crate) mod tests {
     }
     mod hanging_entity_age_tests {
         include!("hanging_entity_age_tests.rs");
+    }
+    mod local_chat_line_tests {
+        include!("local_chat_line_tests.rs");
     }
     mod menu_click_order_tests {
         include!("menu_click_order_tests.rs");

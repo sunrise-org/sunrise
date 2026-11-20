@@ -550,6 +550,57 @@ impl Text {
         }
         Ok(())
     }
+    /// Release a possibly unvalidated mod component without recursive tree or NBT destruction.
+    // hidden: engine text boundary and dispatch cleanup, not a mod authoring method.
+    #[doc(hidden)]
+    pub fn discard(self) {
+        let mut pending = vec![self];
+        while let Some(mut text) = pending.pop() {
+            pending.append(&mut text.children);
+            sunrise_core::nbt::discard_tag(text.metadata);
+            sunrise_core::nbt::discard_tag(text.style.metadata);
+            match text.content {
+                TextContent::Translatable { arguments, .. } => pending.extend(arguments),
+                TextContent::Selector { separator, .. } | TextContent::Nbt { separator, .. } => {
+                    pending.extend(separator.map(|t| *t))
+                }
+                TextContent::Object(object) => {
+                    let fallback = match object {
+                        TextObject::Player {
+                            profile, fallback, ..
+                        } => {
+                            sunrise_core::nbt::discard_tag(profile.metadata);
+                            for property in profile.properties {
+                                sunrise_core::nbt::discard_tag(property.metadata);
+                            }
+                            fallback
+                        }
+                        TextObject::Atlas { fallback, .. } => fallback,
+                    };
+                    pending.extend(fallback.map(|t| *t));
+                }
+                _ => {}
+            }
+            match text.style.hover {
+                Some(TextHover::Text(t)) => pending.push(*t),
+                Some(TextHover::Entity { name, .. }) => pending.extend(name.map(|t| *t)),
+                Some(TextHover::Item {
+                    components: Some(tag),
+                    ..
+                }) => sunrise_core::nbt::discard_tag(tag),
+                _ => {}
+            }
+            if let Some(
+                TextClick::ShowDialog(tag)
+                | TextClick::Custom {
+                    payload: Some(tag), ..
+                },
+            ) = text.style.click
+            {
+                sunrise_core::nbt::discard_tag(tag);
+            }
+        }
+    }
     /// Visit recursive component slots in their relation order, without cloning.
     /// Opaque NBT data is not a component edge.
     pub fn visit_children<'a>(&'a self, mut visit: impl FnMut(&'a Text, TextRelation)) {
@@ -703,6 +754,81 @@ impl TextNodeStyle {
     }
 }
 
+impl TextNodeContent {
+    fn from_content(content: &TextContent) -> Self {
+        match content {
+            TextContent::Literal(s) => Self::Literal(s.clone()),
+            TextContent::Translatable { key, fallback, .. } => Self::Translatable {
+                key: key.clone(),
+                fallback: fallback.clone(),
+            },
+            TextContent::Keybind(s) => Self::Keybind(s.clone()),
+            TextContent::Selector { pattern, .. } => Self::Selector {
+                pattern: pattern.clone(),
+            },
+            TextContent::Score { name, objective } => Self::Score {
+                name: name.clone(),
+                objective: objective.clone(),
+            },
+            TextContent::Nbt {
+                path,
+                interpret,
+                source,
+                ..
+            } => Self::Nbt {
+                path: path.clone(),
+                interpret: *interpret,
+                source: source.clone(),
+            },
+            TextContent::Object(TextObject::Player { profile, hat, .. }) => Self::Player {
+                profile: clone_profile(profile),
+                hat: *hat,
+            },
+            TextContent::Object(TextObject::Atlas { atlas, sprite, .. }) => Self::Atlas {
+                atlas: atlas.clone(),
+                sprite: sprite.clone(),
+            },
+        }
+    }
+
+    fn into_content(self) -> TextContent {
+        match self {
+            Self::Literal(s) => TextContent::Literal(s),
+            Self::Translatable { key, fallback } => TextContent::Translatable {
+                key,
+                fallback,
+                arguments: Vec::new(),
+            },
+            Self::Keybind(s) => TextContent::Keybind(s),
+            Self::Selector { pattern } => TextContent::Selector {
+                pattern,
+                separator: None,
+            },
+            Self::Score { name, objective } => TextContent::Score { name, objective },
+            Self::Nbt {
+                path,
+                interpret,
+                source,
+            } => TextContent::Nbt {
+                path,
+                interpret,
+                source,
+                separator: None,
+            },
+            Self::Player { profile, hat } => TextContent::Object(TextObject::Player {
+                profile,
+                hat,
+                fallback: None,
+            }),
+            Self::Atlas { atlas, sprite } => TextContent::Object(TextObject::Atlas {
+                atlas,
+                sprite,
+                fallback: None,
+            }),
+        }
+    }
+}
+
 fn validate_payload(
     metadata: &Tag,
     style_metadata: &Tag,
@@ -775,47 +901,10 @@ impl TryFrom<&Text> for TextForm {
         let mut pending = vec![(value, None, TextRelation::Child)];
         while let Some((text, parent, relation)) = pending.pop() {
             let index = u32::try_from(nodes.len()).map_err(|_| TextFormError::Malformed)?;
-            let content = match &text.content {
-                TextContent::Literal(s) => TextNodeContent::Literal(s.clone()),
-                TextContent::Translatable { key, fallback, .. } => TextNodeContent::Translatable {
-                    key: key.clone(),
-                    fallback: fallback.clone(),
-                },
-                TextContent::Keybind(s) => TextNodeContent::Keybind(s.clone()),
-                TextContent::Selector { pattern, .. } => TextNodeContent::Selector {
-                    pattern: pattern.clone(),
-                },
-                TextContent::Score { name, objective } => TextNodeContent::Score {
-                    name: name.clone(),
-                    objective: objective.clone(),
-                },
-                TextContent::Nbt {
-                    path,
-                    interpret,
-                    source,
-                    ..
-                } => TextNodeContent::Nbt {
-                    path: path.clone(),
-                    interpret: *interpret,
-                    source: source.clone(),
-                },
-                TextContent::Object(TextObject::Player { profile, hat, .. }) => {
-                    TextNodeContent::Player {
-                        profile: clone_profile(profile),
-                        hat: *hat,
-                    }
-                }
-                TextContent::Object(TextObject::Atlas { atlas, sprite, .. }) => {
-                    TextNodeContent::Atlas {
-                        atlas: atlas.clone(),
-                        sprite: sprite.clone(),
-                    }
-                }
-            };
             nodes.push(TextNode {
                 parent,
                 relation,
-                content,
+                content: TextNodeContent::from_content(&text.content),
                 style: TextNodeStyle::from_style(&text.style),
                 metadata: clone_tag(&text.metadata),
             });
@@ -946,103 +1035,98 @@ impl TryFrom<TextForm> for Text {
             discard_form(value);
             return Err(error);
         }
-        let mut nodes: Vec<_> = value
+        let nodes = value
             .nodes
             .into_iter()
             .map(|node| {
-                let content = match node.content {
-                    TextNodeContent::Literal(s) => TextContent::Literal(s),
-                    TextNodeContent::Translatable { key, fallback } => TextContent::Translatable {
-                        key,
-                        fallback,
-                        arguments: Vec::new(),
-                    },
-                    TextNodeContent::Keybind(s) => TextContent::Keybind(s),
-                    TextNodeContent::Selector { pattern } => TextContent::Selector {
-                        pattern,
-                        separator: None,
-                    },
-                    TextNodeContent::Score { name, objective } => {
-                        TextContent::Score { name, objective }
-                    }
-                    TextNodeContent::Nbt {
-                        path,
-                        interpret,
-                        source,
-                    } => TextContent::Nbt {
-                        path,
-                        interpret,
-                        source,
-                        separator: None,
-                    },
-                    TextNodeContent::Player { profile, hat } => {
-                        TextContent::Object(TextObject::Player {
-                            profile,
-                            hat,
-                            fallback: None,
-                        })
-                    }
-                    TextNodeContent::Atlas { atlas, sprite } => {
-                        TextContent::Object(TextObject::Atlas {
-                            atlas,
-                            sprite,
-                            fallback: None,
-                        })
-                    }
-                };
                 (
-                    node.parent,
+                    node.parent.map(|index| index as usize),
                     node.relation,
-                    Some(Text {
-                        content,
+                    Text {
+                        content: node.content.into_content(),
                         style: node.style.into_style(),
                         children: Vec::new(),
                         metadata: node.metadata,
-                    }),
+                    },
                 )
             })
             .collect();
-        for i in (1..nodes.len()).rev() {
-            let parent = nodes[i].0.expect("validated parent") as usize;
-            let relation = nodes[i].1;
-            let mut child = nodes[i].2.take().expect("unattached child");
-            child.children.reverse();
-            if let TextContent::Translatable { arguments, .. } = &mut child.content {
-                arguments.reverse();
-            }
-            let target = nodes[parent].2.as_mut().expect("parent follows child");
-            match relation {
-                TextRelation::Child => target.children.push(child),
-                TextRelation::Argument => match &mut target.content {
-                    TextContent::Translatable { arguments, .. } => arguments.push(child),
-                    _ => unreachable!("validated argument"),
-                },
-                TextRelation::Separator => match &mut target.content {
-                    TextContent::Selector { separator, .. }
-                    | TextContent::Nbt { separator, .. } => *separator = Some(Box::new(child)),
-                    _ => unreachable!("validated separator"),
-                },
-                TextRelation::Fallback => match &mut target.content {
-                    TextContent::Object(
-                        TextObject::Player { fallback, .. } | TextObject::Atlas { fallback, .. },
-                    ) => *fallback = Some(Box::new(child)),
-                    _ => unreachable!("validated fallback"),
-                },
-                TextRelation::HoverText => {
-                    target.style.hover = Some(TextHover::Text(Box::new(child)))
-                }
-                TextRelation::HoverEntityName => match &mut target.style.hover {
-                    Some(TextHover::Entity { name, .. }) => *name = Some(Box::new(child)),
-                    _ => unreachable!("validated name"),
-                },
-            }
-        }
-        let mut root = nodes[0].2.take().expect("validated root");
-        root.children.reverse();
-        if let TextContent::Translatable { arguments, .. } = &mut root.content {
+        Ok(assemble(nodes))
+    }
+}
+
+// Both callers supply a preorder list with a root and valid component relations.
+fn assemble(mut nodes: Vec<(Option<usize>, TextRelation, Text)>) -> Text {
+    while let Some((parent, relation, mut child)) = nodes.pop() {
+        child.children.reverse();
+        if let TextContent::Translatable { arguments, .. } = &mut child.content {
             arguments.reverse();
         }
-        Ok(root)
+        let Some(parent) = parent else { return child };
+        let target = &mut nodes[parent].2;
+        match relation {
+            TextRelation::Child => target.children.push(child),
+            TextRelation::Argument => match &mut target.content {
+                TextContent::Translatable { arguments, .. } => arguments.push(child),
+                _ => unreachable!("invalid component argument"),
+            },
+            TextRelation::Separator => match &mut target.content {
+                TextContent::Selector { separator, .. } | TextContent::Nbt { separator, .. } => {
+                    *separator = Some(Box::new(child))
+                }
+                _ => unreachable!("invalid component separator"),
+            },
+            TextRelation::Fallback => match &mut target.content {
+                TextContent::Object(
+                    TextObject::Player { fallback, .. } | TextObject::Atlas { fallback, .. },
+                ) => *fallback = Some(Box::new(child)),
+                _ => unreachable!("invalid component fallback"),
+            },
+            TextRelation::HoverText => target.style.hover = Some(TextHover::Text(Box::new(child))),
+            TextRelation::HoverEntityName => match &mut target.style.hover {
+                Some(TextHover::Entity { name, .. }) => *name = Some(Box::new(child)),
+                _ => unreachable!("invalid component name"),
+            },
+        }
+    }
+    unreachable!("component tree has a root")
+}
+
+// Listener snapshots are taken before the text boundary validates the final edit.
+// A snapshot must preserve even invalid text and release it without recursion.
+pub(crate) struct TextSnapshot(Text);
+
+impl TextSnapshot {
+    pub(crate) fn new(text: &Text) -> Self {
+        let mut nodes = Vec::new();
+        let mut pending = vec![(text, None, TextRelation::Child)];
+        while let Some((text, parent, relation)) = pending.pop() {
+            let index = nodes.len();
+            nodes.push((
+                parent,
+                relation,
+                Text {
+                    content: TextNodeContent::from_content(&text.content).into_content(),
+                    style: TextNodeStyle::from_style(&text.style).into_style(),
+                    children: Vec::new(),
+                    metadata: clone_tag(&text.metadata),
+                },
+            ));
+            let start = pending.len();
+            text.visit_children(|child, relation| pending.push((child, Some(index), relation)));
+            pending[start..].reverse();
+        }
+        Self(assemble(nodes))
+    }
+
+    pub(crate) fn restore(mut self, message: &mut Text) {
+        std::mem::swap(&mut self.0, message);
+    }
+}
+
+impl Drop for TextSnapshot {
+    fn drop(&mut self) {
+        std::mem::take(&mut self.0).discard();
     }
 }
 

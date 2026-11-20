@@ -69,13 +69,7 @@ impl Game<'_> {
     }
     /// A line in chat from the client.
     pub(in crate::game) fn native_chat(&mut self, text: &str) {
-        let focused = self.screen == Screen::Chat;
-        let line = Text::literal(text);
-        let ticks = self.visual_ticks();
-        let atlas = &self.gui.atlas;
-        self.ui
-            .chat
-            .add(atlas, line, None, ChatSource::Client, ticks, focused);
+        self.hud_chat_notice(Text::literal(text));
     }
     /// A native mod's own folder: `sunrise-mods/.sunrise-mod-data/<id>/`. Not created here.
     pub(in crate::game) fn native_data_dir(&self, mod_id: &str) -> PathBuf {

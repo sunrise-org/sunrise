@@ -4,7 +4,8 @@
 #[path = "chat/suggestion_completion_tests.rs"]
 mod suggestion_completion_tests;
 
-use super::{Game, Screen};
+use super::{Game, Screen, transactions::After};
+use mod_api::LocalChatSource;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -13,7 +14,7 @@ use std::{
 use sunrise_client::{
     chat::{
         Chat, ChatAbilities, ChatAction, ChatScreen, ChatSource, ChatVisibility, Commands,
-        QUEUE_EXPAND_ID, SYSTEM_INDICATOR, normalize_chat_message,
+        QUEUE_EXPAND_ID, normalize_chat_message,
     },
     command::{ArgType, Dispatcher, MOD_COMMAND, Registries},
     gamerules::GameRules,
@@ -22,6 +23,13 @@ use sunrise_client::{
     text::{ClickEvent, Style, Text},
 };
 use sunrise_world::registry::{BlockRegistry, BlockStateId};
+
+pub(super) enum LocalChatPresentation {
+    /// The usual system marker and connection accounting.
+    System,
+    /// A plain HUD notice, not counted by the connection.
+    HudOnly,
+}
 
 /// The tree the chat parses and completes with: `Remote::chat_tree`, which is
 /// a server's, once it has sent one (ClientPacketListener.commands), else the
@@ -1169,27 +1177,64 @@ impl Game<'_> {
             capture.push(text);
             return;
         }
-        // Connected to a server (single player's own included), the chat on
-        // screen is the connection's: the game's own messages join it.
-        if self.remote.is_some() {
-            self.add_chat_line(text, ChatSource::Server);
+        self.stage_local_chat_line(text, LocalChatSource::Server, LocalChatPresentation::System);
+    }
+
+    /// `ChatComponent.addClientSystemMessage`: the client inserts its own
+    /// line, without the Chat option's server-message filter.
+    pub(super) fn chat_line(&mut self, text: Text) {
+        self.stage_local_chat_line(text, LocalChatSource::Client, LocalChatPresentation::System);
+    }
+
+    /// Insert a local notice that has no marker or connection accounting.
+    pub(super) fn hud_chat_notice(&mut self, text: Text) {
+        self.stage_local_chat_line(
+            text,
+            LocalChatSource::Client,
+            LocalChatPresentation::HudOnly,
+        );
+    }
+
+    fn stage_local_chat_line(
+        &mut self,
+        mut text: Text,
+        source: LocalChatSource,
+        presentation: LocalChatPresentation,
+    ) {
+        let category = match source {
+            LocalChatSource::Client => ChatSource::Client,
+            LocalChatSource::Server => ChatSource::Server,
+        };
+        if !self.ui.chat.shows(category) {
             return;
         }
-        // The Chat option's Hidden level takes the server's messages too.
-        self.local_chat_line(text, Some(SYSTEM_INDICATOR), ChatSource::Server);
-    }
-    /// `ChatComponent.addClientSystemMessage`: a line the client adds itself.
-    /// It joins the connection's chat and its history, with the system
-    /// marker; the Chat option's server-message filter does not hide it
-    /// (`GuiMessageSource.SYSTEM_CLIENT`). Vanilla fires
-    /// `ClientChatReceivedEvent` from `ChatListener` for the lines the server
-    /// sent, so this path does not tell `client_chat_received`.
-    pub(super) fn chat_line(&mut self, text: Text) {
-        if self.remote.is_some() {
-            self.add_chat_line(text, ChatSource::Client);
-        } else {
-            self.local_chat_line(text, Some(SYSTEM_INDICATOR), ChatSource::Client);
+        if self.options.execution_role.is_client()
+            && mod_api::__private::listened(mod_api::HookId::ClientLocalChatLinePre)
+            && let Ok(original) = sunrise_client_lib::api_text::to_api_for_edit(&text)
+        {
+            let mut message = original.clone();
+            let mut cancel = false;
+            self.native_client_local_chat_line_pre(
+                mod_api::__private::ClientLocalChatLinePreCall {
+                    source,
+                    message: &mut message,
+                    cancel: &mut cancel,
+                },
+            );
+            // Compare against the bounded original, not against another unvalidated tree.
+            // An observing listener leaves the exact engine component in place.
+            if !cancel
+                && message != original
+                && let Ok(replacement) = sunrise_client_lib::api_text::to_engine(&message)
+            {
+                text = replacement;
+            }
+            message.discard();
+            if cancel {
+                return;
+            }
         }
+        self.after_commit(After::LocalChat(text, category, presentation));
     }
     /// A player's chat line on the window's own chat: a guest's message on
     /// the server's own chat (`HostEvent::Chat`). `ChatListener`
@@ -1204,24 +1249,15 @@ impl Game<'_> {
         // A server's client receives the line as a packet (PlayerChat or
         // DisguisedChat) and filters it there.
         if self.remote.is_none() {
-            self.local_chat_line(text, None, ChatSource::Player);
+            self.ui.chat.add(
+                &self.gui.atlas,
+                text,
+                None,
+                ChatSource::Player,
+                self.visual_ticks(),
+                self.screen == Screen::Chat,
+            );
         }
-    }
-    /// A line on the window's own chat when the Chat option lets `source`
-    /// through.
-    fn local_chat_line(&mut self, text: Text, indicator: Option<u32>, source: ChatSource) {
-        if !self.ui.chat.shows(source) {
-            return;
-        }
-        let focused = self.screen == Screen::Chat;
-        self.ui.chat.add(
-            &self.gui.atlas,
-            text,
-            indicator,
-            source,
-            self.visual_ticks(),
-            focused,
-        );
     }
     /// Keys while the chat screen is open.
     pub(super) fn chat_key(&mut self, event: &KeyEvent) {
@@ -2353,7 +2389,7 @@ impl Game<'_> {
         );
         if cancel {
             self.ui.screenshot_messages.remove(at);
-            self.post_screenshot_chat(screenshot_cancel_line(message));
+            self.hud_chat_notice(screenshot_cancel_line(message));
             return None;
         }
         let root = sunrise_client::logging::player_dir().join("screenshots");
@@ -2393,19 +2429,7 @@ impl Game<'_> {
             }
             Err(e) => Text::translate("screenshot.failure", &[Text::literal(e.clone())]),
         };
-        self.post_screenshot_chat(message);
-    }
-
-    fn post_screenshot_chat(&mut self, message: Text) {
-        let focused = self.screen == Screen::Chat;
-        self.ui.chat.add(
-            &self.gui.atlas,
-            message,
-            None,
-            ChatSource::Client,
-            self.visual_ticks(),
-            focused,
-        );
+        self.hud_chat_notice(message);
     }
 }
 

@@ -72,7 +72,6 @@ use sunrise_client::{
     atlas_sources::qualified,
     biome::{BiomeColors, SpawnEntry},
     block_entities::Pos,
-    chat::ChatSource,
     containers::{
         BlockEntity, MOD_MENUS, ModBlockEntityFields, ModContainer, ModEnergyBuffer, ModFluidTanks,
     },

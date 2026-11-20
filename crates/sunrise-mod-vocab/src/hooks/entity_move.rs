@@ -33,7 +33,7 @@ pub trait Hooks {
         out = "canceled",
         context = "loop",
         cancellable = true,
-        isolate = true,
+        isolate = "requested",
         neoforge = "none (fork addition; see travel-and-move.md, #2308)",
         target = "sunrise_client_lib::move_gate::native_entity_move"
     )]
