@@ -478,14 +478,15 @@ impl PackEntities {
             let whole = &entities[range];
             // A native fluid carries sprite-array UVs, not shared-atlas UVs.
             // Keep it in its own material even when a shader pack draws the
-            // model in the same block-entity run. Do not corrupt either UV space.
-            let whole: &[Vertex] = if whole
-                .chunks(4)
-                .any(|q| super::is_native_terrain(q[0].layer))
-            {
+            // model in the same block-entity run. Standalone armor glint also needs its
+            // native material: exposing it to gbuffers would draw the hidden armor texture.
+            let native_material = |layer| {
+                super::is_native_terrain(layer) || layer & 0xffff == super::ARMOR_GLINT_ONLY_OVERLAY
+            };
+            let whole: &[Vertex] = if whole.chunks(4).any(|q| native_material(q[0].layer)) {
                 without_fluids.clear();
                 for quad in whole.chunks(4) {
-                    if super::is_native_terrain(quad[0].layer) {
+                    if native_material(quad[0].layer) {
                         if !span.hidden {
                             rest.extend_from_slice(quad);
                         }

@@ -10,10 +10,11 @@
 //! [`Game::render_canceled`], which the frame's entity pass starts afresh.
 pub use mod_api::game::{MobRender, PlayerRender};
 
+use super::native_entity_renderers::Resolved;
 use super::{Game, native_block_entity_draw::BlockEntityDraw};
 use glam::{DVec3, Mat4};
-use mod_api::{EntityRenderState, HiddenParts, HookId, PosedParts};
-use std::cell::RefCell;
+use mod_api::{EntityRenderState, HiddenLayers, HiddenParts, HookId, PosedParts, StockLayerMask};
+use std::cell::{Cell, RefCell};
 use sunrise_client::{
     block_entity_render::diffuse_lights,
     fast_hash::FxHashSet,
@@ -166,32 +167,48 @@ impl Game<'_> {
     /// turned with the body, whose geometry is kept. None when one canceled: the entity draws
     /// nothing more this frame and its post hooks aren't asked, but for a player whose living pre
     /// alone canceled, whose `render_player_post` is asked here. Else the parts of the vanilla
-    /// model the hooks hid. `listened` is the frame's [`Game::mob_render_listened`].
+    /// model and the stock layers the hooks hid. `listened` is the frame's [`Game::mob_render_listened`].
     #[allow(clippy::too_many_arguments)]
     pub(super) fn mod_render_pre(
         &self,
         mob: &Mob,
         who: Option<PlayerRender<'_>>,
+        supported_layers: StockLayerMask,
         listened: bool,
         partial: f32,
         camera: DVec3,
         light: u32,
         out: &mut Vec<Vertex>,
-    ) -> Option<HiddenParts> {
+    ) -> Option<(HiddenParts, StockLayerMask)> {
         let mut hidden = HiddenParts::default();
         if !listened {
-            return Some(hidden);
+            return Some((hidden, StockLayerMask::default()));
         }
         let local = who.as_ref().is_some_and(|who| who.local);
         let mut canceled = false;
+        let layer_mask = Cell::default();
+        let hidden_layers = HiddenLayers::__new(supported_layers, &layer_mask);
         if let Some(who) = &who {
             self.mod_entity_draw(mob, local, partial, camera, light, out, |render, draw| {
-                self.native_render_player_pre(render, who, draw, &mut hidden, &mut canceled);
+                self.native_render_player_pre(
+                    render,
+                    who,
+                    draw,
+                    &mut hidden,
+                    &hidden_layers,
+                    &mut canceled,
+                );
             });
         }
         if !canceled {
             self.mod_entity_draw(mob, local, partial, camera, light, out, |render, draw| {
-                self.native_render_living_pre(render, draw, &mut hidden, &mut canceled);
+                self.native_render_living_pre(
+                    render,
+                    draw,
+                    &mut hidden,
+                    &hidden_layers,
+                    &mut canceled,
+                );
             });
             if canceled && let Some(who) = &who {
                 self.mod_entity_draw(mob, local, partial, camera, light, out, |render, draw| {
@@ -200,7 +217,7 @@ impl Game<'_> {
             }
         }
         if !canceled {
-            return Some(hidden);
+            return Some((hidden, hidden_layers.__mask()));
         }
         let id = render_id(mob.id, local, self.own_entity_id());
         FRAME.with_borrow_mut(|frame| frame.canceled.insert(id));
@@ -208,10 +225,11 @@ impl Game<'_> {
     }
     /// The renderer a mod registered for `mob`'s type (`register_entity_renderers`), drawn in place
     /// of its model and its vanilla layers, from a draw at its feet, not turned: true when it
-    /// drew. False when none is registered for the type, and when it fails this frame (then it is
-    /// asked no more until resources reload): the type draws its own model.
+    /// drew. If it fails (and is disabled until resources reload), the stock renderer draws instead.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn mod_living_renderer_geometry(
         &self,
+        resolved: &Resolved<dyn mod_api::EntityRenderer>,
         mob: &Mob,
         partial: f32,
         camera: DVec3,
@@ -219,15 +237,12 @@ impl Game<'_> {
         in_level: bool,
         out: &mut Vec<Vertex>,
     ) -> bool {
-        let Some(resolved) = super::native_entity_renderers::living_renderer(mob) else {
-            return false;
-        };
         let entity = entity_render_state(mob, mob.id, partial);
         let feet = mob.previous.lerp(mob.position, f64::from(partial));
         let feet = DVec3::new(feet.x, feet.y, feet.z);
         let block = [feet.x, feet.y, feet.z].map(|c| c.floor() as i32);
         self.mod_entity_renderer_geometry(
-            &resolved,
+            resolved,
             &entity,
             &mob.kind.id,
             feet - camera,

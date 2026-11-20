@@ -400,6 +400,26 @@ pub(crate) fn refusable<T>(
     }
 }
 
+/// A failed draw-local editor callback does not stop the draw or the next subscriber.
+pub(crate) fn render_layer_callback<T>(call: impl FnOnce() -> T) -> Result<T, ()> {
+    let current = crate::content::crash::current_native_call();
+    match crate::world::phase_refusal::catch_callback(current.map_or("unknown", |c| c.id), call) {
+        Ok(Ok(answer)) => Ok(answer),
+        Ok(Err(refusal)) => {
+            refusal.report();
+            Err(())
+        }
+        Err(_) => {
+            log::warn!(
+                "native mod {} panicked in {}; ignoring its render edits",
+                current.map_or("unknown", |c| c.id),
+                current.map_or("unknown", |c| c.hook),
+            );
+            Err(())
+        }
+    }
+}
+
 pub(crate) fn mark_mod(id: &'static str, hook: &'static str) -> crate::content::crash::ModGuard {
     crate::content::crash::enter_native_mod(crate::content::crash::ModCall {
         id,

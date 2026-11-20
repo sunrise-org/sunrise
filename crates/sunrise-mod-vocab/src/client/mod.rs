@@ -71,6 +71,7 @@ pub(crate) mod screen_slot_refusal;
 pub(crate) mod screenshot;
 pub(crate) mod skull_models;
 pub(crate) mod special_model_renderers;
+pub(crate) mod stock_entity_layers;
 pub(crate) mod terrain_draw;
 // hidden: module of API-owned label layout values; mods use the re-export
 #[doc(hidden)]

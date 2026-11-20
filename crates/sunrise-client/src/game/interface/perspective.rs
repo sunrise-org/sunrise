@@ -820,8 +820,17 @@ impl Game<'_> {
             local: true,
         };
         let listened = self.mob_render_listened();
-        let pre = self.mod_render_pre(m, Some(who), listened, alpha as f32, camera, packed, out);
-        let Some(hidden) = pre else {
+        let pre = self.mod_render_pre(
+            m,
+            Some(who),
+            mod_api::StockLayerMask::PLAYER,
+            listened,
+            alpha as f32,
+            camera,
+            packed,
+            out,
+        );
+        let Some((hidden, hidden_layers)) = pre else {
             return;
         };
         // The mods' layers' posed parts, kept from the draw below while they want them.
@@ -838,7 +847,7 @@ impl Game<'_> {
                 &lookup,
                 packed,
                 self,
-                &self.player_armor_layers(),
+                &self.player_armor_layers(hidden_layers),
                 hidden,
                 (listened || layers.is_some()).then_some(&mut parts),
                 out,
@@ -851,7 +860,7 @@ impl Game<'_> {
                 &lookup,
                 packed,
                 self,
-                &self.player_armor_layers(),
+                &self.player_armor_layers(hidden_layers),
                 (listened || layers.is_some()).then_some(&mut parts),
                 out,
             );
@@ -860,7 +869,7 @@ impl Game<'_> {
         if sunrise_client::mobs::render::layers_shown(m) {
             let chest = self.armor[1].as_ref().map(|s| &*s.item);
             // CapeLayer: no cape on an invisible player (`isInvisible`, whoever looks).
-            if !self.own_invisible() {
+            if !self.own_invisible() && !hidden_layers.contains(mod_api::StockEntityLayer::Cape) {
                 self.player_cape_geometry(m, chest, camera, alpha as f32, packed, out);
             }
             self.player_ears_geometry(
@@ -871,13 +880,17 @@ impl Game<'_> {
                 packed,
                 out,
             );
-            self.player_elytra_geometry(m, chest, camera, alpha as f32, packed, out);
+            if !hidden_layers.contains(mod_api::StockEntityLayer::Wings) {
+                self.player_elytra_geometry(m, chest, camera, alpha as f32, packed, out);
+            }
             self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
             self.shoulder_parrots_geometry(m, camera, alpha as f32, packed, out);
             self.stuck_in_body_geometry(m, self.own_entity_id(), camera, alpha as f32, packed, out);
-            self.held_item_geometry(m, camera, alpha, packed, true, None, out);
+            self.held_item_geometry(m, camera, alpha, packed, true, hidden_layers, None, out);
             // CustomHeadLayer: a pumpkin, skull or other head item.
-            self.head_item_geometry(m, camera, alpha, packed, true, out);
+            if !hidden_layers.contains(mod_api::StockEntityLayer::HeadItem) {
+                self.head_item_geometry(m, camera, alpha, packed, true, out);
+            }
             // Mods' layers (`register_entity_layers`), over vanilla's.
             self.mod_layer_geometry(
                 m,
@@ -968,7 +981,7 @@ impl Game<'_> {
         let body = self.own_body_visible() || self.spectator();
         let (data, armour) = (
             self as &dyn sunrise_client::mobs::render::RenderDataSource,
-            self.player_armor_layers(),
+            self.player_armor_layers(Default::default()),
         );
         // A screen preview: custom entity model animations see is_in_gui = 1.
         sunrise_client::mobs::cem_anim::in_gui(|| {
@@ -1002,7 +1015,16 @@ impl Game<'_> {
         self.player_elytra_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         let wings = wings_start..verts.len();
         self.shoulder_parrots_geometry(&m, camera, 1.0, 240 | 240 << 8, &mut verts);
-        self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, None, &mut verts);
+        self.held_item_geometry(
+            &m,
+            camera,
+            1.0,
+            240 | 240 << 8,
+            false,
+            Default::default(),
+            None,
+            &mut verts,
+        );
         self.head_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         let height = if m.extra.crouching { 1.5 } else { 1.8 };
         // PictureInPictureRenderer: the box centre, (size, size, -size);

@@ -22,7 +22,10 @@ use super::{
     native_block_entity_draw::{BlockEntityDraw, LevelLight},
 };
 use glam::{DVec3, Mat4};
-use mod_api::{BlockEntityDrawContext, EntityRenderState, EntityRenderer};
+use mod_api::{
+    ArmorLayerPass, BlockEntityDrawContext, EntityRenderState, EntityRenderer, Hand,
+    StockEntityLayer, StockLayerMask,
+};
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{
@@ -110,6 +113,8 @@ pub(super) struct EntityRendererTable {
     thrown: Vec<Option<Arc<Resolved<dyn EntityRenderer>>>>,
     /// By the address of the mob type the game shares with every mob of the type.
     living: FxHashMap<usize, Arc<Resolved<dyn EntityRenderer>>>,
+    /// Stock masks by the same type slot, then adult/baby and right/left main arm.
+    stock_living: FxHashMap<usize, [[StockLayerMask; 2]; 2]>,
     /// Primed TNT (`minecraft:tnt`).
     tnt: Option<Arc<Resolved<dyn EntityRenderer>>>,
     /// An experience orb (`minecraft:experience_orb`).
@@ -140,6 +145,10 @@ impl EntityRendererTable {
         let mut table = Self {
             thrown: thrown.iter().map(|_| None).collect(),
             living: FxHashMap::default(),
+            stock_living: mobs
+                .values()
+                .map(|kind| (Arc::as_ptr(kind) as usize, stock_living_layers(kind)))
+                .collect(),
             tnt: None,
             experience_orb: None,
             painting: None,
@@ -229,14 +238,73 @@ pub(in crate::game) fn thrown_renderer(
     table.as_ref()?.thrown(t).cloned()
 }
 
-/// The renderer the last resource load resolved for `mob`'s type, when a mod registered one: with
-/// none registered for any living type, one flag check, with no lock and no lookup.
-pub(in crate::game) fn living_renderer(mob: &Mob) -> Option<Arc<Resolved<dyn EntityRenderer>>> {
-    if !ANY_LIVING.load(Ordering::Relaxed) {
-        return None;
+/// The selected replacement (if any) and the stock layers the pre hooks can edit. Without a
+/// replacement or a hook that could edit stock layers, there is no table access.
+pub(in crate::game) fn living_renderer(
+    mob: &Mob,
+    wants_layers: bool,
+) -> (Option<Arc<Resolved<dyn EntityRenderer>>>, StockLayerMask) {
+    if !wants_layers && !ANY_LIVING.load(Ordering::Relaxed) {
+        return (None, StockLayerMask::default());
     }
     let table = TABLE.read().unwrap_or_else(PoisonError::into_inner);
-    table.as_ref()?.living(mob).cloned()
+    let Some(table) = table.as_ref() else {
+        return (None, StockLayerMask::default());
+    };
+    if let Some(renderer) = table
+        .living(mob)
+        .filter(|r| !r.failed.load(Ordering::Relaxed))
+    {
+        return (Some(renderer.clone()), StockLayerMask::default());
+    }
+    let stock = if wants_layers {
+        table
+            .stock_living
+            .get(&(Arc::as_ptr(&mob.kind) as usize))
+            .map(|masks| masks[usize::from(mob.is_baby())][usize::from(mob.main_arm_left())])
+            .unwrap_or_default()
+    } else {
+        StockLayerMask::default()
+    };
+    (None, stock)
+}
+
+/// Resolved from the same attachments and armor models that the stock submissions consume, not
+/// from the items currently in the slots. The model and equipment lookups happen at load only.
+fn stock_living_layers(kind: &Arc<MobType>) -> [[StockLayerMask; 2]; 2] {
+    use super::equipment_piece::{MOB_ARMOR, has_mob_armor_layer};
+    use sunrise_client::mobs::render;
+
+    let mut mob = Mob::new(0, kind.clone(), sunrise_core::geometry::Vec3::ZERO, 0.0);
+    std::array::from_fn(|baby| {
+        mob.extra.age = if baby != 0 { -1 } else { 0 };
+        let (head, hands) = render::stock_item_layers(&mob);
+        let mut layers = StockLayerMask::default();
+        if head {
+            layers.insert(StockEntityLayer::HeadItem);
+        }
+        if has_mob_armor_layer(&mob) {
+            for (_, key, _, slot) in MOB_ARMOR {
+                if render::equipment_model_key(&mob, key).is_some() {
+                    layers.insert(slot.layer(ArmorLayerPass::Base));
+                    layers.insert(slot.layer(ArmorLayerPass::Glint));
+                    if !mob.is_baby() {
+                        layers.insert(slot.layer(ArmorLayerPass::Trim));
+                    }
+                }
+            }
+        }
+        hands.map(|[main, off]| {
+            let mut layers = layers;
+            if main {
+                layers.insert(StockEntityLayer::HeldItem(Hand::Main));
+            }
+            if off {
+                layers.insert(StockEntityLayer::HeldItem(Hand::Off));
+            }
+            layers
+        })
+    })
 }
 
 /// The renderer the last resource load resolved for primed TNT, when a mod registered one: with

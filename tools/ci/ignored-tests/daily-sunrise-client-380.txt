@@ -1,0 +1,2 @@
+sunrise-client game::native_render_pair_tests::stock_hides_are_draw_local_and_refused_callbacks_cannot_erase_them lib daily resources
+sunrise-client-render gfx::entity_pixel_test::see_through_tests::secondary_views_draw_foil_without_unrelated_energy_swirl lib daily slow

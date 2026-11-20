@@ -24,12 +24,12 @@ struct Heard {
 /// quad 100 blocks above the entity, so a test sees what a canceled entity still draws.
 struct Pair(Arc<Mutex<Heard>>);
 
-fn marker(draw: &mut dyn BlockEntityDrawContext) {
+fn marker(draw: &mut dyn BlockEntityDrawContext, height: f32) {
     let corners = [
-        [0.0, 101.0, 0.0],
-        [0.0, 100.0, 0.0],
-        [1.0, 100.0, 0.0],
-        [1.0, 101.0, 0.0],
+        [0.0, height + 1.0, 0.0],
+        [0.0, height, 0.0],
+        [1.0, height, 0.0],
+        [1.0, height + 1.0, 0.0],
     ];
     draw.quad("block/stone", corners, [0.0, 0.0, 16.0, 16.0], 0xFF_FFFF);
 }
@@ -53,7 +53,7 @@ impl Hooks for Pair {
     ) -> mod_api::Flow {
         let mut heard = self.0.lock().unwrap();
         heard.events.push(format!("living_pre {}", event.entity.id));
-        marker(event.draw);
+        marker(event.draw, 100.0);
         event.cancelled = heard.cancel_living.contains(&event.entity.id);
         mod_api::Flow::Continue
     }
@@ -281,5 +281,294 @@ fn a_spectator_draws_no_layers_but_gets_its_post_hooks() {
         game.mobs.push(mannequin);
         mob_frame(game);
         assert_eq!(events(&heard), ["living_pre 94", "living_post 94"]);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn stock_hides_are_draw_local_and_refused_callbacks_cannot_erase_them() {
+    use mod_api::__private::{ModPhase, PhaseOwner};
+    use mod_api::{
+        ArmorLayerPass, ArmorLayerSlot, ClientHost, EntityRenderLayer, EntityRenderState, Flow,
+        HideLayerError, LayerTarget, PlayerModel, PosedParts, RegisterEntityLayersEvent,
+        RegistrationContext, StockEntityLayer as Layer,
+    };
+    use sunrise_client::hud::{GuiScale, HudBatch};
+    use sunrise_client::mobs::render::ARMOR_GLINT;
+
+    const CHEST_BASE: Layer = Layer::Armor(ArmorLayerSlot::Chest, ArmorLayerPass::Base);
+    const CHEST_GLINT: Layer = Layer::Armor(ArmorLayerSlot::Chest, ArmorLayerPass::Glint);
+    const CHEST_TRIM: Layer = Layer::Armor(ArmorLayerSlot::Chest, ArmorLayerPass::Trim);
+    type Results = Arc<Mutex<Vec<(u32, Result<(), HideLayerError>)>>>;
+    struct Hide(Results);
+    #[mod_api::__subscriptions]
+    impl Hooks for Hide {
+        fn render_player_pre(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut RenderPlayerPreEvent<'_>,
+        ) -> Flow {
+            if event.who.local {
+                event.hidden_layers.hide(Layer::Cape).unwrap();
+                event.hidden_layers.hide(Layer::Cape).unwrap();
+            }
+            Flow::Continue
+        }
+        fn render_living_pre(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut RenderLivingPreEvent<'_>,
+        ) -> Flow {
+            let id = event.entity.id;
+            if matches!(id, 92 | 93) {
+                let result = event.hidden_layers.hide(Layer::HeadItem);
+                self.0.lock().unwrap().push((id, result));
+            }
+            Flow::Continue
+        }
+    }
+    type Failures = Arc<Mutex<Vec<(&'static str, Result<(), HideLayerError>)>>>;
+    struct Fail {
+        panic: bool,
+        seen: Failures,
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for Fail {
+        fn render_living_pre(
+            &self,
+            host: &dyn ClientHost,
+            event: &mut RenderLivingPreEvent<'_>,
+        ) -> Flow {
+            if event.entity.id != 4321 {
+                return Flow::Continue;
+            }
+            event.cancelled = true;
+            if self.panic {
+                let result = event.hidden_layers.hide(CHEST_TRIM);
+                self.seen.lock().unwrap().push(("panic", result));
+                panic!("a failing living pre listener");
+            }
+            let result = event.hidden_layers.hide(CHEST_BASE);
+            self.seen.lock().unwrap().push(("refusal", result));
+            let _ = host.level("minecraft:overworld");
+            self.seen.lock().unwrap().push(("returned", Ok(())));
+            Flow::Continue
+        }
+    }
+    struct Markers;
+    impl EntityRenderLayer for Markers {
+        fn submit(
+            &self,
+            entity: &EntityRenderState,
+            _: Option<&PosedParts>,
+            draw: &mut dyn BlockEntityDrawContext,
+        ) -> Result<(), String> {
+            if entity.id == 4321 {
+                marker(draw, 200.0);
+            }
+            Ok(())
+        }
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for Markers {
+        fn register_entity_layers(
+            &self,
+            _: &RegistrationContext,
+            event: &mut RegisterEntityLayersEvent<'_>,
+        ) {
+            for model in [PlayerModel::Wide, PlayerModel::Slim] {
+                event
+                    .layers
+                    .add(LayerTarget::Player(model), Arc::new(Self))
+                    .unwrap();
+            }
+        }
+        fn render_living_pre(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut RenderLivingPreEvent<'_>,
+        ) -> Flow {
+            if event.entity.id == 4321 {
+                event.hidden_layers.hide(CHEST_GLINT).unwrap();
+            }
+            Flow::Continue
+        }
+        fn render_living_post(&self, _: &dyn ClientHost, event: &mut RenderLivingPostEvent<'_>) {
+            if event.entity.id == 4321 {
+                marker(event.draw, 300.0);
+            }
+        }
+        fn render_player_post(&self, _: &dyn ClientHost, event: &mut RenderPlayerPostEvent<'_>) {
+            if event.who.local {
+                marker(event.draw, 400.0);
+            }
+        }
+    }
+    super::native_entity_refs::tests::with_client_game(|game| {
+        let mut chest = sunrise_client::items::ItemStack::new("minecraft:diamond_chestplate", 1);
+        chest.enchant("minecraft:protection", 1);
+        chest.data_mut().trim = Some(("minecraft:gold".into(), "minecraft:sentry".into()));
+        game.armor[1] = Some(chest.clone());
+        game.prepare_trims();
+        let trim_sprite = game
+            .armor_stand_assets
+            .trim_texture("minecraft:diamond", "humanoid", &chest)
+            .expect("the equipped armor has a named trim")
+            .sprite();
+        let trim = game.gui.atlas.sprites[&trim_sprite];
+        let base = game.gui.atlas.sprites["entity/equipment/humanoid/diamond"];
+        own_player_frame(game, false);
+        // Mark the capes with independent atlas regions, disjoint from the skin and armor.
+        let local = game.gui.atlas.sprites["block/gold_block"];
+        let remote = game.gui.atlas.sprites["block/diamond_block"];
+        game.gui
+            .atlas
+            .sprites
+            .insert("test:local_cape".into(), local);
+        game.gui
+            .atlas
+            .sprites
+            .insert("test:remote_cape".into(), remote);
+        game.player_model.as_mut().unwrap().cape = Some("test:local_cape".into());
+        let mut other = mob(game, "minecraft:player", 91, 2.0);
+        other.cape = Some("test:remote_cape".into());
+        let mobs = [
+            other,
+            mob(game, "minecraft:creeper", 92, 4.0),
+            mob(game, "minecraft:creeper", 93, -4.0),
+        ];
+        game.mobs.clear();
+        game.mobs.extend(mobs);
+        let unadorned_mobs = mob_frame(game);
+        game.mobs[1].extra.set_slot_id(
+            sunrise_items::equipment::HEAD,
+            Some("minecraft:carved_pumpkin".into()),
+        );
+        let inside = |uv: [f32; 2], rect: sunrise_client::hud::Rect| {
+            uv[0] > rect.u0 && uv[0] < rect.u1 && uv[1] > rect.v0 && uv[1] < rect.v1
+        };
+        let frame = |game: &mut Game<'_>| {
+            let mobs = mob_frame(game);
+            let mut player = Vec::new();
+            game.player_model_geometry(CAMERA, 1.0, &mut player);
+            let mut hud = HudBatch::new(
+                [320, 240],
+                GuiScale {
+                    requested: 1,
+                    unicode: false,
+                },
+            );
+            game.draw_player_preview(&mut hud, 26.0, 8.0, 75.0, 78.0, 30.0, 0.0625);
+            (player, mobs, hud.vertices)
+        };
+        let (stock, equipped_mobs, preview) = frame(game);
+        assert!(
+            equipped_mobs.len() > unadorned_mobs.len(),
+            "a creeper submits the head item"
+        );
+        assert!(unadorned_mobs.iter().any(|v| inside(v.uv, remote)));
+        assert!(preview.iter().any(|v| inside(v.uv, local)));
+        let quad_uses = |quad: &[Vertex; 4], sprite| {
+            let uv = std::array::from_fn(|k| quad.iter().map(|v| v.uv[k]).sum::<f32>() / 4.0);
+            inside(uv, sprite)
+        };
+        let quads = stock.as_chunks::<4>().0.iter();
+        assert!(quads.clone().any(|q| quad_uses(q, local)));
+        let first_base = quads
+            .clone()
+            .position(|q| quad_uses(q, base))
+            .expect("stock armor base");
+        let first_trim = quads
+            .clone()
+            .position(|q| quad_uses(q, trim))
+            .expect("stock armor trim");
+        assert!(first_base < first_trim);
+        assert!(
+            quads
+                .clone()
+                .filter(|q| q[0].layer == ARMOR_GLINT)
+                .all(|q| quad_uses(q, trim))
+        );
+        assert_eq!(quads.clone().nth(first_trim).unwrap()[0].layer, ARMOR_GLINT);
+        let expected: Vec<_> = quads
+            .filter(|q| !quad_uses(q, local))
+            .flatten()
+            .map(|v| {
+                if v.layer == ARMOR_GLINT {
+                    Vertex {
+                        layer: 0,
+                        glint_uv: [0.0; 2],
+                        ..*v
+                    }
+                } else {
+                    *v
+                }
+            })
+            .collect();
+
+        let results = Results::default();
+        let failures = Failures::default();
+        let _setup = PhaseOwner::scope(ModPhase::Setup);
+        mod_platform::testing::with_mods(
+            vec![
+                mod_api::ModEntry::new("hide", Box::new(Hide(results.clone()))),
+                mod_api::ModEntry::new(
+                    "refused",
+                    Box::new(Fail {
+                        panic: false,
+                        seen: failures.clone(),
+                    }),
+                ),
+                mod_api::ModEntry::new(
+                    "panicked",
+                    Box::new(Fail {
+                        panic: true,
+                        seen: failures.clone(),
+                    }),
+                ),
+                mod_api::ModEntry::new("markers", Box::new(Markers)),
+            ]
+            .into(),
+            || {
+                game.resolve_entity_renderers();
+                let (actual, actual_mobs, actual_preview) = frame(game);
+                let (stock, markers) = actual.split_at(expected.len());
+                assert_eq!(
+                    bytemuck::cast_slice::<_, u8>(stock),
+                    bytemuck::cast_slice::<_, u8>(&expected)
+                );
+                let heights: Vec<_> = markers
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|q| q.iter().map(|v| v.pos[1]).reduce(f32::min).unwrap())
+                    .collect();
+                assert_eq!(markers.len(), 12);
+                assert_eq!(
+                    heights,
+                    [200.0, 300.0, 400.0],
+                    "registered layer, Living Post, Player Post"
+                );
+                assert_eq!(
+                    bytemuck::cast_slice::<_, u8>(&actual_mobs),
+                    bytemuck::cast_slice::<_, u8>(&unadorned_mobs)
+                );
+                assert_eq!(
+                    bytemuck::cast_slice::<_, u8>(&actual_preview),
+                    bytemuck::cast_slice::<_, u8>(&preview)
+                );
+                assert_eq!(game.armor[1].as_ref(), Some(&chest));
+                assert_eq!(
+                    game.mobs[1].extra.head_id(),
+                    Some("minecraft:carved_pumpkin")
+                );
+            },
+        );
+        assert_eq!(*results.lock().unwrap(), [(92, Ok(())), (93, Ok(()))]);
+        assert_eq!(
+            *failures.lock().unwrap(),
+            [("refusal", Ok(())), ("panic", Ok(()))]
+        );
+        game.resolve_entity_renderers();
     });
 }

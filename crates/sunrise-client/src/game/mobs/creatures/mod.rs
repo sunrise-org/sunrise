@@ -8231,6 +8231,8 @@ impl Game<'_> {
             viewer,
             skinning,
             listened,
+            wants_stock_layers: listened
+                && mod_api::__private::listened(mod_api::HookId::RenderLivingPre),
         };
         for mob in &self.mobs {
             self.living_geometry::<PRECHECK>(mob, &frame, out);

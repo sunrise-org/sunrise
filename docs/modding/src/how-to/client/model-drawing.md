@@ -305,9 +305,9 @@ draw.fluid_box(&tank.stack, [0.125, 0.0625, 0.125, 0.875, level, 0.875], options
 Each mob and player in view gets the render hook pair once a frame, NeoForge's
 `RenderLivingEvent` and `RenderPlayerEvent`:
 
-1. `render_player_pre(player, who, draw, hidden, canceled)`, for a player only (`who` is its
+1. `render_player_pre(player, who, draw, hidden, hidden_layers, canceled)`, for a player only (`who` is its
    profile name and whether it is this window's own);
-2. `render_living_pre(entity, draw, hidden, canceled)`, before the entity's model;
+2. `render_living_pre(entity, draw, hidden, hidden_layers, canceled)`, before the entity's model;
 3. the model and its vanilla layers, or in their place the renderer a mod registered for its type
    ([entity renderers](entity-renderers.md)), then the layers mods added to its type
    ([entity layers](entity-layers.md));
@@ -350,7 +350,9 @@ Typed humanoid parts have separate storage, so all twelve fit alongside the eigh
 - A hidden part takes its children with it: the hat goes with the head, a sleeve with its arm.
 - The body loses the part, and so do the layers drawn on the body's own model, as vanilla's
   `getParentModel()` layers do: a villager's type, profession and level, a spider's eyes. The
-  armour, held items and other layers keep every part, and the cape, a layer of its own, stays.
+  armour, held items and other layers keep every part, and the cape, a layer of its own, stays. Use
+  the separate [`hidden_layers`](entity-layers.md#hiding-a-stock-layer) editor to suppress those
+  submissions without hiding body parts.
 
 ## Text and animation in block entities
 

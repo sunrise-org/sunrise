@@ -18,9 +18,13 @@ pub trait Hooks {
     /// (`getParentModel()`: a villager's type, profession and level, a spider's eyes), while its
     /// armour, held items and other layers keep every part. An entity is drawn afresh each frame:
     /// `draw.keep()` does nothing here.
+    /// `hidden_layers.hide(layer)` hides a stock layer or armor pass for this world draw only.
+    /// It does not affect the base model, registered layers, or any preview. Hides from successful
+    /// listeners accumulate; an unsupported selector returns a typed error without editing the mask.
+    /// A panicking or refused callback does not contribute hides.
     #[hook(
         side = "client",
-        version = 2,
+        version = 3,
         contract = "cancel",
         out = "canceled",
         neoforge = "RenderLivingEvent.Pre",

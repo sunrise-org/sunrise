@@ -5,9 +5,10 @@
 //! resource reload resolves it again.
 use super::Game;
 use mod_api::{
-    BlockEntityDrawContext, EntityRenderLayer, EntityRenderState, EntityRenderer, Hooks,
-    LayerTarget, Pose, PosedParts, RegisterEntityLayersEvent, RegisterEntityRenderersEvent,
-    RegistrationContext, RenderLivingPostEvent, RenderLivingPreEvent,
+    ArmorLayerPass, ArmorLayerSlot, BlockEntityDrawContext, EntityRenderLayer, EntityRenderState,
+    EntityRenderer, Hand, HideLayerError, Hooks, LayerTarget, Pose, PosedParts,
+    RegisterEntityLayersEvent, RegisterEntityRenderersEvent, RegistrationContext,
+    RenderLivingPostEvent, RenderLivingPreEvent, StockEntityLayer,
 };
 use std::sync::{
     Arc, Mutex,
@@ -20,7 +21,13 @@ use sunrise_client::{mesher::Vertex, mobs::Mob};
 struct Heard {
     events: Vec<String>,
     cancel: Vec<u32>,
+    hides: Vec<Result<(), HideLayerError>>,
 }
+
+const ZOMBIE_STOCK: [StockEntityLayer; 2] = [
+    StockEntityLayer::HeldItem(Hand::Main),
+    StockEntityLayer::Armor(ArmorLayerSlot::Chest, ArmorLayerPass::Base),
+];
 
 type Shared = Arc<Mutex<Heard>>;
 
@@ -128,6 +135,11 @@ impl Hooks for Scene {
     ) -> mod_api::Flow {
         let mut heard = self.heard.lock().unwrap();
         heard.events.push(format!("living_pre {}", event.entity.id));
+        if event.entity.kind == "minecraft:zombie" {
+            heard
+                .hides
+                .extend(ZOMBIE_STOCK.map(|layer| event.hidden_layers.hide(layer)));
+        }
         event.cancelled = heard.cancel.contains(&event.entity.id);
         mod_api::Flow::Continue
     }
@@ -221,6 +233,11 @@ fn a_registered_living_type_draws_its_renderer_in_place_of_its_model() {
                 quads(&zombie),
                 [100.0, 200.0],
                 "the renderer's quad, then the layer's, and no vanilla model"
+            );
+            assert_eq!(
+                heard.lock().unwrap().hides,
+                ZOMBIE_STOCK.map(|layer| Err(HideLayerError::Unsupported(layer))),
+                "the selected replacement has neither of the stock zombie layers",
             );
             assert_eq!(
                 events(heard),

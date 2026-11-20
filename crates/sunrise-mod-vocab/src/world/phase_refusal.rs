@@ -133,16 +133,23 @@ pub fn refuse(operation: &'static str, phase: ModPhase) -> ! {
 /// call that returned normally after its mod swallowed the unwind, because the latch stays set
 /// in the scope. Any other panic goes on unwinding, so real faults crash as before.
 pub fn contain_refusal<T>(mod_id: &'static str, f: impl FnOnce() -> T) -> Result<T, PhaseRefusal> {
+    catch_callback(mod_id, f).unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+/// The same phase latch at a boundary that also recovers from ordinary callback panics.
+pub(crate) fn catch_callback<T>(
+    mod_id: &'static str,
+    f: impl FnOnce() -> T,
+) -> std::thread::Result<Result<T, PhaseRefusal>> {
     let outer = enter_scope(mod_id);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
     let latched = leave_scope(outer);
     match (result, latched) {
-        (Ok(value), None) => Ok(value),
-        (Ok(_), Some(refusal)) => Err(refusal),
-        (Err(payload), latched) => match payload.downcast::<PhaseRefusal>() {
-            Ok(refusal) => Err(latched.unwrap_or(*refusal)),
-            Err(other) => std::panic::resume_unwind(other),
-        },
+        (Ok(value), None) => Ok(Ok(value)),
+        (Ok(_), Some(refusal)) => Ok(Err(refusal)),
+        (Err(payload), latched) => payload
+            .downcast::<PhaseRefusal>()
+            .map(|refusal| Err(latched.unwrap_or(*refusal))),
     }
 }
 

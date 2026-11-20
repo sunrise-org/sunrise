@@ -308,61 +308,63 @@ impl Game<'_> {
     }
     /// `HumanoidArmorLayer` for the player: (model, texture rect, colour,
     /// overlay) of each worn piece, head to feet.
-    pub(super) fn player_armor_layers(&self) -> Vec<(&Part, [f32; 4], u32, u32, bool)> {
-        self.stack_armor_layers(&self.armor)
-    }
-    /// `HumanoidArmorLayer` for worn stacks (head to feet), trims included.
-    pub(super) fn stack_armor_layers(
+    pub(super) fn player_armor_layers(
         &self,
-        armor: &[Option<ItemStack>; 4],
+        hidden_layers: mod_api::StockLayerMask,
     ) -> Vec<(&Part, [f32; 4], u32, u32, bool)> {
-        self.armor_layers(
-            armor
-                .each_ref()
-                .map(|s| s.as_ref().map(|s| (&*s.item, Some(s)))),
-        )
+        self.armor_layers(self.armor.each_ref().map(Option::as_ref), hidden_layers)
     }
     /// `HumanoidArmorLayer` for another player's model: the armour it wears
     /// (`extra.equipment`, head to feet).
-    pub(super) fn worn_armor_layers(&self, m: &Mob) -> Vec<(&Part, [f32; 4], u32, u32, bool)> {
+    pub(super) fn worn_armor_layers(
+        &self,
+        m: &Mob,
+        hidden_layers: mod_api::StockLayerMask,
+    ) -> Vec<(&Part, [f32; 4], u32, u32, bool)> {
         let e = &m.extra;
         self.armor_layers(
-            sunrise_items::equipment::ARMOR
-                .map(|slot| e.slot_stack(slot).map(|stack| (&*stack.item, Some(stack)))),
+            sunrise_items::equipment::ARMOR.map(|slot| e.slot_stack(slot)),
+            hidden_layers,
         )
     }
-    /// The layers of the armour items `worn` (with their stacks when known,
-    /// for trims and CIT armour rules), head to feet.
+    /// The layers of the worn armor stacks (including trims and CIT rules), head to feet.
     fn armor_layers(
         &self,
-        worn: [Option<(&str, Option<&ItemStack>)>; 4],
+        worn: [Option<&ItemStack>; 4],
+        hidden_layers: mod_api::StockLayerMask,
     ) -> Vec<(&Part, [f32; 4], u32, u32, bool)> {
         let assets = &self.armor_stand_assets;
         let mut out = Vec::new();
-        for (item, (layer, slot)) in worn.into_iter().zip([
+        for (stack, (layer, slot)) in worn.into_iter().zip([
             ("helmet", "head"),
             ("chestplate", "chest"),
             ("leggings", "legs"),
             ("boots", "feet"),
         ]) {
-            let Some((item, stack)) = item else {
+            let Some(stack) = stack else {
                 continue;
             };
-            let Some(piece) = self.equipment_piece(item, stack, slot, layer == "leggings", false)
+            let Some(piece) =
+                self.equipment_piece(&stack.item, Some(stack), slot, layer == "leggings", false)
             else {
                 continue;
             };
             let Some(part) = assets.player.get(layer) else {
                 continue;
             };
-            for material in
-                self.equipment_materials(&piece, stack, super::equipment_piece::EquipmentPass::Draw)
-            {
+            for material in self.equipment_materials(
+                &piece,
+                Some(stack),
+                super::equipment_piece::EquipmentPass::Draw,
+            ) {
+                let Some(overlay) = material.visible_overlay(piece.slot, hidden_layers) else {
+                    continue;
+                };
                 out.push((
                     material.model.map_or(part, |model| &**model),
                     material.binding.uv,
                     material.color,
-                    material.overlay,
+                    overlay,
                     material.glows,
                 ));
             }

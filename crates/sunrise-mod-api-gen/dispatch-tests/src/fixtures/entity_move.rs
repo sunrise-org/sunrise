@@ -127,6 +127,9 @@ mod root {
         pub(super) fn refusable<T>(_: bool, call: impl FnOnce() -> T) -> Result<T, Refusal> {
             Ok(call())
         }
+        pub(super) fn render_layer_callback<T>(call: impl FnOnce() -> T) -> Result<T, ()> {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)).map_err(|_| ())
+        }
 
         pub(super) fn listening_kind_owner(
             hook: super::HookId,

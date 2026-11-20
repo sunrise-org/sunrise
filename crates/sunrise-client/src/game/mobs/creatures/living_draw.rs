@@ -2,6 +2,32 @@
 //! layers, hooks, outline and beam around it), moved out of `mob_geometry_inner`: the pass
 //! works out the frame once (`LivingFrame`) and asks this for each mob in turn.
 use super::*;
+use mod_api::{StockEntityLayer, StockLayerMask};
+use sunrise_client::mobs::{anim, render};
+
+/// A world draw lends its mask to the lower model renderer, including the GPU path.
+struct LivingDrawData<'a, 'game> {
+    game: &'a Game<'game>,
+    hidden_layers: StockLayerMask,
+}
+
+impl render::RenderDataSource for LivingDrawData<'_, '_> {
+    fn mob_data(&self) -> &sunrise_client::mobs::MobData {
+        self.game.res.mob_data()
+    }
+
+    fn humanoid_setup(&self) -> Option<&dyn anim::HumanoidSetup> {
+        render::RenderDataSource::humanoid_setup(self.game)
+    }
+
+    fn equipment_layers(&self, mob: &Mob) -> Vec<render::Layer> {
+        self.game.mob_equipment_layers(
+            mob,
+            crate::game::equipment_piece::EquipmentPass::Draw,
+            self.hidden_layers,
+        )
+    }
+}
 
 /// What the mob pass works out once a frame for every living entity it draws.
 #[derive(Clone, Copy)]
@@ -14,6 +40,7 @@ pub(super) struct LivingFrame<'a> {
     pub(super) viewer: Option<&'a sunrise_client::scoreboard::Team>,
     pub(super) skinning: bool,
     pub(super) listened: bool,
+    pub(super) wants_stock_layers: bool,
 }
 
 impl Game<'_> {
@@ -32,6 +59,7 @@ impl Game<'_> {
             viewer,
             skinning,
             listened,
+            wants_stock_layers,
         } = *frame;
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
@@ -113,16 +141,39 @@ impl Game<'_> {
             .then(|| self.remote_player_name(mob.id))
             .flatten()
             .map(|name| PlayerRender { name, local: false });
-        let pre = self.mod_render_pre(mob, who, listened, alpha as f32, camera, packed, out);
-        let Some(hidden) = pre else {
+        let (replacement, supported_layers) = if is_player {
+            (None, StockLayerMask::PLAYER)
+        } else {
+            super::super::native_entity_renderers::living_renderer(mob, wants_stock_layers)
+        };
+        let pre = self.mod_render_pre(
+            mob,
+            who,
+            supported_layers,
+            listened,
+            alpha as f32,
+            camera,
+            packed,
+            out,
+        );
+        let Some((hidden, hidden_layers)) = pre else {
             // What the mods drew in its place is culled as the entity's own would be.
             self.cull_entity_vertices(out, entity_start);
             return;
         };
         // A mod's renderer for the type (`register_entity_renderers`) draws in place of its
         // model and vanilla layers; the mods' layers and post hooks still follow.
-        let modded =
-            self.mod_living_renderer_geometry(mob, alpha as f32, camera, packed, true, out);
+        let modded = replacement.is_some_and(|renderer| {
+            self.mod_living_renderer_geometry(
+                &renderer,
+                mob,
+                alpha as f32,
+                camera,
+                packed,
+                true,
+                out,
+            )
+        });
         if mob.species() == Species::SulfurCube && !mob.is_invisible() && !modded {
             self.sulfur_cube_body_geometry(
                 mob,
@@ -134,7 +185,7 @@ impl Game<'_> {
         }
         // Other players on a server: PlayerRenderer's HumanoidArmorLayer.
         let armor = if is_player {
-            self.worn_armor_layers(mob)
+            self.worn_armor_layers(mob, hidden_layers)
         } else {
             Vec::new()
         };
@@ -155,6 +206,10 @@ impl Game<'_> {
                 Species::Blaze | Species::MagmaCube | Species::GlowSquid | Species::SulfurCube
             );
         let (mut skinned, mut parts, added) = (None, None, self.mod_layers(mob));
+        let data = LivingDrawData {
+            game: self,
+            hidden_layers,
+        };
         if posable {
             let mut models = self.skin_models.borrow_mut();
             let mut frame = self.skin_frame.borrow_mut();
@@ -166,7 +221,7 @@ impl Game<'_> {
                 camera,
                 &lookup,
                 packed,
-                self,
+                &data,
                 hidden,
                 (listened || added.is_some()).then_some(&mut parts),
                 out,
@@ -181,7 +236,7 @@ impl Game<'_> {
                     camera,
                     &lookup,
                     packed,
-                    self,
+                    &data,
                     &armor,
                     hidden,
                     (listened || added.is_some()).then_some(&mut parts),
@@ -194,7 +249,7 @@ impl Game<'_> {
                     camera,
                     &lookup,
                     packed,
-                    self,
+                    &data,
                     &armor,
                     (listened || added.is_some()).then_some(&mut parts),
                     out,
@@ -206,7 +261,7 @@ impl Game<'_> {
                     camera,
                     &lookup,
                     packed,
-                    self,
+                    &data,
                     &armor,
                     hidden,
                     (listened || added.is_some()).then_some(&mut parts),
@@ -233,7 +288,7 @@ impl Game<'_> {
             // the others have no `isInvisible` check.
             let chest = mob.extra.slot_id(sunrise_items::equipment::CHEST);
             // `CapeLayer` and `Deadmau5EarsLayer`: `!state.isInvisible`, whoever sees the body.
-            if !invisible {
+            if !invisible && !hidden_layers.contains(StockEntityLayer::Cape) {
                 self.player_cape_geometry(mob, chest, camera, alpha as f32, packed, out);
             }
             if !invisible
@@ -244,7 +299,9 @@ impl Game<'_> {
             {
                 self.player_ears_geometry(mob, &name, camera, alpha as f32, packed, out);
             }
-            self.player_elytra_geometry(mob, chest, camera, alpha as f32, packed, out);
+            if !hidden_layers.contains(StockEntityLayer::Wings) {
+                self.player_elytra_geometry(mob, chest, camera, alpha as f32, packed, out);
+            }
             self.shoulder_parrots_geometry(mob, camera, alpha as f32, packed, out);
             self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
             self.stuck_in_body_geometry(mob, mob.id as i32, camera, alpha as f32, packed, out);
@@ -254,7 +311,7 @@ impl Game<'_> {
             if !modded {
                 // Held items join the GPU path's draws, their silhouette too.
                 let skin = (skinning && silhouette_on_gpu).then_some(&mut skinned);
-                self.mob_block_geometry(mob, camera, alpha, packed, skin, out);
+                self.mob_block_geometry(mob, camera, alpha, packed, hidden_layers, skin, out);
             }
             self.mod_layer_geometry(mob, who, parts, added, alpha as f32, camera, packed, out);
         }

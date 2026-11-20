@@ -1,0 +1,3 @@
+ids = ["hook:render_living_pre", "hook:render_player_pre"]
+why = "The player and living Pre events can now suppress stock layers and individual armor passes for a world draw."
+migrate = "Rebuild native listeners. Use hidden_layers.hide for a stock layer or pass; the hidden model-part editor and whole-draw cancellation retain their contracts."

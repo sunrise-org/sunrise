@@ -95,6 +95,39 @@ pub(super) struct EntityPipelineOptions<'a> {
     pub(super) write_mask: wgpu::ColorWrites,
 }
 
+/// The additive, depth-tested pipeline for `RenderPipelines.ENERGY_SWIRL` and foil without
+/// its armor color pass. Clipped secondary views give the foil the same bias as their entities.
+pub(super) fn energy_swirl_options(clipped: bool) -> EntityPipelineOptions<'static> {
+    let one_one = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    };
+    EntityPipelineOptions {
+        label: if clipped {
+            "Foil (clipped world view)"
+        } else {
+            "Energy swirls"
+        },
+        cull_mode: None,
+        depth_write: false,
+        compare: wgpu::CompareFunction::GreaterEqual,
+        bias: Default::default(),
+        blend: wgpu::BlendState {
+            color: one_one,
+            alpha: one_one,
+        },
+        clouds: false,
+        vertex: "vs_entity",
+        fragment: if clipped {
+            "fs_foil_clipped"
+        } else {
+            "fs_energy_swirl"
+        },
+        write_mask: wgpu::ColorWrites::ALL,
+    }
+}
+
 /// Constructs the entity shader pipelines shared by the renderer and its pixel tests.
 pub(super) fn entity_pipeline_factory<'a>(
     kept: &'a reuse::On<'a>,

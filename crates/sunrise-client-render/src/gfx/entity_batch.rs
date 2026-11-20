@@ -17,6 +17,8 @@ use super::Vertex;
 /// Sorted still-fluid geometry follows, then the two native world-canvas text materials,
 /// NORMAL and POLYGON_OFFSET. Material storage order is independent of their draw stages.
 const MATERIALS: usize = 17;
+// A subrange of the energy swirl pass, also drawn by secondary world views.
+const ARMOR_FOIL: usize = MATERIALS;
 pub const TERRAIN_MODEL_SOLID_OVERLAY: u32 = 42;
 pub const TERRAIN_MODEL_CUTOUT_OVERLAY: u32 = 43;
 pub const TERRAIN_MODEL_CUTOUT_MIPPED_OVERLAY: u32 = 44;
@@ -66,6 +68,8 @@ pub const WATER_MASK_OVERLAY: u32 = 13;
 /// powered wither's armour). The light bytes carry the sprite's origin and the colour bytes its
 /// size (`breaking::stage_light`), the UV the scrolled position in the sprite.
 pub const ENERGY_SWIRL_OVERLAY: u32 = 34;
+/// Armor foil without its color material: additive, with no depth or outline writes.
+pub const ARMOR_GLINT_ONLY_OVERLAY: u32 = 47;
 /// The overlay of entity shadow quads (`RenderTypes.entityShadow`).
 pub const SHADOW_OVERLAY: u32 = 14;
 /// The overlay of translucent-layer particles (`SingleQuadParticle.Layer.translucent`).
@@ -143,6 +147,7 @@ fn material(layer: u32, oit: bool) -> usize {
         12 => 3,
         WATER_MASK_OVERLAY => 4,
         ENERGY_SWIRL_OVERLAY => 5,
+        ARMOR_GLINT_ONLY_OVERLAY => ARMOR_FOIL,
         SHADOW_OVERLAY => 6,
         TRANSLUCENT_PARTICLE_OVERLAY => 7,
         TRANSLUCENT_ITEM_OVERLAY | TRANSLUCENT_GLINT_ITEM_OVERLAY => 8,
@@ -155,8 +160,10 @@ pub(super) struct EntityBatch {
     // Runs of consecutive quads of one material (first quad, quad count): a
     // model's quads share one, so whole runs are copied at once. Cleared each
     // frame, keeping their storage.
-    runs: [Vec<(usize, usize)>; MATERIALS],
+    runs: [Vec<(usize, usize)>; MATERIALS + 1],
     pub(super) combined: Vec<Vertex>,
+    /// Foil-only quads in `combined`, immediately after the energy swirls.
+    pub(super) armor_foil: std::ops::Range<u32>,
     sort: QuadSort,
     /// Additive quads tagged `OIT_ENTITY` that the last `update` moved into the
     /// last material (improved transparency on): the dragon's eyes, which share
@@ -221,7 +228,7 @@ impl EntityBatch {
         for runs in &mut self.runs {
             runs.clear();
         }
-        let mut counts = [0usize; MATERIALS];
+        let mut counts = [0usize; MATERIALS + 1];
         let mut start = 0;
         while start < quads.len() {
             let kind = material(quads[start][0].layer, oit);
@@ -237,12 +244,21 @@ impl EntityBatch {
         self.combined.clear();
         self.combined
             .reserve(entity_vertices + additive.len() + hand.len() + see_through.len());
-        for runs in &self.runs[..10] {
+        for (material, runs) in self.runs[..10].iter().enumerate() {
             for &(first, count) in runs {
                 self.combined
                     .extend_from_slice(&entities[first * 4..(first + count) * 4]);
             }
+            if material == 5 {
+                let start = self.combined.len() as u32 / 4;
+                for &(first, count) in &self.runs[ARMOR_FOIL] {
+                    self.combined
+                        .extend_from_slice(&entities[first * 4..(first + count) * 4]);
+                }
+                self.armor_foil = start..self.combined.len() as u32 / 4;
+            }
         }
+        counts[5] += counts[ARMOR_FOIL];
         // `RenderTypes.eyes` is blended like the other entities, not added: with
         // improved transparency on, tagged additive quads join the last
         // material, drawn without the additive overlay and the baked shading.
@@ -286,7 +302,7 @@ impl EntityBatch {
         }
         self.combined.extend_from_slice(hand);
         self.combined.extend_from_slice(see_through);
-        counts.map(|count| count as u32)
+        std::array::from_fn(|i| counts[i] as u32)
     }
 }
 

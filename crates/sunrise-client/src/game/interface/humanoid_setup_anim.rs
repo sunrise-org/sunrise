@@ -7,11 +7,19 @@ impl render::RenderDataSource for Game<'_> {
     }
 
     fn equipment_layers(&self, mob: &Mob) -> Vec<render::Layer> {
-        self.mob_equipment_layers(mob, super::equipment_piece::EquipmentPass::Draw)
+        self.mob_equipment_layers(
+            mob,
+            super::equipment_piece::EquipmentPass::Draw,
+            Default::default(),
+        )
     }
 
     fn equipment_inventory(&self, mob: &Mob) -> Vec<render::Layer> {
-        self.mob_equipment_layers(mob, super::equipment_piece::EquipmentPass::TextureInventory)
+        self.mob_equipment_layers(
+            mob,
+            super::equipment_piece::EquipmentPass::TextureInventory,
+            Default::default(),
+        )
     }
 
     fn humanoid_setup(&self) -> Option<&dyn anim::HumanoidSetup> {

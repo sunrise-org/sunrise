@@ -133,6 +133,8 @@ pub struct Layer {
     /// Equipment owns its overlay; other layers inherit the body overlay.
     pub equipment_texture_final: bool,
     pub equipment_overlay: Option<u32>,
+    /// A suppressed submission still participates in first-material CEM texture selection.
+    pub equipment_hidden: bool,
     /// Reload-baked, slot-clipped replacement; never geometry supplied by a frame.
     pub equipment_model: Option<std::sync::Arc<Part>>,
     pub model: Cow<'static, str>,
@@ -608,6 +610,7 @@ pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
     ) {
         v.push(Layer {
             equipment_overlay: None,
+            equipment_hidden: false,
             equipment_model: None,
             equipment_texture_final: false,
             model: model.into(),
@@ -697,6 +700,7 @@ pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
         S::Breeze => {
             v.push(Layer {
                 equipment_overlay: None,
+                equipment_hidden: false,
                 equipment_model: None,
                 equipment_texture_final: false,
                 model: "breeze#wind".into(),
@@ -982,6 +986,14 @@ pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
     }
     v
 }
+/// Whether this renderer has the generic head item route (skulls have an additional gate).
+pub fn has_head_item_layer(m: &Mob) -> bool {
+    let species = m.species();
+    species != Species::SnowGolem
+        && !super::species::body_slot(species)
+        && !super::equine::is_equine(species)
+}
+
 /// The existing humanoid equipment model, without rebuilding its key each frame.
 pub fn equipment_model_key(mob: &Mob, layer: &str) -> Option<Cow<'static, str>> {
     let (model, _) = body(mob);
@@ -998,6 +1010,7 @@ impl Layer {
             texture: interned(format_args!("{texture}")),
             color,
             equipment_overlay: Some(overlay),
+            equipment_hidden: false,
             equipment_model: None,
             equipment_texture_final: false,
             full_bright: false,
@@ -1359,7 +1372,10 @@ fn draw_normals(
                 let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
                 // The armour glint scrolls the layer's model UV in the shader;
                 // the item path already passed its transformed UV.
-                let glint_uv = if overlay == ARMOR_GLINT {
+                let glint_uv = if matches!(
+                    overlay,
+                    ARMOR_GLINT | sunrise_client_render::gfx::ARMOR_GLINT_ONLY_OVERLAY
+                ) {
                     [v[3], v[4]]
                 } else {
                     [0.0, 0.0]
@@ -1424,7 +1440,9 @@ pub fn put(
         light,
         overlay,
     };
-    if let Some(skin) = skin
+    // The skin buffer draws ordinary entity materials. Standalone foil needs the additive pass.
+    if overlay != sunrise_client_render::gfx::ARMOR_GLINT_ONLY_OVERLAY
+        && let Some(skin) = skin
         && skin.draw(part, base, poses, paint)
     {
         return;
@@ -1914,6 +1932,7 @@ pub fn drawn_textures(m: &Mob, data: &dyn RenderDataSource) -> Vec<String> {
         for (model, texture, _) in super::warden::emissive_layers(m, 0.0) {
             all_layers.push(Layer {
                 equipment_overlay: None,
+                equipment_hidden: false,
                 equipment_model: None,
                 equipment_texture_final: false,
                 model: model.into(),
@@ -1973,11 +1992,7 @@ fn posed_body(
     let custom = cem.layer(cem_key(&model_key));
     let model = match custom {
         Some(c) => c.model.clone(),
-        None => m
-            .kind
-            .layer(&model_key)
-            .cloned()
-            .unwrap_or_else(|| m.kind.model.clone()),
+        None => vanilla_body_model(m, &model_key).clone(),
     };
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.mob_data().animations);
@@ -1989,6 +2004,34 @@ fn posed_body(
     let anchors = custom.map_or(Vec::new(), |c| c.anchors.clone());
     (model, poses, anchors)
 }
+fn vanilla_body_model<'a>(m: &'a Mob, key: &str) -> &'a std::sync::Arc<Part> {
+    m.kind.layer(key).unwrap_or(&m.kind.model)
+}
+
+/// Stock attachments for this renderer's model, resolved at resource load, without equipment.
+/// The two hand entries describe a right and a left main arm, each in main/off-hand order.
+pub fn stock_item_layers(m: &Mob) -> (bool, [[bool; 2]; 2]) {
+    let (key, _) = body(m);
+    let model = vanilla_body_model(m, &key);
+    let has = |part| find_part(model, part).is_some();
+    let hands = std::array::from_fn(|main_left| {
+        std::array::from_fn(|off| {
+            let main_left = main_left != 0;
+            let left = main_left != (off != 0);
+            match held_item_anchor(m) {
+                HeldItemAnchor::Panda | HeldItemAnchor::Fox | HeldItemAnchor::Dolphin => !left,
+                HeldItemAnchor::Witch => left == main_left && (has("arms") || has("nose")),
+                HeldItemAnchor::CrossedArms => left == main_left && has("arms"),
+                HeldItemAnchor::Hand if m.species() == Species::Allay => {
+                    has("body") && has("right_arm")
+                }
+                HeldItemAnchor::Hand => has(hand_arm(left)),
+            }
+        })
+    });
+    (has_head_item_layer(m) && has("head"), hands)
+}
+
 /// The humanoid parts of a body drawn with `poses`, for the mods' post hooks and layers: read from the poses the
 /// draw already made, so nothing is posed twice; fixed-size, nothing allocated.
 fn posed_parts(poses: &Poses) -> Option<mod_api::PosedParts> {
@@ -2154,6 +2197,7 @@ fn render_visible(
             if a > 0.0 {
                 all_layers.push(Layer {
                     equipment_overlay: None,
+                    equipment_hidden: false,
                     equipment_model: None,
                     equipment_texture_final: false,
                     model: model.into(),
@@ -2181,14 +2225,17 @@ fn render_visible(
                 && all_layers.iter().all(|layer| {
                     // With improved transparency off, a translucent layer's tag
                     // is the only difference from a plain draw.
-                    (skin.models.tagged && (eyes_layer(m, layer) || !layer.full_bright)
-                        || !layer.full_bright && !translucent_layer(m, layer))
-                        && cem.layer(&layer.model).is_none()
-                        && layer
-                            .equipment_model
-                            .as_ref()
-                            .or_else(|| m.kind.layer(&layer.model))
-                            .is_none_or(|part| skin.supports(part))
+                    layer.equipment_hidden
+                        || (layer.equipment_overlay
+                            != Some(sunrise_client_render::gfx::ARMOR_GLINT_ONLY_OVERLAY)
+                            && (skin.models.tagged && (eyes_layer(m, layer) || !layer.full_bright)
+                                || !layer.full_bright && !translucent_layer(m, layer))
+                            && cem.layer(&layer.model).is_none()
+                            && layer
+                                .equipment_model
+                                .as_ref()
+                                .or_else(|| m.kind.layer(&layer.model))
+                                .is_none_or(|part| skin.supports(part)))
                 })
         }
         None => false,
@@ -2277,6 +2324,9 @@ fn render_visible(
     let mut layer_poses = Poses::pooled();
     let body_keys = [&*model_key, cem_key];
     for (i, layer) in all_layers.iter().enumerate() {
+        if layer.equipment_hidden {
+            continue;
+        }
         let custom = cem.layer(&layer.model);
         // `layer.texture` stays the vanilla name (the villager hats below look for its
         // `/type/` folder).
@@ -2361,7 +2411,9 @@ fn render_visible(
             overlay,
             out,
         );
-        if let Some(glow) = emissive_uv(drawn) {
+        if overlay != sunrise_client_render::gfx::ARMOR_GLINT_ONLY_OVERLAY
+            && let Some(glow) = emissive_uv(drawn)
+        {
             put(
                 &mut skin,
                 &part,
@@ -2548,6 +2600,10 @@ fn allay_hand(model: &Part, base: glam::Mat4, poses: &Poses) -> Option<glam::Mat
             * glam::Mat4::from_translation(glam::Vec3::new(0.0625, 0.0, 0.0)),
     )
 }
+fn hand_arm(left: bool) -> &'static str {
+    if left { "left_arm" } else { "right_arm" }
+}
+
 /// The hand of a mob in model space, up to the item's own transform
 /// (`ItemInHandLayer.submitArmWithItem`).
 fn hand_base(
@@ -2583,7 +2639,7 @@ fn hand_base(
             | Species::Parched
             | Species::WitherSkeleton
     );
-    let arm = if left { "left_arm" } else { "right_arm" };
+    let arm = hand_arm(left);
     // `SkeletonModel.translateToHand` shifts the arm by 1, `PlayerModel.translateToHand`
     // by 0.5 for slim arms: the hand is the middle of the arm.
     let offset = if skeleton {
@@ -2725,6 +2781,27 @@ fn crossed_arms_matrix(model: &Part, base: glam::Mat4, poses: &Poses) -> Option<
             * glam::Mat4::from_rotation_x(std::f32::consts::PI),
     )
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeldItemAnchor {
+    Panda,
+    Fox,
+    Dolphin,
+    Witch,
+    CrossedArms,
+    Hand,
+}
+
+fn held_item_anchor(m: &Mob) -> HeldItemAnchor {
+    match m.species() {
+        Species::Panda => HeldItemAnchor::Panda,
+        Species::Fox => HeldItemAnchor::Fox,
+        Species::Dolphin => HeldItemAnchor::Dolphin,
+        Species::Witch => HeldItemAnchor::Witch,
+        Species::Villager | Species::WanderingTrader => HeldItemAnchor::CrossedArms,
+        _ => HeldItemAnchor::Hand,
+    }
+}
+
 /// The pose a mob's held item is submitted under (`ItemInHandLayer`:
 /// `translateToHand`, then the hand offset; the item model adds its own
 /// display transform), or `None` when the mob shows no held items.
@@ -2735,19 +2812,20 @@ pub fn held_item_transform(
     data: &dyn RenderDataSource,
     left: bool,
 ) -> Option<glam::Mat4> {
+    let anchor = held_item_anchor(m);
     // PandaHoldsItemLayer: the main hand's item in its mouth.
-    if m.species() == Species::Panda {
+    if anchor == HeldItemAnchor::Panda {
         return super::panda::item_offset(m, alpha)
             .filter(|_| !left)
             .map(|offset| base_transform(m, alpha, camera) * offset);
     }
     // FoxHeldItemLayer: the main hand's item in its mouth.
-    if m.species() == Species::Fox {
+    if anchor == HeldItemAnchor::Fox {
         return (!left).then(|| fox_item_transform(m, alpha, camera, data));
     }
     // DolphinCarryingItemLayer: the main hand's item at the snout, lifted and
     // pulled in as the dolphin pitches (up or down) toward 60 degrees.
-    if m.species() == Species::Dolphin {
+    if anchor == HeldItemAnchor::Dolphin {
         return (!left).then(|| {
             let pitch = anim::state(m, alpha)
                 .observed(m, data.humanoid_setup())
@@ -2769,7 +2847,7 @@ pub fn held_item_transform(
     let (model, poses, anchors) = posed_body(m, alpha, data);
     // WitchItemLayer.applyTranslation: a potion is held at the nose, any other
     // item as CrossedArmsItemLayer holds it; only the main hand's item is drawn.
-    if m.species() == Species::Witch {
+    if anchor == HeldItemAnchor::Witch {
         let item = m.extra.main_hand_id()?;
         if left != m.main_arm_left() {
             return None;
@@ -2788,7 +2866,7 @@ pub fn held_item_transform(
     }
     // CrossedArmsItemLayer (villagers and wandering traders): the main hand's
     // item over the folded arms.
-    if matches!(m.species(), Species::Villager | Species::WanderingTrader) {
+    if anchor == HeldItemAnchor::CrossedArms {
         m.extra.main_hand_id()?;
         if left != m.main_arm_left() {
             return None;

@@ -2,6 +2,7 @@
 //! block state an enderman holds (`CarriedBlockLayer`). Also the block
 //! models mobs wear (`SnowGolemHeadLayer`, `MushroomCowMushroomLayer`).
 use super::Game;
+use mod_api::{Hand, StockEntityLayer, StockLayerMask};
 use sunrise_client::{
     items::ItemStack,
     mesher::Vertex,
@@ -200,19 +201,26 @@ impl Game<'_> {
         cull_back_quads(out, first);
     }
     /// The blocks one mob holds or carries.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn mob_block_geometry(
         &self,
         mob: &Mob,
         camera: glam::DVec3,
         alpha: f64,
         light: u32,
+        hidden_layers: StockLayerMask,
         skin: Option<&mut super::creatures::Skinned>,
         out: &mut Vec<Vertex>,
     ) {
-        self.captain_banner_geometry(mob, camera, alpha, light, out);
-        self.held_item_geometry(mob, camera, alpha, light, true, skin, out);
+        let draw_head = !hidden_layers.contains(StockEntityLayer::HeadItem);
+        if draw_head {
+            self.captain_banner_geometry(mob, camera, alpha, light, out);
+        }
+        self.held_item_geometry(mob, camera, alpha, light, true, hidden_layers, skin, out);
         self.worn_block_geometry(mob, camera, alpha, light, out);
-        self.head_item_geometry(mob, camera, alpha, light, true, out);
+        if draw_head {
+            self.head_item_geometry(mob, camera, alpha, light, true, out);
+        }
         self.golem_flower_geometry(mob, camera, alpha, light, out);
         self.antenna_block_geometry(mob, camera, alpha, light, out);
         if mob.species() == Species::Enderman
@@ -381,6 +389,7 @@ impl Game<'_> {
     /// `ItemInHandLayer`: both hands through the item model pipeline. World
     /// draws take the held-item tint, level lighting and the mob's GPU path
     /// when supported. GUI previews light the projected quads themselves.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn held_item_geometry(
         &self,
         mob: &Mob,
@@ -388,6 +397,7 @@ impl Game<'_> {
         alpha: f64,
         light: u32,
         in_world: bool,
+        hidden_layers: StockLayerMask,
         mut skin: Option<&mut super::creatures::Skinned>,
         out: &mut Vec<Vertex>,
     ) {
@@ -396,6 +406,10 @@ impl Game<'_> {
             (sunrise_items::equipment::MAINHAND, false),
             (sunrise_items::equipment::OFFHAND, true),
         ] {
+            let hand = if off_hand { Hand::Off } else { Hand::Main };
+            if hidden_layers.contains(StockEntityLayer::HeldItem(hand)) {
+                continue;
+            }
             let Some(item) = mob.extra.slot_stack(slot).map(|s| &s.item) else {
                 continue;
             };
@@ -492,22 +506,18 @@ impl Game<'_> {
             };
             // `updateForLiving`: seeded by the entity id plus the context ordinal.
             let seed = mob.id as i32 + ordinal;
-            let hand = if off_hand {
+            let cit_hand = if off_hand {
                 sunrise_client::cit::Hand::Off
             } else {
                 sunrise_client::cit::Hand::Main
             };
-            let mut state = self.resolve_item_in_hand(&stack, context, Some(&owner), seed, hand);
+            let mut state =
+                self.resolve_item_in_hand(&stack, context, Some(&owner), seed, cit_hand);
             if in_world {
                 let entity_id = if local_player {
                     self.own_entity_id() as u32
                 } else {
                     mob.id
-                };
-                let hand = if off_hand {
-                    mod_api::Hand::Off
-                } else {
-                    mod_api::Hand::Main
                 };
                 self.tint_held_item(&mut state, &stack, entity_id, hand, alpha as f32);
                 if let Some(skinned) = skin.as_deref_mut()
@@ -535,11 +545,7 @@ impl Game<'_> {
     ) {
         // The layer also draws on an invisible mob.
         let species = mob.species();
-        if species == Species::SnowGolem
-            || sunrise_client::mobs::species::body_slot(species)
-            || sunrise_client::mobs::equine::is_equine(species)
-            || sunrise_client::mobs::raider::is_captain(mob)
-        {
+        if !render::has_head_item_layer(mob) || sunrise_client::mobs::raider::is_captain(mob) {
             return;
         }
         let local_player = self

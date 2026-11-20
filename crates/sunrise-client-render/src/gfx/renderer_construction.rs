@@ -1494,28 +1494,7 @@ impl Renderer {
                 multiview_mask: None,
                 cache: None,
             });
-        // RenderPipelines.ENERGY_SWIRL: BlendFunction.ADDITIVE (one, one), no culling; no depth
-        // writes either: vanilla sorts the quads far to near, so every face passes the test.
-        let one_one = wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::One,
-            dst_factor: wgpu::BlendFactor::One,
-            operation: wgpu::BlendOperation::Add,
-        };
-        let energy_swirl_pipeline = entity_pipeline_with(EntityPipelineOptions {
-            label: "Energy swirls",
-            cull_mode: None,
-            depth_write: false,
-            compare: wgpu::CompareFunction::GreaterEqual,
-            bias: Default::default(),
-            blend: wgpu::BlendState {
-                color: one_one,
-                alpha: one_one,
-            },
-            clouds: false,
-            vertex: "vs_entity",
-            fragment: "fs_energy_swirl",
-            write_mask: wgpu::ColorWrites::ALL,
-        });
+        let energy_swirl_pipeline = entity_pipeline_with(energy_swirl_options(false));
         // HDR output's mark on light-giving particles (entity.wgsl fs_hdr_mark).
         let hdr_mark_pipeline = entity_pipeline_with(EntityPipelineOptions {
             label: "HDR particle mark",
