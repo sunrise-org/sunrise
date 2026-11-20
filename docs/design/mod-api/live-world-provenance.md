@@ -399,3 +399,12 @@ and world-ready setup, with explicit owner/phase assertions before the public ca
 a test-context correction pending its own execution, not evidence that the policy passed.
 The full readiness failure is retained, and unchanged Linux/Python selections are not rerun
 or relabelled green because of this bounded fixture/format correction.
+
+The complementary selected-crate execution reached the real client-lib suite and exposed
+an old configuration-wire assertion expecting the client's former two-level advertisement.
+It now asserts the intentional four-level advertisement; separate old-peer two-level and
+fifth-level refusal coverage is preserved. The unchanged Unix-socket path-limit test also
+failed with the deep evidence TMPDIR and sandbox bind restrictions. Its exact existing binary
+and test passed with fresh short temporary paths under authorized local execution outside
+the sandbox, without changing the test. Both failed and successful environment receipts are
+retained. Cargo's stop still requires executing the remaining package selection explicitly.

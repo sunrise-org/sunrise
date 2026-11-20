@@ -39,6 +39,7 @@ crates/sunrise-client-render/src/world.rs
 crates/sunrise-client/Cargo.toml
 crates/sunrise-client/src/carrier_store.rs
 crates/sunrise-client/src/client_lib.rs
+crates/sunrise-client/src/control.rs
 crates/sunrise-client/src/game.rs
 crates/sunrise-client/src/game/administration/commands/mod.rs
 crates/sunrise-client/src/game/administration/commands/players.rs
