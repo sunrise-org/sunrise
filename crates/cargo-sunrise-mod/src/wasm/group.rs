@@ -319,8 +319,7 @@ pub(super) fn build(
         member.points = points;
     }
     let mut configs = serde_json::Map::new();
-    let mut features = Vec::new();
-    let mut point_names = std::collections::BTreeSet::<String>::new();
+    let mut features: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for member in &members {
         copy(&member.root, &member.stage)?;
         let path = member.stage.join("Cargo.toml");
@@ -420,7 +419,6 @@ pub(super) fn build(
             toml_edit::value(["rlib", "cdylib"].into_iter().collect::<toml_edit::Array>());
         std::fs::write(path, cargo.to_string()).map_err(|e| e.to_string())?;
         let (registrations, points) = (&member.registrations, &member.points);
-        point_names.extend(serde_json::from_str::<Vec<String>>(points).map_err(|e| e.to_string())?);
         configs.insert(member.package.clone(), serde_json::json!({"id":member.manifest["id"].as_str(), "version":member.manifest["version"].as_str(), "stage":member.stage, "registrations":registrations,"points":points,"provided":crates.iter().filter(|c| **c != member.krate).map(String::as_str).collect::<Vec<_>>().join(",")}));
         if let Some(deps) = member
             .manifest
@@ -434,7 +432,10 @@ pub(super) fn build(
                     .and_then(|v| v.as_bool())
                     == Some(true)
                 {
-                    features.push(format!("{}/{id}", member.package));
+                    features
+                        .entry(member.package.clone())
+                        .or_default()
+                        .push(format!("{}/{id}", member.package));
                 }
             }
         }
@@ -486,40 +487,49 @@ pub(super) fn build(
     );
     workspace["workspace"]["resolver"] = toml_edit::value("3");
     std::fs::write(stage.join("Cargo.toml"), workspace.to_string()).map_err(|e| e.to_string())?;
-    let mut command = cargo_command("build", "member", &stage, target, &toolchain)?;
-    command.env(
-        "SUNRISE_POINT_NAMES",
-        serde_json::to_string(&point_names).map_err(|e| e.to_string())?,
-    );
-    command.arg("--workspace").env(
-        "SUNRISE_GROUP_WRAPPER",
-        serde_json::to_string(&configs).map_err(|e| e.to_string())?,
-    );
-    if !features.is_empty() {
-        command.args(["--features", &features.join(",")]);
+    // One cargo invocation per member: feature resolution has to reach exactly the member's own
+    // dependency closure. A shared `--workspace` build would unify sibling members' features into
+    // this member's dependency rlibs, and the module hash a dependent records would then differ
+    // from the module the member produces when built on its own. The member's own point names
+    // reach its build scripts for the same reason.
+    let wrapper = serde_json::to_string(&configs).map_err(|e| e.to_string())?;
+    // The outputs go to fixed names in one target dir, and a member another member's `-p`
+    // build also compiles (a provided crate stays a cargo dependency) would see them
+    // rewritten under the later member's environment: each member's rlib and module are
+    // taken out right after its own build.
+    let mut built = BTreeMap::new();
+    for member in &members {
+        let mut command = cargo_command("build", "member", &stage, target, &toolchain)?;
+        command
+            .env("SUNRISE_POINT_NAMES", &member.points)
+            .arg("-p")
+            .arg(&member.package)
+            .env("SUNRISE_GROUP_WRAPPER", &wrapper);
+        if let Some(features) = features.get(&member.package) {
+            command.args(["--features", &features.join(",")]);
+        }
+        if !command.status().map_err(|e| e.to_string())?.success() {
+            return Err(format!("Cargo group build of {} failed", member.package));
+        }
+        let artifacts = target.join(TARGET).join(PROFILE);
+        let rlib = std::fs::read(artifacts.join(format!("lib{}.rlib", member.krate)))
+            .map_err(|e| e.to_string())?;
+        let module = std::fs::read(artifacts.join(format!("{}.wasm", member.krate)))
+            .map_err(|e| e.to_string())?;
+        built.insert(&member.package, (rlib, module));
     }
-    if !command.status().map_err(|e| e.to_string())?.success() {
-        return Err("Cargo group build failed".into());
-    }
-    let artifacts = target.join(TARGET).join(PROFILE);
     let rlibs: BTreeMap<_, _> = members
         .iter()
         .map(|m| {
-            let bytes = std::fs::read(artifacts.join(format!("lib{}.rlib", m.krate)))
-                .map_err(|e| e.to_string())?;
             Ok((
                 m.manifest["id"].as_str().ok_or("no mod id")?.to_owned(),
-                sha512_of(&bytes),
+                sha512_of(&built[&m.package].0),
             ))
         })
         .collect::<Result<_, String>>()?;
     let mut hashes = BTreeMap::new();
     for member in &members {
-        let artifacts = target.join(TARGET).join(PROFILE);
-        let mut module = std::fs::read(artifacts.join(format!("{}.wasm", member.krate)))
-            .map_err(|e| e.to_string())?;
-        let rlib = std::fs::read(artifacts.join(format!("lib{}.rlib", member.krate)))
-            .map_err(|e| e.to_string())?;
+        let (rlib, mut module) = built[&member.package].clone();
         // Included in the module hash checked by the production loader's [wasm.linked].
         let identity = serde_json::to_vec(&serde_json::json!({"compiler":toolchain.version,"target":TARGET,"flags":FLAGS,"rlib":sha512_of(&rlib), "dependency_rlibs": member.manifest.get("dependencies").and_then(|v| v.as_table_like()).map(|deps| deps.iter().filter_map(|(id, _)| rlibs.get(id).map(|hash| (id, hash))).collect::<BTreeMap<_,_>>()).unwrap_or_default(), "profile":PROFILE, "member_visibility":"protected", "codegen_units":1, "panic":"abort"})).map_err(|e| e.to_string())?;
         let mut section = Vec::new();
