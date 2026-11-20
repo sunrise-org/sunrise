@@ -1947,21 +1947,26 @@ pub(super) fn mob_kind(mob: &sunrise_client::mobs::Mob) -> String {
 }
 
 /// The level behaviour's answer, or `None` to try `useWithoutItem`.
-/// `ServerPlayerGameMode.useItemOn` lets both FAIL and PASS go to the item.
-/// Both success swing sources swing on this server path.
+/// Both game modes let FAIL and PASS go to the item. SUCCESS_SERVER
+/// consumes without a swing on the predicting client.
 pub(super) fn block_use_result(
     answer: mod_api::InteractionResult,
+    side: LogicalSide,
 ) -> Option<sunrise_world::level::InteractionResult> {
+    use mod_api::InteractionResult as Answer;
     use sunrise_world::level::InteractionResult;
     match answer {
-        mod_api::InteractionResult::Success | mod_api::InteractionResult::SuccessServer => {
-            Some(InteractionResult::Success)
-        }
-        mod_api::InteractionResult::Consume => Some(InteractionResult::Consume),
-        mod_api::InteractionResult::TryWithEmptyHand => None,
+        Answer::SuccessServer if side == LogicalSide::Client => Some(InteractionResult::Consume),
+        Answer::Success | Answer::SuccessServer => Some(InteractionResult::Success),
+        Answer::Consume => Some(InteractionResult::Consume),
+        Answer::TryWithEmptyHand => None,
         _ => Some(InteractionResult::Pass),
     }
 }
+
+/// The captured target or hand changed during client block-use prediction.
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::game) struct StaleBlockClick;
 
 /// What the mods answered a right click on a block (`right_click_block`).
 pub(super) enum BlockClickAnswer {
@@ -2277,20 +2282,93 @@ impl Game<'_> {
         hit: &super::Hit,
         hand: Hand,
         stack: &ItemStack,
-    ) -> Option<mod_api::InteractionResult> {
+    ) -> Result<Option<mod_api::InteractionResult>, StaleBlockClick> {
         if let Some(answer) =
             self.use_item_on_block(hit, hand, Some(stack), UsePhase::ItemBeforeBlock)
         {
-            return Some(answer);
+            return Ok(Some(answer));
         }
-        if !mod_api::__private::has_part_hook(mod_api::HookId::OnItemUseFirst) {
-            return None;
+        if !mod_api::__private::item_listens(mod_api::HookId::OnItemUseFirst, &stack.item) {
+            return Ok(None);
         }
-        let snapshot = stack.try_into_api().ok()?;
+        let Ok(snapshot) = stack.try_into_api() else {
+            return Ok(None);
+        };
+        let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
         let click = self.block_click(hit, hand, Some(&snapshot));
+        self.with_block_click_part(&click, state, Some(stack), |game, answer| {
+            game.native_on_item_use_first(&snapshot, &click, answer);
+        })
+    }
+
+    /// Run the captured block's selected behaviour, only if that key subscribes.
+    pub(super) fn predict_block_part(
+        &mut self,
+        hit: &super::Hit,
+        state: BlockStateId,
+        hand: Hand,
+        held: Option<&ItemStack>,
+        branch: sunrise_world::level::UseBranch,
+    ) -> Result<Option<mod_api::InteractionResult>, StaleBlockClick> {
+        use sunrise_world::level::UseBranch;
+        let hook = match branch {
+            UseBranch::ItemOn => mod_api::HookId::UseItemOn,
+            UseBranch::WithoutItem => mod_api::HookId::UseWithoutItem,
+        };
+        if !super::api_values::block_state::block_listens(hook, state) {
+            return Ok(None);
+        }
+        let Ok(snapshot) = held.try_into_api() else {
+            return Ok(None);
+        };
+        let click = self.block_click(hit, hand, snapshot.as_ref());
+        self.with_block_click_part(&click, state, held, |game, answer| match branch {
+            UseBranch::ItemOn => game.native_use_item_on(state, &click, answer),
+            UseBranch::WithoutItem => game.native_use_without_item(state, &click, answer),
+        })
+    }
+
+    /// A refused payload defers to the template. A stale decision must not
+    /// be applied or retried against a different block or hand. The server's
+    /// Parts may write and deliberately do not have this prediction guard.
+    pub(in crate::game) fn with_block_click_part(
+        &mut self,
+        click: &BlockClick<'_>,
+        state: BlockStateId,
+        held: Option<&ItemStack>,
+        dispatch: impl FnOnce(&mut Self, &mut Option<mod_api::InteractionResult>),
+    ) -> Result<Option<mod_api::InteractionResult>, StaleBlockClick> {
+        let predicting = click.side == LogicalSide::Client;
+        if predicting
+            && (!click.hit.point.into_iter().all(f64::is_finite)
+                || !Direction::ALL
+                    .into_iter()
+                    .any(|face| face.normal() == click.hit.face))
+        {
+            return Ok(None);
+        }
+        let [x, y, z] = click.pos;
+        let selected = self.selected;
+        let epoch = self.native_lifecycle.epoch();
+        let current = |game: &Self| {
+            game.remote.is_some()
+                && game.native_lifecycle.epoch() == epoch
+                && game.dim.level() == click.dimension
+                && game.world.block(x, y, z) == state
+                && match click.hand {
+                    Hand::Main => game.selected == selected && game.stack_in(selected) == held,
+                    Hand::Off => game.offhand.as_ref() == held,
+                }
+        };
+        if predicting && !current(self) {
+            return Err(StaleBlockClick);
+        }
         let mut answer = None;
-        self.native_on_item_use_first(&snapshot, &click, &mut answer);
-        answer.filter(|answer| *answer != mod_api::InteractionResult::Pass)
+        dispatch(self, &mut answer);
+        if predicting && !current(self) {
+            return Err(StaleBlockClick);
+        }
+        Ok(answer)
     }
     /// `GameRuleChangedEvent` once the server set the rule `name` to `value`
     /// (`GameRules.set` with a server).

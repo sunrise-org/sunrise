@@ -2756,14 +2756,14 @@ registration path.
   Consuming answers end the client's hand loop: `Success` swings client-side, `SuccessServer`
   server-side, `Consume` never. Client hosts permit reads/effects, not authoritative writes.
 
-- A block's own item-use behaviour, on the server for every player: attach a `BlockPart` and implement
-  `use_item_on(host, event) -> Option<InteractionResult>`. `event.state` keys the per-state table;
-  `event.click` carries the level, position, hit, hand, stack and player. `Some` replaces the template's
-  `Block.useItemOn`: `Success`/`SuccessServer` consume and swing, `Consume` consumes without swinging,
-  `Pass`/`Fail` let the item try its `useOn`, and `TryWithEmptyHand` tries the block's `useWithoutItem`
-  on the main hand only. `None` leaves the template in charge. This is the block's behaviour, not
-  NeoForge's separate `UseItemOnBlockEvent` broadcast interceptor. The earlier `right_click_block`
-  event still decides whether the block is used at all. Dispatch visits only the clicked state's parts.
+- A block's own item-use behaviour on both sides: attach a `BlockPart` and implement
+  `use_item_on(host: HostSide, event) -> Option<InteractionResult>`. `event.state` keys the per-state
+  table; `event.click` carries the level, position, hit, hand, stack and player. `Some` replaces
+  the template's `Block.useItemOn`: `Success` predicts a client swing, `SuccessServer` and `Consume`
+  consume without a client swing, `Pass`/`Fail` let the item try its `useOn`, and `TryWithEmptyHand`
+  tries the block's `useWithoutItem` on the main hand only. `None` leaves the template in charge.
+  This is the block's behaviour, not the `UseItemOnBlockEvent` interceptor. `right_click_block`
+  still decides whether to use the block. Only the clicked state's parts run.
 
 - Global interaction interception on both sides: `Hooks::use_item_on_block(host, event)` is NeoForge's
   `UseItemOnBlockEvent`. `event.phase` is `UsePhase::Block` just before the block's item method/Part,
@@ -2777,11 +2777,10 @@ registration path.
   canceling skips that item's Part, but `Pass` continues to the block. Any non-`Pass` answer ends the block interaction.
   Client Parts predict hands only; server-only answers cannot retroactively suppress client offhand use.
   `Fail` ends only block interaction; `Pass`/`TryWithEmptyHand` fall through.
-- `ItemPart::on_item_use_first(host, event)` is `IItemExtension.onItemUseFirst`, server side, for the
-  held item (`event.click` is the same `BlockClick`). Return `Some(result)` to end the click:
-  neither the block nor the item's `use_on` runs, and `Success` swings the hand. `None` or `Pass`
-  goes on to the block. It has no global method: NeoForge's bus event for this moment is
-  `use_item_on_block`'s `ItemBeforeBlock` phase.
+- `ItemPart::on_item_use_first(host, event)` is `IItemExtension.onItemUseFirst` on both sides, for
+  the held item (`event.click` is the same `BlockClick`). Any non-`Pass` answer skips the block
+  and the item's `use_on` for this hand; only `Success` predicts a swing. `None` or `Pass` goes on
+  to the block. NeoForge's bus event for this moment is `use_item_on_block`'s `ItemBeforeBlock` phase.
 
 - `Hooks::right_click_item(host, event)` is NeoForge's `PlayerInteractEvent.RightClickItem`, before
   `Item.use` and the item's `use_item` Part on both sides, after the same hand's target interaction falls through.
@@ -2793,12 +2792,13 @@ registration path.
   rather than on UseItemOn.
 
 - A block's empty-hand behaviour: `BlockPart::use_without_item(host, event)` replaces
-  `Block.useWithoutItem` on the server, on the main hand only, after `useItemOn` returns
-  `TryWithEmptyHand`. The event keeps the original state's key even if the item phase
-  changed the block. `Some` replaces the template; `None` runs it, including jukebox ejection,
-  pot wobble and bookshelf removal. Consuming results trigger DEFAULT_BLOCK_USE.
-  `Pass`, `Fail` and `TryWithEmptyHand` continue to the item; the empty method is never
-  retried. Dispatch visits only the clicked state's parts.
+  `Block.useWithoutItem` on either side, on the main hand only, when the block result is
+  `TryWithEmptyHand`. This includes a canceled `Block` event with that result. There is no
+  fourth event phase. The Part sees the captured state's key and the hand's optional stack.
+  `Some` replaces the template; `None` lets it run. Consuming results trigger DEFAULT_BLOCK_USE
+  on the server. `Pass`, `Fail` and `TryWithEmptyHand` continue to the item without retrying.
+  A client Part has reads and local effects, and cannot suppress the ordinary server request.
+  Prediction keeps the ordinary path for a refused payload and discards a stale result.
 
 - Breaking and placing a block, on the server for every player: `break_block` hears a player break a
   block once the game allowed it (`ServerPlayerGameMode.destroyBlock`) and may cancel it, which keeps the block and its

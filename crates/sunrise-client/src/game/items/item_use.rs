@@ -1401,7 +1401,7 @@ pub(super) mod interact_vibration_tests {
                 game.world
                     .chunks
                     .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
-                game.with_level(|b, level, _| {
+                let cake = game.with_level(|b, level, _| {
                     let cake = b
                         .table
                         .default_state(b.table.block_by_name("minecraft:cake").unwrap());
@@ -1413,6 +1413,7 @@ pub(super) mod interact_vibration_tests {
                         )
                         .is_some()
                     );
+                    cake
                 });
                 let hit = super::super::Hit {
                     pos: [0, 64, 0],
@@ -1421,9 +1422,17 @@ pub(super) mod interact_vibration_tests {
                     inside: false,
                 };
                 let held = game.held().cloned();
-                let (result, (changes, _)) =
-                    game.remote_block_template(&hit, held.as_ref(), true, true);
-                assert_eq!(result, sunrise_world::level::InteractionResult::Success);
+                let (result, (changes, _)) = game.remote_block_template(
+                    &hit,
+                    cake,
+                    held.as_ref(),
+                    Some(sunrise_world::level::UseBranch::WithoutItem),
+                    true,
+                );
+                assert_eq!(
+                    result,
+                    Some(sunrise_world::level::InteractionResult::Success)
+                );
                 assert_eq!(changes.len(), 1, "the client predicts a bitten cake");
                 let bitten = game.with_level(|b, _, _| {
                     let cake = b

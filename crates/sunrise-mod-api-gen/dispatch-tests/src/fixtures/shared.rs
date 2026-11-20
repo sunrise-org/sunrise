@@ -383,7 +383,7 @@ fn a_disabled_owner_answers_only_at_its_dispatch_position() {
         }
         fn use_without_item(
             &self,
-            _: &mut dyn ServerHost,
+            _: HostSide<'_>,
             _: &mut UseWithoutItemEvent<'_>,
         ) -> Option<InteractionResult> {
             self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -409,7 +409,7 @@ fn a_disabled_owner_answers_only_at_its_dispatch_position() {
         });
         let mut answer = None;
         dispatch_use_without_item(
-            &mut TestHost,
+            HostSide::Server(&mut TestHost),
             BlockState::new(BlockKey::Test, 0),
             &BlockClick(&()),
             &mut answer,

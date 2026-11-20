@@ -23,15 +23,16 @@ const BUCKET: u32 = 1000;
 /// A tank block calls it from its `use_item_on` part and answers a success when it is true:
 ///
 /// ```no_run
-/// use mod_api::{BlockPart, Direction, InteractionResult, ServerHost, UseItemOnEvent, fluid_util};
+/// use mod_api::{BlockPart, Direction, HostSide, InteractionResult, UseItemOnEvent, fluid_util};
 /// struct Tank;
 /// #[mod_api::sunrise_part]
 /// impl BlockPart for Tank {
 ///     fn use_item_on(
 ///         &self,
-///         host: &mut dyn ServerHost,
+///         host: HostSide<'_>,
 ///         event: &mut UseItemOnEvent<'_>,
 ///     ) -> Option<InteractionResult> {
+///         let HostSide::Server(host) = host else { return None };
 ///         let click = event.click;
 ///         let player = host.player(click.player)?;
 ///         let level = player.level(host)?;

@@ -190,7 +190,14 @@ impl Game<'_> {
             .is_some_and(|stack| &*stack.item == "minecraft:debug_stick");
         if let Some(hit) = self.pick() {
             use mod_api::InteractionResult as Answer;
-            use mod_api::TriState;
+            use mod_api::{LogicalSide, TriState};
+            use sunrise_world::level::UseBranch;
+            // MultiPlayerGameMode.useItemOn syncs the original slot before prediction.
+            // A Part can select a different slot, but not for this request.
+            self.remote_send_carried();
+            // startPrediction reserves one sequence for the request, even if
+            // the client does not apply a prediction.
+            let seq = self.next_sequence();
             let spectator = self.spectator();
             // RightClickBlock on this client, where performUseItemOn starts,
             // for a spectator too (whose use only opens menus on the server):
@@ -207,18 +214,18 @@ impl Game<'_> {
                     canceled = Some(answer);
                 }
             }
-            // The held item's onItemUseFirst on this client: the broadcast
-            // event skips the item's before-block Part when canceled. Only
-            // non-PASS answers end the block interaction; PASS goes
-            // on to the block (a Part's answer comes from the server).
+            // Before-block event, then the held item's first refusal. A
+            // canceled PASS skips that Part but still goes on to the block.
             if canceled.is_none()
                 && !spectator
                 && use_item.or(true)
                 && let Some(stack) = held.as_ref()
             {
-                canceled = self
-                    .use_item_on_block(&hit, hand, Some(stack), mod_api::UsePhase::ItemBeforeBlock)
-                    .filter(|answer| *answer != Answer::Pass);
+                let Ok(answer) = self.item_use_first(&hit, hand, stack) else {
+                    self.send_use_item_on(&hit, hand, seq);
+                    return true;
+                };
+                canceled = answer.filter(|answer| *answer != Answer::Pass);
             }
             // Player.isSecondaryUseActive with something in either hand
             // keeps the block from reacting by default; an explicit block
@@ -244,13 +251,30 @@ impl Game<'_> {
                                 ))
                         })
                     }));
+            let [x, y, z] = hit.pos;
+            let state = self.world.block(x, y, z);
             let block_answer = if !spectator && block_used {
-                self.use_item_on_block(&hit, hand, held.as_ref(), mod_api::UsePhase::Block)
+                if let Some(answer) =
+                    self.use_item_on_block(&hit, hand, held.as_ref(), mod_api::UsePhase::Block)
+                {
+                    Some(answer)
+                } else {
+                    let Ok(answer) = self.predict_block_part(
+                        &hit,
+                        state,
+                        hand,
+                        held.as_ref(),
+                        UseBranch::ItemOn,
+                    ) else {
+                        self.send_use_item_on(&hit, hand, seq);
+                        return true;
+                    };
+                    answer
+                }
             } else {
                 None
             };
             let vanilla_block = block_used && block_answer.is_none();
-            let seq = self.next_sequence();
             // ShelfBlock.useItemOn consumes a nonempty main-hand click client-side
             // without predicting the inventory swap or swinging.
             let shelf_reacts = hand == Hand::Main
@@ -258,15 +282,32 @@ impl Game<'_> {
                 && vanilla_block
                 && self.shelf_hit(&hit).is_some();
             let (result, changes) = if let Some(answer) = block_answer {
-                if let Some(result) = crate::game::native_hooks::block_use_result(answer) {
-                    (result, DryUse::default())
-                } else if hand == Hand::Main {
-                    self.remote_block_template(&hit, held.as_ref(), true, true)
-                } else {
-                    (InteractionResult::Pass, DryUse::default())
-                }
+                let result =
+                    crate::game::native_hooks::block_use_result(answer, LogicalSide::Client);
+                (
+                    result.or((hand == Hand::Off).then_some(InteractionResult::Pass)),
+                    DryUse::default(),
+                )
+            } else if shelf_reacts {
+                (Some(InteractionResult::Consume), DryUse::default())
             } else if hand == Hand::Main && !spectator && vanilla_block {
-                self.remote_block_reacts(&hit, held.as_ref(), true)
+                self.remote_block_shortcut(&hit, held.as_ref())
+                    .map(|(result, changes)| (Some(result), changes))
+                    .unwrap_or_else(|| {
+                        // With no fallback Part, keep both vanilla methods
+                        // on the same dry level as an ordinary click.
+                        let split = crate::game::api_values::block_state::block_listens(
+                            mod_api::HookId::UseWithoutItem,
+                            state,
+                        );
+                        self.remote_block_template(
+                            &hit,
+                            state,
+                            held.as_ref(),
+                            split.then_some(UseBranch::ItemOn),
+                            true,
+                        )
+                    })
             } else {
                 // useItemOn runs for the off hand too (useWithoutItem doesn't):
                 // RespawnAnchorBlock.useItemOn charges an anchor with its
@@ -282,7 +323,52 @@ impl Game<'_> {
                 } else {
                     InteractionResult::Pass
                 };
-                (result, DryUse::default())
+                (Some(result), DryUse::default())
+            };
+            // Campfire dousing is an item-on-block behaviour, not a use
+            // without the item. If it takes the click there is no fallback.
+            let result = if !spectator
+                && vanilla_block
+                && !result.is_some_and(InteractionResult::consumes_action)
+                && self.with_hand(hand, |g| g.predict_campfire_douse(&hit, held.as_ref(), seq))
+            {
+                Some(InteractionResult::Success)
+            } else {
+                result
+            };
+            // Only the main-hand block branch can select the empty method.
+            // That method still sees the held stack, and has no broadcast phase.
+            let mut empty_answer = None;
+            let (result, changes) = if let Some(result) = result {
+                (result, changes)
+            } else {
+                let Ok(answer) = self.predict_block_part(
+                    &hit,
+                    state,
+                    hand,
+                    held.as_ref(),
+                    UseBranch::WithoutItem,
+                ) else {
+                    self.send_use_item_on(&hit, hand, seq);
+                    return true;
+                };
+                empty_answer = answer;
+                if let Some(answer) = answer {
+                    (
+                        crate::game::native_hooks::block_use_result(answer, LogicalSide::Client)
+                            .unwrap_or(InteractionResult::Pass),
+                        DryUse::default(),
+                    )
+                } else {
+                    let (result, changes) = self.remote_block_template(
+                        &hit,
+                        state,
+                        held.as_ref(),
+                        Some(UseBranch::WithoutItem),
+                        true,
+                    );
+                    (result.unwrap_or(InteractionResult::Pass), changes)
+                }
             };
             // AbstractCauldronBlock.useItemOn, either hand: CauldronInteractions
             // answers on the client as on the server and only the server acts,
@@ -320,15 +406,6 @@ impl Game<'_> {
                     self.candle_smoke(hit.pos, state);
                 }
             }
-            let result = if !spectator
-                && vanilla_block
-                && !result.consumes_action()
-                && self.with_hand(hand, |g| g.predict_campfire_douse(&hit, held.as_ref(), seq))
-            {
-                InteractionResult::Success
-            } else {
-                result
-            };
             let item_answer = if !spectator && !result.consumes_action() && item_used {
                 self.use_item_on_block(&hit, hand, held.as_ref(), mod_api::UsePhase::ItemAfterBlock)
                     .or_else(|| {
@@ -357,20 +434,7 @@ impl Game<'_> {
                 && held
                     .as_ref()
                     .is_some_and(|s| self.armor_stand_spawn(&hit, s).is_some());
-            let cursor = [
-                (hit.point[0] - f64::from(hit.pos[0])) as f32,
-                (hit.point[1] - f64::from(hit.pos[1])) as f32,
-                (hit.point[2] - f64::from(hit.pos[2])) as f32,
-            ];
-            self.send(S::UseItemOn(play::UseItemOn {
-                hand: hand_id(hand),
-                pos: hit.pos,
-                face: i32::from(face_direction(hit.face)),
-                cursor,
-                inside: hit.inside,
-                world_border: false,
-                sequence: seq,
-            }));
+            self.send_use_item_on(&hit, hand, seq);
             // MultiPlayerGameMode.performUseItemOn: a spectator's use predicts
             // nothing and ends the click (CONSUME, no swing); the server opens
             // the block's menu. A cancelled RightClickBlock answers instead,
@@ -405,7 +469,9 @@ impl Game<'_> {
             if reacts {
                 self.predict_use(&changes, seq);
                 // LeverBlock.useWithoutItem on the client: the predicted pull puffs.
-                if vanilla_block || block_answer == Some(Answer::TryWithEmptyHand) {
+                if empty_answer.is_none()
+                    && (vanilla_block || block_answer == Some(Answer::TryWithEmptyHand))
+                {
                     if &*self.block_name(hit.pos) == "minecraft:lever" {
                         self.lever_puff(hit.pos);
                     }
@@ -414,7 +480,7 @@ impl Game<'_> {
                 }
                 // MultiPlayerGameMode.useItemOn: SUCCESS SwingSource.CLIENT
                 // (a chest, barrel, furnace, …). CONSUME does not swing.
-                if result.should_swing() && block_answer != Some(Answer::SuccessServer) {
+                if result.should_swing() {
                     self.with_hand(hand, Game::swing_arm);
                 }
             } else if item_used
@@ -541,5 +607,20 @@ impl Game<'_> {
             return reacts;
         }
         false
+    }
+
+    /// Send the ordinary block-use request, even for a discarded prediction.
+    /// The carried slot was already synced before prediction; don't sync it again here.
+    fn send_use_item_on(&self, hit: &crate::game::Hit, hand: Hand, sequence: i32) {
+        let cursor = [0, 1, 2].map(|i| (hit.point[i] - f64::from(hit.pos[i])) as f32);
+        self.send_play(S::UseItemOn(play::UseItemOn {
+            hand: hand_id(hand),
+            pos: hit.pos,
+            face: i32::from(face_direction(hit.face)),
+            cursor,
+            inside: hit.inside,
+            world_border: false,
+            sequence,
+        }));
     }
 }

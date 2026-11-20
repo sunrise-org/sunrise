@@ -19,7 +19,8 @@ does) can't see tag parts, and warns once.
 ## Right click on a block
 
 `Hooks::right_click_block` corresponds to NeoForge 26.3's
-`PlayerInteractEvent.RightClickBlock`, on the clicking client and server:
+`PlayerInteractEvent.RightClickBlock`, with the same switches on the clicking
+client and server:
 
 - `use_block = TriState::True` allows block use even while sneaking with an item
   in either hand. `Default` skips while sneaking with either hand full; `False` skips block use.
@@ -66,15 +67,30 @@ Canceling skips the item Part and vanilla action.
 
 ## Item use on a block
 
-`Hooks::use_item_on_block` (`UseItemOnBlockEvent`) runs with
-`HostSide` before each selected phase: `ItemBeforeBlock`, `Block`, then
-`ItemAfterBlock`. `event.click` describes the hit, hand, held stack and player.
-Return `Flow::Cancel` to skip the selected phase's Part and vanilla behaviour,
-using `*event.cancellation_result` (initially `TryWithEmptyHand`) as its result.
+After `Hooks::right_click_block` lets the click through, `Hooks::use_item_on_block`
+(`UseItemOnBlockEvent`) runs with `HostSide` before each selected phase:
+`ItemBeforeBlock`, `Block`, then `ItemAfterBlock`. The event and the scoped Parts
+below share `event.click`: the logical side, level, position, exact hit, hand,
+optional held stack and acting player. Return `Flow::Cancel` to skip the selected
+phase's Part and vanilla behaviour, using `*event.cancellation_result` (initially
+`TryWithEmptyHand`) as its result. Canceling does not undo work from earlier phases.
 
-Canceling `ItemBeforeBlock` skips the item's `on_item_use_first` Part. `Pass`
-continues to the block phase; any non-`Pass` result ends the block interaction. Cancellation alone does not suppress the later phases when its answer is `Pass`. A block-phase `TryWithEmptyHand`
-can run the block's empty-hand behaviour on the main hand.
+- `ItemPart::on_item_use_first` is the held item's first refusal, after the
+  `ItemBeforeBlock` event and before the block is asked. `Pass` goes on to the
+  block; any other result skips both block use and the item's `use_on` for this hand.
+- `BlockPart::use_item_on` is the clicked state's behaviour, after the `Block`
+  event, for either hand. `Pass` and `Fail` go on to the item rather than using
+  the block's template. `TryWithEmptyHand` selects the empty method on the main
+  hand only, even if it came from a canceled `Block` event.
+- `BlockPart::use_without_item` then runs before the empty method's template.
+  There is no fourth event phase. The click still carries whatever the hand
+  holds; the fallback does not require an empty stack. `Pass`, `Fail` and
+  `TryWithEmptyHand` go on to the item without retrying the fallback.
+
+These three methods take `HostSide` and return `Option<InteractionResult>`.
+`None` defers to the ordinary behaviour if no other Part answers. A supplied
+result replaces that behaviour. If the block lets the click through, the
+`ItemAfterBlock` event still precedes the held item's `use_on` Part.
 
 `ItemPart::use_on`, `Hooks::entity_interact` and `ItemPart::item_interact_mob`
 use version 2, run on both logical sides, and expose native `HostSide`.
@@ -83,19 +99,24 @@ listeners and the ordinary behaviour; `Some(result)` supplies the replacement
 answer. `item_interact_mob` also carries the interaction `hand`.
 `ItemPart::use_item` keeps its existing both-side, version-2 contract.
 
-Client execution predicts hands only. Client hosts allow reads and local effects,
-not authoritative world, inventory or entity writes; perform those on the server.
-Answer on the client as well when prediction must stop the hand loop: an answer
-made only on the server cannot suppress an offhand attempt already predicted by
-the client.
+Client hosts allow reads and local effects, not authoritative world, inventory or
+entity writes; perform those on the server. A client Part changes only prediction,
+not whether the ordinary `UseItemOn` request goes to the server. If its click or
+stack cannot be represented, the engine keeps the ordinary path; if the captured
+block or hand changed while deciding, it discards the prediction without retrying.
+A main-hand request still uses the hotbar slot selected before prediction; a Part's
+change of slot applies to later actions.
+Answer on the client as well when prediction must stop the hand loop: a server-only
+answer cannot suppress an offhand attempt already predicted by the client.
 
 A client without this mod predicts vanilla here; the server corrects it.
 
 `Success`, `SuccessServer` and `Consume` consume the interaction and end the
 client's hand loop. Only `Success` swings on the client; `SuccessServer` swings
-on the server and `Consume` never swings. `Fail` ends block interaction only,
-not an entity or air-use hand loop. `Pass` and `TryWithEmptyHand` fall through
-(the latter can select the block's empty-hand behaviour at the block phase).
+on the server and `Consume` never swings. A `Fail` from the outer block gate or
+an item-on-block result ends the client's click, but a `Fail` from either block
+method falls through to the item as described above. `Pass` falls through;
+`TryWithEmptyHand` selects the empty method only at the main-hand `Block` phase.
 
 ## Item wear
 

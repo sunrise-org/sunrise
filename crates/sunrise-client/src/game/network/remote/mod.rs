@@ -1794,10 +1794,10 @@ impl Game<'_> {
 
     pub(super) fn send(&self, packet: S) {
         if self.remote.is_some() {
-            // MultiPlayerGameMode's attack, interact, useItem, useItemOn, releaseUsingItem, dropItem and
-            // piercingAttack run ensureHasSentCarriedItem before their packet: a slot the number keys
-            // chose this tick goes out first. A miss, a dig's start or a swap waits for the next tick.
-            if let S::Attack(_) | S::Interact(_) | S::UseItem(_) | S::UseItemOn(_) = &packet {
+            // MultiPlayerGameMode's attack, interact, useItem, releaseUsingItem, dropItem and
+            // piercingAttack sync the carried slot before their packet. useItemOn does this
+            // separately, before prediction. A miss, a dig's start or a swap waits for the next tick.
+            if let S::Attack(_) | S::Interact(_) | S::UseItem(_) = &packet {
                 self.remote_send_carried();
             } else if let S::PlayerAction(a) = &packet
                 && matches!(a.action, 4 | 5 | 6 | 8)
@@ -8480,21 +8480,36 @@ impl Game<'_> {
         held: Option<&ItemStack>,
         asks_mods: bool,
     ) -> (InteractionResult, DryUse) {
+        if let Some(reacts) = self.remote_block_shortcut(hit, held) {
+            return reacts;
+        }
+        let [x, y, z] = hit.pos;
+        let state = self.world.block(x, y, z);
+        let (result, changes) = self.remote_block_template(hit, state, held, None, asks_mods);
+        (result.unwrap_or(InteractionResult::Pass), changes)
+    }
+
+    /// Main-hand client `useItemOn` branches handled outside the dry level.
+    fn remote_block_shortcut(
+        &mut self,
+        hit: &super::Hit,
+        held: Option<&ItemStack>,
+    ) -> Option<(InteractionResult, DryUse)> {
         // AbstractCauldronBlock.useItemOn (CauldronInteractions): a bucket,
         // bottle or dye the cauldron takes fills or lowers it, and the click
         // ends there instead of falling through to Item.use (which would
         // empty a water bucket into the face of the cauldron).
         if let Some(reacts) = self.remote_cauldron_reacts(hit, held) {
-            return reacts;
+            return Some(reacts);
         }
         if self.jukebox_takes(hit.pos, held) {
-            return (InteractionResult::Success, DryUse::default());
+            return Some((InteractionResult::Success, DryUse::default()));
         }
         // RespawnAnchorBlock.useItemOn: PASS when the off hand's glowstone is to
         // charge the anchor, so useWithoutItem doesn't run and the off hand's turn
         // comes (glowstone in this hand charges it in `use_item_on`).
         if !self.anchor_takes(hit.pos, held) && self.anchor_takes(hit.pos, self.offhand.as_ref()) {
-            return (InteractionResult::Pass, DryUse::default());
+            return Some((InteractionResult::Pass, DryUse::default()));
         }
         // BeehiveBlock.useItemOn: a glass bottle on a full hive (honey level 5)
         // is SUCCESS, so the click ends after UseItemOn and no UseItem follows.
@@ -8505,22 +8520,18 @@ impl Game<'_> {
                 .hive_state(hit.pos)
                 .is_some_and(|(honey, _)| honey == Some(5))
         {
-            return (InteractionResult::Success, DryUse::default());
+            return Some((InteractionResult::Success, DryUse::default()));
         }
         // ComposterBlock.useItemOn: a compostable item on a composter below
         // level 8 is SUCCESS on the client too (only the server adds the
         // layer), so the other hand (a torch) is never tried.
         if self.composter_takes(hit.pos, held) {
-            return (InteractionResult::Success, DryUse::default());
+            return Some((InteractionResult::Success, DryUse::default()));
         }
-        if let Some(result) = self.client_block_answer(hit, held) {
-            return (result, DryUse::default());
-        }
-        self.remote_block_template(hit, held, false, asks_mods)
+        self.client_block_answer(hit, held)
+            .map(|result| (result, DryUse::default()))
     }
 
-    /// The shared dry-level boundary for a normal block use or the empty
-    /// method requested by a canceled `BLOCK` phase's `TryWithEmptyHand`.
     /// The `useItemOn` answers a client level gives without changing a block, for either hand:
     /// - VaultBlock: something in the hand on an ACTIVE vault is SUCCESS_SERVER (no swing here);
     /// - RedStoneOreBlock: SUCCESS, unless a block item goes in the cell beside it
@@ -8562,14 +8573,19 @@ impl Game<'_> {
             _ => None,
         }
     }
+    /// Run a selected block method on a dry level (or both for a preview).
+    /// ItemOn returns None for TryWithEmptyHand, with no dry changes, so the
+    /// clicking client can ask the fallback Part at that boundary.
     pub(super) fn remote_block_template(
         &mut self,
         hit: &super::Hit,
+        state: BlockStateId,
         held: Option<&ItemStack>,
-        without_item: bool,
+        branch: Option<sunrise_world::level::UseBranch>,
         asks_mods: bool,
-    ) -> (InteractionResult, DryUse) {
+    ) -> (Option<InteractionResult>, DryUse) {
         use sunrise_core::geometry::Direction;
+        use sunrise_world::level::UseBranch;
         let face = match hit.face {
             [0, 1, 0] => Direction::Up,
             [0, -1, 0] => Direction::Down,
@@ -8594,12 +8610,18 @@ impl Game<'_> {
                 inside: hit.inside,
             };
             let mut ticks = sunrise_world::level::Ticks::default();
-            let result = if without_item {
-                use sunrise_world::level::LevelAccess as _;
-                let state = level.block_state(hit.block);
-                b.use_without_item(&mut level, &mut ticks, state, hit, player)
-            } else {
-                b.use_item_on(&mut level, &mut ticks, hit, player, held.map(|s| &*s.item))
+            let item = held.map(|s| &*s.item);
+            let result = match branch {
+                Some(UseBranch::ItemOn) => {
+                    b.block_use_item_on(&mut level, &mut ticks, state, hit, player, item)
+                }
+                Some(UseBranch::WithoutItem) => {
+                    Some(b.use_without_item(&mut level, &mut ticks, state, hit, player))
+                }
+                None => Some(
+                    b.use_item_on_branch(&mut level, &mut ticks, state, hit, player, item)
+                        .0,
+                ),
             };
             (result, (level.changed.into_iter().collect(), level.sounds))
         })
