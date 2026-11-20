@@ -2199,7 +2199,11 @@ impl Game<'_> {
     ) {
         let (mut background, mut border_top, mut border_bottom) =
             (0xf0100010, 0x505000ff, 0x5028007f);
-        let mut texture = None;
+        // `itemStack.get(DataComponents.TOOLTIP_STYLE)`, the style the hook starts from.
+        let mut texture = stack
+            .and_then(|s| s.data())
+            .and_then(|d| sunrise_client::save::text(d.other("minecraft:tooltip_style")))
+            .and_then(|style| mod_api::Identifier::parse(&style).ok());
         self.native_render_tooltip_texture(
             stack,
             &mut texture,

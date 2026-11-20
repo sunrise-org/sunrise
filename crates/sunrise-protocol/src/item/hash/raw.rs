@@ -322,8 +322,8 @@ pub(super) fn code(kind: i32, bytes: &[u8], names: &dyn Names) -> Option<HashCod
         22 | 49 | 59 | 68 | 81 | 82 => HashOps::from_nbt(&r.nbt().ok()?, &[]),
         // `Codec.FLOAT`: minimum_attack_charge, potion_duration_scale.
         7 | 54 => float(r)?,
-        // `Identifier.CODEC`: tooltip_style, note_block_sound.
-        35 | 73 => string(&r.string(32767).ok()?),
+        // `Identifier.CODEC`: note_block_sound.
+        73 => string(&r.string(32767).ok()?),
         // `Enchantable`, `VillagerFood`.
         31 => int_record("value", r)?,
         44 => int_record("nutrition", r)?,

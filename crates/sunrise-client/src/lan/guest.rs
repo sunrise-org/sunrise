@@ -2106,6 +2106,16 @@ pub(super) fn network_stack(
             sunrise_protocol::item::Component::Ident(model),
         ));
     }
+    // The tooltip style, whose background and frame sprites the client's tooltip draws.
+    if let Some(style) = s
+        .data()
+        .and_then(|d| crate::save::text(d.other("minecraft:tooltip_style")))
+    {
+        stack.added.push((
+            sunrise_protocol::item::component::TOOLTIP_STYLE,
+            sunrise_protocol::item::Component::Ident(style),
+        ));
+    }
     // Arbitrary NBT other mods and item models read back client-side
     // (`item_model.rs`'s `custom_data_at`), as vanilla's DataComponentPatch does.
     if let Some(tag @ sunrise_core::nbt::Tag::Compound(_)) =

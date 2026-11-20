@@ -68,6 +68,37 @@ mod render_tooltip_texture_tests {
         (r.u0..=r.u1).contains(&uv[0]) && (r.v0..=r.v1).contains(&uv[1])
     }
 
+    /// `TooltipRenderUtil.extractTooltipBackground` with the stack's own `tooltip_style`: with no
+    /// mod, its background and frame sprites are drawn instead of the fills.
+    #[test]
+    #[ignore = "daily"]
+    fn an_items_tooltip_style_draws_its_own_sprites() {
+        let mut styled = ItemStack::new("minecraft:stone", 1);
+        let given =
+            sunrise_client::item_data::command_components("[tooltip_style='lobby:gold']").unwrap();
+        (styled.damage, styled.extra) = sunrise_client::item_data::decode_components(Some(&given));
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            let plain = drawn(game, Some(&ItemStack::new("minecraft:stone", 1)));
+            let rects = [sprite(0.0), sprite(0.5)];
+            for (part, rect) in ["background", "frame"].iter().zip(rects) {
+                game.gui
+                    .atlas
+                    .sprites
+                    .insert(format!("lobby:gui/sprites/tooltip/gold_{part}"), rect);
+            }
+            let quads = drawn(game, Some(&styled));
+            assert_ne!(quads, plain);
+            for rect in rects {
+                assert!(quads.iter().any(|&(uv, _)| in_sprite(uv, rect)));
+            }
+            assert!(
+                quads
+                    .iter()
+                    .all(|&(uv, _)| rects.iter().any(|&r| in_sprite(uv, r)))
+            );
+        });
+    }
+
     /// `RenderTooltipEvent.Texture`: a mod's tooltip style draws its background and frame
     /// sprites from the GUI atlas, follows the atlas a resource reload restitches, and falls
     /// back to the fills when no pack has it; its colours change the fills; and an unheard

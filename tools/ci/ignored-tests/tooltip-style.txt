@@ -1,0 +1,1 @@
+sunrise-client game::native_hooks::render_tooltip_texture::render_tooltip_texture_tests::an_items_tooltip_style_draws_its_own_sprites lib daily resources

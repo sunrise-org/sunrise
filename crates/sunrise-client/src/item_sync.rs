@@ -1954,6 +1954,52 @@ mod tests {
         );
     }
 
+    /// `tooltip_style` goes out as `Identifier.STREAM_CODEC` and comes back as the
+    /// component the client's tooltip reads, through the encoded bytes.
+    #[test]
+    fn a_tooltip_style_crosses_the_wire() {
+        let mut components = vec![String::new(); 60];
+        components[component::TOOLTIP_STYLE as usize] = "minecraft:tooltip_style".into();
+        let items = ["minecraft:air", "minecraft:stone"];
+        let builtin = Builtin {
+            registries: [
+                (
+                    "minecraft:item".to_owned(),
+                    Ids::from_names(items.iter().map(|s| s.to_string()).collect()),
+                ),
+                (
+                    "minecraft:data_component_type".to_owned(),
+                    Ids::from_names(components),
+                ),
+            ]
+            .into(),
+        };
+        let given = crate::item_data::command_components("[tooltip_style='lobby:gold']").unwrap();
+        let (damage, extra) = crate::item_data::decode_components(Some(&given));
+        let stone = ItemStack {
+            damage,
+            extra,
+            ..ItemStack::new("minecraft:stone", 1)
+        };
+        let wire = crate::lan::guest::stack_to_network(
+            |name| items.iter().position(|i| *i == name).unwrap_or(0) as i32,
+            |_, _| None,
+            &Some(stone),
+        );
+        let mut writer = sunrise_protocol::buf::Writer::new();
+        sunrise_protocol::item::Slot::write(&wire, &mut writer);
+        let mut reader = sunrise_protocol::buf::Reader::new(&writer.data);
+        let read = sunrise_protocol::item::Slot::read(&mut reader)
+            .unwrap()
+            .unwrap();
+        assert!(reader.rest().is_empty(), "the slot was read short");
+        let back = from_network(&read, &builtin, &Dynamic::default());
+        assert_eq!(
+            crate::save::text(back.data().unwrap().other("minecraft:tooltip_style")).as_deref(),
+            Some("lobby:gold")
+        );
+    }
+
     /// `custom_model_data` and `item_model` reach the client, whose item
     /// model reads them (#4916): single player's window gets its stacks this way.
     #[test]
