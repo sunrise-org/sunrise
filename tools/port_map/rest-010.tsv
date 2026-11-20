@@ -17,16 +17,16 @@ SnbtPrinterTagVisitor.visitLongArray	skip:data		datagen .snbt writer only (NbtUt
 SnbtPrinterTagVisitor.visitList	skip:data		datagen .snbt writer only (NbtUtils.structureToSnbt); Sunrise writes no .snbt
 SnbtPrinterTagVisitor.visitCompound	skip:data		datagen .snbt writer only (NbtUtils.structureToSnbt); Sunrise writes no .snbt
 SnbtPrinterTagVisitor.getKeys	skip:data		structure key order for .snbt files; Sunrise writes no .snbt
-StringTagVisitor.visitByteArray	inline	crates/sunrise-client-core/src/snbt.rs::visit	compact [B;..B] form
-StringTagVisitor.visitIntArray	inline	crates/sunrise-client-core/src/snbt.rs::visit	compact [I;..] form
-StringTagVisitor.visitLongArray	inline	crates/sunrise-client-core/src/snbt.rs::visit	compact [L;..L] form
-StringTagVisitor.visitList	inline	crates/sunrise-client-core/src/snbt.rs::visit	compact list form
-StringTagVisitor.visitCompound	inline	crates/sunrise-client-core/src/snbt.rs::visit	compact form; keys sorted
-StringTagVisitor.handleKeyEscape	inline	crates/sunrise-client-core/src/snbt.rs::Pretty::compound	decides bare or quoted key; quote_and_escape does the quoting
+StringTagVisitor.visitByteArray	inline	crates/sunrise-core/src/nbt_snbt_text.rs::visit_leaf	compact [B;..B] form
+StringTagVisitor.visitIntArray	inline	crates/sunrise-core/src/nbt_snbt_text.rs::visit_leaf	compact [I;..] form
+StringTagVisitor.visitLongArray	inline	crates/sunrise-core/src/nbt_snbt_text.rs::visit_leaf	compact [L;..L] form
+StringTagVisitor.visitList	inline	crates/sunrise-core/src/nbt_snbt_text.rs::write_snbt_utf16	compact list form
+StringTagVisitor.visitCompound	inline	crates/sunrise-core/src/nbt_snbt_text.rs::write_snbt_utf16	compact form; keys sorted
+StringTagVisitor.handleKeyEscape	inline	crates/sunrise-core/src/nbt_snbt_text.rs::compound_key	decides bare or quoted key; quoted_units does the quoting
 Tag.acceptAsRoot	skip:java		streaming visitor entry point; Sunrise reads whole trees
 Tag.asBoolean	port	crates/sunrise-world/src/datafix/dynamic.rs::as_bool_opt	non-zero number is true
 TagParser.castToCompoundOrThrow	inline	crates/sunrise-command/src/snbt.rs::parse_compound_argument	expected-compound error
-TagParser.parseCompoundFully	port	crates/sunrise-command/src/snbt.rs::parse_fully	gap: minor: returns any tag; callers check for a compound
+TagParser.parseCompoundFully	port	crates/sunrise-core/src/nbt_snbt.rs::parse_compound_fully	requires a compound after checking the complete input
 TagType.parseRoot	skip:java		streaming root parse; Sunrise reads whole trees
 TagType.StaticSize.skip	skip:java		streaming skip; Sunrise reads whole trees
 TagType.VariableSize.skip	skip:java		streaming skip; Sunrise reads whole trees

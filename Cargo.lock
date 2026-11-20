@@ -4424,12 +4424,14 @@ version = "0.1.0"
 dependencies = [
  "crc-fast",
  "crc32fast",
+ "indexmap",
  "libm",
  "md-5",
  "rustc-hash 2.1.3",
  "safe_arch",
  "serde",
  "serde_json",
+ "smallvec",
  "unicode_names2",
 ]
 

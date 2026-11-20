@@ -46,6 +46,37 @@ Every profile retains the engine's Java `pow` special cases. Reading the profile
 does not change `strict_math` or promise universal HotSpot equality. It allocates
 nothing.
 
+## Text NBT
+
+Use `mod_api::nbt` to convert typed NBT at a load, save or command boundary.
+These functions work on either logical side without a `Host` or an open world.
+
+- `parse_fully(&JavaString)` reads one complete SNBT value as a `Tag`.
+  `parse_compound_fully(&JavaString)` requires a `Compound` root. Both accept
+  trailing vanilla whitespace, but not trailing data. `SnbtError` gives a
+  vanilla translation key and a zero-based UTF-16 cursor. A wrong-root error
+  points just past the trailing whitespace.
+- `to_snbt(&Tag)` produces compact vanilla SNBT as a `JavaString`. Keys sort by
+  UTF-16 code units, and keys and strings preserve unpaired units. Neither SNBT
+  operation applies network NBT quotas. SNBT is not a binary round trip: for
+  example, the printed `END` parses as text, and NaN payload bits cannot be
+  recovered from their spelling.
+- `from_json(&str)` reads one UTF-8 JSON value. Compound members are inserted
+  in source order; a duplicate replaces its earlier value. Only surviving
+  values can cause conversion refusals, but malformed input is always refused.
+  Exact integers use the narrowest signed tag that fits; other numbers use float
+  or double. JSON booleans become bytes, and arrays become lists. Unicode escapes retain their
+  UTF-16 units. A root `null` becomes `Tag::End`; a surviving nested `null` is
+  refused. `JsonTextError` distinguishes malformed input, decimals outside
+  Gson's length or scale bounds, and conversion refusals such as nested null.
+- `to_json(&Tag)` returns compact JSON text. Numeric tag widths, byte boolean
+  identity and typed-array identity are lost; `Tag::End` writes as `null`.
+  `JsonNbtError` refuses non-finite numbers or unpaired UTF-16 instead of replacing
+  them. Both JSON directions enforce the shared 512-container nesting limit.
+
+Use SNBT for readable typed values and the binary codec below when you need
+wire bytes, such as preserving NaN payload bits on write.
+
 ## Network NBT
 
 `Tag::to_network_bytes()` writes the engine's nameless network root, preserving

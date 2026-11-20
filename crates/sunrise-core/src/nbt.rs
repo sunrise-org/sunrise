@@ -455,7 +455,11 @@ fn clone_tree(root: &Tag, java_copy: bool) -> Tag {
 
 /// Release a boundary-owned tag without recursive list/compound drops.
 pub fn discard_tag(root: Tag) {
-    let mut pending = vec![root];
+    let mut pending = match root {
+        Tag::List(values) => values,
+        Tag::Compound(values) => values.into_values().collect(),
+        _ => return,
+    };
     while let Some(tag) = pending.pop() {
         match tag {
             Tag::List(values) => pending.extend(values),
@@ -1434,8 +1438,12 @@ pub fn compare_nbt(expected: &Tag, actual: Option<&Tag>) -> bool {
 #[path = "nbt_snbt.rs"]
 mod snbt;
 pub use snbt::{
-    SnbtError, parse_snbt, parse_snbt_argument, parse_snbt_utf16, snbt_suggestions, snbt_whitespace,
+    SnbtError, parse_compound_fully, parse_fully, parse_snbt, parse_snbt_argument,
+    parse_snbt_utf16, snbt_suggestions, snbt_whitespace,
 };
+
+#[path = "nbt_snbt_text.rs"]
+pub mod snbt_text;
 
 /// A tag as its network NBT bytes (`write_network`); a
 /// tag past the default limits is refused, with the reason.

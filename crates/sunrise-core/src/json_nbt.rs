@@ -8,9 +8,9 @@
 //! member order used by NbtOps to build its hash map. An already parsed `Value`
 //! only exposes its map's iteration order, not the original collision history.
 
-use crate::nbt::{Compound, JavaString, Tag};
-use serde::{Deserialize, Deserializer, de};
-use serde_json::{Map, Number, Value};
+use crate::nbt::{Compound, CompoundIter, JavaString, Tag, discard_tag};
+use indexmap::IndexMap;
+use serde_json::{Map, Number, Value, value::RawValue};
 
 const MAX_DEPTH: usize = 512;
 
@@ -40,86 +40,264 @@ impl std::fmt::Display for JsonNbtError {
 }
 impl std::error::Error for JsonNbtError {}
 
-/// Parse raw JSON directly into NBT, inserting members in source order at
-/// every level. Duplicate keys replace the value in its original position.
-/// Applies serde_json's syntax and parser depth limits, plus JsonOps' refusal
-/// of nested nulls. Call this before decoding to `serde_json::Value` when
-/// serialized NBT order matters.
-pub fn parse_json_tag(source: &str) -> Result<Tag, serde_json::Error> {
-    struct OrderedTag(Tag);
-
-    impl<'de> Deserialize<'de> for OrderedTag {
-        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-            struct TagVisitor;
-
-            impl<'de> de::Visitor<'de> for TagVisitor {
-                type Value = OrderedTag;
-
-                fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    f.write_str("a JSON value")
-                }
-
-                fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-                    Ok(OrderedTag(Tag::End))
-                }
-                fn visit_bool<E: de::Error>(self, value: bool) -> Result<Self::Value, E> {
-                    Ok(OrderedTag(Tag::Byte(i8::from(value))))
-                }
-                fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
-                    Ok(OrderedTag(Tag::String(value.into())))
-                }
-                fn visit_i64<E: de::Error>(self, value: i64) -> Result<Self::Value, E> {
-                    Ok(OrderedTag(number(&value.into())))
-                }
-                fn visit_u64<E: de::Error>(self, value: u64) -> Result<Self::Value, E> {
-                    Ok(OrderedTag(number(&value.into())))
-                }
-                fn visit_f64<E: de::Error>(self, value: f64) -> Result<Self::Value, E> {
-                    let value = Number::from_f64(value).expect("finite JSON number");
-                    Ok(OrderedTag(number(&value)))
-                }
-                fn visit_seq<A: de::SeqAccess<'de>>(
-                    self,
-                    mut seq: A,
-                ) -> Result<Self::Value, A::Error> {
-                    let mut values = Vec::new();
-                    while let Some(OrderedTag(value)) = seq.next_element()? {
-                        values.push(value);
-                    }
-                    Ok(OrderedTag(Tag::List(values)))
-                }
-                fn visit_map<A: de::MapAccess<'de>>(
-                    self,
-                    mut map: A,
-                ) -> Result<Self::Value, A::Error> {
-                    let mut values = Compound::new();
-                    while let Some((key, OrderedTag(value))) = map.next_entry::<String, _>()? {
-                        values.insert(key.as_str().into(), value);
-                    }
-                    Ok(OrderedTag(Tag::Compound(values)))
-                }
+/// A refusal when decoding JSON text into typed NBT.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum JsonTextError {
+    /// Invalid JSON or trailing data, with a zero-based byte offset into the input.
+    Malformed { cursor: usize },
+    /// A number exceeds Gson's decimal digit or scale bounds.
+    NumberOutOfRange { cursor: usize },
+    /// A well-formed JSON value violates a shared conversion rule.
+    Conversion(JsonNbtError),
+}
+impl std::fmt::Display for JsonTextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Malformed { cursor } => write!(f, "malformed JSON at byte {cursor}"),
+            Self::NumberOutOfRange { cursor } => {
+                write!(f, "JSON number out of range at byte {cursor}")
             }
-
-            d.deserialize_any(TagVisitor)
+            Self::Conversion(error) => error.fmt(f),
         }
     }
+}
+impl std::error::Error for JsonTextError {}
 
-    let OrderedTag(tag) = serde_json::from_str(source)?;
-    // A duplicate member may have replaced a null. Check only the surviving
-    // values, just as JsonOps does after JSON parsing.
-    if matches!(tag, Tag::End) {
-        return Ok(tag);
+/// Parse one complete UTF-8 JSON value, inserting object members in source order
+/// at every level. Duplicate keys replace the value in its original position.
+/// Only surviving values can cause conversion errors; malformed JSON is always
+/// refused. Unicode escapes retain their UTF-16 units. Numbers narrow from the
+/// original decimal, booleans become bytes, arrays become lists, and a root null
+/// becomes End. Returns [`JsonTextError`] for malformed input, unsupported decimal
+/// size, surviving nested nulls, or more than 512 nested list/compound containers.
+pub fn parse_json_tag(source: &str) -> Result<Tag, JsonTextError> {
+    let mut parser = JsonParser {
+        source,
+        tail: source,
+    };
+    let result = parser.value()?;
+    if !parser.remaining().is_empty() {
+        return Err(parser.malformed());
     }
-    let mut pending = vec![&tag];
-    while let Some(value) = pending.pop() {
-        match value {
-            Tag::End => return Err(de::Error::custom(JsonNbtError::NestedNull)),
-            Tag::List(children) => pending.extend(children),
-            Tag::Compound(children) => pending.extend(children.values()),
-            _ => {}
+    result.map(DecodedTag::into_tag)
+}
+
+// Dropping a replaced member or a partial parse must not recurse through its NBT.
+struct DecodedTag(Tag);
+impl DecodedTag {
+    fn into_tag(mut self) -> Tag {
+        std::mem::replace(&mut self.0, Tag::End)
+    }
+}
+impl Drop for DecodedTag {
+    fn drop(&mut self) {
+        discard_tag(std::mem::replace(&mut self.0, Tag::End));
+    }
+}
+
+// Keep a conversion error attached to its value so replacing a duplicate
+// object member also replaces its error.
+type Converted = Result<DecodedTag, JsonTextError>;
+
+enum JsonFrame {
+    List(Vec<Converted>),
+    Object(IndexMap<JavaString, Converted>, JavaString),
+}
+impl JsonFrame {
+    fn finish(self) -> Converted {
+        match self {
+            Self::List(values) => {
+                let mut output = DecodedTag(Tag::List(Vec::with_capacity(values.len())));
+                let Tag::List(list) = &mut output.0 else {
+                    unreachable!()
+                };
+                for value in values {
+                    list.push(value?.into_tag());
+                }
+                Ok(output)
+            }
+            Self::Object(entries, _) => {
+                let mut output = DecodedTag(Tag::Compound(Compound::new()));
+                let Tag::Compound(compound) = &mut output.0 else {
+                    unreachable!()
+                };
+                for (key, value) in entries {
+                    compound.insert(key, value?.into_tag());
+                }
+                Ok(output)
+            }
         }
     }
-    Ok(tag)
+}
+
+struct JsonParser<'a> {
+    source: &'a str,
+    tail: &'a str,
+}
+impl JsonParser<'_> {
+    fn cursor(&self) -> usize {
+        self.source.len() - self.tail.len()
+    }
+    fn malformed(&self) -> JsonTextError {
+        JsonTextError::Malformed {
+            cursor: self.cursor(),
+        }
+    }
+    fn remaining(&mut self) -> &str {
+        self.tail = self.tail.trim_start_matches([' ', '\t', '\r', '\n']);
+        self.tail
+    }
+    fn eat(&mut self, token: &str) -> bool {
+        self.remaining();
+        if let Some(tail) = self.tail.strip_prefix(token) {
+            self.tail = tail;
+            true
+        } else {
+            false
+        }
+    }
+    fn string(&mut self) -> Result<JavaString, JsonTextError> {
+        self.remaining();
+        if !self.tail.starts_with('"') {
+            return Err(self.malformed());
+        }
+        // RawValue validates escapes without forcing escaped UTF-16 to become UTF-8.
+        let mut tokens = serde_json::Deserializer::from_str(self.tail).into_iter::<&RawValue>();
+        let token = tokens
+            .next()
+            .expect("a token starts here")
+            .map_err(|_| self.malformed())?
+            .get();
+        self.tail = &self.tail[tokens.byte_offset()..];
+        let mut contents = &token[1..token.len() - 1];
+        let mut units = Vec::new();
+        while let Some((literal, escape)) = contents.split_once('\\') {
+            units.extend(literal.encode_utf16());
+            let (unit, width) = match escape.as_bytes()[0] {
+                b'u' => (
+                    u16::from_str_radix(&escape[1..5], 16).expect("validated hex escape"),
+                    5,
+                ),
+                b'b' => (8, 1),
+                b't' => (9, 1),
+                b'n' => (10, 1),
+                b'f' => (12, 1),
+                b'r' => (13, 1),
+                byte => (u16::from(byte), 1),
+            };
+            units.push(unit);
+            contents = &escape[width..];
+        }
+        units.extend(contents.encode_utf16());
+        Ok(JavaString(units))
+    }
+    fn key(&mut self) -> Result<JavaString, JsonTextError> {
+        let key = self.string()?;
+        if !self.eat(":") {
+            return Err(self.malformed());
+        }
+        Ok(key)
+    }
+    fn value(&mut self) -> Result<Converted, JsonTextError> {
+        const TOO_DEEP: Converted = Err(JsonTextError::Conversion(JsonNbtError::TooDeep));
+        let mut frames = Vec::new();
+        'value: loop {
+            let mut value = match self.remaining().as_bytes().first().copied() {
+                Some(b'[') => {
+                    self.tail = &self.tail[1..];
+                    if self.eat("]") {
+                        if frames.len() >= MAX_DEPTH {
+                            TOO_DEEP
+                        } else {
+                            Ok(DecodedTag(Tag::List(Vec::new())))
+                        }
+                    } else {
+                        frames.push(JsonFrame::List(Vec::new()));
+                        continue;
+                    }
+                }
+                Some(b'{') => {
+                    self.tail = &self.tail[1..];
+                    if self.eat("}") {
+                        if frames.len() >= MAX_DEPTH {
+                            TOO_DEEP
+                        } else {
+                            Ok(DecodedTag(Tag::Compound(Compound::new())))
+                        }
+                    } else {
+                        frames.push(JsonFrame::Object(IndexMap::new(), self.key()?));
+                        continue;
+                    }
+                }
+                Some(b'"') => Ok(DecodedTag(Tag::String(self.string()?))),
+                Some(b't') if self.eat("true") => Ok(DecodedTag(Tag::Byte(1))),
+                Some(b'f') if self.eat("false") => Ok(DecodedTag(Tag::Byte(0))),
+                Some(b'n') if self.eat("null") => Ok(DecodedTag(Tag::End)),
+                Some(b'-' | b'0'..=b'9') => {
+                    let len = self
+                        .tail
+                        .bytes()
+                        .take_while(|byte| {
+                            matches!(byte, b'0'..=b'9' | b'.' | b'-' | b'+' | b'e' | b'E')
+                        })
+                        .count();
+                    let (decimal, tail) = self.tail.split_at(len);
+                    // RawValue checks JSON number syntax without narrowing to f64.
+                    serde_json::from_str::<&RawValue>(decimal).map_err(|_| self.malformed())?;
+                    // JsonPrimitive.getAsBigDecimal checks Gson's bounds before
+                    // JsonOps narrows the number; this is not a JSON syntax error.
+                    let result = decimal_parts(decimal)
+                        .filter(|(_, scale)| {
+                            decimal.len() <= 10_000 && scale.unsigned_abs() < 10_000
+                        })
+                        .map(|(mantissa, scale)| match exact_long(mantissa, scale) {
+                            Some(value) => integer_tag(value),
+                            None => {
+                                floating_tag(decimal.parse::<f64>().expect("validated decimal"))
+                            }
+                        })
+                        .ok_or_else(|| JsonTextError::NumberOutOfRange {
+                            cursor: self.cursor(),
+                        });
+                    self.tail = tail;
+                    result.map(DecodedTag)
+                }
+                _ => return Err(self.malformed()),
+            };
+            while let Some(frame) = frames.last_mut() {
+                if matches!(value, Ok(DecodedTag(Tag::End))) {
+                    value = Err(JsonTextError::Conversion(JsonNbtError::NestedNull));
+                }
+                let end = match frame {
+                    JsonFrame::List(values) => {
+                        values.push(value);
+                        "]"
+                    }
+                    JsonFrame::Object(entries, key) => {
+                        entries.insert(std::mem::take(key), value);
+                        "}"
+                    }
+                };
+                if !self.eat(end) {
+                    if !self.eat(",") {
+                        return Err(self.malformed());
+                    }
+                    if let JsonFrame::Object(_, key) = frame {
+                        *key = self.key()?;
+                    }
+                    continue 'value;
+                }
+                let complete = frames.pop().expect("completed frame");
+                value = if frames.len() >= MAX_DEPTH {
+                    TOO_DEEP
+                } else {
+                    complete.finish()
+                };
+            }
+            return Ok(value);
+        }
+    }
 }
 
 /// Convert JSON metadata using JsonOps→NbtOps numeric and nested-null rules.
@@ -339,55 +517,22 @@ impl<'a> JsonTag<'a> {
         let mut done = Vec::new();
         while let Some(step) = work.pop() {
             match step {
-                Work::Enter(tag) => {
-                    let value = match tag {
-                        Tag::End => Value::Null,
-                        Tag::Byte(v) => Value::from(*v),
-                        Tag::Short(v) => Value::from(*v),
-                        Tag::Int(v) => Value::from(*v),
-                        Tag::Long(v) => Value::from(*v),
-                        Tag::Float(bits) => Value::Number(
-                            Number::from_f64(
-                                crate::java_number::float_to_string(f32::from_bits(*bits))
-                                    .parse::<f64>()
-                                    .expect("validated finite float"),
-                            )
-                            .expect("validated finite float"),
-                        ),
-                        // Do not reparse through serde_json: its optional parser
-                        // features must not affect an already typed double's bits.
-                        Tag::Double(bits) => Value::Number(
-                            Number::from_f64(f64::from_bits(*bits))
-                                .expect("validated finite double"),
-                        ),
-                        Tag::String(s) => Value::String(s.to_string().expect("validated UTF-16")),
-                        Tag::ByteArray(values) => {
-                            Value::Array(values.iter().map(|v| Value::from(*v as i8)).collect())
-                        }
-                        Tag::IntArray(values) => {
-                            Value::Array(values.iter().copied().map(Value::from).collect())
-                        }
-                        Tag::LongArray(values) => {
-                            Value::Array(values.iter().copied().map(Value::from).collect())
-                        }
-                        Tag::List(values) => {
-                            work.push(Work::List(values.len()));
-                            work.extend(values.iter().rev().map(Work::Enter));
-                            continue;
-                        }
-                        Tag::Compound(values) => {
-                            work.push(Work::Object(
-                                values
-                                    .keys()
-                                    .map(|k| k.to_string().expect("validated UTF-16"))
-                                    .collect(),
-                            ));
-                            work.extend(values.values().map(Work::Enter));
-                            continue;
-                        }
-                    };
-                    done.push(value);
-                }
+                Work::Enter(tag) => match tag {
+                    Tag::List(values) => {
+                        work.push(Work::List(values.len()));
+                        work.extend(values.iter().rev().map(Work::Enter));
+                    }
+                    Tag::Compound(values) => {
+                        work.push(Work::Object(
+                            values
+                                .keys()
+                                .map(|k| k.to_string().expect("validated UTF-16"))
+                                .collect(),
+                        ));
+                        work.extend(values.values().map(Work::Enter));
+                    }
+                    leaf => done.push(json_atom(leaf)),
+                },
                 Work::List(len) => {
                     let values = done.split_off(done.len() - len);
                     done.push(Value::Array(values));
@@ -404,24 +549,136 @@ impl<'a> JsonTag<'a> {
     }
 }
 
+/// Convert an NBT tag into compact JSON text without a recursive serializer.
+/// Refuses the same values as [`tag_to_json`]. Object members follow NBT
+/// traversal order, as in `NbtOps.convertTo(JsonOps)`.
+pub fn tag_to_json_text(root: &Tag) -> Result<String, JsonNbtError> {
+    validate_tag(root)?;
+    enum Frame<'a> {
+        List(std::slice::Iter<'a, Tag>),
+        Object(CompoundIter<'a>),
+    }
+    let mut output = String::new();
+    let mut frames = Vec::new();
+    let mut next = Some(root);
+    loop {
+        if let Some(tag) = next.take() {
+            match tag {
+                Tag::List(values) => {
+                    output.push('[');
+                    let mut values = values.iter();
+                    if let Some(first) = values.next() {
+                        frames.push(Frame::List(values));
+                        next = Some(first);
+                        continue;
+                    }
+                    output.push(']');
+                }
+                Tag::Compound(entries) => {
+                    output.push('{');
+                    let mut entries = entries.iter();
+                    if let Some((key, value)) = entries.next() {
+                        write_json_key(&mut output, key);
+                        frames.push(Frame::Object(entries));
+                        next = Some(value);
+                        continue;
+                    }
+                    output.push('}');
+                }
+                leaf => {
+                    use std::fmt::Write;
+                    write!(&mut output, "{}", json_atom(leaf)).expect("writing to a String");
+                }
+            }
+        }
+        match frames.last_mut() {
+            Some(Frame::List(values)) => {
+                if let Some(value) = values.next() {
+                    output.push(',');
+                    next = Some(value);
+                    continue;
+                }
+                output.push(']');
+            }
+            Some(Frame::Object(entries)) => {
+                if let Some((key, value)) = entries.next() {
+                    output.push(',');
+                    write_json_key(&mut output, key);
+                    next = Some(value);
+                    continue;
+                }
+                output.push('}');
+            }
+            None => return Ok(output),
+        }
+        frames.pop();
+    }
+}
+
+fn write_json_key(output: &mut String, key: &JavaString) {
+    use std::fmt::Write;
+    let key = Value::String(key.to_string().expect("validated UTF-16"));
+    write!(output, "{key}:").expect("writing to a String");
+}
+
+fn json_atom(tag: &Tag) -> Value {
+    match tag {
+        Tag::End => Value::Null,
+        Tag::Byte(v) => Value::from(*v),
+        Tag::Short(v) => Value::from(*v),
+        Tag::Int(v) => Value::from(*v),
+        Tag::Long(v) => Value::from(*v),
+        Tag::Float(bits) => Value::Number(
+            Number::from_f64(
+                crate::java_number::float_to_string(f32::from_bits(*bits))
+                    .parse::<f64>()
+                    .expect("validated finite float"),
+            )
+            .expect("validated finite float"),
+        ),
+        // Do not reparse through serde_json: its optional parser
+        // features must not affect an already typed double's bits.
+        Tag::Double(bits) => {
+            Value::Number(Number::from_f64(f64::from_bits(*bits)).expect("validated finite double"))
+        }
+        Tag::String(s) => Value::String(s.to_string().expect("validated UTF-16")),
+        Tag::ByteArray(values) => {
+            Value::Array(values.iter().map(|v| Value::from(*v as i8)).collect())
+        }
+        Tag::IntArray(values) => Value::Array(values.iter().copied().map(Value::from).collect()),
+        Tag::LongArray(values) => Value::Array(values.iter().copied().map(Value::from).collect()),
+        Tag::List(_) | Tag::Compound(_) => unreachable!("containers are visited by the walker"),
+    }
+}
+
 fn number(number: &Number) -> Tag {
     // BigDecimal.longValueExact in JsonOps: do not round a fraction or a u64
     // through f64 into an apparently integral signed long.
-    if let Some(value) = exact_long(&number.to_string()) {
-        if let Ok(value) = i8::try_from(value) {
-            return Tag::Byte(value);
-        }
-        if let Ok(value) = i16::try_from(value) {
-            return Tag::Short(value);
-        }
-        if let Ok(value) = i32::try_from(value) {
-            return Tag::Int(value);
-        }
-        return Tag::Long(value);
+    if let Some((mantissa, scale)) = decimal_parts(&number.to_string())
+        && let Some(value) = exact_long(mantissa, scale)
+    {
+        return integer_tag(value);
     }
-    let value = number
-        .as_f64()
-        .expect("a JSON number is representable as f64");
+    floating_tag(
+        number
+            .as_f64()
+            .expect("a JSON number is representable as f64"),
+    )
+}
+
+fn integer_tag(value: i64) -> Tag {
+    if let Ok(value) = i8::try_from(value) {
+        Tag::Byte(value)
+    } else if let Ok(value) = i16::try_from(value) {
+        Tag::Short(value)
+    } else if let Ok(value) = i32::try_from(value) {
+        Tag::Int(value)
+    } else {
+        Tag::Long(value)
+    }
+}
+
+fn floating_tag(value: f64) -> Tag {
     let float = value as f32;
     if f64::from(float) == value {
         Tag::Float(if float == 0.0 { 0 } else { float.to_bits() })
@@ -430,19 +687,23 @@ fn number(number: &Number) -> Tag {
     }
 }
 
-/// Decimal integer extraction without rounding. The input is Number's valid
-/// decimal spelling; this is not a second JSON parser.
-fn exact_long(decimal: &str) -> Option<i64> {
-    let (mantissa, exponent) = decimal
-        .split_once(['e', 'E'])
-        .map_or((decimal, 0), |(m, e)| {
-            (m, e.parse::<i32>().expect("JSON exponent"))
-        });
-    let negative = mantissa.starts_with('-');
-    let mantissa = mantissa.trim_start_matches('-');
-    let fractional = mantissa.split_once('.').map_or(0, |(_, f)| f.len() as i32);
+/// A validated decimal's mantissa and Java BigDecimal scale.
+fn decimal_parts(decimal: &str) -> Option<(&str, i32)> {
+    let (mantissa, exponent) = match decimal.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().ok()?),
+        None => (decimal, 0),
+    };
+    let fractional = i32::try_from(mantissa.split_once('.').map_or(0, |(_, f)| f.len())).ok()?;
+    Some((mantissa, fractional.checked_sub(exponent)?))
+}
+
+/// BigDecimal.longValueExact without intermediate floating-point rounding.
+fn exact_long(mantissa: &str, scale: i32) -> Option<i64> {
+    let (negative, mantissa) = mantissa
+        .strip_prefix('-')
+        .map_or((false, mantissa), |v| (true, v));
     let mut digits: Vec<u8> = mantissa.bytes().filter(|b| *b != b'.').collect();
-    let mut scale = exponent - fractional;
+    let mut scale = scale.checked_neg()?;
     while scale < 0 && digits.last() == Some(&b'0') {
         digits.pop();
         scale += 1;

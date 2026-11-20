@@ -18,6 +18,8 @@ serde_json = { version = "1.0.151", features = ["raw_value"] }
 serde = { version = "1", features = ["derive"] }
 unicode_names2 = "=2.0.0"
 crc32fast = "1.5"
+indexmap = "2"
+smallvec = "1"
 
 [target.'cfg(any(target_arch = "aarch64", target_arch = "x86_64"))'.dependencies]
 crc-fast = { version = "=1.10.0", default-features = false, features = ["std"] }

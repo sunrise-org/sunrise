@@ -60,6 +60,7 @@ def main():
     report = build / 'report.json'
     report.unlink(missing_ok=True)
     paths = ['crates/sunrise-world/src/snbt_text.rs', 'crates/sunrise-world/src/datafix/json.rs',
+             'crates/sunrise-core/src/nbt_snbt_text.rs',
              'crates/sunrise-core/src/nbt.rs', 'crates/sunrise-core/src/java_number.rs',
              'crates/sunrise-world/examples/probe/main.rs',
              'crates/sunrise-world/examples/probe/float_text_fixture.rs',
