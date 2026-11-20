@@ -1340,3 +1340,6 @@ fn public_transfer_refuses_second_destination_aborts_root_then_moves_and_returns
 
 #[path = "checkpoint_adverse_tests/shutdown_tests.rs"]
 mod shutdown_tests;
+
+#[path = "checkpoint_adverse_tests/retired_recapture_tests.rs"]
+mod retired_recapture_tests;

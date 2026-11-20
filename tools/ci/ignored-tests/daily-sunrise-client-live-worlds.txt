@@ -13,3 +13,4 @@ sunrise-client game::native_live_worlds_tests::checkpoint_adverse_tests::public_
 sunrise-client game::native_live_worlds::publication_tests::trusted_external_pose_consumes_overlap_while_default_identity_and_step_guards_hold lib daily resources
 sunrise-client game::native_live_worlds_tests::checkpoint_adverse_tests::shutdown_tests::normal_shutdown_checkpoints_leaving_players_and_rejects_late_notices lib daily resources
 sunrise-client game::native_live_worlds::publication_tests::ordinary_destination_shapes_use_real_position_context_without_weakening_source_admission lib daily resources
+sunrise-client game::native_live_worlds_tests::checkpoint_adverse_tests::retired_recapture_tests::completed_return_reopens_retired_source_and_recaptures_into_new_columns lib daily child-process # Completed public Return, ordinary whole-Game stop, fresh-process load of the same retired Source and public Capture into new columns, retaining another active Source.

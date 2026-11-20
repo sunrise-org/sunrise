@@ -219,7 +219,7 @@ fn post_decision_failure_keeps_deferred_records_and_forbids_old_or_new_replay() 
     assert!(!path(&root.0, 1).exists());
 }
 #[test]
-#[ignore = "large real payload admission latency/memory tier has not been measured"]
+#[ignore = "daily"]
 fn aggregate_serialized_payload_budget_refuses_without_any_player_file() {
     let root = Scratch::new("byte-cap");
     let mut saves = Autosaves::default();

@@ -707,6 +707,7 @@ fn native_live_world_ordinary_actions_admit_revalidate_and_update_real_membershi
 
 struct SchedulerFixture {
     activate: Arc<AtomicU8>,
+    seeds: Arc<AtomicU8>,
     observations: Arc<std::sync::Mutex<Vec<(bool, Option<bool>)>>>,
 }
 #[mod_api::__subscriptions]
@@ -728,6 +729,23 @@ impl Hooks for SchedulerFixture {
         // The source is inactive: its own level callback cannot request its first activation.
         let source = host.level("live_scheduler:local").unwrap();
         assert!(!source.in_place(host));
+        let stone = host.block_state_id("minecraft:stone").unwrap();
+        let before = source.revisions(host).unwrap();
+        assert_eq!(
+            source.set_block(host, [2, 64, 0], stone, mod_api::BlockUpdateFlags::CLIENTS),
+            Err(mod_api::LevelWriteError::Unavailable)
+        );
+        assert_eq!(
+            mod_api::HostTransaction::transaction(host, |host, _| source.set_block(
+                host,
+                [2, 64, 0],
+                stone,
+                mod_api::BlockUpdateFlags::CLIENTS
+            )),
+            Err(mod_api::LevelWriteError::Unavailable),
+            "a transaction never switches a parked Source into place"
+        );
+        assert_eq!(source.revisions(host).unwrap(), before);
         for chunk in [[0, 0], [1, 0]] {
             assert!(
                 source
@@ -763,6 +781,39 @@ impl Hooks for SchedulerFixture {
             ),
             Err(LiveWorldError::Busy),
         );
+        if event.level == source
+            && self.activate.load(Ordering::Relaxed) == 2
+            && self.seeds.load(Ordering::Relaxed) == 0
+        {
+            assert!(source.in_place(host));
+            assert_eq!(
+                host.transaction_lifecycle(),
+                mod_api::TransactionLifecycle::None
+            );
+            self.seeds.store(1, Ordering::Relaxed);
+            let flags = mod_api::BlockUpdateFlags::CLIENTS;
+            let stone = host.block_state_id("minecraft:stone").unwrap();
+            let chest = host.block_state_id("minecraft:chest").unwrap();
+            assert_eq!(source.set_block(host, [2, 64, 0], stone, flags), Ok(true));
+            assert_eq!(source.set_block(host, [3, 65, 0], chest, flags), Ok(true));
+            assert!(
+                host.block_entity(source, [3, 65, 0])
+                    .unwrap()
+                    .merge_data(
+                        host,
+                        [(
+                            "Items".into(),
+                            mod_api::Tag::List(vec![mod_api::Tag::compound([
+                                ("Slot", mod_api::Tag::Byte(0)),
+                                ("id", mod_api::Tag::String("minecraft:stone".into())),
+                                ("count", mod_api::Tag::Int(7)),
+                            ])])
+                        )]
+                        .into()
+                    )
+                    .unwrap()
+            );
+        }
         if event.level.dimension_id() == "live_scheduler:local"
             || event.level.dimension_id() == "minecraft:overworld"
         {
@@ -785,12 +836,14 @@ fn runtime_source_global_activation_and_parked_readiness_use_ordinary_scheduler(
         return;
     }
     let activate = Arc::new(AtomicU8::new(0));
+    let seeds = Arc::new(AtomicU8::new(0));
     let observations = Arc::new(std::sync::Mutex::new(Vec::new()));
     mod_platform::testing::with_mods(
         vec![ModEntry::new(
             "live_scheduler",
             Box::new(SchedulerFixture {
                 activate: activate.clone(),
+                seeds: seeds.clone(),
                 observations: observations.clone(),
             }),
         )]
@@ -856,10 +909,27 @@ fn runtime_source_global_activation_and_parked_readiness_use_ordinary_scheduler(
                 );
                 observations.lock().unwrap().clear();
                 activate.store(1, Ordering::Relaxed);
+                let blocks_before_seed = source.revisions(game).unwrap().block_revision;
                 for _ in 0..4 {
                     game.tick_server(false).unwrap();
                 }
                 assert_eq!(activate.load(Ordering::Relaxed), 2);
+                assert_eq!(
+                    seeds.load(Ordering::Relaxed),
+                    1,
+                    "repeated ordinary Source callbacks do not seed again"
+                );
+                assert_eq!(
+                    source.revisions(game).unwrap().block_revision,
+                    blocks_before_seed + 2,
+                    "only the once-admitted stone and chest state writes occurred"
+                );
+                let source_world = game.native_level_world(source).unwrap();
+                let Some(BlockEntity::Chest(chest)) = source_world.block_entities.get(&(3, 65, 0))
+                else {
+                    panic!("real seeded chest absent")
+                };
+                assert_eq!(chest[0].as_ref().unwrap().count, 7);
                 let seen = observations.lock().unwrap();
                 assert_eq!(
                     seen.iter().filter(|(in_place, _)| *in_place).count(),
