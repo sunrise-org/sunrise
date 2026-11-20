@@ -1,7 +1,12 @@
 # Placing a block from code
 
-`level.set_block(host, pos, state, flags)` writes a state without running `Block.setPlacedBy`.
-These are all server operations on the level in place.
+`level.set_block(host, pos, state, flags)` writes a complete state without running `Block.setPlacedBy`.
+It uses the level named by the handle even when the server has another level in place. Only resident
+chunks can be written; this does not open a level or load a chunk. A compatible block entity retains its
+handle and attachments. `merge_data` and `replace_data` on that entity also work in a resident level
+that is not in place, preserving the entity's identity and position.
+
+The placement and shape helpers below still operate only on the level in place.
 
 - `level.update_from_neighbour_shapes(host, pos, state)` is `Block.updateFromNeighbourShapes`: it returns
   the state fitted to the blocks around `pos` (a fence gets its connections, a stair its corner). Nothing
@@ -34,7 +39,9 @@ game event or advancement. `place_block` and `update_from_neighbour_shapes` refu
 
 To place from a stack or saved data, write the state with `set_block`, then load the block entity data
 if any, then call `set_placed_by` with the original stack (if any). `BlockItem.place` applies item data
-before `Block.setPlacedBy`; the standalone call only runs the last step.
+before `Block.setPlacedBy`; the standalone call only runs the last step. When `set_block` stages
+a new block entity in a transaction, you can look up its handle and load its payload in that
+transaction. The outer commit publishes it; an abort discards both the new holder and its payload.
 
 ## Initialize a block after placement
 
@@ -53,5 +60,7 @@ The server's `block_changed` hook hears a successful state change before its blo
 and neighbour updates. `event.flags` gives the flags applied to that write. For example,
 `event.flags.contains(BlockUpdateFlags::KNOWN_SHAPE)` tells you that this write skips the
 neighbour shape passes, even though the state change itself is still reported. If a transaction
-staged changes, the notice describes the write applied at commit, not each intermediate change.
+staged changes with `set_block`, the notice describes the original and final state and the last
+write's flags, in the addressed level, not each intermediate change. The block Part's
+`on_block_state_change` still follows neighbour updates. Neither notice vetoes the write.
 Rebuild listeners against the version 2 hook.

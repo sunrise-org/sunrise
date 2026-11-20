@@ -153,6 +153,20 @@ pub struct BlockEntities {
     client_snapshots: FxHashMap<Pos, ClientSnapshot>,
 }
 
+enum InsertIdentity {
+    KeepMatching,
+    Replace,
+    Journaled(Option<u64>),
+}
+
+/// A suspended ticker's position in the level's existing queues.
+#[derive(Clone, Copy)]
+pub struct JournaledTicker {
+    live: Option<u32>,
+    pending: Option<u32>,
+    asleep: bool,
+}
+
 /// A removed block entity held for the `block_drops` event of its break: its position, the
 /// identity it had and its saved data, read before the removal took its `CustomName` away.
 pub struct Broken {
@@ -752,39 +766,83 @@ impl BlockEntities {
     /// `/data merge block`), where vanilla keeps the object, so its
     /// attachments stay; any other replacement starts them over.
     pub fn insert(&mut self, pos: Pos, entity: BlockEntity) -> Option<BlockEntity> {
-        self.insert_impl(pos, entity, false)
+        self.insert_impl(pos, entity, InsertIdentity::KeepMatching)
     }
     /// Attach a different instance, even when its type matches the old instance.
     /// Payload-only writes use `insert` and retain their identity instead.
     pub fn replace(&mut self, pos: Pos, entity: BlockEntity) -> Option<BlockEntity> {
-        self.insert_impl(pos, entity, true)
+        self.insert_impl(pos, entity, InsertIdentity::Replace)
     }
+    /// Attach journal storage without announcing a load. A restored instance keeps its
+    /// generation, including any previously queued load for that exact instance.
+    pub fn insert_journaled(&mut self, pos: Pos, entity: BlockEntity, generation: Option<u64>) {
+        self.insert_impl(pos, entity, InsertIdentity::Journaled(generation));
+    }
+
+    /// Register a newly committed instance in the ticker and load queues.
+    pub fn publish_journaled_load(&mut self, pos: Pos) {
+        self.add(pos);
+        if self.on_load_enabled && matches!(self.map.get(&pos), Some(BlockEntity::Mod(_))) {
+            self.on_load.push_back((pos, self.generations[&pos]));
+        }
+    }
+
+    /// Remember an existing ticker's slot before temporarily hiding its holder.
+    pub fn journaled_ticker(&self, pos: Pos) -> JournaledTicker {
+        JournaledTicker {
+            live: self.live.get(&pos).copied(),
+            pending: self.pending.get(&pos).copied(),
+            asleep: self.is_asleep(&pos),
+        }
+    }
+
+    /// Rebind the original instance to its slot without reordering the tickers.
+    pub fn restore_journaled_ticker(&mut self, pos: Pos, ticker: JournaledTicker) {
+        if let Some(slot) = ticker.live {
+            self.live.insert(pos, slot);
+        }
+        if let Some(slot) = ticker.pending {
+            self.pending.insert(pos, slot);
+        }
+        if ticker.asleep {
+            self.asleep.insert(pos);
+        }
+    }
+
     fn insert_impl(
         &mut self,
         pos: Pos,
         entity: BlockEntity,
-        replace_identity: bool,
+        identity: InsertIdentity,
     ) -> Option<BlockEntity> {
         let new_is_mod = matches!(entity, BlockEntity::Mod(_));
         let same_type = |old: &BlockEntity| match (old, &entity) {
             (BlockEntity::Mod(old), BlockEntity::Mod(new)) => old.id() == new.id(),
             (old, new) => std::mem::discriminant(old) == std::mem::discriminant(new),
         };
-        let new_identity = replace_identity || !self.map.get(&pos).is_some_and(same_type);
+        let journaled = matches!(identity, InsertIdentity::Journaled(_));
+        let new_identity = !matches!(identity, InsertIdentity::KeepMatching)
+            || !self.map.get(&pos).is_some_and(same_type);
         if new_identity {
             self.retire(pos);
-            self.new_generation(pos);
+            if let InsertIdentity::Journaled(Some(generation)) = identity {
+                self.generations.insert(pos, generation);
+            } else {
+                self.new_generation(pos);
+            }
         }
         self.replace_taken(pos);
         let new_box = shows_box(&entity);
         self.note_sign_editor(pos, &entity);
         self.asleep.remove(&pos);
         let old = self.map.insert(pos, entity);
-        if self.on_load_enabled && new_identity && new_is_mod {
-            self.on_load.push_back((pos, self.generations[&pos]));
-        }
-        if old.is_none() {
-            self.add(pos);
+        if !journaled {
+            if self.on_load_enabled && new_identity && new_is_mod {
+                self.on_load.push_back((pos, self.generations[&pos]));
+            }
+            if old.is_none() {
+                self.add(pos);
+            }
         }
         if new_box {
             self.boxes.insert(pos);

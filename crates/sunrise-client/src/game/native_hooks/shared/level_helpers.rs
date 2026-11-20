@@ -133,13 +133,27 @@ impl GameLevel<'_> {
         {
             return false;
         }
+        self.apply_native_block_write(ticks, pos, state, flags)
+    }
+
+    /// Run the normal write after the caller validated the state and resident position.
+    pub(in crate::game) fn apply_native_block_write(
+        &mut self,
+        ticks: &mut Ticks,
+        pos: [i32; 3],
+        state: BlockStateId,
+        flags: i32,
+    ) -> bool {
         let at = BlockPos::new(pos[0], pos[1], pos[2]);
         let previous = self.world.block(pos[0], pos[1], pos[2]);
         let b = self.behaviours;
         let changed = b.set_block(self, ticks, at, state, flags);
         let landed = self.world.block(pos[0], pos[1], pos[2]);
         if !self.world.block_entities.stateful_entity(landed.0)
-            && block_entity_to_create(self.facts, changed, previous, state, landed).is_some()
+            && changed
+            && b.block(previous) != b.block(state)
+            && b.block(landed) == b.block(state)
+            && !self.install_staged_block_entity((pos[0], pos[1], pos[2]), landed)
             && let Some(entity) = self.new_block_entity_for_state(landed)
         {
             put_block_entity(self.world, pos, entity);
@@ -263,21 +277,6 @@ pub(super) fn block_entity_for_block(
         }));
     }
     BlockEntity::for_block(name)
-}
-
-/// After a `Level.setBlock` of `state` over `previous`: the block whose block
-/// entity the write creates, when the write changed the block's name and the
-/// new block landed.
-fn block_entity_to_create(
-    facts: &sunrise_client::blocks::BlockFacts,
-    changed: bool,
-    previous: BlockStateId,
-    state: BlockStateId,
-    landed: BlockStateId,
-) -> Option<String> {
-    let new = &facts.get(state).name;
-    (changed && facts.get(previous).name != *new && facts.get(landed).name == *new)
-        .then(|| new.to_string())
 }
 
 /// Stores a new block entity at `pos`, keeping an existing one of the same kind.

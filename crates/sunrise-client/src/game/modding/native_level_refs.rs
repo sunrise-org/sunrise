@@ -315,7 +315,7 @@ impl Game<'_> {
             return Ok(&self.world);
         }
         self.levels
-            .parked_world_of(level.dimension_id())
+            .parked_world(super::Dim::from_key(level.dimension()))
             .ok_or(mod_api::LevelReadError::Stale)
     }
     /// The world a handle names for a read that works on both sides: the

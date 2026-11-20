@@ -31,10 +31,11 @@ fn update(host: &mut dyn ServerHost) -> Result<(), ()> {
 - Closing a transaction aborts any transactions left open inside it before closing
   the parent.
 
-The journal covers writes through capability handlers to these storages:
+The journal covers capability handler writes and the handle writes below to these storages:
 
 | Storage | Recorded state |
 |---|---|
+| Block | Complete states written with `LevelRef::set_block`, including in other resident server levels |
 | Block entity | Item slots, saved compound, custom name and attachments |
 | Hopper | Cooldown |
 | Cauldron | Block state |
@@ -48,6 +49,17 @@ At the outermost commit, game-held vanilla containers publish their implicit cha
 notifications. Other deferred effects include jukebox playback, cauldron and composter block updates and
 item drops, including items placed at a block, thrown by a player or entity, or split off an
 item entity. Explicit mod-issued world notifications are not deferred with these effects.
+
+`LevelRef::set_block` and `BlockEntityRef::{merge_data, replace_data}` participate in the
+open transaction without a separate token argument. Storage is recorded by level lifetime
+and position, so the same coordinates in two levels are independent. Reads see tentative
+states, block entities and saved payloads, including payloads on newly placed block entities.
+At outer commit, state writes replay in order from the published world, without exposing
+other cells' tentative states to the block lifecycle. Each changed cell applies its final
+state with its last write's flags. Implicit saved-data
+updates go to the addressed level at commit, not the level that opened the transaction.
+Abort restores the state and payload without those effects. An unsafe write phase is
+refused before mutation; neither the call nor publication loads a chunk or level.
 
 A world pickup or placement of fluid (`level.pickup_fluid`, `level.place_fluid`) writes
 its block at the call and the rest at the outermost commit; an aborted one leaves the world

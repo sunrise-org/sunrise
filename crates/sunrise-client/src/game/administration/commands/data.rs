@@ -1343,26 +1343,6 @@ impl Game<'_> {
             }
         }
     }
-    /// `BlockEntity.loadWithComponents` for the block entity at `key` from its full saved
-    /// `tag` (id and position included): false when the tag doesn't decode.
-    pub(in crate::game) fn load_block_entity_data(
-        &mut self,
-        key: (i32, i32, i32),
-        tag: &Tag,
-    ) -> bool {
-        let state = self.world.block(key.0, key.1, key.2);
-        let name = &self.res.facts().get(state).name;
-        let previous = self.world.block_entities.get(&key);
-        let Some((_, mut new)) = save::decode_block_entity_replacing(tag, name, previous) else {
-            return false;
-        };
-        self.take_loot_table(key, tag, &mut new);
-        self.load_block_name(key, &new, tag);
-        self.world.block_entities.insert(key, new);
-        self.world.set_block_lock(key, tag);
-        self.update_spawner_display(key);
-        true
-    }
     /// What `BlockDataAccessor.setData` tells the world after a load: `setChanged` and
     /// `sendBlockUpdated(3)`, even when the block state stays the same.
     pub(in crate::game) fn block_entity_updated(&mut self, key: (i32, i32, i32)) {

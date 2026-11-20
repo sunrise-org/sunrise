@@ -412,21 +412,26 @@ impl Game<'_> {
         data: Compound,
         replace: bool,
     ) -> Result<bool, BlockEntityError> {
-        let (key, block) = self
-            .native_block_entity_write_target(entity)
+        let fields = entity.fields();
+        let target = super::Dim::from_key(fields.level.dimension());
+        if !self.is_logical_server() || !self.block_write_phase_available(target) {
+            return Err(BlockEntityError::Stale);
+        }
+        let (world, current) = self
+            .native_block_entity_target(entity)
             .ok_or(BlockEntityError::Stale)?;
+        if !super::native_entity_refs::resident_block_write_position(world, fields.position) {
+            return Ok(false);
+        }
+        let [x, y, z] = fields.position;
+        let key = (x, y, z);
+        let block = &self.res.facts().get(world.block(x, y, z)).name;
         let nbt = Tag::Compound(mod_payload(data));
         if sunrise_client::nbt_path::too_deep(&nbt, 0) {
             return Ok(false);
         }
-        let Some(old) = self
-            .world
-            .block_entities
-            .get(&key)
-            .and_then(|current| {
-                save_with_metadata(&self.world, key, current, &block, self.res.items())
-            })
-            .map(Tag::Compound)
+        let Some(old) =
+            save_with_metadata(world, key, current, block, self.res.items()).map(Tag::Compound)
         else {
             return Ok(false);
         };
@@ -434,20 +439,49 @@ impl Game<'_> {
         if merged == old {
             return Ok(false);
         }
-        self.journal_block_entity(key);
-        let cleared = matches!(
-            self.world.block_entities.get(&key),
-            Some(BlockEntity::Mod(current)) if current.shapes_cleared()
-        );
-        if !self.load_block_entity_data(key, &merged) {
+        let Some((_, mut loaded)) =
+            save::decode_block_entity_replacing(&merged, block, Some(current))
+        else {
             return Ok(false);
+        };
+        if let (BlockEntity::Mod(current), BlockEntity::Mod(loaded)) = (current, &mut loaded) {
+            loaded.keep_shapes_cleared(current.shapes_cleared());
+            loaded.data.clone_from(&current.data);
         }
-        if cleared && let Some(BlockEntity::Mod(loaded)) = self.world.block_entities.get_mut(&key) {
-            loaded.keep_shapes_cleared(true);
+        self.with_resident_block_level(target, |game| {
+            game.journal_pin_block_storage();
+            game.journal_block_entity(key);
+            game.take_loot_table(key, &merged, &mut loaded);
+            game.load_block_name(key, &loaded, &merged);
+            game.world.block_entities.insert(key, loaded);
+            game.world.set_block_lock(key, &merged);
+            // Use the generation in the receiver, not whichever entity occupies the cell
+            // when the transaction publishes its effects.
+            if game.transactions.is_empty() {
+                game.apply_saved_block_entity_update(key);
+            } else {
+                game.after_commit(super::transactions::After::SavedBlockEntity(entity));
+            }
+        })
+        .ok_or(BlockEntityError::Stale)?;
+        Ok(true)
+    }
+
+    pub(super) fn publish_saved_block_entity(&mut self, entity: BlockEntityRef) {
+        if self.native_block_entity_target(entity).is_none() {
+            return;
         }
+        let fields = entity.fields();
+        let [x, y, z] = fields.position;
+        self.with_resident_block_level(super::Dim::from_key(fields.level.dimension()), |game| {
+            game.apply_saved_block_entity_update((x, y, z));
+        });
+    }
+
+    fn apply_saved_block_entity_update(&mut self, key: (i32, i32, i32)) {
         self.block_entity_updated(key);
         self.container_changed(key);
-        Ok(true)
+        let _ = self.process_level_events();
     }
 
     /// `BlockEntity.setChanged`: notify at once, including inside a transaction. An abort

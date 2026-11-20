@@ -32,6 +32,16 @@ use sunrise_core::geometry::{Aabb, Vec3};
 use sunrise_items::items::ItemStack;
 use sunrise_world::registry::BlockStateId;
 
+pub(super) fn resident_block_write_position(
+    world: &sunrise_client::world::World,
+    pos @ [x, y, z]: [i32; 3],
+) -> bool {
+    (-30_000_000..30_000_000).contains(&x)
+        && (-30_000_000..30_000_000).contains(&z)
+        && world.is_loaded_at(x, y, z)
+        && !world.carrier_fences.locks_cell(&pos)
+}
+
 /// The engine's direction of a mod API block face.
 pub(super) fn block_face_direction(face: BlockFace) -> sunrise_core::geometry::Direction {
     use sunrise_core::geometry::Direction;
@@ -468,8 +478,7 @@ impl Game<'_> {
         };
         self.roll_table_at(table, Some(origin), tool, this.as_ref())
     }
-    /// Set a block through Level.setBlock. Typed errors distinguish stale/unavailable
-    /// levels; Ok(false) preserves vanilla's position/no-change refusal.
+    /// Set a block through Level.setBlock in the resident level named by the handle.
     pub(super) fn level_set_block(
         &mut self,
         level: LevelRef,
@@ -477,14 +486,44 @@ impl Game<'_> {
         state: BlockStateId,
         flags: BlockUpdateFlags,
     ) -> Result<bool, mod_api::LevelWriteError> {
-        if !self.native_level_write_position(level, pos)? {
+        use mod_api::{BlockStateError, LevelWriteError};
+        let world = self.native_level_world_result(level)?;
+        if self.pack.assets.registry.state(state).is_none() {
+            return Err(BlockStateError::UnknownState.into());
+        }
+        let target = super::Dim::from_key(level.dimension());
+        if !self.block_write_phase_available(target) {
+            return Err(LevelWriteError::Unavailable);
+        }
+        if self.world_debug || !resident_block_write_position(world, pos) {
             return Ok(false);
         }
-        if let Some(mut host) = super::journal_level_write::JournalLevelWrite::new(self, level) {
-            return Ok(host.write_block(pos, state, flags.bits()));
-        }
-        Ok(self.native_set_block(level.dimension_id(), pos, state, flags.bits()))
+        let flags = flags.bits();
+        self.with_resident_block_level(target, |game| {
+            if game.transactions.is_empty() {
+                game.apply_native_block_write(pos, state, flags, None)
+            } else {
+                game.stage_native_block_write(
+                    pos,
+                    state,
+                    flags,
+                    super::transactions::BlockWritePath::Handle,
+                )
+            }
+        })
+        .ok_or(LevelWriteError::Stale)
     }
+
+    pub(super) fn block_write_phase_available(&self, target: super::Dim) -> bool {
+        use mod_api::TransactionLifecycle;
+        !matches!(
+            self.transaction_lifecycle(),
+            TransactionLifecycle::Closing | TransactionLifecycle::RootClosing
+        ) && (target == self.dim
+            || (self.block_entity_tick_key.is_none()
+                && !(self.lan_acting.is_some() && self.lan.is_none())))
+    }
+
     /// `Block.updateFromNeighbourShapes` for `state` at `pos`, nothing written: the state
     /// fitted to the loaded blocks around it. A position that is not loaded or outside the
     /// world gives `state` back.

@@ -386,6 +386,7 @@ struct GameLevel<'w> {
     border: &'w sunrise_core::geometry::border::BorderGeometry,
     world: &'w mut World,
     command_block_transition: Option<command_blocks::CommandBlockTransition>,
+    staged_block_entity: Option<transactions::StagedBlockEntity>,
     redstone_experiments: bool,
     facts: &'w BlockFacts,
     /// The block-state facts a part reads through `LevelHost::block_states`.
@@ -2128,6 +2129,14 @@ impl Dim {
             }
         }
     }
+    fn from_key(key: mod_api::DimensionKey) -> Self {
+        match key {
+            mod_api::DimensionKey::OVERWORLD => Self::Overworld,
+            mod_api::DimensionKey::NETHER => Self::Nether,
+            mod_api::DimensionKey::END => Self::End,
+            key => Self::Extra(key),
+        }
+    }
     fn from_id(id: &str) -> Self {
         match id {
             "minecraft:the_nether" => Self::Nether,
@@ -3147,12 +3156,13 @@ impl Game<'_> {
             cake_requested: std::cell::Cell::new(false),
             cake_answer: None,
             api_level: if native_authoritative {
-                self.level(self.dim.id())
+                self.native_level_here()
             } else {
                 self.native_client_level()
             },
             part_state_index: self.attachment_indexes.get(&self.dim),
             command_block_transition: None,
+            staged_block_entity: None,
             positions: piston_carry_state::PositionState {
                 gateways: &mut self.be_anims.gateway_servers,
                 hoppers: &mut self.hoppers,

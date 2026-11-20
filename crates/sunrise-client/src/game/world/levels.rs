@@ -181,6 +181,8 @@ pub(super) struct Parked {
     persist: persist::EntityMemory,
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
     lid_openers: HashMap<(i32, i32, i32), i32>,
+    captured_sounds: Vec<sunrise_client::audio::CapturedSound>,
+    lan_songs: Vec<([i32; 3], Option<String>)>,
     lan_events: Vec<super::QueuedLevelEvent>,
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
     lan_entity_events: Vec<(i32, i8)>,
@@ -802,6 +804,8 @@ impl Game<'_> {
             lan_events: Vec::new(),
             lan_block_events: Vec::new(),
             lan_entity_events: Vec::new(),
+            captured_sounds: Vec::new(),
+            lan_songs: Vec::new(),
             lan_critical_hits: Vec::new(),
             lan_states: Default::default(),
             anims: Default::default(),
@@ -954,6 +958,10 @@ impl Game<'_> {
         swap(&mut self.persist, &mut p.persist);
         swap(&mut self.lectern_pulses, &mut p.lectern_pulses);
         swap(&mut self.lid_openers, &mut p.lid_openers);
+        if let Some(capture) = &mut self.audio.capture {
+            swap(capture, &mut p.captured_sounds);
+        }
+        swap(&mut self.lan_songs, &mut p.lan_songs);
         swap(&mut self.lan_events, &mut p.lan_events);
         swap(&mut self.lan_block_events, &mut p.lan_block_events);
         swap(&mut self.lan_entity_events, &mut p.lan_entity_events);
@@ -974,8 +982,99 @@ impl Game<'_> {
         self.creaking.swap_level(&mut p.creaking);
         swap(&mut self.spawn_scratch, &mut p.spawn_scratch);
         swap(&mut self.border, &mut p.border);
-        // What only the client draws starts over.
-        self.clear_client_particles();
+    }
+
+    // Keep all authoritative routing with the resident world, not the level that called us.
+    fn put_level_in_place(&mut self, target: Dim, mut parked: Parked) {
+        parked.world.game_time = self.world.game_time;
+        parked.world.end_clock = self.world.end_clock;
+        parked.world.weather = self.world.weather;
+        parked.world.health_rules = self.world.health_rules;
+        parked.world.watched = std::mem::take(&mut self.world.watched);
+        self.swap_level(&mut parked);
+        if let Some(host) = &mut self.lan {
+            std::mem::swap(&mut host.states, &mut parked.lan_states);
+            std::mem::swap(&mut host.border_sent, &mut parked.border_sent);
+        }
+        let left = std::mem::replace(&mut self.dim, target);
+        self.levels.parked.insert(left, parked);
+    }
+
+    /// Run a write or journal publication in a resident level, without opening a level,
+    /// advancing its tick or counting this as player activity. Restore the caller on unwind.
+    pub(super) fn with_resident_block_level<R>(
+        &mut self,
+        target: Dim,
+        run: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        if target == self.dim {
+            return Some(run(self));
+        }
+        let mut parked = self.levels.parked.remove(&target)?;
+        let previous = self.dim;
+        let previous_day = self.world.day_time;
+        let clock = self.dimension_type_of(target).default_clock.as_deref();
+        parked.world.day_time =
+            self.command_clock_time(clock.unwrap_or(super::chat::OVERWORLD_CLOCK));
+        // The borrowed player, their active hook and any in-flight effects belong to the caller.
+        let actor = (
+            self.player.take(),
+            self.lan_acting.take(),
+            self.lan_acting_uuid.take(),
+            self.lan_acting_entity.take(),
+        );
+        let container = self.container.take();
+        let hook = std::mem::take(&mut self.hook);
+        let pending = std::mem::take(&mut self.pending);
+        let spill = std::mem::take(&mut self.spill);
+        self.put_level_in_place(target, parked);
+        if let Some(host) = &mut self.lan {
+            host.hub.set_dimension(target.id());
+        }
+
+        struct ReturnLevel<'a, 'g, F: FnOnce(&mut Game<'g>)> {
+            game: &'a mut Game<'g>,
+            restore: Option<F>,
+        }
+        impl<'g, F: FnOnce(&mut Game<'g>)> Drop for ReturnLevel<'_, 'g, F> {
+            fn drop(&mut self) {
+                self.restore.take().unwrap()(self.game);
+            }
+        }
+        let scope = ReturnLevel {
+            game: self,
+            restore: Some(move |game: &mut Game<'_>| {
+                let mut parked = game
+                    .levels
+                    .parked
+                    .remove(&previous)
+                    .expect("a scoped write cannot unload its caller's level");
+                parked.world.day_time = previous_day;
+                game.put_level_in_place(previous, parked);
+                if let Some(host) = &mut game.lan {
+                    host.hub.set_dimension(previous.id());
+                }
+                (
+                    game.player,
+                    game.lan_acting,
+                    game.lan_acting_uuid,
+                    game.lan_acting_entity,
+                ) = actor;
+                game.container = container;
+                game.hook = hook;
+                game.pending = pending;
+                game.spill = spill;
+            }),
+        };
+        Some(run(scope.game))
+    }
+
+    /// Publish attachment retirement for all levels a root transaction could have touched.
+    pub(super) fn publish_block_entity_retirement(&mut self) {
+        self.world.block_entities.publish_retirement();
+        for parked in self.levels.parked.values_mut() {
+            parked.world.block_entities.publish_retirement();
+        }
     }
 
     /// Put `target`'s level in place, opening it first if it is not loaded.
@@ -987,36 +1086,17 @@ impl Game<'_> {
             return Ok(());
         }
         if target != self.dim {
-            let (mut p, opened) = match self.levels.parked.remove(&target) {
+            let (mut parked, opened) = match self.levels.parked.remove(&target) {
                 Some(p) => (p, false),
                 None => (self.open_level(target)?, true),
             };
-            p.world.game_time = self.world.game_time;
             // The level's day time is its default clock's; a level without one follows the
             // Overworld's.
             let clock = self.level_clock_name(target);
-            p.world.day_time = self.switch_clock(&clock);
-            p.world.end_clock = self.world.end_clock;
-            p.world.weather = self.world.weather;
-            // The game rules and the difficulty are the server's, not a
-            // level's: natural regeneration holds in every dimension.
-            p.world.health_rules = self.world.health_rules;
-            // The sculk tables' watched blocks are built once per game.
-            p.world.watched = std::mem::take(&mut self.world.watched);
-            self.swap_level(&mut p);
-            // The tracked entities go with their level: a level's moves, read before its tick
-            // describes its entities again, would otherwise meet the last level's (a move
-            // missed the boat under a player while anyone was in another dimension).
-            let states = self.lan.as_mut().map(|h| &mut h.states);
-            if let Some(states) = states {
-                std::mem::swap(states, &mut p.lan_states);
-            }
-            if let Some(h) = self.lan.as_mut() {
-                std::mem::swap(&mut h.border_sent, &mut p.border_sent);
-            }
-            p.idle = 0;
-            let left = std::mem::replace(&mut self.dim, target);
-            self.levels.parked.insert(left, p);
+            parked.world.day_time = self.switch_clock(&clock);
+            parked.idle = 0;
+            self.put_level_in_place(target, parked);
+            self.clear_client_particles();
             if opened {
                 // The new streaming's radius and meshing options.
                 self.apply_settings();

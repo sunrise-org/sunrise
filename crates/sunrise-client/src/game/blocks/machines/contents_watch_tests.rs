@@ -362,6 +362,47 @@ fn watch_dispatch_snapshots_membership_and_guards_the_source_not_the_observer() 
 
 #[test]
 #[ignore = "daily"]
+fn a_net_zero_block_write_keeps_the_live_observers_contents_watches() {
+    with_watches(
+        "game::machines::contents_watch_tests::a_net_zero_block_write_keeps_the_live_observers_contents_watches",
+        |game, level, watcher| {
+            let _phase = __private::PhaseOwner::scope(__private::ModPhase::World);
+            let observer = game.block_entity(level, OBSERVER).unwrap();
+            let chest = level.block_state(game, OBSERVER).unwrap();
+            let air = (&*game as &dyn ServerHost)
+                .block_state_id("minecraft:air")
+                .unwrap();
+            observer.watch_contents(game, source_pos(), true).unwrap();
+            (game as &mut dyn ServerHost)
+                .transaction(|host, _| {
+                    assert_eq!(
+                        level.set_block(host, OBSERVER, air, BlockUpdateFlags::NONE),
+                        Ok(true)
+                    );
+                    assert!(host.block_entity(level, OBSERVER).is_none());
+                    assert_eq!(
+                        level.set_block(host, OBSERVER, chest, BlockUpdateFlags::NONE),
+                        Ok(true)
+                    );
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+            assert_eq!(game.block_entity(level, OBSERVER), Some(observer));
+            assert!(take(&watcher).is_empty());
+            notify(game, level, SOURCE);
+            assert_eq!(
+                take(&watcher)
+                    .iter()
+                    .map(|n| (n.owner, n.observer))
+                    .collect::<Vec<_>>(),
+                [("watch_a", Some(observer)), ("watch_b", Some(observer))]
+            );
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
 fn observer_unload_reload_requires_explicit_reregistration_and_replacement_retires_it() {
     with_watches(
         "game::machines::contents_watch_tests::observer_unload_reload_requires_explicit_reregistration_and_replacement_retires_it",

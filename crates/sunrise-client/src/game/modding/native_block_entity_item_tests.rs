@@ -654,9 +654,11 @@ fn a_kept_slot_goes_back_only_into_the_block_entity_it_came_from() {
             };
 
             let before = container_at(game, pos, "minecraft:chest");
+            let original = game.block_entity(level, at).unwrap();
             for state in [air, barrel] {
                 replace(game, state, false);
                 assert_eq!(level.block_state(game, at), Some(chest));
+                assert_eq!(game.block_entity(level, at), Some(original));
                 assert_eq!(slots_at(game, pos).as_ref(), Some(&before));
             }
 

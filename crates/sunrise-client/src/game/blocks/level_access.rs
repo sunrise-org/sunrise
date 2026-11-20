@@ -46,7 +46,9 @@ impl LevelAccess for GameLevel<'_> {
         {
             return;
         }
-        if let Some(entity) = self.new_block_entity_for_state(state) {
+        if !self.install_staged_block_entity(key, state)
+            && let Some(entity) = self.new_block_entity_for_state(state)
+        {
             self.world.block_entities.insert(key, entity);
         }
     }

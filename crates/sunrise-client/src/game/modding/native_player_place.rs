@@ -152,7 +152,7 @@ impl Game<'_> {
         {
             return Ok(false);
         }
-        if !self.level_set_block(level, pos, state, flags)? {
+        if !self.native_set_block(level.dimension_id(), pos, state, flags.bits()) {
             return Ok(false);
         }
         self.run_mod_placement_callback(pos, state, None);

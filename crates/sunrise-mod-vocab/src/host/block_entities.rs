@@ -105,13 +105,13 @@ pub trait BlockEntitiesBackendMut {
         lock: Option<Compound>,
     ) -> Result<bool, BlockEntityError>;
     /// Side: server.
-    /// Merges `data` into the block entity's saved data and loads it, as `/data merge block`
-    /// does (`BlockDataAccessor.setData`: `loadWithComponents`, `setChanged`, then
-    /// `sendBlockUpdated`, so comparators re-read it and clients get the update). `id`, `x`,
-    /// `y` and `z` in `data` are ignored. Ok(true) when data changed; Ok(false) for data
-    /// nested too deep, no change, or data the entity cannot load. Stale or unwritable
-    /// handles return BlockEntityError::Stale. Inside a transaction an
-    /// abort puts the block entity, its name, `lock`, loot table roll and attachments back.
+    /// Merges and loads the saved payload of a resident block entity, including in a server
+    /// level that is not in place. As in `BlockDataAccessor.setData`, the load is followed by
+    /// dirty, comparator and client updates in that level. A Host transaction reads the
+    /// tentative payload immediately and defers those updates to outer commit. Abort restores
+    /// the payload without those updates. Identity and position are retained: `id`, `x`, `y`
+    /// and `z` in `data` are ignored. `Ok(false)` means unchanged or refused data/position;
+    /// stale or unwritable handles return `BlockEntityError::Stale`. Loads no level or chunk.
     #[access(WorldOnly)]
     fn block_entity_merge_data(
         &mut self,
@@ -120,8 +120,9 @@ pub trait BlockEntitiesBackendMut {
     ) -> Result<bool, BlockEntityError>;
     /// Side: server.
     /// Replaces the saved payload, retaining identity and position metadata.
-    /// Uses the same transactional load and client update path as `merge_data`.
-    /// Ok(false) for unsupported data or no change; Stale for an invalidated handle.
+    /// Uses the same resident-level, transactional load and update path as `merge_data`.
+    /// `Ok(false)` means unchanged or refused data/position; stale or unwritable handles
+    /// return `BlockEntityError::Stale`.
     #[access(WorldOnly)]
     fn block_entity_replace_data(
         &mut self,

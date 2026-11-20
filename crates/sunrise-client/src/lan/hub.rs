@@ -4863,7 +4863,10 @@ impl Hub {
             last_level_clock: self.last_level_clock,
             weather: self.weather,
         };
-        let entering = self.level_sync.remove(dimension).unwrap_or_default();
+        let (dimension, entering) = self
+            .level_sync
+            .remove_entry(dimension)
+            .unwrap_or_else(|| (dimension.to_owned(), LevelSync::default()));
         self.level_sync
             .insert(std::mem::take(&mut self.config.dimension), leaving);
         (
@@ -4877,7 +4880,8 @@ impl Hub {
             entering.last_level_clock,
             entering.weather,
         );
-        self.config.dimension = dimension.to_owned();
+        self.config.dimension = dimension;
+        let dimension = &self.config.dimension;
         self.dimension_type = self
             .sync
             .id(

@@ -76,9 +76,14 @@ pub trait LevelBlocksBackend {
 #[sunrise_mod_api_macros::host_area]
 pub trait LevelBlocksBackendMut {
     /// Side: server.
-    /// Set a block (`Level.setBlock`). Stale/unavailable levels and invalid states return
-    /// typed errors without mutation. Ok(false) means vanilla refused an unchanged,
-    /// unloaded or out-of-height write. Notification follows the supplied update flags.
+    /// Set a complete state (`Level.setBlock`) in a resident chunk of this server level,
+    /// including when another level is in place (`MinecraftServer.getLevel`). No levels or
+    /// chunks are loaded. Compatible block entities keep their handles and attachments.
+    /// Stale/unavailable levels and invalid states return typed errors. `Ok(false)` means
+    /// no change or a refused position. In a Host transaction the new state and any
+    /// new block entity are readable immediately. The outermost commit publishes the
+    /// final change with the last write's flags. An abort restores storage without
+    /// publishing that change.
     #[access(WorldOnly)]
     fn level_set_block(
         &mut self,
