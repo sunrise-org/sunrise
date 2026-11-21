@@ -25,6 +25,8 @@ use sunrise_world::worldgen::decoration_order::DecorationOrder;
 /// generator's scratch buffers ([`ChunkGenerator::idle`]).
 pub const IDLE_RELEASE: std::time::Duration = std::time::Duration::from_secs(5);
 
+const UNLOAD_SWEEP_AGE: u8 = 8;
+
 /// Worker CPU time and job counts by kind, for benchmarks
 /// (`examples/gen_light_bench.rs`). Off unless enabled: a relaxed load per
 /// job then.
@@ -1846,7 +1848,7 @@ impl Streaming {
         // The sweep unloads columns, saving them and dropping their block entities' bindings:
         // never while a transaction is open, whose values may still be tentative. A due sweep
         // waits for the next update instead.
-        let sweep = (area != self.scan_area || self.scan_age >= 8)
+        let sweep = (area != self.scan_area || self.scan_age >= UNLOAD_SWEEP_AGE)
             && !world.block_entities.defers_retirement();
         if sweep {
             (self.scan_area, self.scan_age) = (area, 0);
@@ -2017,6 +2019,9 @@ impl Streaming {
         let mut far = far;
         if self.saves.live_world_barrier_required() && !checkpointed && !far.is_empty() {
             self.saves.request_live_world_barrier();
+            // Keep retirement due: frontier service builds a fresh plan, then checkpoints
+            // and commits that exact plan instead of saving a fresh empty plan.
+            self.scan_age = UNLOAD_SWEEP_AGE;
             far.clear();
         }
         if sweep {
@@ -2060,6 +2065,8 @@ impl Streaming {
                 .collect();
             if self.saves.live_world_barrier_required() && !checkpointed && !far.is_empty() {
                 self.saves.request_live_world_barrier();
+                // Proto retirement needs the same fresh sweep after common admission.
+                self.scan_age = UNLOAD_SWEEP_AGE;
                 far.clear();
             }
             if !far.is_empty() {

@@ -717,3 +717,23 @@ absent from PATH and was not started. The author did not add a compiler to PATH 
 build to complete this check. The new daily row remains subject to the coordinator's
 normal configured inventory gate. Formatting, diff and the actual local commit hook are
 reported separately; these inventory attempts are retained nonpasses.
+
+The coordinator subsequently compiled and actually executed the tests-only source
+`b8e258f3329fc7d115a6b8ffa0e294c298add574` against unchanged production behavior. It reported
+exit 101 at the expected assertion: the acknowledged common decision had left the deferred
+column resident. The test completed in 4.48 seconds; the original binary and raw receipt are
+retained by the coordinator. This author received that generic result, not a rewritten pass.
+
+The bounded correction keeps the existing periodic sweep threshold due when common admission
+defers either full-column or proto retirement. Frontier service therefore builds a fresh due
+plan from the then-current World, results, view and forced areas. It does not reuse a stale
+plan, callback result or readset. The exact fresh plan still passes the existing common
+checkpoint, callback/readset validation and once-only owner-removal gate before retirement.
+All WAL publication, durable writes, fsync, acknowledgment, budget and failure fences remain
+unchanged. Successful admission returns to the normal periodic sweep schedule. No field,
+persistence format, dependency, physics, contact, pose or rendering contract changes.
+
+The regression and its daily policy row are byte-unchanged from the failing-before source.
+The author again ran only the preserved formatter and source/commit checks. Passing-after,
+focused existing controls and the rebuilt isolated application's cadence/render validation
+remain separate coordinator gates; this source-only checkpoint claims none of them.
