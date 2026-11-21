@@ -9,6 +9,9 @@ description = "Host a Sunrise server: server.toml, the CLI and the supervisor th
 [dependencies]
 sunrise-platform = { path = "../sunrise-platform", features = ["server-files", "world"] }
 # Shared server configuration and launch command used by the native-mod launcher.
+sunrise-addresses = { path = "../sunrise-addresses" }
+sunrise-mod-install = { path = "../sunrise-mod-install" }
+sunrise-native-build = { path = "../sunrise-native-build" }
 sunrise-server-launch = { path = "../sunrise-server-launch" }
 # `sunrise-server mcp`: the Model Context Protocol, shared with sunrise-ctl and the launcher.
 sunrise-mcp = { path = "../sunrise-mcp" }
@@ -33,6 +36,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 p12-keystore = "0.2"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
 ureq = { version = "2", default-features = false, features = ["tls"] }
+semver = "1"
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
+tempfile = "3.27.0"
 # [discord]: the chat drawn as a PNG with Pixelify Sans (SIL OFL, crates/sunrise-theme/fonts).
 ab_glyph = "0.2.32"
 png = "0.18"

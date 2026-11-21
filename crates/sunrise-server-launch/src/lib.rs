@@ -3,6 +3,7 @@
 
 pub mod config;
 mod install;
+pub use sunrise_mod_install::lock as mod_lock;
 pub mod prune;
 
 use config::Config;

@@ -236,6 +236,7 @@ function renderUpdate(update) {
   if (update && update.busy) text = `Updating: ${update.busy}…`;
   else if (offer) text = `Sunrise ${update.available} is out. This server runs ${update.installed}.`;
   else if (update && update.last && !update.ok) text = update.last;
+  if (update?.mod_warnings?.length) text = [text, ...update.mod_warnings].filter(Boolean).join(" ");
   $("update").hidden = !text || page !== "overview";
   $("update").classList.toggle("failed", Boolean(update && update.last && !update.ok && !update.busy && !offer));
   $("update-text").textContent = text;

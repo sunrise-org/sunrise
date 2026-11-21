@@ -98,6 +98,28 @@ pub fn install(
     side: Side,
     native_fits: impl Fn(&Project, &Version) -> bool,
 ) -> InstallPlan {
+    install_where(
+        index,
+        requests,
+        installed,
+        game,
+        side,
+        native_fits,
+        |_, _| None,
+    )
+}
+
+/// As [`install`], with additional candidate refusals for the caller's parsed requirements and
+/// installation policy. A refusal excludes the candidate even if it is already installed.
+pub fn install_where(
+    index: &Index,
+    requests: &[Request],
+    installed: &[InstalledMod],
+    game: &str,
+    side: Side,
+    native_fits: impl Fn(&Project, &Version) -> bool,
+    rejected: impl Fn(&Project, &Version) -> Option<String>,
+) -> InstallPlan {
     let mut plan = InstallPlan::default();
     let mut roots = Roots::new();
     for r in requests {
@@ -123,7 +145,7 @@ pub fn install(
             return plan;
         }
     }
-    let catalog = Catalog::new(index, game, side, native_fits, &present);
+    let catalog = Catalog::new(index, game, side, native_fits, &present, rejected);
     let installed_choices: Selected<'_> = present
         .keys()
         .filter_map(|&id| Some((id, catalog.mods.get(id)?.iter().find(|c| c.installed)?)))
@@ -412,6 +434,7 @@ impl<'a> Catalog<'a> {
         side: Side,
         native_fits: impl Fn(&Project, &Version) -> bool,
         present: &Present<'a>,
+        rejected: impl Fn(&Project, &Version) -> Option<String>,
     ) -> Self {
         let mut mods: BTreeMap<_, Vec<_>> = index
             .projects
@@ -441,7 +464,9 @@ impl<'a> Catalog<'a> {
                                 Fit::Revoked
                             } else if v.game != game {
                                 Fit::WrongGame
-                            } else if let Some(reason) = v.capabilities.unsupported() {
+                            } else if let Some(reason) =
+                                v.capabilities.unsupported().or_else(|| rejected(p, v))
+                            {
                                 Fit::Unsupported(reason)
                             } else if p.kind == Kind::NativeMod && !native_fits(p, v) {
                                 Fit::WrongSunrise
@@ -896,7 +921,7 @@ pub fn uninstallable_versions(index: &Index, include: impl Fn(&Version) -> bool)
         let present = Present::new();
         let installed = Selected::new();
         for (side, label) in [(Side::Client, "client"), (Side::Server, "dedicated server")] {
-            let catalog = Catalog::new(index, game, side, |_, _| true, &present);
+            let catalog = Catalog::new(index, game, side, |_, _| true, &present, |_, _| None);
             for &(id, version) in &versions {
                 let roots = Roots::from([(id, vec![version])]);
                 if let Err(reason) = catalog.solve(&roots, &installed) {

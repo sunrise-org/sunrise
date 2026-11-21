@@ -31,6 +31,10 @@ pub struct Answers {
     pub online: Option<bool>,
     /// Take the default for every question not answered by a flag.
     pub yes: bool,
+    pub mods: Vec<sunrise_mod_install::input::ModRequest>,
+    pub pack: Option<sunrise_mod_install::selection::PackSource>,
+    pub json: bool,
+    pub trust_native: bool,
 }
 
 impl Answers {
@@ -61,7 +65,7 @@ impl Answers {
                 .unwrap_or_default(),
             op: var("SUNRISE_OP"),
             online: flag("SUNRISE_ONLINE"),
-            yes: false,
+            ..Self::default()
         })
     }
 }
@@ -76,11 +80,11 @@ impl Prompt {
             return default.to_owned();
         }
         if default.is_empty() {
-            print!("{question}: ");
+            eprint!("{question}: ");
         } else {
-            print!("{question} [{default}]: ");
+            eprint!("{question} [{default}]: ");
         }
-        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
         let mut line = String::new();
         if std::io::stdin().lock().read_line(&mut line).unwrap_or(0) == 0 {
             return default.to_owned();
@@ -122,7 +126,7 @@ pub fn run(dir: &Path, answers: Answers) -> Result<(), String> {
         let cfg = Config::import(&source)?;
         let kept = dir.join("server.properties.imported");
         std::fs::copy(&properties, &kept).map_err(|e| e.to_string())?;
-        println!(
+        eprintln!(
             "Imported server.properties into server.toml (the original is kept as {}).",
             kept.display()
         );
@@ -135,7 +139,7 @@ pub fn run(dir: &Path, answers: Answers) -> Result<(), String> {
     let eula_path = dir.join("eula.txt");
     let agreed = eula::agreed(&eula_path).unwrap_or(false);
     if !agreed {
-        println!(
+        eprintln!(
             "Minecraft's End User License Agreement applies to running a server: {}",
             eula::EULA_LINK
         );
@@ -156,7 +160,7 @@ pub fn run(dir: &Path, answers: Answers) -> Result<(), String> {
         .world
         .unwrap_or_else(|| prompt.ask("World name", &cfg.world.name));
     if dir.join(&cfg.world.name).join("level.dat").exists() {
-        println!("Using the existing world in {}.", cfg.world.name);
+        eprintln!("Using the existing world in {}.", cfg.world.name);
     } else {
         cfg.world.seed = answers
             .seed
@@ -176,7 +180,7 @@ pub fn run(dir: &Path, answers: Answers) -> Result<(), String> {
     // checks stay private to that crate rather than becoming a second public validation API.
     cfg = Config::parse(&config::render(&cfg))?;
     if std::net::TcpListener::bind(("0.0.0.0", cfg.server.port)).is_err() {
-        println!(
+        eprintln!(
             "Port {} is in use right now: stop what uses it, or change server.port in server.toml.",
             cfg.server.port
         );
@@ -219,31 +223,50 @@ pub fn run(dir: &Path, answers: Answers) -> Result<(), String> {
     // 5. The game and its files.
     match launch::program(&cfg, dir) {
         Ok(program) => {
-            println!("Game: {}", program.display());
+            eprintln!("Game: {}", program.display());
             if let Err(e) = engine::check_starts(&program) {
-                println!("Warning: {e}");
+                eprintln!("Warning: {e}");
             }
             match launch::resources(&cfg, dir, Some(&program)) {
                 Ok(resources) => {
-                    println!("Game files: {}", resources.display());
+                    eprintln!("Game files: {}", resources.display());
                     if let Err(e) = engine::check_prepared(&resources) {
-                        println!("Warning: {e}");
+                        eprintln!("Warning: {e}");
                     }
                 }
-                Err(e) => println!("{e}"),
+                Err(e) => eprintln!("{e}"),
             }
         }
-        Err(e) => println!("{e}"),
+        Err(e) => eprintln!("{e}"),
     }
 
-    std::fs::write(&toml_path, config::render(&cfg)).map_err(|e| e.to_string())?;
-    println!(
-        "Wrote {}. Start the server with: sunrise-server run --dir {}",
+    let managed = !answers.mods.is_empty() || answers.pack.is_some();
+    if managed {
+        crate::mods::init(
+            dir,
+            &cfg,
+            answers.mods,
+            answers.pack,
+            answers.json,
+            answers.yes,
+            answers.trust_native,
+        )?;
+    } else {
+        std::fs::write(&toml_path, config::render(&cfg)).map_err(|e| e.to_string())?;
+        if answers.json {
+            println!(
+                "{}",
+                serde_json::json!({"world": cfg.world.name, "port": cfg.server.port})
+            );
+        }
+    }
+    eprintln!(
+        "Wrote {}. Start the server with: sunrise-server start --dir {}",
         toml_path.display(),
         dir.display()
     );
     if !cfg.server.online_mode {
-        println!(
+        eprintln!(
             "Note: online mode is off, so anyone can join under any name: keep the whitelist on, or play on a \
              LAN or a tailnet."
         );
@@ -271,7 +294,7 @@ fn add_players(
                 user: crate::lists::account(name, online)?,
             });
         }
-        println!("Whitelisted: {}", players.join(", "));
+        eprintln!("Whitelisted: {}", players.join(", "));
     }
     if let Some(name) = op {
         let mut ops = OpList::new(dir.join("ops.json"));
@@ -283,7 +306,7 @@ fn add_players(
             level: op_level,
             bypasses_player_limit: false,
         });
-        println!("Operator: {name}");
+        eprintln!("Operator: {name}");
     }
     Ok(())
 }
@@ -324,6 +347,7 @@ mod tests {
             // Offline: no account lookups in a test.
             online: Some(false),
             yes: true,
+            ..Default::default()
         };
         run(&dir, answers).unwrap();
         let cfg = Config::load(&dir).unwrap();

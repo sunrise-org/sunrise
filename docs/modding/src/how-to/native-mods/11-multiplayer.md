@@ -7,4 +7,5 @@
   the missing, extra or different-version mods and the ones whose runtime files differ.
 - **Dedicated server:** native mods run in a standalone engine export built with `--server-output`, not in an
   instance build (`--server-output` conflicts with `--instance` and needs an explicit mod `FOLDER`). See
-  [Standalone server export](12-standalone-server-export.md).
+  [Standalone server export](12-standalone-server-export.md) or the
+  [modded server hosting guide](https://github.com/sunrise-org/sunrise/blob/main/docs/hosting-mods.md).

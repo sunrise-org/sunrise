@@ -4,7 +4,7 @@
 //! the registry), and optionally `overrides/`: settings and resource packs
 //! copied into the profile's game folder.
 use crate::manifest::STORAGE_DIR;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     io::Read,
     path::{Path, PathBuf},
@@ -21,7 +21,7 @@ const MAX_OVERRIDES: u64 = 256 << 20;
 /// The settings files an override may replace.
 const SETTINGS: [&str; 3] = ["options.txt", "sunrise-graphics.txt", "sunrise-extras.txt"];
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub format: u32,
@@ -39,7 +39,7 @@ pub struct Manifest {
     pub mods: Vec<PackMod>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackMod {
     pub id: String,
@@ -160,7 +160,17 @@ impl Modpack {
     /// place, with the file it replaces kept aside. If anything fails, the files
     /// that were there are put back and what the import created is removed.
     pub fn extract_overrides(path: &Path, home: &Path) -> Result<Vec<PathBuf>, String> {
-        let pack = Modpack::read(path)?;
+        Self::extract_overrides_where(path, home, |_| true)
+    }
+
+    /// Extract only overrides for the installation's side, with the same staging and checks.
+    pub fn extract_overrides_where(
+        path: &Path,
+        home: &Path,
+        include: impl Fn(&str) -> bool,
+    ) -> Result<Vec<PathBuf>, String> {
+        let mut pack = Modpack::read(path)?;
+        pack.overrides.retain(|name| include(name));
         if pack.overrides.is_empty() {
             return Ok(Vec::new());
         }

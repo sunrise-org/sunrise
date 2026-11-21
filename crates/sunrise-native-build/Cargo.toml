@@ -9,6 +9,7 @@ description = "Native mods compiled against a signed prebuilt SDK: the launcher'
 
 [dependencies]
 sunrise-addresses = { path = "../sunrise-addresses" }
+sunrise-release-sign = { path = "../sunrise-release-sign" }
 sunrise-mod-package = { path = "../sunrise-mod-package", default-features = false, features = ["index", "prebuilt"] }
 sunrise-platform = { path = "../sunrise-platform", features = ["mod-build"] }
 flate2 = "1"

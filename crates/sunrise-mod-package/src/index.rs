@@ -1081,7 +1081,8 @@ pub fn verify_signature(key: &str, signature: &str, path: &Path) -> Result<(), S
         .map_err(|_| "the signature doesn't match the project's key".to_string())
 }
 
-fn verify_signature_bytes(key: &str, signature: &str, bytes: &[u8]) -> Result<(), String> {
+/// Verify a downloaded file against the author key without writing it to disk.
+pub fn verify_signature_bytes(key: &str, signature: &str, bytes: &[u8]) -> Result<(), String> {
     let key =
         minisign_verify::PublicKey::from_base64(key.trim()).map_err(|e| format!("key: {e}"))?;
     let sig =

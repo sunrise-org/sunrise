@@ -1,14 +1,14 @@
 //! The commands that manage a server in the background (docs/server.md, section 5): `start`, `stop`,
 //! `restart`, `status`, `cmd`, `report` and `logs`. They talk to the running supervisor through the control API.
 
-use crate::{api::Client, backup, signals, supervisor};
+use crate::{StartError, api::Client, backup, mods, signals, supervisor};
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
-use sunrise_server_launch::config;
+use sunrise_server_launch::{Install, config};
 
 /// How long `start` waits for the game's `Done`, and `stop` for the server to end.
 const START_TIMEOUT: Duration = Duration::from_secs(300);
@@ -19,18 +19,26 @@ fn running(dir: &Path) -> Result<Client, String> {
 }
 
 /// `start`: `run` in the background, its output in logs/supervisor.log; returns once the game is up.
-pub fn start(dir: &Path) -> Result<(), String> {
+pub fn start(dir: &Path) -> Result<(), StartError> {
+    let _mods = mods::read_lease(dir)?;
+    let config = config::Config::load(dir);
+    // Client::open can create the supervisor lock file. Refuse managed drift before that write.
+    if let Ok(config) = &config
+        && config.mods.is_some()
+    {
+        mods::check_start(dir, config, Install::find().as_ref())?;
+    }
     if let Some(client) = Client::open(dir)? {
         let status = client.call("GET", "/api/v1/status", None)?;
         if status["phase"] != "stopped" {
-            return Err(format!("a server is already running in {}", dir.display()));
+            return Err(format!("a server is already running in {}", dir.display()).into());
         }
         client.call("POST", "/api/v1/start", None)?;
         wait_running(&client, None)?;
         println!("The server is running.");
         return Ok(());
     }
-    config::Config::load(dir)?;
+    config?;
     // Left by a supervisor that was killed: the new one writes its own.
     let endpoint = dir.join(".sunrise/api.json");
     let _ = std::fs::remove_file(&endpoint);
@@ -66,10 +74,9 @@ pub fn start(dir: &Path) -> Result<(), String> {
     loop {
         if let Ok(Some(status)) = child.try_wait() {
             println!();
-            return Err(format!(
-                "the server stopped ({status}); see {}",
-                log_path.display()
-            ));
+            return Err(
+                format!("the server stopped ({status}); see {}", log_path.display()).into(),
+            );
         }
         // Only once the new supervisor holds the folder (its endpoint is there) may we look: probing the
         // lock any earlier could take it from under it.
@@ -91,7 +98,8 @@ pub fn start(dir: &Path) -> Result<(), String> {
                 "the game isn't up after {} s; it may still be starting: see {}",
                 START_TIMEOUT.as_secs(),
                 log_path.display()
-            ));
+            )
+            .into());
         }
         print!(".");
         let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -466,6 +474,12 @@ fn describe(status: &Value) -> String {
             "Sunrise {tag} is out (this server runs {}): `sunrise-server update` installs it\n",
             update["installed"].as_str().unwrap_or("?")
         );
+    }
+    if let Some(warnings) = update["mod_warnings"].as_array() {
+        for warning in warnings.iter().filter_map(Value::as_str) {
+            out.push_str(warning);
+            out.push('\n');
+        }
     }
     out
 }

@@ -4848,6 +4848,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "sunrise-mod-install"
+version = "0.1.0"
+dependencies = [
+ "semver",
+ "serde",
+ "serde_json",
+ "sunrise-mod-package",
+ "tempfile",
+ "toml",
+ "toml_edit",
+ "ureq",
+ "url",
+ "zip",
+]
+
+[[package]]
 name = "sunrise-mod-package"
 version = "0.1.0"
 dependencies = [
@@ -4978,6 +4994,7 @@ dependencies = [
  "sunrise-mod-package",
  "sunrise-mod-vocab",
  "sunrise-platform",
+ "sunrise-release-sign",
  "syn 2.0.119",
  "tar",
  "tempfile",
@@ -5172,20 +5189,27 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dunce",
+ "flate2",
  "getrandom 0.3.4",
  "libc",
  "p12-keystore",
  "png",
  "rcgen",
  "rustls",
+ "semver",
  "serde",
  "serde_json",
  "sha1",
  "sha2 0.10.9",
+ "sunrise-addresses",
  "sunrise-mcp",
+ "sunrise-mod-install",
+ "sunrise-native-build",
  "sunrise-platform",
  "sunrise-release-sign",
  "sunrise-server-launch",
+ "tar",
+ "tempfile",
  "toml",
  "ureq",
  "windows-sys 0.61.2",
@@ -5213,6 +5237,7 @@ dependencies = [
  "dunce",
  "serde",
  "sunrise-core",
+ "sunrise-mod-install",
  "sunrise-platform",
  "toml",
  "toml_edit",

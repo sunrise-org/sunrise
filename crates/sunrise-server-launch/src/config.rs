@@ -177,7 +177,12 @@ pub struct Config {
     /// The game reads this opt-in itself before opening a world with missing mods (docs/hosting.md).
     #[serde(default, skip_serializing_if = "MissingMods::is_default")]
     pub missing_mods: MissingMods,
+    /// Managed mod choices. Even an empty table opts in to the lock check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mods: Option<Mods>,
 }
+
+pub use sunrise_mod_install::input::{ModId, ModRequest, Mods, Pack, Spelled};
 
 const EVENTS: [&str; 6] = ["chat", "join", "leave", "death", "kick", "announce"];
 

@@ -55,6 +55,7 @@ members = [
     "crates/sunrise-friends",
     "crates/sunrise-relay",
     "crates/sunrise-mod-package",
+    "crates/sunrise-mod-install",
     "crates/sunrise-mod-api-gen",
     "crates/sunrise-mod-api",
     "crates/sunrise-mod-dimension-game",
