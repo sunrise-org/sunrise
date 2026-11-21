@@ -4,6 +4,7 @@ use crate::{
     hud::{HudAtlas, HudBatch},
     text::Text,
 };
+use std::time::{Duration, Instant};
 
 /// `Minecraft.doWorldLoad`: `max(5, 3) + ChunkLevel.RADIUS_AROUND_FULL_CHUNK + 1`.
 pub const STATUS_RADIUS: i32 = 8;
@@ -378,10 +379,42 @@ pub fn smooth(smoothed: f32, progress: f32) -> f32 {
     smoothed + (progress - smoothed) * 0.2
 }
 
-/// `LoadingOverlay.extractRenderState`: each frame the bar moves 5% of the
-/// way to the reload's actual progress, so a jump in stages slides in.
-pub fn ease_overlay(current: f32, actual: f32) -> f32 {
-    (current * 0.95 + actual * 0.050000012).clamp(0.0, 1.0)
+/// `LoadingOverlay`'s timings, quicker than vanilla's on purpose: vanilla
+/// fades in over 500 ms, holds a quick reload for 1000 ms, fades the bar out
+/// over 1000 ms and then itself over another 1000 ms, which keeps a reload
+/// that is long done behind its animation.
+/// How long the overlay takes to fade in, and the least it stays up for.
+pub const OVERLAY_FADE_IN: Duration = Duration::from_millis(150);
+/// How long the bar fades out once the reload is done.
+pub const OVERLAY_BAR_FADE_OUT: Duration = Duration::from_millis(150);
+/// How long the background and logo fade out after the bar.
+pub const OVERLAY_FADE_OUT: Duration = Duration::from_millis(250);
+/// The bar's time constant: it covers 95% of a jump in progress in three of
+/// these, whatever the frame rate (vanilla moves it 5% a frame).
+const OVERLAY_BAR_EASE: Duration = Duration::from_millis(40);
+
+/// `LoadingOverlay.extractRenderState`'s bar, moved toward the reload's actual
+/// progress by the time since the last frame, so a jump in stages slides in.
+pub fn ease_overlay(current: f32, actual: f32, elapsed: Duration) -> f32 {
+    let moved = 1.0 - (-elapsed.as_secs_f32() / OVERLAY_BAR_EASE.as_secs_f32()).exp();
+    (current + (actual - current) * moved).clamp(0.0, 1.0)
+}
+
+/// The overlay's bar as drawn (`LoadingOverlay.currentProgress`) and when it
+/// last moved.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OverlayBar {
+    value: f32,
+    at: Option<Instant>,
+}
+impl OverlayBar {
+    /// This frame's bar, eased toward `actual` since the last frame.
+    pub fn ease(&mut self, actual: f32, now: Instant) -> f32 {
+        let elapsed = self.at.map_or(Duration::ZERO, |at| now.duration_since(at));
+        self.at = Some(now);
+        self.value = ease_overlay(self.value, actual, elapsed);
+        self.value
+    }
 }
 
 /// `ARGB.opaque` as the batch's RGBA.
@@ -477,7 +510,7 @@ fn fill_corners(batch: &mut HudBatch, atlas: &HudAtlas, [x0, y0, x1, y1]: [i32; 
 }
 
 /// How far `LoadingOverlay` has faded: the background's alpha, the logo's
-/// opacity, and the bar's, which is gone once the fade-out's first second ends.
+/// opacity, and the bar's, which is gone once the bar's fade-out ends.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OverlayFade {
     pub background: u8,
@@ -492,24 +525,30 @@ impl OverlayFade {
         bar: Some(1.0),
     };
     /// `LoadingOverlay.extractRenderState` for an overlay that fades in
-    /// (`fadeIn`): `fade_in_ms` since its first frame (`fadeInStart`),
-    /// `fade_out_ms` since the reload finished (`fadeOutStart`). It fades in
-    /// over half a second, then on finishing fades its bar out for a second
-    /// and itself for another; `None` once gone (`setOverlay(null)`).
-    pub fn at(fade_in_ms: u64, fade_out_ms: Option<u64>) -> Option<Self> {
-        let fade_out = fade_out_ms.map_or(-1.0, |ms| ms as f32 / 1000.0);
-        if fade_out >= 2.0 {
+    /// (`fadeIn`): `fade_in` since its first frame (`fadeInStart`),
+    /// `fade_out` since the reload finished (`fadeOutStart`). It fades in over
+    /// `OVERLAY_FADE_IN`, then on finishing fades its bar out over
+    /// `OVERLAY_BAR_FADE_OUT` and itself over `OVERLAY_FADE_OUT`; `None` once
+    /// gone (`setOverlay(null)`).
+    pub fn at(fade_in: Duration, fade_out: Option<Duration>) -> Option<Self> {
+        let bar_out = fade_out.map_or(-1.0, |at| {
+            at.as_secs_f32() / OVERLAY_BAR_FADE_OUT.as_secs_f32()
+        });
+        let out = fade_out.map_or(-1.0, |at| {
+            at.saturating_sub(OVERLAY_BAR_FADE_OUT).as_secs_f32() / OVERLAY_FADE_OUT.as_secs_f32()
+        });
+        if bar_out >= 1.0 && out >= 1.0 {
             return None;
         }
-        let fade_in = fade_in_ms as f32 / 500.0;
-        let (background, logo) = if fade_out >= 1.0 {
-            let logo = 1.0 - (fade_out - 1.0).clamp(0.0, 1.0);
+        let fade_in = fade_in.as_secs_f32() / OVERLAY_FADE_IN.as_secs_f32();
+        let (background, logo) = if bar_out >= 1.0 {
+            let logo = 1.0 - out.clamp(0.0, 1.0);
             ((logo * 255.0).ceil() as u8, logo)
         } else {
             let background = (f64::from(fade_in).clamp(0.15, 1.0) * 255.0).ceil() as u8;
             (background, fade_in.clamp(0.0, 1.0))
         };
-        let bar = (fade_out < 1.0).then(|| 1.0 - fade_out.clamp(0.0, 1.0));
+        let bar = (bar_out < 1.0).then(|| 1.0 - bar_out.clamp(0.0, 1.0));
         Some(Self {
             background,
             logo,
@@ -851,16 +890,19 @@ mod tests {
 
     #[test]
     fn the_overlay_bar_slides_toward_a_jump_in_progress() {
-        // A stage jump from 0 to 1/3: the first frame moves 5% of the way.
-        let first = ease_overlay(0.0, 1.0 / 3.0);
-        assert!((first - 1.0 / 60.0).abs() < 1e-6, "{first}");
-        // After 60 frames it covers 1 - 0.95^60, about 95% of the jump.
-        let mut bar = 0.0;
-        for _ in 0..60 {
-            bar = ease_overlay(bar, 1.0);
+        let ms = Duration::from_millis;
+        // No time passed: the bar has not moved yet.
+        assert_eq!(ease_overlay(0.0, 1.0, Duration::ZERO), 0.0);
+        // 120 ms covers 1 - e^-3, about 95% of the jump...
+        let bar = ease_overlay(0.0, 1.0, ms(120));
+        assert!((bar - 0.950_213).abs() < 1e-4, "{bar}");
+        // ...in one slow frame or in many fast ones alike.
+        let mut many = 0.0;
+        for _ in 0..30 {
+            many = ease_overlay(many, 1.0, ms(4));
         }
-        assert!((bar - 0.953_930).abs() < 1e-4, "{bar}");
-        assert_eq!(ease_overlay(1.0, 1.0), 1.0);
+        assert!((many - bar).abs() < 1e-4, "{many}");
+        assert_eq!(ease_overlay(1.0, 1.0, ms(16)), 1.0);
     }
 
     #[test]
@@ -872,17 +914,24 @@ mod tests {
                 bar,
             })
         };
-        // From 15% over the frame to opaque in half a second, the logo from nothing.
-        assert_eq!(OverlayFade::at(0, None), fade(39, 0.0, Some(1.0)));
-        assert_eq!(OverlayFade::at(250, None), fade(128, 0.5, Some(1.0)));
-        assert_eq!(OverlayFade::at(600, None), fade(255, 1.0, Some(1.0)));
-        // Finished: the bar fades out over a second on the full background...
-        assert_eq!(OverlayFade::at(3000, Some(500)), fade(255, 1.0, Some(0.5)));
-        // ...then the background and logo over the next, without the bar.
-        assert_eq!(OverlayFade::at(3000, Some(1500)), fade(128, 0.5, None));
-        assert_eq!(OverlayFade::at(3000, Some(2000)), None);
-        assert!(!OverlayFade::at(250, None).unwrap().opaque());
-        assert!(OverlayFade::at(600, None).unwrap().opaque());
+        let ms = Duration::from_millis;
+        // From 15% over the frame to opaque in 150 ms, the logo from nothing.
+        assert_eq!(OverlayFade::at(ms(0), None), fade(39, 0.0, Some(1.0)));
+        assert_eq!(OverlayFade::at(ms(75), None), fade(128, 0.5, Some(1.0)));
+        assert_eq!(OverlayFade::at(ms(200), None), fade(255, 1.0, Some(1.0)));
+        // Finished: the bar fades out over 150 ms on the full background...
+        assert_eq!(
+            OverlayFade::at(ms(500), Some(ms(75))),
+            fade(255, 1.0, Some(0.5))
+        );
+        // ...then the background and logo over the next 250 ms, without the bar.
+        assert_eq!(
+            OverlayFade::at(ms(500), Some(ms(275))),
+            fade(128, 0.5, None)
+        );
+        assert_eq!(OverlayFade::at(ms(500), Some(ms(400))), None);
+        assert!(!OverlayFade::at(ms(75), None).unwrap().opaque());
+        assert!(OverlayFade::at(ms(200), None).unwrap().opaque());
     }
 
     #[test]

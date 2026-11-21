@@ -432,7 +432,7 @@ impl Game<'_> {
     pub(super) fn reload_overlay_frame(&mut self) -> Option<(f32, OverlayFade)> {
         let overlay = self.reload_overlay.as_mut()?;
         let now = Instant::now();
-        let since = |at: Instant| now.duration_since(at).as_millis() as u64;
+        let since = |at: Instant| now.duration_since(at);
         let fade_in = since(*overlay.fade_in.get_or_insert(now));
         let Some(fade) = OverlayFade::at(fade_in, overlay.fade_out.map(since)) else {
             self.reload_overlay = None;
@@ -442,8 +442,7 @@ impl Game<'_> {
             .pack_reload
             .as_ref()
             .map_or(1.0, |reload| reload.progress.fraction());
-        overlay.bar = sunrise_client::level_loading::ease_overlay(overlay.bar, actual);
-        Some((overlay.bar, fade))
+        Some((overlay.bar.ease(actual, now), fade))
     }
     /// `LoadingOverlay.tick` once the reload is done: the staged pack is
     /// applied on the render thread, and its outcome goes to whoever asked
@@ -846,7 +845,8 @@ pub(super) struct PackReload {
     hold: Duration,
 }
 /// `LoadingOverlay` over a pack reload, from its first frame until it has
-/// faded out (`Minecraft.setOverlay(null)`), two seconds after the reload.
+/// faded out (`Minecraft.setOverlay(null)`), `OVERLAY_BAR_FADE_OUT` and
+/// `OVERLAY_FADE_OUT` after the reload.
 #[derive(Default)]
 pub(super) struct ReloadOverlay {
     /// `fadeInStart`: the overlay's first frame.
@@ -854,13 +854,13 @@ pub(super) struct ReloadOverlay {
     /// `fadeOutStart`: when the reload was applied.
     fade_out: Option<Instant>,
     /// `currentProgress`: the bar as drawn.
-    bar: f32,
+    bar: sunrise_client::level_loading::OverlayBar,
 }
 /// `LoadingOverlay.isReadyToFadeOut`: a reload started from inside the game
-/// (`fadeIn`) is not ready while `Util.getMillis() - fadeInStart < 1000L`, so
-/// a pack that stages in a few frames still shows its overlay for a second
-/// instead of flashing.
-pub(super) const OVERLAY_HOLD: Duration = Duration::from_millis(1000);
+/// (`fadeIn`) is not ready until it has faded in, so a pack that stages in a
+/// few frames does not flash the overlay. Vanilla holds it for 1000 ms;
+/// Sunrise only for the fade-in.
+pub(super) const OVERLAY_HOLD: Duration = sunrise_client::level_loading::OVERLAY_FADE_IN;
 impl PackReload {
     /// Starts `stage` on its own thread and returns at once.
     fn spawn(
@@ -1164,11 +1164,10 @@ mod tests {
     }
 
     /// `LoadingOverlay.isReadyToFadeOut`: a reload that stages at once still
-    /// keeps its overlay up - the 1000 ms `fadeInStart` gate - so a small pack
-    /// does not flash the Mojang logo for a frame or two.
+    /// keeps its overlay up until it has faded in, so a small pack does not
+    /// flash the Mojang logo for a frame or two.
     #[test]
     fn a_fast_reload_keeps_the_overlay_up_before_it_applies() {
-        assert_eq!(OVERLAY_HOLD, Duration::from_millis(1000));
         let mut quick = PackReload::spawn_holding(ReloadKind::Selection, Duration::ZERO, |_| {
             Err("staged".into())
         })
