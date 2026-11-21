@@ -1,0 +1,1 @@
+sunrise-client game::native_hooks::base::config_screen_tests::typed_config_screen_keeps_its_mods_parent_and_owns_input lib daily resources

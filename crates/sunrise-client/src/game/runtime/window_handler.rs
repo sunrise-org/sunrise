@@ -257,6 +257,7 @@ impl Game<'_> {
         if resized {
             self.notify_window_resize();
         }
+        self.settle_config_screen();
         // A title screen the event asked for opens before the next event.
         self.settle_title_mode();
         if let Some((button, pressed, modifiers)) = mouse {

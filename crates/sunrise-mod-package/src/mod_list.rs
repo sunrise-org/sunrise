@@ -94,6 +94,8 @@ pub struct NativePage {
     pub mappings: Vec<KeyMapping>,
     /// Its settings, in registration order, with the values the page shows.
     pub settings: Vec<NativeSetting>,
+    /// Whether a loaded, enabled owner registered a custom Config screen.
+    pub config_screen: bool,
 }
 
 /// A setting on a native mod's page: its key within the mod, the translation keys of its label

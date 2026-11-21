@@ -166,6 +166,8 @@ impl StartupMenu {
         if self.options_open {
             let resource_error = game.ui.options.resource_error.take();
             game.ui.options = std::mem::take(&mut self.options);
+            // The loading menu used package metadata; Game now owns the live rows.
+            game.ui.options.mods_screen = None;
             game.ui.options.resource_error =
                 game.ui.options.resource_error.take().or(resource_error);
             game.set_screen(Screen::Options);
@@ -756,9 +758,12 @@ impl Loading {
                 Event::AccessibilityHelp => {
                     super::packs::open_uri(super::options::ACCESSIBILITY_HELP_LINK)
                 }
-                // Mods' settings pages open only in a running game.
+                // This menu precedes native registration; only Game can open a factory.
                 // The HUD editor needs a world: its button is inactive here.
-                Event::NativeSettings(_) | Event::NativeSetting(..) | Event::HudEditor => {}
+                Event::NativeSettings(_)
+                | Event::NativeSetting(..)
+                | Event::ConfigScreen(_)
+                | Event::HudEditor => {}
                 // The startup menu runs before the game opens a control socket,
                 // and before its sound engine (no clicks, no volume previews,
                 // and no music tracks to list or play).

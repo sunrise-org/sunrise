@@ -52,9 +52,19 @@ pub(super) fn read_raw(dir: &Path, owner: &str, key: &str) -> Option<String> {
     sunrise_world::native_load_context::read_setting(dir, key)
 }
 pub(super) fn store(dir: &Path, owner: &str, key: &str, value: &str) -> bool {
-    if mod_api::__private::setting(owner, key).is_none() {
+    mod_api::__private::setting(owner, key).is_some() && store_registered(dir, key, value)
+}
+
+/// A custom Config screen writes through the same registered-setting
+/// boundary as generated rows, but receives text through Host::set_setting.
+pub(super) fn store_edit(dir: &Path, owner: &str, key: &str, value: &str) -> bool {
+    let Some(spec) = mod_api::__private::setting(owner, key) else {
         return false;
-    }
+    };
+    spec.parse_stored(value).is_some() && store_registered(dir, key, value)
+}
+
+fn store_registered(dir: &Path, key: &str, value: &str) -> bool {
     if fs::create_dir_all(dir)
         .and_then(|()| fs::write(dir.join(key), value))
         .is_err()

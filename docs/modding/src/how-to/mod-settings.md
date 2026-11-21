@@ -75,6 +75,26 @@ button.
 A mod reads and writes only its own settings: another mod's id, or a key its owner never registered, reads
 `None` and writes nothing.
 
+### Your own Config screen
+
+A native client mod can call `Registrar::register_config_screen_factory` during
+`Hooks::register`. This is Sunrise's counterpart to NeoForge's
+`IConfigScreenFactory`. Register one factory per mod; a duplicate returns a
+typed error and keeps the first factory. The Config button appears even with no
+settings rows. If you register both, the factory takes precedence; without
+one, registered rows still open the generated page.
+
+The selected, enabled mod's factory is called once when Config is pressed. It
+receives the loader-resolved owner id, a client UI context with no world access,
+and a return target for the current Mods list. Opening does not save a setting
+or start a transaction. Only write on an explicit edit: `Host::set_setting`
+keeps valid values for the owner's registered keys, including on the title
+screen, with the same cache invalidation as the generated page. It does not
+send a `setting_changed` notice for a programmatic write.
+
+See [Screens](client/screens.md#opening-your-screen-from-the-mods-list) for
+drawing, input and navigation.
+
 The settings folder is settings only, not bulk storage: ordinary files there are read as setting keys and
 subfolders or unsafe entries still warn during snapshots. Use the bulk services above instead; their files are
 not included in settings snapshots.

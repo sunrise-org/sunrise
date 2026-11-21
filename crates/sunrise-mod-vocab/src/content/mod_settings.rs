@@ -228,28 +228,34 @@ impl SettingSpec {
     /// The value kept as `stored` (see [`SettingSpec::store`]), or the default when nothing is
     /// kept, or when what is kept isn't a value of this setting (another kind, out of range).
     pub fn read(&self, stored: Option<&str>) -> SettingValue {
-        let stored = stored.map(str::trim);
-        let value = match (&self.kind, stored) {
-            (SettingKind::Toggle { .. }, Some("true")) => Some(SettingValue::Toggle(true)),
-            (SettingKind::Toggle { .. }, Some("false")) => Some(SettingValue::Toggle(false)),
-            (SettingKind::Choice { options, .. }, Some(text)) => text
+        stored
+            .and_then(|stored| self.parse_stored(stored))
+            .unwrap_or_else(|| self.default_value())
+    }
+
+    /// Decode a stored value without substituting a default for invalid text.
+    #[doc(hidden)]
+    pub fn parse_stored(&self, stored: &str) -> Option<SettingValue> {
+        match (&self.kind, stored.trim()) {
+            (SettingKind::Toggle { .. }, "true") => Some(SettingValue::Toggle(true)),
+            (SettingKind::Toggle { .. }, "false") => Some(SettingValue::Toggle(false)),
+            (SettingKind::Choice { options, .. }, text) => text
                 .parse::<usize>()
                 .ok()
                 .filter(|index| *index < options.len())
                 .map(SettingValue::Choice),
-            (SettingKind::Range { min, max, .. }, Some(text)) => text
+            (SettingKind::Range { min, max, .. }, text) => text
                 .parse::<f64>()
                 .ok()
                 .filter(|v| v.is_finite() && (*min..=*max).contains(v))
                 .map(SettingValue::Range),
-            (SettingKind::Color { .. }, Some(text)) => text
+            (SettingKind::Color { .. }, text) => text
                 .strip_prefix('#')
                 .filter(|hex| hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
                 .and_then(|hex| u32::from_str_radix(hex, 16).ok())
                 .map(SettingValue::Color),
             _ => None,
-        };
-        value.unwrap_or_else(|| self.default_value())
+        }
     }
 
     /// How `value` is kept: the text [`SettingSpec::read`] gives back. None when `value` isn't

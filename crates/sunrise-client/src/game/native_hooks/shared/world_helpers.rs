@@ -170,7 +170,9 @@ impl Game<'_> {
     /// A mod's own screen closes (Escape, or `mod_screen_close`).
     pub(in crate::game) fn close_mod_screen(&mut self) {
         if self.screen == Screen::Mod {
-            if self.title.is_some() {
+            if self.config_screen.is_some() {
+                self.set_screen(Screen::Options);
+            } else if self.title.is_some() {
                 self.close_mod_screen_to_title();
             } else {
                 self.set_screen(Screen::Playing);

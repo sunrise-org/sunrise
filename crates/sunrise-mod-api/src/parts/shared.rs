@@ -56,6 +56,7 @@ pub struct PartRegistrar {
     pub(crate) entity_tick_each: Vec<Option<String>>,
     pub(crate) mod_id: &'static str,
     pub(crate) mod_index: usize,
+    pub(crate) config_screen_client: bool,
     /// Parts registered so far, by every mod: the next part's `order`.
     pub(crate) registered: usize,
     pub(crate) parts: Parts,
@@ -112,6 +113,7 @@ impl PartRegistrar {
             entity_tick_each: Vec::new(),
             mod_id,
             mod_index: 0,
+            config_screen_client: true,
             registered: 0,
             parts: Self::capability_parts(),
             entity_selector_bytes: 0,
@@ -241,6 +243,7 @@ pub(crate) fn register_all(
         registrar.mod_id = mod_vocab::__private::parts_installation::mod_entry_id(&mods[index]);
         registrar.mod_index = index;
         let context = crate::RegistrationContext::new();
+        registrar.config_screen_client = mod_vocab::__private::client_registration(&context);
         let rollback = registrar.registration_checkpoint();
         hooks.register(&mut registrar, &context);
         registrar.warnings.extend(

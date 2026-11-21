@@ -49,6 +49,29 @@ the sign's block position and whether its front side is being edited. It returns
 editor open, or outside a world. A close of the sign editor always sends the sign update, however it
 closes; there is no close that skips it, because the vanilla client never omits that packet.
 
+## Opening your screen from the Mods list
+
+Implement `ConfigScreenFactory::create_screen` and register the factory as
+described in [Settings](../mod-settings.md#your-own-config-screen). Return
+`Ok(parent.screen())` to open a fresh session, or
+`Err(ConfigScreenRefusal::Unavailable)` to leave the list as it was. A
+`screen_opening` veto also leaves the list and selection unchanged. A valid
+replacement opens normally instead; the unused Config session is discarded.
+
+When `ScreenView.id` is `"mod"` and `host.mod_screen()` names your mod, draw
+through the screen render hooks' `DrawContext`. The existing screen hooks
+receive mouse presses and releases, drags and scroll, key presses and releases,
+and typed characters. Cancelling a Pre hook keeps that input from going
+further; neither the hidden Options page nor gameplay receives it.
+
+Unhandled Escape returns to the same Mods list and selection, from the title
+or in a world. For your own Back control, keep a copy of the factory's
+`ConfigScreenParent` and call `go_back()` from the screen hook that handles the
+control. It requests the normal screen close after the current input or frame.
+`ClientHost::mod_screen_close` does the same return from a mutable client
+hook. A return target from a closed or refused session cannot close another
+session. This does not change where `ClientHost::mod_screen_open` may be used.
+
 ## Reading open trades
 
 From a client hook in the world, get the menu from `host.local_player()` and

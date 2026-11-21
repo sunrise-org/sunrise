@@ -1642,6 +1642,14 @@ fn matches_focus(id: &FocusId, i: usize, wd: &Widget) -> bool {
         _ => false,
     }
 }
+/// A custom Config activation bound to the selected installed mod and its Mods list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfigScreenRequest {
+    pub index: usize,
+    pub owner: String,
+    pub parent: crate::mods_screen::ModsScreenId,
+}
+
 /// What the game must do after an interaction.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
@@ -1706,6 +1714,8 @@ pub enum Event {
     NativePackOptions(usize),
     /// Native mod `.0`'s page opened: the game reads its settings' kept values again.
     NativeSettings(usize),
+    /// Request the selected loaded mod's custom Config screen, without changing this page.
+    ConfigScreen(ConfigScreenRequest),
     /// Setting `.1` of native mod `.0`'s page changed (`settings.mods`): the game keeps it and
     /// tells the mod (`setting_changed`).
     NativeSetting(usize, usize),
@@ -3204,8 +3214,24 @@ impl OptionsUi {
                 Do::OpenFolder => events.push(Event::OpenModFolder),
                 Do::Back => events.extend(self.back(s)),
                 Do::Config(i) => {
-                    self.push(Page::NativeMod(i));
-                    events.push(Event::NativeSettings(i));
+                    if let Some(list) = &self.mods_screen
+                        && let Some((index, owner)) = list.selected_mod()
+                        && index == i
+                        && let Some(row) = s.mods.installed.get(index)
+                        && row.id == owner
+                        && let Some(page) = &row.native
+                    {
+                        if page.config_screen {
+                            events.push(Event::ConfigScreen(ConfigScreenRequest {
+                                index,
+                                owner: owner.to_owned(),
+                                parent: list.id(),
+                            }));
+                        } else if !page.settings.is_empty() {
+                            self.push(Page::NativeMod(i));
+                            events.push(Event::NativeSettings(i));
+                        }
+                    }
                 }
                 Do::Link(url) => events.push(Event::OpenLink(url)),
                 Do::Copy(text) => events.push(Event::CopyText(text)),
@@ -5263,6 +5289,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_custom_config_request_needs_no_generated_settings_and_does_not_push_a_page() {
+        let atlas = atlas();
+        let mut settings = Settings::default();
+        settings.mods.installed.push(crate::mod_list::Installed {
+            id: "custom".into(),
+            title: "Z Test Mod".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            native: Some(crate::mod_list::NativePage {
+                config_screen: true,
+                ..Default::default()
+            }),
+        });
+        let mut ui = OptionsUi::default();
+        ui.open_at(false, Page::Mods);
+        let click = |ui: &mut OptionsUi, s: &mut Settings, x, y| {
+            ui.click(s, &atlas, x, y, (480.0, 240.0), [480, 240], false, false)
+        };
+        click(&mut ui, &mut settings, 61.0, 76.0);
+        let parent = ui.mods_screen.as_ref().unwrap().id();
+        assert_eq!(
+            click(&mut ui, &mut settings, 397.0, 192.0),
+            [
+                Event::ButtonClick,
+                Event::ConfigScreen(ConfigScreenRequest {
+                    index: 0,
+                    owner: "custom".into(),
+                    parent,
+                })
+            ]
+        );
+        assert_eq!(ui.page(), Page::Mods);
+        assert_eq!(
+            ui.mods_screen.as_ref().unwrap().selected_mod(),
+            Some((0, "custom"))
+        );
+    }
+
     /// The Mods page is NeoForge's list screen: no switches, a footer of folder and
     /// Back, and Config on the selected native mod. Positions are the layout at 480x240:
     /// 150 px buttons 4 px apart, centred 27 px above the bottom; the sidebar at x 41 with its
@@ -5745,6 +5811,7 @@ mod tests {
                     ..Default::default()
                 }],
                 settings: Vec::new(),
+                ..Default::default()
             }),
         });
         ui.show(Page::KeyBinds);
@@ -6096,13 +6163,13 @@ mod tests {
             problem: None,
             dev: false,
             native: Some(crate::mod_list::NativePage {
-                mappings: Vec::new(),
                 settings: vec![crate::mod_list::NativeSetting {
                     key: "trails".into(),
                     label: "Trails".into(),
                     tooltip: None,
                     value: crate::mod_list::NativeSettingValue::Toggle(true),
                 }],
+                ..Default::default()
             }),
         });
         let labels = lang::scoped(english(), || ui.extras.row_labels(&s)).0;

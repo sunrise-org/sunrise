@@ -93,7 +93,7 @@ pub trait ScreensClientHost {
     /// `screen_render_post` and takes its clicks, scroll, keys and
     /// typing there; the mouse is freed, and Escape closes it. Every mod's own
     /// screen has the `ScreenView.id` `mod`, so a mod's screen hooks
-    /// check `native_mod_screen()` is its own before drawing. It doesn't pause
+    /// check `mod_screen()` is its own before drawing. It doesn't pause
     /// a single-player game (as the inventory doesn't). True when it is open:
     /// false while another screen is (or another mod's), over the title
     /// screen, a book, a sign editor, a dialog or a prompt, while the world
@@ -103,8 +103,12 @@ pub trait ScreensClientHost {
     #[access(WorldOnly)]
     fn mod_screen_open(&mut self, mod_id: &str) -> bool;
     /// Side: client.
-    /// Closes mod `mod_id`'s own screen, if it is open.
-    #[access(WorldOnly)]
+    /// Closes mod `mod_id`'s own screen, if it is open. A screen opened from
+    /// Config can be closed by its owner and returns to its Mods list and
+    /// selection, including on the title.
+    /// A read-only screen hook can request the same close through its
+    /// [`ConfigScreenParent`]. This does not need or grant world access.
+    #[access(ClientSetup)]
     fn mod_screen_close(&mut self, mod_id: &str);
     /// Side: client.
     /// Closes the open screen as its Escape key does: a container screen

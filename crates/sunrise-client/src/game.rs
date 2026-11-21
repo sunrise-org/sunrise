@@ -1743,6 +1743,8 @@ struct Game<'a> {
     native_net: native_net::NativeNet,
     /// The mod whose own screen is open (`Screen::Mod`).
     native_mod_screen: Option<String>,
+    /// Active Config session, whose parent Mods list stays in `ui.options`.
+    config_screen: Option<mod_api::ConfigScreenSession>,
     /// Meshed sections waiting for an upload budget (Sunrise settings).
     pending_uploads: Vec<sunrise_client::streaming::MeshUpload>,
     upload_pace: upload_pace::UploadPace,
@@ -9281,8 +9283,8 @@ impl Game<'_> {
         }
         // A character that comes with no key (Windows' Alt codes, `Alt` + digits on the numeric
         // keypad: a `WM_CHAR` after the Alt is released) reaches winit as a key event with no
-        // physical key. GLFW's char callback types it in the focused text field (`charTyped`),
-        // and every screen's key handler here would drop it for want of a key code.
+        // physical key. GLFW sends it through charTyped even for a custom screen with no
+        // engine-owned text field; the normal key handler would drop it for want of a key code.
         if let WindowEvent::KeyboardInput {
             event: key_event, ..
         } = &event
@@ -9290,6 +9292,10 @@ impl Game<'_> {
             && matches!(key_event.physical_key, PhysicalKey::Unidentified(_))
             && let Some(text) = key_event.text.as_deref()
         {
+            if self.config_screen.is_some() && !self.screen_over_playing() {
+                self.screen_chars_typed(Some(text));
+                return;
+            }
             let text: String = text.chars().filter(|c| !c.is_control()).collect();
             if !text.is_empty() && self.text_field_focused() && self.types_text() {
                 self.screen_text_each(&text, |game, c| {
@@ -9582,7 +9588,9 @@ impl Game<'_> {
             {
                 // Screen cancellation must not leave a held keyboard mapping down.
                 self.keys.remove(&key);
-                self.mapped_key_event(key, false, false)?;
+                if self.config_screen.is_none() {
+                    self.mapped_key_event(key, false, false)?;
+                }
                 return Ok(());
             }
             if let WindowEvent::KeyboardInput { event, .. } = &event
@@ -9730,8 +9738,18 @@ impl Game<'_> {
                             }
                             native_hooks::ScreenMousePre::NotFired => {}
                         }
-                        if self.dialog_open() {
-                            self.dialog_drag();
+                        if self.prompt_open() {
+                            if self.command_prompt.is_none()
+                                && self.link_prompt.is_none()
+                                && self.code_of_conduct.is_none()
+                                && self.server_packs.prompt.is_none()
+                            {
+                                self.dialog_drag();
+                            }
+                            return Ok(());
+                        }
+                        if self.config_screen.is_some() {
+                            return Ok(());
                         }
                         if self.screen == Screen::BlockEditor {
                             self.block_editor_drag();
@@ -9830,6 +9848,9 @@ impl Game<'_> {
                         } else if self.server_packs.prompt.is_none() {
                             self.dialog_scroll(d);
                         }
+                        return Ok(());
+                    }
+                    if self.config_screen.is_some() {
                         return Ok(());
                     }
                     // The item panel beside a container screen pages on the
@@ -9966,7 +9987,8 @@ impl Game<'_> {
                         self.connect_screen_click()?;
                     }
                 }
-                WindowEvent::MouseInput { .. } if self.screen == Screen::Win => {}
+                WindowEvent::MouseInput { .. }
+                    if self.screen == Screen::Win || self.config_screen.is_some() => {}
                 WindowEvent::MouseInput { state, button, .. } if self.screen == Screen::Options => {
                     if self.options_waiting_for_key() && state == ElementState::Pressed {
                         self.options_bind_mouse(button)?;
@@ -10341,6 +10363,15 @@ impl Game<'_> {
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
                 {
                     self.world_options_key(&event)
+                }
+                WindowEvent::KeyboardInput { event, .. } if self.config_screen.is_some() => {
+                    if let PhysicalKey::Code(key) = event.physical_key {
+                        self.config_screen_key(
+                            key,
+                            event.state == ElementState::Pressed,
+                            event.repeat,
+                        );
+                    }
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Win => {
                     self.win_key(&event)?
@@ -11325,6 +11356,7 @@ impl<'a> Game<'a> {
             mod_phase,
             native_net: Default::default(),
             native_mod_screen: None,
+            config_screen: None,
             sky_darken_memo: Default::default(),
             water_plane_memo: Default::default(),
             water_plane_scan: Default::default(),

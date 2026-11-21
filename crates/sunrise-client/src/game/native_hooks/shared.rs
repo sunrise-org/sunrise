@@ -159,13 +159,7 @@ impl Game<'_> {
                 }
                 ScreenDecision::Vanilla(target) => {
                     before(self);
-                    self.open_screen_target(target);
-                    if self.title.is_some() {
-                        // A title screen: told here, so the frame's observer
-                        // doesn't announce it again.
-                        self.screen_state.observed = self.observed_now();
-                        self.shown_init_post();
-                    }
+                    self.open_replacement_target(target);
                     return;
                 }
                 ScreenDecision::Open => {}
@@ -202,6 +196,111 @@ impl Game<'_> {
     ) -> ScreenDecision {
         self.screen_decision(self.screen_change(current, new, true, closes))
     }
+    /// Open the selected live factory over the Mods list without pushing an
+    /// Options page or touching the world. The list stays in OptionsUi.
+    pub(super) fn open_config_screen(
+        &mut self,
+        request: sunrise_client::options_ui::ConfigScreenRequest,
+    ) {
+        use mod_api::content::crash::{ModCall, enter_native_mod};
+        use sunrise_client::options_ui::Page;
+
+        let index = request.index;
+        let selected = |game: &Self| {
+            if game.screen != Screen::Options
+                || game.ui.options.page() != Page::Mods
+                || !game.options.execution_role.is_client()
+                || game.mod_screen_blocked()
+                || !game.settings.mods.is_on(index)
+            {
+                return None;
+            }
+            let list = game.ui.options.mods_screen.as_ref()?;
+            if list.id() != request.parent
+                || list.selected_mod() != Some((index, request.owner.as_str()))
+                || game.settings.mods.installed.get(index)?.id != request.owner
+            {
+                return None;
+            }
+            mod_api::__private::config_screen_factory(&request.owner)
+        };
+        let Some((owner, factory)) = selected(self) else {
+            return;
+        };
+        let parent = mod_api::ConfigScreenParent::new_activation();
+        let context = mod_api::ConfigScreenContext::new(self.title.is_none());
+        let session = {
+            let _call = enter_native_mod(ModCall {
+                id: owner,
+                hook: "create_config_screen",
+                part: None,
+            });
+            factory.create_screen(owner, context, parent.clone())
+        };
+        let Ok(session) = session else {
+            return;
+        };
+        let still_current = |game: &Self| {
+            selected(game).is_some_and(|(id, current)| id == owner && Arc::ptr_eq(current, factory))
+        };
+        if !session.belongs_to(&parent) || !still_current(self) {
+            return;
+        }
+
+        let current = self.screen_change_view(Screen::Options);
+        let decision = if self.screen_hooks_heard() {
+            let mut answer = None;
+            let new = self.screen_change_view(Screen::Mod);
+            self.native_screen_opening(&current, &new, &mut answer);
+            self.screen_decision(answer)
+        } else {
+            ScreenDecision::Open
+        };
+        if matches!(decision, ScreenDecision::Keep) || !still_current(self) {
+            return;
+        }
+        if self.screen_hooks_heard() {
+            self.native_screen_closing(&current);
+            if !still_current(self) {
+                return;
+            }
+        }
+
+        self.ui.options.discard_draw();
+        self.dragging = false;
+        match decision {
+            ScreenDecision::Keep => unreachable!(),
+            ScreenDecision::Vanilla(target) => self.open_replacement_target(target),
+            ScreenDecision::ModScreen(other) => self.apply_screen(Screen::Mod, Some(other)),
+            ScreenDecision::Open => {
+                self.apply_screen(Screen::Mod, Some(owner));
+                self.config_screen = Some(session);
+            }
+        }
+    }
+
+    /// Handle a key after the active Config screen's Pre hook lets it through.
+    /// Only Escape has a default action. Other keys stop at the screen's Post.
+    pub(super) fn config_screen_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) {
+        if pressed && key == KeyCode::Escape {
+            self.close_mod_screen();
+        } else {
+            self.screen_key_post(key, pressed, repeat);
+        }
+    }
+
+    /// Settle a request from the active session's Back control, never from a
+    /// refused, replaced or already closed session.
+    pub(super) fn settle_config_screen(&mut self) {
+        if self
+            .config_screen
+            .as_ref()
+            .is_some_and(|screen| screen.take_back_request())
+        {
+            self.close_mod_screen();
+        }
+    }
+
     /// What a mod's `screen_opening` answer does here: a `ModScreen` only
     /// where a mod's screen can open (`mod_screen_blocked`), a `Vanilla`
     /// target only where it opens (a title screen while the title shows, a
@@ -245,6 +344,17 @@ impl Game<'_> {
             .set(!matches!(decision, ScreenDecision::Open));
         decision
     }
+    /// Apply a vanilla replacement for an engine-owned screen. A replacement
+    /// in the title UI is an overlay, so record it here to avoid announcing
+    /// another opening during frame observation.
+    fn open_replacement_target(&mut self, target: ScreenTarget) {
+        self.open_screen_target(target);
+        if self.title.is_some() {
+            self.screen_state.observed = self.observed_now();
+            self.shown_init_post();
+        }
+    }
+
     /// Opens vanilla screen `target` as it opens on its own, in place of the
     /// one asked for (`ScreenOpening::Vanilla`, which `screen_decision` let
     /// through): the change fires no screen hook again.
@@ -286,6 +396,7 @@ impl Game<'_> {
     /// What `set_screen` does once the hooks have answered: `screen` opens,
     /// and the mod `owner`'s own screen when one answered `ModScreen`.
     fn apply_screen(&mut self, screen: Screen, owner: Option<&str>) {
+        self.config_screen = None;
         self.screen = screen;
         if let Some(owner) = owner {
             self.native_mod_screen = Some(owner.to_owned());
@@ -552,6 +663,7 @@ impl Game<'_> {
     }
 
     pub(super) fn observe_screen(&mut self) {
+        self.settle_config_screen();
         self.settle_title_mode();
         // Keeps the build on the frame's window size and drops it once nothing
         // shows; an unchanged frame compares and builds nothing.
@@ -3001,7 +3113,12 @@ impl Game<'_> {
                     category: k.category.clone(),
                 })
                 .collect();
-            row.native = Some(NativePage { mappings, settings });
+            let config_screen = mod_api::__private::config_screen_factory(&row.id).is_some();
+            row.native = Some(NativePage {
+                mappings,
+                settings,
+                config_screen,
+            });
             self.settings.mods.installed.push(row);
         }
     }

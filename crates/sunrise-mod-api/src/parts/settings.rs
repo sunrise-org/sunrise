@@ -62,4 +62,21 @@ impl SettingsRegistrar for PartRegistrar {
         self.parts.settings.push((self.mod_id, setting));
         Ok(())
     }
+
+    fn register_config_screen_factory(
+        &mut self,
+        factory: Box<dyn crate::ConfigScreenFactory>,
+    ) -> Result<(), crate::ConfigScreenRegistrationError> {
+        use crate::ConfigScreenRegistrationError as Error;
+        if !self.config_screen_client {
+            return Err(Error::NotClient);
+        }
+        let std::collections::hash_map::Entry::Vacant(slot) =
+            self.parts.config_screen_factories.entry(self.mod_id)
+        else {
+            return Err(Error::Duplicate);
+        };
+        slot.insert((self.mod_index, Arc::from(factory)));
+        Ok(())
+    }
 }

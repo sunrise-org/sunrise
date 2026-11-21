@@ -4270,6 +4270,7 @@ dependencies = [
  "wgpu",
  "winit",
  "winresource",
+ "x11rb",
  "zip",
 ]
 
