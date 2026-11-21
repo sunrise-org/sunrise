@@ -2155,6 +2155,10 @@ impl Dim {
             "minecraft:overworld" | "minecraft:the_nether" | "minecraft:the_end"
         )
     }
+    /// Whether this is one of vanilla's built-in levels (Overworld, Nether, End).
+    fn is_builtin(self) -> bool {
+        matches!(self, Self::Overworld | Self::Nether | Self::End)
+    }
     /// Whether the open world has the dimension `id`.
     fn exists(id: &str) -> bool {
         Self::is_vanilla(id) || Self::extra(id).is_some()

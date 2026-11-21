@@ -3505,7 +3505,8 @@ impl Game<'_> {
     /// (`native_chunk_load`), so a mod sets up what it keeps for the level
     /// here. At startup the Overworld, Nether and End are published and
     /// announced in that order, before `server_started`, with each level in
-    /// place. A level closed while idle fires this again when it reopens.
+    /// place, and stay open until server shutdown. A custom level closed while
+    /// idle fires this again when it reopens.
     /// An explicitly opened runtime level can fire while parked: `dimension`
     /// names that level, not the Host's current one. Once for each open;
     /// `native_level_unload` follows. Server-side.
@@ -3514,12 +3515,13 @@ impl Game<'_> {
     }
     /// `dimension`'s level closed (NeoForge's `LevelEvent.Unload`, posted after
     /// `level.close()` in `MinecraftServer.stopServer`), after its last save:
-    /// drop what the mod kept for it. A level other than the Overworld closes
-    /// once nobody has been in it for 300 ticks, after its chunks' unloads;
-    /// every level still open closes when the server stops, before
-    /// `WorldCloseFinal`, and when its open or its loop fails, before
-    /// `WorldOpenFailed` or `WorldCloseFailed`. Once for each
-    /// `native_level_load`. Don't read its blocks. Server-side.
+    /// drop what the mod kept for it. A custom level closes once nobody has
+    /// been in it for 300 ticks, after its chunks' unloads; built-in levels
+    /// (Overworld, Nether, End) stay open until server shutdown, unloading
+    /// only their unticketed chunks while idle. Every level still open closes
+    /// when the server stops, before `WorldCloseFinal`, and when its open or
+    /// its loop fails, before `WorldOpenFailed` or `WorldCloseFailed`. Once for
+    /// each `native_level_load`. Don't read its blocks. Server-side.
     pub(in crate::game) fn native_level_unload(&mut self, dimension: &str) {
         self.fire_level_unload(dimension);
     }

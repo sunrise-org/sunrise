@@ -8,7 +8,8 @@ pub trait Hooks {
     /// here. Before `server_started`, this fires in Overworld, Nether, End
     /// order, with the level in place, regardless of the saved player's dimension.
     /// The next built-in is not available until after the current notification.
-    /// It fires again if a built-in level closes and later reopens.
+    /// Built-in levels stay open until server shutdown; custom levels that
+    /// close while idle fire this again when they reopen.
     /// Explicitly opened runtime levels can fire this while parked:
     /// `event.dimension` names the opened level, not the Host's current level.
     /// Server-side.
@@ -17,7 +18,7 @@ pub trait Hooks {
         contract = "listen",
         neoforge = "LevelEvent.Load",
         cancellable = false,
-        version = 2
+        version = 3
     )]
     fn level_load();
 }

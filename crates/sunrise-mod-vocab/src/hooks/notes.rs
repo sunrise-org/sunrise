@@ -2213,7 +2213,7 @@ registration path.
 
 - A loot table's custom function or condition uses a codec registered by id through `Registrar::register_loot_function_type` or `Registrar::register_loot_condition_type`. Data validates before publication; unknown types refuse the load. Callbacks receive read-only context facts, authoritative tags and the actual evaluation random. Entry, pool and table order is preserved in both loot evaluators.
 
-- A server's levels opening and closing, on the single player server thread and on a dedicated server: `level_load(dimension)` when a level opens, before any of its chunks (NeoForge's `LevelEvent.Load`), and `level_unload(dimension)` once it has closed, after its last save (`LevelEvent.Unload`). The Overworld, Nether and End fire `level_load` in that order during startup, before `server_started`. The Nether and End can still close when idle and fire `level_load` again when reopened. Every level still open closes when the server stops, before `WorldCloseFinal`, or when its open or its loop fails, so each load has one unload.
+- A server's levels opening and closing, on the single player server thread and on a dedicated server: `level_load(dimension)` when a level opens, before any of its chunks (NeoForge's `LevelEvent.Load`), and `level_unload(dimension)` once it has closed, after its last save (`LevelEvent.Unload`). The Overworld, Nether and End fire `level_load` in that order during startup, before `server_started`, and stay open until server shutdown (unloading unticketed chunks while idle). Custom levels still close after 300 idle ticks and fire `level_load` again when reopened. Every level still open closes when the server stops, before `WorldCloseFinal`, or when its open or its loop fails, so each load has one unload.
 
 - The client's level made and dropped, on the window: `client_level_load(dimension)` when the client makes a level, on joining a server (single player's own included) and on changing dimension (NeoForge's `LevelEvent.Load` from the `ClientLevel` constructor), and `client_level_unload(dimension)` when it drops one, replaced by another dimension's (told after the new one's load, as `Minecraft.setLevel` does) or on leaving the server (`LevelEvent.Unload`). Each load has one unload, except when the game itself quits.
 
@@ -3005,8 +3005,8 @@ registration path.
 - `LevelRef::with_random(host, |random| ...)`, the server level's own random (vanilla's `Level.random`, NeoForge mods'
   `level.getRandom()`): a mod draws from the stream vanilla's explosions and block drops use, so its draws shift theirs
   as a Java mod's would. The closure draws on the level's stream and the level keeps it after (`random(host)` is a copy
-  of it, `set_random(host, random)` stores one back), also for a level parked while the server ticks another. It is `None` on a client of a server, for a stale handle and for a level that isn't open:
-  the Nether and the End open at server startup and can later close while idle. Inside a
+  of it, `set_random(host, random)` stores one back), also for a level parked while the server ticks another. It is `None` on a client of a server, for a stale handle and for a custom level that isn't open:
+  the built-in levels open at server startup and stay open until server shutdown, while custom levels can close while idle. Inside a
   restricted level hook, `with_random` on the `LevelRandomHost` draws from the same stream.
 
 - Server lifecycle hooks run once per start, on both the single-player server thread and a dedicated server.

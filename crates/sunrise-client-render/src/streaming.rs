@@ -1786,6 +1786,15 @@ impl Streaming {
     pub fn busy(&self) -> bool {
         self.chunks_in_flight() || !self.meshing.is_empty() || self.pending() != 0
     }
+    /// Whether any queued, in-flight, cached proto or extra-area work remains
+    /// for an idle parked server level to drain.
+    pub fn has_idle_work(&self) -> bool {
+        self.busy()
+            || !self.protos.is_empty()
+            || !self.extra.is_empty()
+            || !self.deferred.is_empty()
+            || self.saving != 0
+    }
     /// Whether the near terrain is still coming in: chunks generating,
     /// decorating, finishing or being lit (or their neighbours' light views),
     /// or sections meshing for the first time. Each of those is counted from
@@ -4963,6 +4972,33 @@ mod tests {
         assert!(r.in_range(30, 30, 1));
         let idle = Ranges { extra: &[], ..r };
         assert!(!idle.requested(5, -3, true) && idle.unloaded(5, -3, true));
+    }
+
+    /// An idle server level with no players, extra areas or tickets unloads its
+    /// resident chunks while the world itself stays alive.
+    #[test]
+    fn idle_level_unloads_all_unticketed_chunks() {
+        let mut world = World::new(sunrise_world::registry::BlockStateId(0), 0);
+        for key in [(0, 0), (1, -2), (-4, 5)] {
+            world
+                .chunks
+                .insert(key, Arc::new(Chunk::empty(key.0, key.1)));
+        }
+        let forced = HashSet::new();
+        let idle = Ranges {
+            center: (0, 0),
+            radius: -1,
+            extra: &[],
+            forced: &forced,
+            cover: None,
+            forced_cover: None,
+            band: None,
+        };
+        let planned = plan_unloads(&world, |x, z| idle.unloaded(x, z, true));
+        assert_eq!(planned.len(), 3);
+        let unloaded = commit_unloads(&mut world, &planned);
+        assert_eq!(unloaded.len(), 3);
+        assert!(world.chunks.is_empty());
     }
 
     /// A server player's area (`lan_update_streaming`: the server view

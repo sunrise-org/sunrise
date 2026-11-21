@@ -69,7 +69,7 @@ the opened level, whereas the Host still names the current level.
 while a player, or an arrival that has not landed, is in the level, both when it is called and
 when it is applied: move the players out first with `entity.teleport_to_level`. `NotOpen` is the
 answer for a level that is not open (or still waiting to open). The idle close the game gives
-every level without players applies too, as to any other level: a runtime level nobody is in and
+custom levels without players applies to runtime levels too: a runtime level nobody is in and
 no forced chunk holds is saved and dropped from memory after 300 ticks (`level_unload` fires), but
 it stays open: `is_open` still says true, and the level opens again from its folder, with
 `level_load`, when a player or a mod enters it. Only `unload` or `delete` closes it for good.

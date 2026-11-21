@@ -24,8 +24,9 @@ impl Game<'_> {
     /// Overworld) answers with its own stream. This is a copy of it as it
     /// stands: draw with `LevelRef::with_random`, which stores the stream
     /// back, so the draws move the level's own. `None` on a client of a
-    /// server, for a stale handle and for a level not open: the Nether and
-    /// the End open when someone first goes there and close after 300 ticks
+    /// server, for a stale handle and for a custom level not open: the
+    /// built-in levels (Overworld, Nether, End) open at server startup and
+    /// stay open until shutdown, while custom levels close after 300 ticks
     /// with nobody in them (`close_idle_levels`).
     pub(in crate::game) fn level_random(
         &self,
