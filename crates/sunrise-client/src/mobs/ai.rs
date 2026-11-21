@@ -3794,9 +3794,12 @@ pub fn feed_animal(
     }
     Some(sound)
 }
-/// `AgeableMob.canAgeUp`: a baby that no age lock holds back.
+/// `AgeableMob.canAgeUp`: a baby that no age lock holds back. `SkeletonHorse.canAgeUp` and
+/// `ZombieHorse.canAgeUp` are `false`: an undead foal never grows.
 pub fn can_age_up(m: &Mob) -> bool {
-    m.is_baby() && !m.extra.age_locked
+    m.is_baby()
+        && !m.extra.age_locked
+        && !matches!(m.species(), Species::SkeletonHorse | Species::ZombieHorse)
 }
 /// `AgeableMob.canUseGoldenDandelion`: a golden dandelion in hand, a baby
 /// whose particle timer has run out, and a type outside
@@ -6285,11 +6288,19 @@ mod age_up_tests {
 
     /// Official Java 26.3: NoAI leaves both age clocks running. AgeLocked
     /// holds a baby's age, but a positive breeding cooldown still expires.
+    /// An undead horse's `canAgeUp` is false, so its foal's age never moves.
     #[test]
     #[ignore = "daily"]
     fn age_clocks_tick_with_no_ai_and_respect_baby_age_lock() {
         let ran = crate::mobs::world::with_test_world(&[], |w, types| {
-            for species in ["pig", "cow", "horse", "turtle"] {
+            for species in [
+                "pig",
+                "cow",
+                "horse",
+                "turtle",
+                "skeleton_horse",
+                "zombie_horse",
+            ] {
                 for no_ai in [true, false] {
                     for locked in [false, true] {
                         for age in [-2, 2] {
@@ -6306,7 +6317,8 @@ mod age_up_tests {
                             let level = &mut test_level.level();
                             let expected = if age > 0 {
                                 [1, 0, 0, 0]
-                            } else if locked {
+                            } else if locked || matches!(species, "skeleton_horse" | "zombie_horse")
+                            {
                                 [-2, -2, -2, -2]
                             } else {
                                 [-1, 0, 0, 0]
