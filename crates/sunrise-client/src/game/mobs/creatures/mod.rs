@@ -5136,6 +5136,17 @@ impl Game<'_> {
             self.player_hit(&victim, "minecraft:thrown", Some(direct), amount);
         }
     }
+    /// `ThrownEnderpearl.onHit` once its owner, the acting player, stands at
+    /// `to`: the pearl's damage and the teleport sound there.
+    pub(in crate::game) fn land_pearl_owner(&mut self, to: Vec3, damage: f32) {
+        self.hurt_player_by("minecraft:ender_pearl", damage);
+        self.audio.play(
+            "minecraft:entity.player.teleport",
+            Some([to.x, to.y, to.z]),
+            1.0,
+            1.0,
+        );
+    }
     /// `projectile_hit` for a projectile the guest `conn` shot, run as them;
     /// as the host's when they have left.
     fn guest_projectile_hit(&mut self, conn: u32, p: &Projectile, hit: Hit) -> Result<()> {
@@ -6295,11 +6306,15 @@ impl Game<'_> {
                 }
                 // ThrownEnderpearl.isAllowedToTeleportOwner: an owner who is
                 // dead or asleep cannot take the pearl, so it is discarded
-                // where it lands (no teleport and no 5 damage).
+                // where it lands (no teleport and no 5 damage). An owner in
+                // another level (`getEntityInAnyDimension`) is taken as through
+                // a portal (`canUsePortal(true)`): alive is enough.
+                let owner_level = self.target_level(super::commands::Target::Player);
+                let elsewhere = p.owner == Some(Who::Player) && owner_level != self.dim;
                 let taken = self.player.as_ref().is_some_and(|pl| {
                     sunrise_client::projectiles::owner_can_take_pearl(
                         !pl.health.dead_or_dying(),
-                        self.sleeping.is_some(),
+                        !elsewhere && self.sleeping.is_some(),
                     )
                 });
                 if p.owner == Some(Who::Player) && taken && !cancel {
@@ -6316,15 +6331,35 @@ impl Game<'_> {
                         let from = pl.position;
                         self.spawn_mob_raw("minecraft:endermite", [from.x, from.y, from.z], false);
                     }
-                    // ServerPlayer.teleport: removeVehicle before the placement.
-                    section_steps::teleport_player(self, to);
-                    self.hurt_player_by("minecraft:ender_pearl", damage);
-                    self.audio.play(
-                        "minecraft:entity.player.teleport",
-                        Some([to.x, to.y, to.z]),
-                        1.0,
-                        1.0,
-                    );
+                    // `isOnPortalCooldown`: a pearl that came through a portal
+                    // and lands before its cooldown has run out gives its
+                    // owner theirs (`Entity.setPortalCooldown`).
+                    if self.pearl_on_portal_cooldown(p.id) {
+                        self.portals.player.cooldown = super::nether_portal::PLAYER_DELAY;
+                    }
+                    if elsewhere {
+                        // ServerPlayer.teleport into the pearl's level:
+                        // removeVehicle first; the damage and the sound
+                        // follow there.
+                        self.stop_riding();
+                        let teleports = self.level_teleports.len();
+                        self.teleport_across(
+                            super::commands::Target::Player,
+                            self.dim,
+                            [to.x, to.y, to.z],
+                            None,
+                            true,
+                            super::vehicle_teleport::TeleportMotion::Stop,
+                        )
+                        .ok();
+                        if let Some(t) = self.level_teleports.get_mut(teleports) {
+                            t.pearl_damage = Some(damage);
+                        }
+                    } else {
+                        // ServerPlayer.teleport: removeVehicle before the placement.
+                        section_steps::teleport_player(self, to);
+                        self.land_pearl_owner(to, damage);
+                    }
                 }
                 if let Some(Who::Mob(id)) = p.owner {
                     self.mob_pearl_teleport(p, id, hit);

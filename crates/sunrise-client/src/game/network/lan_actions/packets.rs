@@ -1306,6 +1306,7 @@ impl Game<'_> {
                     at,
                     rotation: Some([yaw, pitch]),
                     vehicle: None,
+                    pearl_damage: None,
                 });
             return;
         }

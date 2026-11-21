@@ -287,6 +287,7 @@ fn a_cross_level_teleport_returns_both_cursors_before_arrival() {
             at: [8.5, 70.0, 8.5],
             rotation: None,
             vehicle: None,
+            pearl_damage: None,
         });
         game.run_level_teleports();
 

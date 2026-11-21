@@ -226,6 +226,9 @@ pub(super) struct LevelTeleport {
     pub rotation: Option<[f32; 2]>,
     /// `TeleportTransition.asPassenger`: the vehicle already moved with its tree.
     pub vehicle: Option<u32>,
+    /// `ThrownEnderpearl.onHit` across levels: the damage its owner takes
+    /// once in the pearl's level, with the teleport sound there.
+    pub pearl_damage: Option<f32>,
 }
 
 /// A teleport a command made inside a level: told to the mods once it has
@@ -1206,6 +1209,7 @@ impl Game<'_> {
             // Facing the world spawn's angle (respawnData.yaw(), pitch()).
             rotation: Some(self.level.world_spawn_angle),
             vehicle: None,
+            pearl_damage: None,
         });
         self.run_level_teleports();
         if credits_respawn && let Some(host) = self.lan.as_mut() {
@@ -1684,6 +1688,9 @@ impl Game<'_> {
                 // The mods hear the teleport into another level, with the
                 // player's state swapped in.
                 g.native_player_teleported(uuid, &name, origin, t.at, t.dim.id());
+                if let Some(damage) = t.pearl_damage {
+                    g.land_pearl_owner(Vec3::new(t.at[0], t.at[1], t.at[2]), damage);
+                }
             });
             self.server_trips.retain(|trip| !trip.is(t.conn));
             self.server_trips.push(Trip {

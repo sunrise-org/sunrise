@@ -1754,6 +1754,7 @@ impl Game<'_> {
                 at: pos,
                 rotation,
                 vehicle: None,
+                pearl_damage: None,
             });
         Ok(true)
     }

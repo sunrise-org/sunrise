@@ -1632,10 +1632,16 @@ impl Game<'_> {
         self.as_guest(conn, |g| g.trigger_enter_block(state));
     }
 
-    /// `Entity.getPortalCooldown` of an ender pearl: only an End gateway gives
-    /// it one (zero when it has none).
+    /// `Entity.getPortalCooldown` of an ender pearl: from the End gateway or
+    /// the Nether or End portal it last went through (zero when it has none).
     pub(super) fn pearl_portal_cooldown(&self, id: u32) -> i32 {
-        self.end.gateways.get(&id).map_or(0, |t| t.cooldown())
+        let gateway = self.end.gateways.get(&id).map_or(0, |t| t.cooldown());
+        let portal = self.portals.entities.get(&id).map_or(0, |s| s.cooldown);
+        gateway.max(portal)
+    }
+    /// `Entity.isOnPortalCooldown` of the ender pearl `id` as it lands.
+    pub(super) fn pearl_on_portal_cooldown(&self, id: u32) -> bool {
+        self.pearl_portal_cooldown(id) > 0
     }
 
     /// `Entity.handlePortal` for the entities in an End gateway: they go

@@ -858,6 +858,7 @@ pub(in crate::game) mod tests {
                 at,
                 rotation: None,
                 vehicle: None,
+                pearl_damage: None,
             });
         game.run_level_teleports();
     }
