@@ -956,7 +956,7 @@ def run(package, skip, number=None, count=None, only=None, binaries=None):
         if client_half:
             # The runner's own cap (tools/ci/cargo_jobs.py --cap) when set, else the old fixed one.
             command.append(f"--jobs={os.environ.get('CI_JOBS', '8')}")
-        # What the package's tests need built first (ignored_shards.PREPARE: the command verify runs too).
+        # What the package's tests need built first (ignored_shards.PREPARE).
         if prepare := ignored_shards.PREPARE.get(package):
             built = subprocess.run(prepare, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                    errors="replace", env=env, cwd=ROOT / workspace)

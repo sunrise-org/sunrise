@@ -596,11 +596,6 @@ jobs:
       - name: Setup done
         id: setup
         run: 'true'
-      - name: Build the runtime holder test actor
-        id: actor
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && (needs.changes.outputs.rust_required != 'false') }}
-        # The command lives in tools/ci/ignored_shards.py PREPARE, which the daily run uses too.
-        run: python3 tools/ci/ignored_shards.py --prepare sunrise-mod-package $JOBS
       # Compile first, apart from running: the build's time and its slowest units show on their own.
       - name: Build Rust core test binaries
         id: core_build
@@ -643,7 +638,7 @@ jobs:
       # The guard library is built here only; the daily run does not preload it. Unix sockets remain available.
       - name: Test Rust core and voxel kernel correctness
         id: test_rust_core_and_voxel_kernel_correctness
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && (needs.changes.outputs.rust_required != 'false') && steps.core_build.outcome == 'success' && steps.actor.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && (needs.changes.outputs.rust_required != 'false') && steps.core_build.outcome == 'success' }}
         run: |
           cc -shared -fPIC -O2 -Wall -Wextra -Werror tools/ci/network_guard.c -o target/network_guard.so
           python3 tools/ci/run_test_binaries.py --jobs 3 --time-limits 2,5 --network-guard target/network_guard.so --no-data-skips -- cargo test $JOBS --profile test --workspace --lib --bins --tests

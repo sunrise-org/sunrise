@@ -318,7 +318,6 @@ class DynaRoutingTests(unittest.TestCase):
         self.assertNotIn("cargo test", static)
         self.assertNotIn("Swatinem/rust-cache", static)
         self.assertNotIn("runner-packages.txt", static)
-        self.assertIn("python3 tools/ci/ignored_shards.py --prepare sunrise-mod-package $JOBS", runtime)
         self.assertIn("cc -shared -fPIC -O2 -Wall -Wextra -Werror tools/ci/network_guard.c -o target/network_guard.so", runtime)
         self.assertIn("python3 tools/ci/run_test_binaries.py --jobs 3 --time-limits 2,5 --network-guard target/network_guard.so --no-data-skips -- cargo test $JOBS --profile test --workspace --lib --bins --tests", runtime)
         self.assertIn("cargo test $JOBS --no-fail-fast --profile test --workspace --doc", runtime)
@@ -408,7 +407,7 @@ class DynaRoutingTests(unittest.TestCase):
         self.assertLess(runtime.index("- name: Use persistent verify build artifacts"),
                         runtime.index("- name: Restore unchanged source timestamps"))
         self.assertLess(runtime.index("- name: Restore unchanged source timestamps"),
-                        runtime.index("- name: Build the runtime holder test actor"))
+                        runtime.index("- name: Build Rust core test binaries"))
         for case in ("absent", "correct-link", "directory", "file", "wrong-link", "dangling-link"):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
