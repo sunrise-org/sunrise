@@ -152,7 +152,12 @@ impl Game<'_> {
         let mut list = self.fangs.list.lift();
         #[cfg(test)]
         super::entity::taken_pass_tests::after_take(self);
+        // ServerLevel.tick: only entities in entity-ticking chunks tick.
+        let ticking = self.entity_ticking_area();
         list.retain_mut(|f| {
+            if !ticking(f.pos[0].floor() as i32, f.pos[2].floor() as i32) {
+                return true;
+            }
             f.warmup = f.warmup.wrapping_sub(1);
             if f.warmup >= 0 {
                 return true;
@@ -499,3 +504,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "fangs/ticking_tests.rs"]
+mod ticking_tests;
