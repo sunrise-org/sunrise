@@ -66,6 +66,7 @@ members = [
     "crates/sunrise-mod-api-gen/dispatch-tests",
     "crates/cargo-sunrise-mod",
     "crates/sunrise-port-pack",
+    "crates/sunrise-proxy",
     "crates/sunrise-shaders",
     "crates/sunrise-connected",
     "crates/sunrise-optifine",

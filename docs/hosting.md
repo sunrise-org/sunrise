@@ -421,6 +421,9 @@ that 0.2 comes after the dated releases and says it is up to date: run `sunrise-
 once ([versioning](versioning.md)). A stopped server is switched and starts on the new release next
 time. Set `SUNRISE_NO_UPDATE_CHECK=1` in the server's environment to turn the check off.
 
+Release checks and downloads, and the Discord webhook, use `HTTPS_PROXY` or `HTTP_PROXY` for the URL's scheme,
+falling back to `ALL_PROXY`. Local addresses and hosts in `NO_PROXY` are reached directly.
+
 ## 6. Web panel
 
 The panel runs inside `sunrise-server` while the server runs. It shows live TPS, MSPT, RAM and CPU graphs for

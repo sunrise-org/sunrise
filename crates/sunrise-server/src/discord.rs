@@ -35,10 +35,11 @@ pub fn start(shared: Arc<Shared>, settings: Discord) {
 
 fn forward(shared: &Shared, settings: &Discord) {
     let wanted = |kind: &str| settings.events.iter().any(|e| e == kind);
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(20))
-        .user_agent(concat!("sunrise-server/", env!("CARGO_PKG_VERSION")))
-        .build();
+    let agent = sunrise_proxy::agent("sunrise-server-discord", &settings.webhook, |builder| {
+        builder
+            .timeout(Duration::from_secs(20))
+            .user_agent(concat!("sunrise-server/", env!("CARGO_PKG_VERSION")))
+    });
     let font = FontRef::try_from_slice(FONT).expect("the bundled font parses");
     let mut glyphs = HashMap::new();
     let mut cursor = shared.events.lock().unwrap().after(u64::MAX, &wanted).0;

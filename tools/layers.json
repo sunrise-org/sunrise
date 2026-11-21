@@ -56,6 +56,7 @@
     "sunrise-platform": "platform",
     "sunrise-polytone": "platform",
     "sunrise-port-pack": "platform",
+    "sunrise-proxy": "platform",
     "sunrise-shader-api": "platform",
     "sunrise-shaders": "platform",
     "sunrise-theme": "platform",

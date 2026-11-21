@@ -249,7 +249,8 @@ pub struct Release {
 /// GitHub's API, or a release asset: the body of `url`.
 fn fetch(url: &str) -> Result<Vec<u8>, String> {
     let mut body = Vec::new();
-    ureq::get(url)
+    sunrise_proxy::agent("sunrise-server-update", url, std::convert::identity)
+        .get(url)
         .set("Accept", "application/vnd.github+json")
         .set("User-Agent", "sunrise-server")
         .call()
@@ -471,7 +472,10 @@ pub fn download(install: &Install, release: &Release) -> Result<PathBuf, String>
     let path = folder.join(&release.asset);
     let part = folder.join(format!("{}.part", release.asset));
     let result = (|| {
-        let mut reader = ureq::get(&release.url)
+        let url = &release.url;
+        let agent = sunrise_proxy::agent("sunrise-server-update", url, std::convert::identity);
+        let mut reader = agent
+            .get(url)
             .set("User-Agent", "sunrise-server")
             .call()
             .map_err(|e| format!("downloading {}: {e}", release.asset))?

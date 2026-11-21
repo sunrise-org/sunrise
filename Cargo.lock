@@ -529,6 +529,7 @@ dependencies = [
  "sunrise-mod-surface",
  "sunrise-native-build",
  "sunrise-port-pack",
+ "sunrise-proxy",
  "sunrise-release-sign",
  "sunrise-shader-api",
  "tar",
@@ -5096,6 +5097,7 @@ dependencies = [
  "sunrise-mod-api",
  "sunrise-mod-api-gen",
  "sunrise-mod-package",
+ "sunrise-proxy",
  "toml",
  "ureq",
  "url",
@@ -5131,6 +5133,13 @@ dependencies = [
  "sunrise-mod-runtime",
  "sunrise-threads",
  "sunrise-world",
+]
+
+[[package]]
+name = "sunrise-proxy"
+version = "0.1.0"
+dependencies = [
+ "ureq",
 ]
 
 [[package]]
@@ -5184,6 +5193,7 @@ dependencies = [
  "sha2 0.10.9",
  "sunrise-mcp",
  "sunrise-platform",
+ "sunrise-proxy",
  "sunrise-release-sign",
  "sunrise-server-launch",
  "toml",

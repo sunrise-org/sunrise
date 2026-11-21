@@ -33,11 +33,10 @@ pub(super) fn fetch(out: &Path) -> Result<(), String> {
     }
     // Request only the fixed Sunrise repository. Do not forward credentials to redirects or
     // to URLs supplied by pagination headers or Git objects.
-    let agent = ureq::AgentBuilder::new()
-        .redirects(0)
-        .timeout(Duration::from_secs(30))
-        .build();
     write_list(out, |url| {
+        let agent = sunrise_proxy::agent("cargo-sunrise-mod-registry", url, |builder| {
+            builder.redirects(0).timeout(Duration::from_secs(30))
+        });
         let mut request = agent
             .get(url)
             .set("Accept", "application/vnd.github+json")

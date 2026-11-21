@@ -27,6 +27,7 @@ sunrise-mod-surface = { path = "../sunrise-mod-surface" }
 sunrise-shader-api = { path = "../sunrise-shader-api" }
 sunrise-release-sign = { path = "../sunrise-release-sign" }
 sunrise-port-pack = { path = "../sunrise-port-pack" }
+sunrise-proxy = { path = "../sunrise-proxy" }
 rustc-demangle = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.151"

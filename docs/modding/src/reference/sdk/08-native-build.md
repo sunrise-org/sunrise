@@ -53,8 +53,10 @@ Each line is an object whose `event` names it.
 | `built` | `route`, `binary`, `libraries`, `records`, `mods`, `internals`, `mixins`, `used` | The executable and the libraries to install beside it, in load order; `records` is each library's identity, the build record's `libraries`: one row per library, the patch library included, whose `identity` is `<build id> <mod id> <version> <rustc release> unwind` (the panic strategy the library's entry reports; the loader refuses `abort`); `route` is `prebuilt-api` or `prebuilt`, as the record names it; `mods` is the compiled mods in dependency order. `internals` has each compiled mod's `[[internals]]` by mod id, every absent `hash` taken from the SDK's catalog, as the build record keeps them; `mixins` is the horizon-mixins revision the build ran; `used` lists the kept folders and files under `work` it used, for a caller's cache to count as used. |
 | `failed` | `error`, `blame`, `used` | Why it did not build, as the build log ends with it. `blame` is `null`, or the mod the error is that mod's own and how: `{"mod": id, "kind": "compile" \| "build-script" \| "features"}`, the one a caller leaves out next time. `used` as for `built`. |
 
-What it downloads (the horizon-mixins tool, a mod's GitHub source) goes through the proxy its environment names:
-`HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY`, with the hosts `NO_PROXY` lists reached directly. A caller with a proxy setting of its own passes it in those variables.
+The mod tool uses `HTTPS_PROXY` or `HTTP_PROXY` for the URL's scheme, falling back to `ALL_PROXY`, for SDK downloads,
+registry release discovery and native-build downloads (such as the horizon-mixins tool or a mod's GitHub source).
+Local addresses and hosts in `NO_PROXY` are reached directly. A caller with a proxy setting of its own passes it
+in those variables.
 
 The tool never edits an instance, never selects a version and never installs anything outside `work`.
 
