@@ -2290,7 +2290,7 @@ impl Game<'_> {
             a.spawn_velocity = Some(p.velocity);
             a.spawn_rot = Some((p.pitch, p.yaw));
         }
-        self.creatures.projectiles.push(p);
+        self.creatures.projectiles.push_in_join_order(p);
         self.native_projectile_launch(player, &name, id, kind);
         id
     }

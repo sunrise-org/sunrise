@@ -991,6 +991,16 @@ impl<T: Joined, const DIRECT: bool> JoinList<T, DIRECT> {
             binding.entity(&self.0[index], residency::Change::Install);
         }
     }
+    /// `EntityTickList`: a numbered entity that never left its level goes back before the first that joined after it; a new one goes last.
+    pub fn push_in_join_order(&mut self, entity: T) {
+        let seq = entity.join_seq();
+        let at = seq
+            .is_joined()
+            .then(|| self.0.iter().position(|q| q.join_seq() > seq))
+            .flatten()
+            .unwrap_or(self.0.len());
+        self.insert(at, entity);
+    }
     pub fn extend(&mut self, entities: impl IntoIterator<Item = T>) {
         self.written();
         for entity in entities {
@@ -1124,6 +1134,24 @@ mod tests {
         let seqs: Vec<_> = list.iter().map(|e| e.join).collect();
         assert!(seqs.windows(2).all(|w| w[0] < w[1]), "{seqs:?}");
         assert_eq!(seqs.len(), 4);
+    }
+
+    #[test]
+    fn a_numbered_entity_pushed_again_keeps_its_join_order() {
+        let mut list: JoinList<E> = JoinList::default();
+        for _ in 0..3 {
+            list.push(E {
+                join: JoinSeq::UNJOINED,
+            });
+        }
+        let joins: Vec<_> = list.iter().map(|e| e.join).collect();
+        let a = list.remove(0);
+        list.push_in_join_order(a);
+        assert_eq!(list.iter().map(|e| e.join).collect::<Vec<_>>(), joins);
+        list.push_in_join_order(E {
+            join: JoinSeq::UNJOINED,
+        });
+        assert!(list[3].join > joins[2]);
     }
 
     fn entity(value: u32) -> Entity {
