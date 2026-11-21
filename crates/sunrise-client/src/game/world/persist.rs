@@ -871,6 +871,9 @@ impl Game<'_> {
                         delay,
                         owner,
                     );
+                    let last = self.fangs.list.len() - 1;
+                    let motion = entity_nbt::loaded_motion(&tag);
+                    self.fangs.list.update(last, |f| f.motion = motion);
                     let uuid = with_constructor_uuid(uuid);
                     self.remember(id, uuid, tag);
                 }

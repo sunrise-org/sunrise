@@ -370,6 +370,11 @@ impl Game<'_> {
                 );
                 // Entity.saveWithoutId's common fields, also for a cloud never saved.
                 crate::game::persist::write_static_entity_fields(&mut tag);
+                set_key(
+                    &mut tag,
+                    "fall_distance",
+                    Tag::Double(c.fall_distance.to_bits()),
+                );
                 set_key(&mut tag, "Age", Tag::Int(c.age));
                 set_key(&mut tag, "Duration", Tag::Int(c.duration));
                 set_key(&mut tag, "Radius", Tag::Float(c.radius.to_bits()));
@@ -636,6 +641,7 @@ impl Game<'_> {
                 if let Some(i) = self.fangs.list.iter().position(|e| e.id == id) {
                     self.fangs.list.update(i, |f| {
                         f.pos = [at.x, at.y, at.z];
+                        f.motion = entity_nbt::loaded_motion(&tag);
                         f.yaw = entity_nbt::rotation(&tag)[0];
                         f.warmup =
                             sunrise_client::save::number(tag.get("Warmup")).unwrap_or(0) as i32;

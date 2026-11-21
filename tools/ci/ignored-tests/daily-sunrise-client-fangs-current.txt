@@ -1,0 +1,1 @@
+sunrise-client game::fangs::current_tests::fangs_in_a_current_are_pushed_and_fangs_in_still_water_are_not lib daily resources
