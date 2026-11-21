@@ -17,6 +17,27 @@ pub struct PosRot {
 }
 
 impl PosRot {
+    /// `Entity.setRot`, as `setPos`/`setRot` place an entity at a step: the
+    /// yaw kept within a turn (`yRot % 360.0F`), the pitch too, both through
+    /// `setYRot` and `setXRot`.
+    pub fn set_rot(&mut self, yaw: f32, pitch: f32) {
+        self.set_y_rot(yaw % 360.0);
+        self.set_x_rot(pitch % 360.0);
+    }
+    /// `Entity.setYRot` (`snapTo` calls it with the packet's yaw as it is):
+    /// a yaw that isn't finite is discarded, keeping the old one.
+    pub fn set_y_rot(&mut self, yaw: f32) {
+        if yaw.is_finite() {
+            self.yaw = yaw;
+        }
+    }
+    /// `Entity.setXRot`: the pitch within a turn and clamped to ±90; one that
+    /// isn't finite is discarded.
+    pub fn set_x_rot(&mut self, pitch: f32) {
+        if pitch.is_finite() {
+            self.pitch = (pitch % 360.0).clamp(-90.0, 90.0);
+        }
+    }
     /// `PositionAndRotation.is`: the same rotation and `Vec3.equals`
     /// position (`Double.compare`, so -0.0 is not 0.0).
     fn is(&self, position: [f64; 3], yaw: f32, pitch: f32) -> bool {
@@ -75,6 +96,9 @@ pub struct SteppedInterpolation {
     /// `AbstractInterpolationHandler.lastPositionAndRotation`: where the
     /// handler last left the entity.
     placed: PosRot,
+    /// The turn the entity made by itself since then, which the next step
+    /// adds to the target and its steps.
+    turn: (f32, f32),
 }
 
 /// `Mth.wrapDegrees(float)`.
@@ -111,6 +135,7 @@ impl SteppedInterpolation {
             remaining_ticks: 0.0,
             speed: 1.0,
             placed: PosRot::default(),
+            turn: (0.0, 0.0),
         }
     }
     /// `hasActiveInterpolation`.
@@ -190,17 +215,23 @@ impl SteppedInterpolation {
             self.cancel();
             return None;
         }
+        // adjustInterpolationTargetFromDeltas' addRotation: the entity's own
+        // turn `follow` measured, else +0.0, which still makes a -0.0 angle 0.0.
+        let (yaw, pitch) = std::mem::take(&mut self.turn);
+        self.add_rotation(yaw, pitch);
         // doInterpolate: getNewPositionAndRotation, then advance by the
         // level's relative tick speed (1 at the normal tick rate).
         let at = self.new_position();
         self.advance(1.0);
         // setLastPositionAndRotation: the rotation setRot applied (setXRot clamps the
-        // pitch), so only the entity's own turns move the steps later.
-        self.placed = PosRot {
-            yaw: at.yaw % 360.0,
-            pitch: (at.pitch % 360.0).clamp(-90.0, 90.0),
-            ..at
+        // pitch, an angle that isn't finite is kept), so only the entity's own turns move
+        // the steps later.
+        let mut placed = PosRot {
+            position: at.position,
+            ..self.placed
         };
+        placed.set_rot(at.yaw, at.pitch);
+        self.placed = placed;
         Some(at)
     }
     /// `adjustInterpolationTargetFromDeltas`, at the start of `interpolate`:
@@ -220,10 +251,12 @@ impl SteppedInterpolation {
             }
         }
         // The client's yaw may be a whole turn from the handler's.
-        self.add_rotation(
+        self.turn = (
             wrap_degrees(entity.yaw - self.placed.yaw),
             entity.pitch - self.placed.pitch,
         );
+        // Where `interpolate`'s setRot starts from.
+        self.placed = entity;
     }
     /// `InterpolationData.addDelta`: the target, every step left and the
     /// step being walked from move by `delta`.
@@ -393,6 +426,20 @@ mod tests {
         // Four packets a tick apart: 12 ticks of steps, walked in fewer.
         assert!(ticks < 12, "{ticks}");
         assert_eq!(entity.position[0], 4.0);
+    }
+
+    #[test]
+    fn a_step_keeps_the_yaw_within_a_turn_and_a_snap_does_not() {
+        let mut r = PosRot::default();
+        r.set_rot(570.0, 100.0);
+        assert_eq!((r.yaw, r.pitch), (210.0, 90.0));
+        r.set_rot(-490.0, f32::NAN);
+        assert_eq!((r.yaw, r.pitch), (-130.0, 90.0));
+        r.set_rot(f32::INFINITY, -400.0);
+        assert_eq!((r.yaw, r.pitch), (-130.0, -40.0));
+        r.set_y_rot(570.0);
+        r.set_x_rot(f32::NEG_INFINITY);
+        assert_eq!((r.yaw, r.pitch), (570.0, -40.0));
     }
 
     #[test]

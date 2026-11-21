@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Compare how a client walks a living entity along its server's positions with vanilla.
 
-Vanilla's unmodified SteppedInterpolationHandler.InterpolationData (VanillaSteppedInterpolationOracle
-drives it as the handler does) and sunrise-world's SteppedInterpolation replay the same packets and
-client ticks: move packets with and without a position or rotation, straight or stepped paths,
-repeats of the one the entity is headed for, packets a tick apart that pile up and others after it
-stopped, for update intervals of 1 to 3 ticks, plus a punched pig's knockback as the server sends it
-(its first move at once, `needsSync`, then every update interval). The entity's position and rotation
-after every event must match bit for bit. The handler's entity hooks (deltas, passengers) are out of
-scope.
+A real pig in a client level, moved by vanilla's own `Entity.moveOrInterpolateTo`, its
+SteppedInterpolationHandler and `Entity.setRot` (VanillaSteppedInterpolationOracle), and sunrise-world's
+SteppedInterpolation with `PosRot::set_rot` replay the same packets and client ticks: move packets with
+and without a position or rotation, straight or stepped paths, repeats of the one the entity is headed
+for, packets a tick apart that pile up and others after it stopped, for update intervals of 1 to 3
+ticks, turns past a full circle, pitches past the ±90 clamp, rotations that aren't finite (which
+`setYRot`/`setXRot` discard), plus a punched pig's knockback as the server sends it (its first move at
+once, `needsSync`, then every update interval). The entity's position and rotation after every event
+must match bit for bit. The game places mobs with the same `PosRot::set_rot`. Nothing else moves the
+entity (riding, physics).
 """
 import os
 import random
@@ -33,8 +35,19 @@ def rotation(rng):
     return [round(rng.uniform(-400, 400), rng.choice([0, 1, 3])), round(rng.uniform(-120, 120), rng.choice([0, 2]))]
 
 
+# Rotations a teleport can carry as raw floats, which Entity.setYRot and setXRot discard.
+NON_FINITE = ['NaN', 'Infinity', '-Infinity']
+
+
+def angle(v):
+    """A rotation as both sides parse it."""
+    return v if isinstance(v, str) else repr(v)
+
+
 def cases(count, seed):
     rng = random.Random(seed)
+    # Its own stream, so the non-finite rotations leave the other cases as they were.
+    odd = random.Random(seed + 2)
     lines = []
     for interval in (1, 2, 3):
         # The knockback: a packet for the hit tick's move, then every interval (each phase).
@@ -71,7 +84,9 @@ def cases(count, seed):
                     p = position(rng, p) if rng.random() < 0.9 else p
                     line = f'move L {p[0]!r} {p[1]!r} {p[2]!r}'
                 rot = rotation(rng) if rng.random() < 0.6 else None
-                line += f' R {rot[0]!r} {rot[1]!r}' if rot else ' -'
+                if rot and odd.random() < 0.03:
+                    rot[odd.randrange(2)] = odd.choice(NON_FINITE)
+                line += f' R {angle(rot[0])} {angle(rot[1])}' if rot else ' -'
             last = line
             lines.append(line)
             lines += ['tick'] * rng.choice([0, 1, 1, 2, 3, 6])
