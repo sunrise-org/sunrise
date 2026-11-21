@@ -8,6 +8,7 @@
 //! inaccessible. A method moves into a one-method trait implemented for its own type, so `self`,
 //! `Self` and the helpers' bindings stay as written. horizon-mixins then patches the copies, and
 //! the game installs each through its function's replacement slot (`__fnr_<name>`).
+use crate::source::unraw;
 use quote::{ToTokens, format_ident, quote};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -711,60 +712,58 @@ pub(crate) fn replaceable(
     reexports::check_body(source, &found.module, sig, &found.function.block)
 }
 
-/// The names a module's own items define, for explicit re-export (an explicit name outranks the
-/// module's glob imports, as the item itself did).
-fn defined(items: &[Item]) -> Vec<(syn::Ident, Vec<syn::Attribute>)> {
-    let cfg = |attrs: &[syn::Attribute]| {
-        attrs
-            .iter()
-            .filter(|attr| attr.path().is_ident("cfg"))
-            .cloned()
-            .collect::<Vec<_>>()
+/// An item's own definition, before filtering for re-export.
+fn definition(item: &Item) -> Option<(&syn::Ident, &[syn::Attribute])> {
+    let (ident, attrs) = match item {
+        Item::Fn(item) => (&item.sig.ident, &item.attrs),
+        Item::Struct(item) => (&item.ident, &item.attrs),
+        Item::Enum(item) => (&item.ident, &item.attrs),
+        Item::Union(item) => (&item.ident, &item.attrs),
+        Item::Const(item) => (&item.ident, &item.attrs),
+        Item::Static(item) => (&item.ident, &item.attrs),
+        Item::Type(item) => (&item.ident, &item.attrs),
+        Item::Trait(item) => (&item.ident, &item.attrs),
+        Item::Mod(item) => (&item.ident, &item.attrs),
+        _ => return None,
     };
-    // Test-only items are not in the prebuilt game.
-    let test_only = |attrs: &[syn::Attribute]| {
-        attrs.iter().any(|attr| {
-            attr.path().is_ident("test")
-                || (attr.path().is_ident("cfg")
-                    && attr.to_token_stream().to_string().contains("test"))
-        })
+    Some((ident, attrs))
+}
+
+/// The condition an attribute puts on an item's existence. `cfg_attr(P, ...)` imposes
+/// its nested conditions only when P holds; other nested attributes need not apply to a use.
+fn cfg_predicate(meta: &syn::Meta) -> Option<proc_macro2::TokenStream> {
+    let syn::Meta::List(list) = meta else {
+        return None;
     };
-    items
-        .iter()
-        .filter(|item| {
-            let attrs = match item {
-                Item::Fn(item) => &item.attrs,
-                Item::Mod(item) => &item.attrs,
-                Item::Struct(item) => &item.attrs,
-                Item::Enum(item) => &item.attrs,
-                Item::Const(item) => &item.attrs,
-                Item::Static(item) => &item.attrs,
-                Item::Type(item) => &item.attrs,
-                Item::Trait(item) => &item.attrs,
-                Item::Union(item) => &item.attrs,
-                _ => return true,
-            };
-            !test_only(attrs)
+    let cfg = list.path.is_ident("cfg");
+    if !cfg && !list.path.is_ident("cfg_attr") {
+        return None;
+    }
+    let (when, conditions) = list
+        .parse_args_with(|input: syn::parse::ParseStream| {
+            // Keep Rust's cfg predicate tokens verbatim (including `true` and `false`,
+            // which aren't attribute metadata), but leave out the separating comma.
+            let mut when = proc_macro2::TokenStream::new();
+            while !input.is_empty() && !input.peek(syn::Token![,]) {
+                when.extend([input.parse::<proc_macro2::TokenTree>()?]);
+            }
+            input.parse::<Option<syn::Token![,]>>()?;
+            let attrs =
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated(input)?;
+            Ok((
+                when,
+                attrs.iter().filter_map(cfg_predicate).collect::<Vec<_>>(),
+            ))
         })
-        .filter_map(|item| match item {
-            Item::Fn(item) => Some((item.sig.ident.clone(), cfg(&item.attrs))),
-            Item::Struct(item) => Some((item.ident.clone(), cfg(&item.attrs))),
-            Item::Enum(item) => Some((item.ident.clone(), cfg(&item.attrs))),
-            Item::Union(item) => Some((item.ident.clone(), cfg(&item.attrs))),
-            Item::Const(item) => Some((item.ident.clone(), cfg(&item.attrs))),
-            Item::Static(item) => Some((item.ident.clone(), cfg(&item.attrs))),
-            Item::Type(item) => Some((item.ident.clone(), cfg(&item.attrs))),
-            Item::Trait(item) => Some((item.ident.clone(), cfg(&item.attrs))),
-            Item::Mod(item) => Some((item.ident.clone(), cfg(&item.attrs))),
-            _ => None,
-        })
-        .filter(|(ident, attrs)| {
-            ident != "tests"
-                && !attrs
-                    .iter()
-                    .any(|a| a.to_token_stream().to_string().contains("test"))
-        })
-        .collect()
+        .ok()?;
+    if cfg {
+        return Some(when);
+    }
+    (!conditions.is_empty()).then(|| quote!(any(not(#when), all(#(#conditions),*))))
+}
+
+fn cfg_predicates(attrs: &[syn::Attribute]) -> impl Iterator<Item = proc_macro2::TokenStream> {
+    attrs.iter().filter_map(|attr| cfg_predicate(&attr.meta))
 }
 
 /// A module's own `macro_rules!` items that it does not export.
@@ -1567,26 +1566,22 @@ fn mirror(
     // Which `thread_local!` is std's: a bare one unless another macro of that name may be in
     // scope, and `std::thread_local!` unless the module may bind `std` to something else.
     // `::std::thread_local!` always is. Unresolved, the module keeps the glob.
+    let defined = items.iter().filter_map(definition);
     let bare_is_std = !source.local_macros.contains("thread_local")
         && !macro_may_be_in_scope(source, path, "thread_local")
         && !uses(&items)
             .iter()
-            .any(|item| may_import(&item.tree, "thread_local"));
+            .any(|item| may_import(&item.tree, None, "thread_local"));
     let std_is_std = !uses(&items)
         .iter()
-        .any(|item| may_import(&item.tree, "std"))
-        && !defined(&items).iter().any(|(ident, _)| ident == "std")
+        .any(|item| may_import(&item.tree, None, "std"))
+        && !defined
+            .clone()
+            .any(|(ident, attrs)| unraw(ident) == "std" && !mod_source::modules::test_only(attrs))
         && !items.iter().any(|item| {
             matches!(item, Item::ExternCrate(krate)
-                if krate.rename.as_ref().is_some_and(|(_, name)| name == "std"))
+                if krate.rename.as_ref().is_some_and(|(_, name)| unraw(name) == "std"))
         });
-    let cfgs = |attrs: &[syn::Attribute]| {
-        attrs
-            .iter()
-            .filter(|attr| attr.path().is_ident("cfg"))
-            .cloned()
-            .collect::<Vec<_>>()
-    };
     let mut glob = false;
     let mut thread_locals = Vec::new();
     for item in &items {
@@ -1600,8 +1595,9 @@ fn mirror(
                         .into_iter()
                         .filter(|item| matches!(item.vis, syn::Visibility::Public(_)))
                         .map(|item| {
-                            let mut cfg = cfgs(&mac.attrs);
-                            cfg.extend(cfgs(&item.attrs));
+                            let cfg: Vec<_> = cfg_predicates(&mac.attrs)
+                                .chain(cfg_predicates(&item.attrs))
+                                .collect();
                             (item.ident, cfg)
                         }),
                 ),
@@ -1612,13 +1608,23 @@ fn mirror(
     public.extend(thread_locals.iter().map(|(ident, _)| ident.to_string()));
     // One `pub use` brings every namespace a name has: `pub mod render;` beside
     // `pub fn render` is one re-export, under the cfg either item is compiled under.
-    let mut names: Vec<(syn::Ident, Vec<Vec<syn::Attribute>>)> = Vec::new();
-    for (ident, cfg) in defined(&items)
-        .into_iter()
+    let mut names: Vec<(syn::Ident, Vec<Vec<proc_macro2::TokenStream>>)> = Vec::new();
+    // Keep the prebuilt game's test-item filter on re-exports, not on binding detection.
+    let re_exported = defined
+        .filter(|(ident, attrs)| *ident != "tests" && !mod_source::modules::test_only(attrs))
+        .map(|(ident, attrs)| (ident.clone(), cfg_predicates(attrs).collect()));
+    // A lower crate is compiled with its own features, but the patch crate with the game's, so a
+    // condition on a feature can't be decided here: the glob brings such an item where it exists.
+    let lower = path.split("::").next() != Some("sunrise_client");
+    for (ident, cfg) in re_exported
         .chain(thread_locals)
         .filter(|(ident, _)| !reserved.contains(&ident.to_string()))
         .filter(|(ident, _)| !only_public || public.contains(&ident.to_string()))
     {
+        if lower && cfg.iter().any(names_feature) {
+            glob = true;
+            continue;
+        }
         match names.iter_mut().find(|(name, _)| *name == ident) {
             Some((_, cfgs)) => cfgs.push(cfg),
             None => names.push((ident, vec![cfg])),
@@ -1626,16 +1632,10 @@ fn mirror(
     }
     let explicit = names.into_iter().map(|(ident, cfgs)| {
         let cfg = match cfgs.as_slice() {
-            [cfg] => quote!(#(#cfg)*),
+            [cfg] => quote!(#(#[cfg(#cfg)])*),
             _ if cfgs.iter().any(Vec::is_empty) => quote!(),
             _ => {
-                let each = cfgs.iter().map(|attrs| {
-                    let predicates = attrs
-                        .iter()
-                        .filter_map(|attr| attr.meta.require_list().ok())
-                        .map(|list| &list.tokens);
-                    quote!(all(#(#predicates),*))
-                });
+                let each = cfgs.iter().map(|cfg| quote!(all(#(#cfg),*)));
                 quote!(#[cfg(any(#(#each),*))])
             }
         };
@@ -1884,13 +1884,34 @@ fn macro_may_be_in_scope(source: &mut Source, path: &str, name: &str) -> bool {
     (1..=segments.len()).any(|end| within(source, &segments[..end].join("::"), name))
 }
 
+/// Whether a cfg predicate reads a Cargo feature.
+fn names_feature(predicate: &proc_macro2::TokenStream) -> bool {
+    predicate.clone().into_iter().any(|tree| match tree {
+        proc_macro2::TokenTree::Ident(ident) => ident == "feature",
+        proc_macro2::TokenTree::Group(group) => names_feature(&group.stream()),
+        _ => false,
+    })
+}
+
+/// The binding of an unaliased import: `use x::name::{self}` binds `name`.
+fn use_binding<'a>(ident: &'a syn::Ident, prefix: Option<&'a syn::Ident>) -> &'a syn::Ident {
+    if ident == "self" {
+        prefix.unwrap_or(ident)
+    } else {
+        ident
+    }
+}
+
 /// Whether `tree` may bring `name` into scope: it binds it, or it has a glob.
-fn may_import(tree: &syn::UseTree, name: &str) -> bool {
+fn may_import(tree: &syn::UseTree, prefix: Option<&syn::Ident>, name: &str) -> bool {
     match tree {
-        syn::UseTree::Path(path) => may_import(&path.tree, name),
-        syn::UseTree::Group(group) => group.items.iter().any(|item| may_import(item, name)),
-        syn::UseTree::Name(binding) => binding.ident == name,
-        syn::UseTree::Rename(rename) => rename.rename == name,
+        syn::UseTree::Path(path) => may_import(&path.tree, Some(&path.ident), name),
+        syn::UseTree::Group(group) => group
+            .items
+            .iter()
+            .any(|item| may_import(item, prefix, name)),
+        syn::UseTree::Name(binding) => unraw(use_binding(&binding.ident, prefix)) == name,
+        syn::UseTree::Rename(rename) => unraw(&rename.rename) == name,
         syn::UseTree::Glob(_) => true,
     }
 }
@@ -1924,14 +1945,11 @@ fn filter_use_tree(
                 .collect();
             (!group.items.is_empty()).then_some(Group(group))
         }
-        Name(ref name) => {
-            let binding = if name.ident == "self" {
-                prefix.unwrap_or(&name.ident)
-            } else {
-                &name.ident
-            };
-            keep(&binding.to_string(), root.unwrap_or(&name.ident)).then_some(tree)
-        }
+        Name(ref name) => keep(
+            &use_binding(&name.ident, prefix).to_string(),
+            root.unwrap_or(&name.ident),
+        )
+        .then_some(tree),
         Rename(ref rename) => (rename.rename == "_"
             || keep(&rename.rename.to_string(), root.unwrap_or(&rename.ident)))
         .then_some(tree),
@@ -2330,6 +2348,105 @@ mod tests {
             out.contains("#[cfg(unix)]#[cfg(not(test))]pubuse::lower::anim::RELEASED;"),
             "{out}"
         );
+    }
+
+    #[test]
+    fn re_exports_keep_conditions_added_by_cfg_attr() {
+        let mut source = source_of(
+            "lower::anim",
+            r#"
+            #[cfg_attr(true, cfg(unix,), cfg(target_pointer_width = "64"))]
+            thread_local! {
+                #[cfg_attr(windows, cfg_attr(target_env = "msvc", cfg(target_arch = "x86_64")))]
+                pub static SHARED: u8 = 0;
+            }
+            #[cfg_attr(windows, cfg(target_arch = "aarch64"), inline)]
+            pub fn ordinary() {}
+            #[cfg(unix)]
+            pub mod ordinary {}
+            "#,
+        );
+        let out = mirror(&mut source, "lower::anim", &with_a_copy(), &[], None)
+            .unwrap()
+            .to_string()
+            .replace(' ', "");
+        assert!(!out.contains("pubuse::lower::anim::*;"), "{out}");
+        assert!(
+            out.contains(concat!(
+                r#"#[cfg(any(not(true),all(unix,target_pointer_width="64")))]"#,
+                r#"#[cfg(any(not(windows),all(any(not(target_env="msvc"),all(target_arch="x86_64")))))]"#,
+                "pubuse::lower::anim::SHARED;",
+            )),
+            "{out}"
+        );
+        assert!(
+            out.contains(concat!(
+                r#"#[cfg(any(all(any(not(windows),all(target_arch="aarch64"))),all(unix)))]"#,
+                "pubuse::lower::anim::ordinary;",
+            )),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_thread_local_under_a_gated_std_module_keeps_the_glob() {
+        let out = |text: &str| {
+            let mut source = source_of("lower::anim", text);
+            mirror(&mut source, "lower::anim", &with_a_copy(), &[], None)
+                .unwrap()
+                .to_string()
+                .replace(' ', "")
+        };
+        let thread_local = "std::thread_local! { pub static SHARED: u8 = 0; }";
+        for gated in [
+            "#[cfg(not(test))] mod std {}",
+            "#[cfg(not(test))] mod r#std {}",
+        ] {
+            let out = out(&format!("{gated} {thread_local}"));
+            assert!(out.contains("pubuse::lower::anim::*;"), "{out}");
+            assert!(!out.contains("pubuse::lower::anim::SHARED;"), "{out}");
+        }
+        // A test-only `std` doesn't exist in the build, and a release item stays named.
+        let out = out(&format!(
+            "#[cfg(test)] mod std {{}} #[cfg(not(test))] pub fn release() {{}} {thread_local}"
+        ));
+        assert!(!out.contains("pubuse::lower::anim::*;"), "{out}");
+        assert!(out.contains("pubuse::lower::anim::SHARED;"), "{out}");
+        assert!(out.contains("pubuse::lower::anim::release;"), "{out}");
+    }
+
+    #[test]
+    fn a_lower_crate_item_gated_on_a_feature_comes_through_the_glob() {
+        let mut source = source_of(
+            "lower::anim",
+            r#"#[cfg_attr(feature = "default", cfg(any()))]
+            pub fn helper() {}
+            #[cfg(unix)]
+            pub fn plain() {}"#,
+        );
+        let out = mirror(&mut source, "lower::anim", &with_a_copy(), &[], None)
+            .unwrap()
+            .to_string()
+            .replace(' ', "");
+        assert!(out.contains("pubuse::lower::anim::*;"), "{out}");
+        assert!(!out.contains("pubuse::lower::anim::helper;"), "{out}");
+        assert!(out.contains("pubuse::lower::anim::plain;"), "{out}");
+    }
+
+    #[test]
+    fn a_thread_local_with_a_grouped_std_self_import_keeps_the_glob() {
+        for import in ["use other::std::{self};", "use other::r#std::{self};"] {
+            let mut source = source_of(
+                "lower::anim",
+                &format!("{import} std::thread_local! {{ pub static SHARED: u8 = 0; }}"),
+            );
+            let out = mirror(&mut source, "lower::anim", &with_a_copy(), &[], None)
+                .unwrap()
+                .to_string()
+                .replace(' ', "");
+            assert!(out.contains("pubuse::lower::anim::*;"), "{out}");
+            assert!(!out.contains("pubuse::lower::anim::SHARED;"), "{out}");
+        }
     }
 
     #[test]
