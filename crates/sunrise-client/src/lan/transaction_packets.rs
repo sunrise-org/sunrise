@@ -1,6 +1,6 @@
 //! Scoped packet capture for a tentative server action. Reserve each body's retained bytes as
 //! it enters the batch; rollback releases reservations, commit transfers them to normal output.
-use super::{Body, PlayerSender, io_pool};
+use super::{Body, PlayerSender};
 use std::{cell::RefCell, marker::PhantomData, rc::Rc, sync::atomic::Ordering};
 
 thread_local! {
@@ -19,8 +19,26 @@ const JOURNAL_CHARGE: usize = 2 * std::mem::size_of::<ReservedBody>();
 
 struct ReservedBody {
     sender: PlayerSender,
-    body: Option<Body>,
+    body: Option<Run>,
     cost: usize,
+    journal_cost: usize,
+}
+
+pub(super) enum Run {
+    One(Body),
+    Many(Vec<Body>),
+}
+
+impl From<Body> for Run {
+    fn from(body: Body) -> Self {
+        Self::One(body)
+    }
+}
+
+impl From<Vec<Body>> for Run {
+    fn from(bodies: Vec<Body>) -> Self {
+        Self::Many(bodies)
+    }
 }
 
 impl Drop for ReservedBody {
@@ -36,12 +54,14 @@ impl Packets {
     pub fn publish(self) {
         debug_assert!(!self.failed);
         for mut packet in self.bodies {
-            let body = packet.body.take().expect("reserved body");
-            packet
-                .sender
+            let sender = &packet.sender;
+            sender
                 .pending
-                .fetch_sub(JOURNAL_CHARGE, Ordering::AcqRel);
-            packet.sender.publish_reserved(body);
+                .fetch_sub(packet.journal_cost, Ordering::AcqRel);
+            match packet.body.take().expect("reserved body") {
+                Run::One(body) => sender.publish_reserved(body),
+                Run::Many(bodies) => sender.publish_reserved_many(bodies),
+            }
         }
     }
 }
@@ -99,7 +119,11 @@ pub(super) fn active() -> bool {
     SCOPES.with(|s| !s.borrow().is_empty())
 }
 
-pub(super) fn capture(sender: &PlayerSender, body: Body) -> Result<(), Body> {
+pub(super) fn capture<T: Into<Run>>(
+    sender: &PlayerSender,
+    body: T,
+    queued: usize,
+) -> Result<(), T> {
     SCOPES.with(|s| {
         let mut scopes = s.borrow_mut();
         let Some(packets) = scopes.last_mut() else {
@@ -108,12 +132,19 @@ pub(super) fn capture(sender: &PlayerSender, body: Body) -> Result<(), Body> {
         if packets.failed {
             return Ok(());
         }
-        let cost = io_pool::charge(body.retained()).saturating_add(JOURNAL_CHARGE);
+        let body = body.into();
+        let journal_cost = JOURNAL_CHARGE
+            + match &body {
+                Run::One(_) => 0,
+                Run::Many(bodies) => std::mem::size_of::<Body>() * bodies.capacity(),
+            };
+        let cost = queued.saturating_add(journal_cost);
         if sender.reserve(cost) {
             packets.bodies.push(ReservedBody {
                 sender: sender.clone(),
                 body: Some(body),
                 cost,
+                journal_cost,
             });
         } else {
             // Refuse the complete take even if this child is abandoned before it can merge.
@@ -128,7 +159,7 @@ pub(super) fn capture(sender: &PlayerSender, body: Body) -> Result<(), Body> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lan::conn::Out;
+    use crate::lan::{conn::Out, io_pool};
     use std::sync::{Arc, mpsc};
 
     #[test]
@@ -152,8 +183,8 @@ mod tests {
         assert!(rx.try_recv().is_err());
         outer.finish().unwrap().publish();
         assert_eq!(sender.queued().1, 3 * charge);
-        for expected in 1..=3 {
-            assert!(matches!(rx.try_recv().unwrap(), Out::Packet(body) if body == [expected]));
+        for value in [1, 2, 3] {
+            assert!(matches!(rx.try_recv().unwrap(), Out::Packet(body) if body == [value]));
         }
         sender.pending.store(0, Ordering::Relaxed); // The test channel has no network drain.
 
@@ -172,5 +203,13 @@ mod tests {
         drop(outer);
         assert_eq!(sender.queued().1, 0);
         assert!(rx.try_recv().is_err());
+
+        let bundle = Scope::begin();
+        sender.send_batch([vec![8], vec![9]]);
+        assert!(rx.try_recv().is_err());
+        bundle.finish().unwrap().publish();
+        assert_eq!(sender.queued().1, 2 * charge);
+        assert!(matches!(rx.try_recv().unwrap(), Out::Packets(bodies)
+            if bodies == [vec![8], vec![9]]));
     }
 }

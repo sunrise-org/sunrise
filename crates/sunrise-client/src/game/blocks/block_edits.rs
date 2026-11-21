@@ -45,9 +45,13 @@ impl Game<'_> {
         };
         let tags = [&self.res.items().block_tags, &world_items.block_tags];
         let facts = self.res.facts();
+        let journaled_groups = self
+            .transactions
+            .journaled_connection_group_positions(self.dim);
         let watched = std::mem::take(&mut self.world.watched);
         let out = self.world.edit_runs(
             &runs,
+            &journaled_groups,
             |f, s| {
                 super::commands::block_input_matches(
                     registry,
@@ -65,6 +69,10 @@ impl Game<'_> {
             },
         );
         self.world.watched = watched;
+        if !out.group_clears.is_empty() {
+            self.transactions
+                .reconcile_bulk_connection_group_clears(self.dim, &out.group_clears);
+        }
         // The block entities the new blocks bring, as `native_set_block` makes them (a mod block's own,
         // included), in the order `replace_block_entities` takes them: the positions needing a fresh entity.
         let name = |s: u32| self.res.facts().get(BlockStateId(s)).name.clone();
@@ -602,6 +610,7 @@ mod tests {
                 state: 1,
                 only: None,
             }],
+            &FxHashSet::default(),
             |_, _| true,
             |s| s == 2,
         );
@@ -639,6 +648,7 @@ mod tests {
                 state: 1,
                 only: None,
             }],
+            &FxHashSet::default(),
             |_, _| true,
             |s| s == 3,
         );
@@ -666,6 +676,7 @@ mod tests {
                 state: 3,
                 only: None,
             }],
+            &FxHashSet::default(),
             |_, _| true,
             |s| s == 3,
         );
@@ -710,6 +721,7 @@ mod tests {
                 state: 4,
                 only: None,
             }],
+            &FxHashSet::default(),
             |_, _| true,
             |_| true,
         );
@@ -734,6 +746,7 @@ mod tests {
                 state: 4,
                 only: None,
             }],
+            &FxHashSet::default(),
             |_, _| true,
             |_| true,
         );

@@ -139,17 +139,7 @@ fn retry_slot(title: &mut Option<sunrise_client::title::Title>) -> Option<&mut O
 impl Game<'_> {
     /// Leave the title for a server (ConnectScreen): an empty world fed by the connection.
     pub(in crate::game) fn connect_server(&mut self, address: &str, name: &str) -> Result<()> {
-        self.connect_server_with_cookies(address, name, None)
-    }
-    /// `connect_server` carrying a transfer's stored server cookies
-    /// (`TransferState`); None on an ordinary join.
-    pub(super) fn connect_server_with_cookies(
-        &mut self,
-        address: &str,
-        name: &str,
-        cookies: Option<sunrise_client::net::Cookies>,
-    ) -> Result<()> {
-        self.connect_server_with_options(address, name, cookies, false, false)
+        self.connect_server_with_options(address, name, None, false, false)
     }
     /// `ConnectScreen.startConnecting`: keep LAN discovery's server kind through loading.
     pub(in crate::game) fn connect_server_with_options(

@@ -246,14 +246,24 @@ impl Endpoint {
         });
         self.transport().close();
         match &self.0 {
-            Target::Client { writer, events, .. } => {
-                let _ = events.send(Event::Disconnected {
+            Target::Client {
+                writer,
+                configuring,
+                events,
+                ..
+            } => {
+                let writer = writer.lock().unwrap();
+                let _ = events.send_terminal(Event::Disconnected {
                     reason: reason.plain(),
                     key: None,
                     from_server: false,
                 });
-                if let Some(writer) = writer.lock().unwrap().as_ref() {
-                    writer.shutdown();
+                if let Some(writer) = writer.as_ref() {
+                    if configuring.load(Ordering::Acquire) {
+                        writer.shutdown();
+                    } else {
+                        writer.close_after_pending();
+                    }
                 }
             }
             Target::Server(sender) => {

@@ -24,7 +24,7 @@ pub use visibility_plan::{
 #[cfg(test)]
 #[path = "mesher/source_tests.rs"]
 mod source_tests;
-use crate::connected::{Pick, TileLayer};
+use crate::connected::{FaceNeighbours, Pick, TileLayer};
 use crate::{
     assets::{Assets, RenderAssets},
     biome::{Biomes, GrassModifier},
@@ -1578,13 +1578,14 @@ const OFFSETS: [isize; 6] = {
     out
 };
 /// Per-worker temporary arrays. They never hold resource-pack references or
-/// geometry still owned by the renderer, and total about 150 KiB per worker
-/// (the leaf mask adds 8,000 cells, depths and a queue).
+/// geometry still owned by the renderer. Group cells are allocated only by workers
+/// that mesh a region with group rules and data.
 #[derive(Default)]
 pub struct MeshScratch {
     padded: Padded,
     own: Option<Box<[u32; 4096]>>,
     leaf: leaf_culling::LeafMask,
+    groups: Option<GroupCells>,
     /// Per padded row (`pi(-B, y, z) / P`), bit `x + B` set where the block
     /// is `isSolidRender` (`MeshTables::solid`).
     solid_rows: Vec<u32>,
@@ -2155,6 +2156,72 @@ pub struct Mesher<'a> {
     /// no part subscribes.
     pub part_tables: &'a part_tables::PartTables,
 }
+/// A direct-indexed view using the same padded strides as states. The mask is
+/// independent of the ID, so both zero and every other u64 remain usable.
+struct GroupCells {
+    values: Box<[u64; P * P * P]>,
+    present: [u32; P * P],
+}
+
+impl GroupCells {
+    fn new() -> Self {
+        Self {
+            values: Box::new([0; P * P * P]),
+            present: [0; P * P],
+        }
+    }
+
+    fn fill(&mut self, region: &[[Option<&Chunk>; 3]; 3], base_y: i32) {
+        self.present.fill(0);
+        let span = -B..16 + B;
+        for (dz, row) in region.iter().enumerate() {
+            for (dx, chunk) in row.iter().enumerate() {
+                let Some(chunk) = chunk.filter(|c| !c.connection_groups.is_empty()) else {
+                    continue;
+                };
+                let (ox, oz) = ((dx as i32 - 1) * 16, (dz as i32 - 1) * 16);
+                let x = span.start.max(ox)..span.end.min(ox + 16);
+                let z = span.start.max(oz)..span.end.min(oz + 16);
+                let y =
+                    span.start.max(chunk.min_y() - base_y)..span.end.min(chunk.max_y() - base_y);
+                // Sparse columns cost one visit per group; dense tall columns cost at
+                // most one hash lookup per padded cell, never one per face or rule.
+                if chunk.connection_groups.len() <= x.len() * y.len() * z.len() {
+                    for (&cell, &group) in &chunk.connection_groups {
+                        let (lx, wy, lz) = chunk.dynamic_cell_coords(cell);
+                        let (xx, yy, zz) = (ox + i32::from(lx), wy - base_y, oz + i32::from(lz));
+                        if x.contains(&xx) && y.contains(&yy) && z.contains(&zz) {
+                            self.put(pi(xx, yy, zz), group);
+                        }
+                    }
+                } else {
+                    for yy in y {
+                        for zz in z.clone() {
+                            for xx in x.clone() {
+                                if let Some(group) =
+                                    chunk.connection_group(xx - ox, yy + base_y, zz - oz)
+                                {
+                                    self.put(pi(xx, yy, zz), group);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn put(&mut self, cell: usize, group: u64) {
+        self.values[cell] = group;
+        self.present[cell / P] |= 1 << (cell % P);
+    }
+
+    #[inline]
+    fn at(&self, cell: usize) -> Option<u64> {
+        (self.present[cell / P] & (1 << (cell % P)) != 0).then(|| self.values[cell])
+    }
+}
+
 impl Mesher<'_> {
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
     #[sunrise_mod_api_macros::replaceable]
@@ -2268,6 +2335,19 @@ impl Mesher<'_> {
         let info = &self.tables.info;
         let full_faces = &self.tables.full_faces;
         let catalog = &self.render.model_catalog;
+        let groups = if self.render.connected.has_group_rules()
+            && region
+                .iter()
+                .flatten()
+                .flatten()
+                .any(|c| !c.connection_groups.is_empty())
+        {
+            let groups = scratch.groups.get_or_insert_with(GroupCells::new);
+            groups.fill(region, base_y);
+            Some(&*groups)
+        } else {
+            None
+        };
         let mut models = Vec::new();
         for y in 0..16 {
             for z in 0..16 {
@@ -2431,6 +2511,7 @@ impl Mesher<'_> {
                             }
                             self.face(
                                 pad,
+                                groups,
                                 &mut tints,
                                 &mut out,
                                 [x, y, z],
@@ -2463,6 +2544,7 @@ impl Mesher<'_> {
     fn face(
         &self,
         pad: &Padded,
+        groups: Option<&GroupCells>,
         tints: &mut Tints,
         out: &mut SectionMesh,
         pos: [i32; 3],
@@ -2567,16 +2649,22 @@ impl Mesher<'_> {
                 face.layer as u16,
                 CtmFace::ALL[q.facing as usize],
                 [world.x, world.y, world.z],
-                neighbour,
-                |s| self.tables.full_faces[s as usize],
-                || Some(tints.biome(pos[0], pos[1], pos[2])),
-                // A pane's tiles are drawn with the cube's UVs (below), so that is its texture.
-                || {
-                    if state.pane {
-                        Some(CtmAxes::cube(CtmFace::ALL[q.facing as usize]))
-                    } else {
-                        CtmAxes::texture(&q.positions, &q.uv)
-                    }
+                FaceNeighbours {
+                    state: neighbour,
+                    group: |n| {
+                        groups
+                            .and_then(|groups| groups.at((cell as isize + step_index(n)) as usize))
+                    },
+                    full_faces: |s| self.tables.full_faces[s as usize],
+                    biome: || Some(tints.biome(pos[0], pos[1], pos[2])),
+                    // A pane's tiles are drawn with the cube's UVs (below), so that is its texture.
+                    texture: || {
+                        if state.pane {
+                            Some(CtmAxes::cube(CtmFace::ALL[q.facing as usize]))
+                        } else {
+                            CtmAxes::texture(&q.positions, &q.uv)
+                        }
+                    },
                 },
                 &mut push,
             )
@@ -2987,5 +3075,28 @@ mod quarter_tests {
         assert_eq!(standard_uv(D::North, [1.0, 1.0, 0.0]), [0.0, 0.0]);
         assert_eq!(standard_uv(D::East, [1.0, 0.0, 1.0]), [0.0, 1.0]);
         assert_eq!(standard_uv(D::Down, [0.0, 0.0, 1.0]), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn group_cells_index_the_padded_region_and_forget_old_values_on_reuse() {
+        let mut centre = Chunk::empty(0, 0);
+        let mut east = Chunk::empty(1, 0);
+        let mut north = Chunk::empty(0, -1);
+        centre.set_connection_group(15, 64, 0, Some(0));
+        east.set_connection_group(0, 64, 0, Some(u64::MAX));
+        north.set_connection_group(15, 63, 15, Some(88));
+        let mut region = [[None; 3]; 3];
+        region[1][1] = Some(&centre);
+        region[1][2] = Some(&east);
+        region[0][1] = Some(&north);
+        let mut cells = GroupCells::new();
+        cells.fill(&region, 64);
+        assert_eq!(cells.at(pi(15, 0, 0)), Some(0));
+        assert_eq!(cells.at(pi(16, 0, 0)), Some(u64::MAX));
+        assert_eq!(cells.at(pi(15, -1, -1)), Some(88));
+        assert_eq!(cells.at(pi(15, 1, 0)), None);
+        region[1][2] = None;
+        cells.fill(&region, 64);
+        assert_eq!(cells.at(pi(16, 0, 0)), None);
     }
 }

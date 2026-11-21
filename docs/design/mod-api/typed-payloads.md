@@ -72,10 +72,14 @@ Handlers return `Result<(), PayloadHandleError>`. Application failures must use
 `Result<(), String>`. Native panics and disabled owners are failures. There is no
 handler retry result.
 
-Each connection holds the receiving turn until the main root publishes or rolls
-back. Later deliveries stay in order and keep their original ingress credit.
-Disconnect or phase replacement cancels work from the old epoch and wakes a
+For standalone deliveries, the connection holds the receiving turn until the main root
+publishes or rolls back. Later deliveries stay in order and keep their original ingress
+credit. Disconnect or phase replacement cancels work from the old epoch and wakes a
 dedicated receiver waiting for that turn.
+
+A clientbound play bundle is one main-thread turn. Its handlers, including NETWORK handlers,
+run in member order on that thread. NETWORK handlers still use their network context. Main work
+they enqueue runs after the handler succeeds and before the next member.
 
 **Historical WebAssembly dispatch:** A guest group could return `Busy` before a
 callback started. The receiving transport retained its body and holder snapshot at

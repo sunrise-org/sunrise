@@ -726,7 +726,7 @@ struct WorldRest {
     ambient: sunrise_client::ambience::AmbientTables,
     nether_environment: Environment,
     end_environment: Environment,
-    behaviours: Behaviours,
+    behaviours: Arc<Behaviours>,
     /// The player model's right and left arms.
     player_arm: [Option<sunrise_client::mobs::Part>; 2],
     /// The slim model's right and left arms (3 pixels wide).
@@ -10857,7 +10857,11 @@ impl<'a> Game<'a> {
                 None,
             )
         })?;
-        let world = Game::world_for_mods(res.facts().air, 0);
+        let world = if options.execution_role.is_logical_server() {
+            Game::authoritative_world_for_mods(res, 0)
+        } else {
+            Game::world_for_mods(res.facts().air, 0)
+        };
         let tutorial = tutorial::Tutorial::new(tutorial::Step::from_option(
             settings.file.int("tutorialStep"),
         ));

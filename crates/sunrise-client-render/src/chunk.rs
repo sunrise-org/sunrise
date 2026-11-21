@@ -728,6 +728,11 @@ pub struct Chunk {
     /// The chunk came in holding a `dynamic_light` state and its cells are not asked yet: no light
     /// job reads it until they are (`streaming::light_region_ready`).
     pub dynamic_pending: bool,
+    /// Mod-published per-position connection groups (`LevelRef::set_connection_group`), by
+    /// [`Self::dynamic_cell`]. Read by the mesher when evaluating rules with `connect_group`;
+    /// synced to Sunrise clients over `sunrise:connection_groups`; dropped with the chunk and
+    /// never saved to disk.
+    pub connection_groups: crate::fast_hash::FxHashMap<u32, u64>,
 }
 impl Chunk {
     /// An all-air chunk in the current `layout`.
@@ -764,12 +769,58 @@ impl Chunk {
             entities: Vec::new(),
             dynamic_emission: Default::default(),
             dynamic_pending: false,
+            connection_groups: Default::default(),
         }
     }
-    /// The [`Self::dynamic_emission`] key of the cell at `y` (chunk-local `x`, `z`):
-    /// `section << 12 | y << 8 | z << 4 | x`; `None` outside the column.
+    /// The [`Self::dynamic_emission`] / [`Self::connection_groups`] key of the cell at `y`
+    /// (chunk-local `x`, `z`): `section << 12 | y << 8 | z << 4 | x`; `None` outside the column.
     pub fn dynamic_cell(&self, x: i32, y: i32, z: i32) -> Option<u32> {
         Some((self.section_index(y)? as u32) << 12 | index(x, y, z) as u32)
+    }
+    /// Inverse of [`Self::dynamic_cell`]: `(local_x 0..16, world_y, local_z 0..16)`.
+    pub fn dynamic_cell_coords(&self, cell: u32) -> (u8, i32, u8) {
+        let s = (cell >> 12) as i32;
+        let idx = (cell & 0xFFF) as i32;
+        let local_x = (idx & 15) as u8;
+        let local_z = ((idx >> 4) & 15) as u8;
+        let local_y = (idx >> 8) & 15;
+        (local_x, self.min_y + s * 16 + local_y, local_z)
+    }
+    /// Read the mod-published connection group at chunk-local `(x, z)` and world `y`.
+    #[inline]
+    pub fn connection_group(&self, x: i32, y: i32, z: i32) -> Option<u64> {
+        if self.connection_groups.is_empty() {
+            return None;
+        }
+        let cell = self.dynamic_cell(x, y, z)?;
+        self.connection_groups.get(&cell).copied()
+    }
+    /// Set or clear the connection group at chunk-local `(x, z)` and world `y`.
+    /// Returns `None` if `y` is outside the column, else `Some(changed)`.
+    pub fn set_connection_group(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        group: Option<u64>,
+    ) -> Option<bool> {
+        let cell = self.dynamic_cell(x, y, z)?;
+        Some(self.write_group(cell, group))
+    }
+
+    pub(crate) fn write_group(&mut self, cell: u32, group: Option<u64>) -> bool {
+        if let Some(group) = group {
+            self.connection_groups.insert(cell, group) != Some(group)
+        } else if self.connection_groups.remove(&cell).is_some() {
+            if self.connection_groups.is_empty() {
+                self.connection_groups = Default::default();
+            } else if self.connection_groups.len() * 4 < self.connection_groups.capacity() {
+                self.connection_groups.shrink_to_fit();
+            }
+            true
+        } else {
+            false
+        }
     }
     /// The original `structures.starts`, including starts with unknown pieces.
     pub fn saved_structure_starts(&self) -> Option<&sunrise_core::nbt::Compound> {

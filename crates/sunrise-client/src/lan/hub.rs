@@ -40,7 +40,7 @@ use {
 
 /// GameEvent types (ClientboundGameEventPacket).
 pub mod advancements;
-mod block_changes;
+pub(in crate::lan) mod block_changes;
 mod carried_check;
 pub mod chat;
 mod fake_kicks;
@@ -2562,6 +2562,7 @@ impl Hub {
                 .any(|g| g.participates_online() && g.dimension == self.config.dimension)
             {
                 let _ = ctx.world.block_log.take();
+                ctx.world.connection_group_log = None;
                 let _ = ctx.world.light_log.take();
                 ctx.world.bulk_log.clear();
             }
@@ -2569,6 +2570,9 @@ impl Hub {
         }
         if ctx.world.block_log.is_none() {
             ctx.world.block_log = Some(Vec::new());
+        }
+        if ctx.world.connection_group_log.is_none() {
+            ctx.world.connection_group_log = Some(Default::default());
         }
         if ctx.world.light_log.is_none() {
             ctx.world.light_log = Some(Default::default());
@@ -2911,20 +2915,37 @@ impl Hub {
                 let size = batch.len();
                 // The single-player window shares the sections it is sent (handoff.rs).
                 let memory = g.address == super::conn::MEMORY_ADDRESS;
+                let sync_groups = g.negotiated_connection_groups();
                 if size > 0 {
                     g.batch_quota -= size as f32;
                     g.send(&C::ChunkBatchStart(sunrise_protocol::packets::Empty));
-                    g.sender.send_many(batch.into_iter().map(|j| {
+                    let grouped = sync_groups
+                        && batch
+                            .iter()
+                            .any(|&j| !chunks[j].connection_groups.is_empty());
+                    let bodies = batch.into_iter().flat_map(|j| {
+                        let chunk = chunks[j];
                         if memory {
-                            super::handoff::offer(chunks[j]);
+                            super::handoff::offer(chunk);
                         }
+                        let groups = if grouped && !chunk.connection_groups.is_empty() {
+                            block_changes::encode_chunk_connection_groups(chunk)
+                        } else {
+                            Vec::new()
+                        };
                         uses[j] -= 1;
-                        if uses[j] == 0 {
+                        let body = if uses[j] == 0 {
                             std::mem::take(&mut encoded[j])
                         } else {
                             encoded[j].clone()
-                        }
-                    }));
+                        };
+                        block_changes::group_bundle(body, groups)
+                    });
+                    if grouped {
+                        g.sender.send_batch(bodies);
+                    } else {
+                        g.sender.send_many(bodies);
+                    }
                     g.send(&C::ChunkBatchFinished(play::ChunkBatchFinished {
                         size: size as i32,
                     }));
@@ -2956,7 +2977,9 @@ impl Hub {
                         seen.iter().map(|&(x, z)| Holder::Chunk([x, z])),
                     );
                 }
-                g.sent_chunks.extend(seen);
+                for key in seen {
+                    g.sent_chunks.insert(key);
+                }
             });
         }
     }
@@ -4685,17 +4708,11 @@ impl Hub {
             }
         }
         for pos @ [x, y, z] in positions {
-            let state = ctx.world.block(x, y, z);
-            self.send_to(
-                conn,
-                &C::BlockUpdate(play::BlockUpdate {
-                    pos,
-                    state: state.0 as i32,
-                }),
-            );
+            self.send_authoritative_block(conn, ctx.world, pos);
             let Some(entity) = ctx.world.block_entities.get(&(x, y, z)) else {
                 continue;
             };
+            let state = ctx.world.block(x, y, z);
             let Some(tag) = self.encoder.update_tag((x, y, z), state.0, entity) else {
                 continue;
             };
@@ -5248,6 +5265,7 @@ mod tests {
     mod cave_air_tests;
     mod collision_exclusion_tests;
     mod collision_part_tests;
+    mod connection_group_sync_tests;
     mod displace_tests;
     mod effect_meta_tests;
     mod entity_move_check_tests;

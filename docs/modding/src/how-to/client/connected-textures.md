@@ -32,6 +32,7 @@ overrides your models, and they are read again when resources reload.
 | `sprites` | The sprites the rule replaces. Leave it out to replace whatever sprite the block's faces use; name it to leave other sprites of the same block alone. A rule names `blocks`, `tag`, `sprites`, or several. |
 | `faces` | `down`, `up`, `north`, `south`, `west`, `east`, `sides` or `all` (the default). |
 | `connect` | What a neighbour must be to join: `"block"` (the default: the same block), `"state"` (the same block state), `"sprite"` (the same sprite on that face), `{"tag": "mymod:casings"}` (any block of a tag), `{"same": ["axis"]}` (the same block with equal values of the listed state properties: a pillar that joins only pillars along its own axis), or `{"height": {...}}` (by collision height, below). |
+| `connect_group` | Optional boolean, `false` by default. When `true`, the block and each joining neighbour (including a covering block under `cover`) must also share the same non-empty mod-published connection group (`LevelRef::set_connection_group`). Blocks with no group join nothing. |
 | `orient` | Where a face's left, right, up and down are: `"default"` (a vanilla cube's), `"axis"` (turned by the block's `axis` property, as a pillar's model is), or `"texture"` (the quad's own texture directions, so a turned or mirrored model turns its neighbours too: use it for a pane, whose vanilla model mirrors some faces, and for turned blocks whose model rotates the texture). A pane here is any block of vanilla's `IronBarsBlock` class (glass panes, iron bars, and a mod block declared on that template), whatever its name: it takes the cube's directions for its tiles and hides the strips shared with a stacked pane. |
 | `sheet` | The sprite the tiles are cut from. |
 | `table` | A table: the name of a shared one, or the table itself. |
@@ -96,6 +97,42 @@ Heights are compared exactly: they come from the published collision shapes, rea
 One rule per case, in order. Create's copper roofs, for example, are a rule for the bottom slab
 (a `blocks` entry with `"state": {"type": ["bottom"]}`) that joins with `higher`, and a rule for the other roof blocks that joins with
 `same`, `above` and `side`, both on the `up` face.
+
+## Joining by a connection group
+
+Some multiblock structures (fluid tanks, boilers, vaults) decide at runtime which touching blocks belong to the same
+structure: two 2 × 2 tanks placed side by side share the same block state, but their textures must not merge across
+the seam between them.
+
+Set `"connect_group": true` on the rule and publish an opaque `u64` group identifier per block position from the
+server with `LevelRef::set_connection_group(host, pos, Some(group))` (or `None` to clear it; read on either side
+with `LevelRef::connection_group(host, pos)`):
+
+```rust
+level.set_connection_group(host, pos, Some(tank_controller_id))?;
+```
+
+- **Combined with `connect`.** `connect_group` narrows `connect`: a neighbour joins only when both the rule's
+  `connect` predicate matches and `connection_group(pos) == connection_group(neighbour)` with a `Some` value. A
+  position with `None` joins nothing (not even another `None` neighbour). Every `u64`, including `0`, is a valid
+  group. When a table enables `cover`, the covering cell must also share the same connection group to suppress a join.
+- **Derived visual state.** Connection groups are never saved to disk. For block-entity-backed structures,
+  republish them from `block_entity_on_load` when `HostSide::Server`. It runs after saved data is available and
+  before the server sends the column, even in a dimension held only by `Loaded` views. For chunks without block
+  entities, queue the loaded chunk in `chunk_load` and publish on the next server tick (`chunk_load` receives a
+  read-only `&dyn Host`); a loaded-only view does not tick. Also republish whenever your multiblock forms, splits,
+  or changes membership.
+- **Automatic lifetime.** Replacing a block with one that does not keep block entities (including through bulk
+  `edit_blocks`), or attaching a fresh block entity at the same block state, ends the old group's lifetime.
+  Changing only a state property of the same block (or weathering a copper chest or copper golem statue)
+  preserves it. Writing to an unloaded chunk, an out-of-height position, a carrier-fenced cell, or an unchanged
+  group returns `Ok(false)`.
+- **Sync and transactions.** Negotiated clients adopt groups with the cell's current authoritative state,
+  including in viewed levels. If only the group would be sent, the server sends the current block update first
+  in the same bundle, only to negotiated clients. Group changes remesh affected sections and borders. Vanilla
+  peers get neither the groups nor any additional updates. Writes inside a Host transaction are tentative:
+  aborting restores the previous group quietly, and committing publishes the final block and group per position
+  (including a clear caused by an intermediate replacement).
 
 ## What it joins, and what it does not
 

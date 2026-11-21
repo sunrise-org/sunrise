@@ -524,10 +524,11 @@ impl PlayerSender {
         if matches!(self.to, To::Disabled) {
             return;
         }
-        let Err(body) = transaction_packets::capture(self, body) else {
+        let cost = io_pool::charge(body.retained());
+        let Err(body) = transaction_packets::capture(self, body, cost) else {
             return;
         };
-        if !self.reserve_queued(io_pool::charge(body.retained())) {
+        if !self.reserve_queued(cost) {
             self.close();
             return;
         }
@@ -579,6 +580,44 @@ impl PlayerSender {
                 return;
             }
             held.push(body);
+        }
+    }
+    /// Queue a bundle (including both delimiters) without interleaving output.
+    pub(super) fn send_batch<B: Into<Body>>(&self, bodies: impl IntoIterator<Item = B>) {
+        if matches!(self.to, To::Disabled) {
+            return;
+        }
+        let bodies = bodies.into_iter().map(Into::into).collect::<Vec<_>>();
+        if bodies.is_empty() {
+            return;
+        }
+        let cost = bodies
+            .iter()
+            .map(|body| io_pool::charge(body.retained()))
+            .sum();
+        let Err(bodies) = transaction_packets::capture(self, bodies, cost) else {
+            return;
+        };
+        if !self.reserve_queued(cost) {
+            self.close();
+            return;
+        }
+        self.publish_reserved_many(bodies);
+    }
+
+    fn publish_reserved_many(&self, bodies: Vec<Body>) {
+        if bodies.is_empty() {
+            return;
+        }
+        if HOLDING.get() {
+            self.held().extend(bodies);
+        } else {
+            self.flush();
+            match &self.to {
+                To::Disabled => {}
+                To::Channel(tx) => drop(tx.send(unshared(bodies))),
+                To::Pool(outbox, _) => outbox.send(bodies, None),
+            }
         }
     }
     /// Hand the held packets to the network thread.

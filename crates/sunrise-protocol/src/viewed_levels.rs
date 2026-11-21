@@ -57,9 +57,10 @@
 //!   the server closes the view of the level entered before the travel, which then swaps nothing.
 //!
 //! Only the
-//! [`LEVEL_SCOPED`] kinds and, from revision 3, the [`SOUNDS`] may be wrapped, and a run never
-//! mixes levels. A serverbound play payload on the channel is a protocol error
-//! (`custom_payload`'s codec refuses it).
+//! [`LEVEL_SCOPED`] kinds, from revision 3 the [`SOUNDS`], and `CustomPayload` on the
+//! `sunrise:connection_groups` channel (sent only to peers that negotiated that channel) may be
+//! wrapped, and a run never mixes levels. A serverbound play payload on the channel is a protocol
+//! error (`custom_payload`'s codec refuses it).
 use crate::{
     buf::{Codec, Reader, Writer},
     ids::play::clientbound as id,
@@ -461,13 +462,17 @@ fn head(kind: u8, level: Level) -> Writer {
 /// that its play clientbound codec does not read exactly.
 fn check_level_scoped(id: i32, body: &[u8], revision: u8) -> Result<(), ViewedLevelsError> {
     let sound = revision >= REVISION_3 && SOUNDS.contains(&id);
-    if !LEVEL_SCOPED.contains(&id) && !sound {
+    let custom = id == id::CUSTOM_PAYLOAD;
+    if !LEVEL_SCOPED.contains(&id) && !sound && !custom {
         return Err(ViewedLevelsError::NotLevelScoped(id));
     }
     let scoped =
         match Clientbound::decode(id, body).map_err(|_| ViewedLevelsError::MalformedPacket(id))? {
             Clientbound::GameEvent(e) => WEATHER_EVENTS.contains(&e.event),
             Clientbound::LevelEvent(e) => !e.global,
+            // Its own receive boundary checks negotiation and decodes against the connection's
+            // bundle. This envelope owns only whether the channel is scoped.
+            Clientbound::CustomPayload(p) => p.channel == crate::connection_groups::CHANNEL,
             _ => true,
         };
     if scoped {
@@ -903,6 +908,49 @@ mod tests {
         assert_eq!(
             Message::decode_in(&[2, 1], REVISION_4),
             Err(ViewedLevelsError::CutShort)
+        );
+    }
+
+    #[test]
+    fn a_run_carries_connection_groups_and_refuses_other_custom_payloads() {
+        use crate::connection_groups::{self, Cell, Entry, Section};
+        let valid_data = Section {
+            pos: [1, 4, -2],
+            entries: vec![Entry {
+                cell: Cell::of([3, 64, 4]),
+                group: Some(99),
+            }],
+        }
+        .encode()
+        .unwrap();
+        let valid = Clientbound::CustomPayload(CustomPayload {
+            channel: connection_groups::CHANNEL.into(),
+            data: valid_data,
+        });
+        let run = received(
+            &Run::new(Level::Bound { slot: 0, epoch: 1 }, &valid.encode())
+                .unwrap()
+                .finish(),
+        );
+        let Message::Run { level, packets } = Message::decode_in(&run.data, REVISION_4).unwrap()
+        else {
+            panic!("not a run");
+        };
+        assert_eq!(level, Level::Bound { slot: 0, epoch: 1 });
+        assert_eq!(packets.len(), 1);
+        assert_eq!(
+            Clientbound::decode(packets[0].0, packets[0].1).unwrap(),
+            valid
+        );
+
+        let other = Clientbound::CustomPayload(CustomPayload {
+            channel: "minecraft:brand".into(),
+            data: vec![1, b'x'],
+        })
+        .encode();
+        assert_eq!(
+            Run::new(Level::Bound { slot: 0, epoch: 1 }, &other).err(),
+            Some(ViewedLevelsError::NotLevelScoped(id::CUSTOM_PAYLOAD))
         );
     }
 }

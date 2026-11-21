@@ -372,7 +372,7 @@ pub(super) struct Remote {
     pub(super) hashed_seed: i64,
     /// What chunk packets decode with (the dimension's height and sky, the
     /// biome registry); replaced whenever one of them changes.
-    pub(super) chunk_format: Arc<ChunkFormat>,
+    pub(in crate::game) chunk_format: Arc<ChunkFormat>,
     /// Decodes chunk packets as they arrive, off the frame.
     decoder: ChunkDecoder,
     /// Options.serverRenderDistance: the server's view distance from the
@@ -606,8 +606,6 @@ pub(super) struct Remote {
     backlog: VecDeque<Received>,
     backlog_since: Option<Instant>,
     /// `ClientboundTransferPacket`'s target: when the connection ends the
-    /// game connects here, the stored cookies carried over (`TransferState`).
-    transfer: Option<String>,
     /// `ClientCommonPacketListenerImpl.serverLinks`: the links "Server
     /// Links..." in the pause menu lists (only `http`/`https` URIs kept).
     pub(super) server_links: Vec<sunrise_protocol::packets::configuration::ServerLink>,
@@ -988,6 +986,10 @@ impl Game<'_> {
             C::CustomPayload(p) if p.channel == sunrise_protocol::collider_sync::CHANNEL => {
                 self.remote_collider_sync(&p.data);
             }
+            // Per-position connected-texture groups synced for the window's chunks.
+            C::CustomPayload(p) if p.channel == sunrise_protocol::connection_groups::CHANNEL => {
+                self.refuse_play_payload("connection groups: payload outside its bundle")?;
+            }
             // Full-width data slots for the open blockless mod menu.
             C::CustomPayload(p) if p.channel == sunrise_protocol::menu_extra::DATA_CHANNEL => {
                 use sunrise_protocol::menu_extra::{DataSlot, LIVE_DATA_REVISION};
@@ -1036,10 +1038,12 @@ impl Game<'_> {
             C::LightUpdate(p) => self.remote_light_update(&p),
             C::ChunksBiomes(p) => self.remote_chunks_biomes(&p),
             C::ForgetLevelChunk(p) => self.apply_forget_level_chunk_packet(p),
-            C::BlockUpdate(p) => self.server_block(p.pos, p.state),
+            C::BlockUpdate(p) => self.server_block(p.pos, p.state, None),
             C::AddTransientBlock(p) => self.add_transient_block(p.pos, p.state),
             C::BlockDestruction(p) => self.apply_block_destruction_packet(p),
-            C::SectionBlocksUpdate(p) => self.apply_section_blocks_update_packet(p),
+            C::SectionBlocksUpdate(p) => {
+                self.apply_section_blocks_update_packet(&p, Default::default())
+            }
             C::BlockChangedAck(p) => self.end_predictions(p.sequence),
             C::BlockEvent(p) => self.apply_block_event_packet(p)?,
             // ClientLevel.levelEvent: LevelEventHandler, as this client's own
@@ -2217,6 +2221,9 @@ pub(crate) mod tests {
     mod chat_window_and_input_tests {
         include!("chat_window_and_input_tests.rs");
     }
+    mod play_bundle_tests {
+        include!("play_bundle_tests.rs");
+    }
     mod chunk_storage_tests {
         include!("chunk_storage_tests.rs");
     }
@@ -2422,6 +2429,19 @@ pub(crate) mod tests {
         sunrise_protocol::connection::ConnReader,
         sunrise_protocol::connection::ConnWriter,
     ) {
+        connect_play_test(game, |_, _| {})
+    }
+
+    fn connect_play_test(
+        game: &mut super::Game<'_>,
+        configure: impl FnOnce(
+            &mut sunrise_protocol::connection::ConnReader,
+            &mut sunrise_protocol::connection::ConnWriter,
+        ),
+    ) -> (
+        sunrise_protocol::connection::ConnReader,
+        sunrise_protocol::connection::ConnWriter,
+    ) {
         use super::super::execution_role::ExecutionRole;
         use sunrise_protocol::{
             connection::{Connection, Pipe},
@@ -2456,6 +2476,7 @@ pub(crate) mod tests {
         ));
         reader.recv().unwrap();
         reader.recv().unwrap();
+        configure(&mut reader, &mut writer);
         writer
             .send(&cfg::Clientbound::FinishConfiguration(Empty).encode())
             .unwrap();

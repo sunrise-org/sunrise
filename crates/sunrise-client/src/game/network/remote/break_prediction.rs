@@ -1,5 +1,6 @@
 //! Optimistic block writes and reconciliation on the multiplayer client.
 use super::*;
+use crate::game::native_connection_groups::ReceivedGroup;
 use sunrise_core::position::BlockPos;
 
 /// `BlockStatePredictionHandler.ServerVerifiedState`: the most recent sequence,
@@ -9,6 +10,7 @@ pub(super) struct Prediction {
     state: BlockStateId,
     player_pos: [f64; 3],
     removed_entity: Option<Box<RemovedEntity>>,
+    group: Option<ReceivedGroup>,
 }
 
 /// A predicted write displaced this entity. The server need not resend its payload
@@ -98,6 +100,7 @@ impl Game<'_> {
                     state: before,
                     player_pos: here,
                     removed_entity: None,
+                    group: None,
                 });
         }
         self.write_client_block(pos, state, None)
@@ -133,7 +136,12 @@ impl Game<'_> {
 
     /// ClientLevel.setServerVerifiedBlockState: a predicted block keeps its on-screen
     /// state until acknowledgement, but remembers the server's update for then.
-    pub(super) fn server_block(&mut self, pos: [i32; 3], state: i32) {
+    pub(in crate::game) fn server_block(
+        &mut self,
+        pos: [i32; 3],
+        state: i32,
+        group: Option<ReceivedGroup>,
+    ) {
         // An unknown state (a server with mods we lack) reads as air, as in its chunks.
         let state = state.max(0) as u32;
         let state = BlockStateId(if sunrise_client::chunk::known_block_state(state) {
@@ -147,6 +155,9 @@ impl Game<'_> {
             .and_then(|r| r.predictions.get_mut(&pos))
         {
             p.state = state;
+            if group.is_some() {
+                p.group = group;
+            }
             if let Some(removed) = &p.removed_entity
                 && self.res.facts().get(removed.state).name != self.res.facts().get(state).name
             {
@@ -155,6 +166,9 @@ impl Game<'_> {
             return;
         }
         let previous = self.write_client_block(pos, state, None);
+        if let Some(group) = group {
+            group.apply(&mut self.world, pos);
+        }
         self.finish_client_block_write(pos, previous, state, false);
     }
 
@@ -172,10 +186,16 @@ impl Game<'_> {
         for (pos, prediction) in settled {
             let [x, y, z] = pos;
             let state = prediction.state;
-            if self.world.block(x, y, z) == state {
+            let changed = self.world.block(x, y, z) != state;
+            let previous = changed
+                .then(|| self.write_client_block(pos, state, prediction.removed_entity))
+                .flatten();
+            if let Some(group) = prediction.group {
+                group.apply(&mut self.world, pos);
+            }
+            if !changed {
                 continue;
             }
-            let previous = self.write_client_block(pos, state, prediction.removed_entity);
             self.finish_client_block_write(pos, previous, state, false);
             // ClientLevel.syncBlockState: the returning block may now hold the player.
             let meets = self.block_meets_player(pos, state);

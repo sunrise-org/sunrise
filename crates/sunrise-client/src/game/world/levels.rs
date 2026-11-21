@@ -755,7 +755,7 @@ impl Game<'_> {
         if let Some(terrain) = &locator {
             terrain.set_mob_maps(self.mob_map_snapshot());
         }
-        let mut world = Game::world_for_mods(self.res.facts().air, seed);
+        let mut world = Game::authoritative_world_for_mods(&self.res, seed);
         world.attachments = save.load_attachments();
         world.shape = self.level_shapes.get(dim.id());
         world.fast_lava = self.dimension_type_of(dim).fast_lava;

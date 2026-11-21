@@ -657,6 +657,23 @@ impl Game<'_> {
             .get(key)
             .cloned()
     }
+    /// Read the mod-published connection group at `pos`, or `Ok(None)` when unset, unloaded, or
+    /// out of height. Works on both server (including parked levels) and client (including viewed
+    /// levels).
+    pub(super) fn level_connection_group(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+    ) -> Result<Option<u64>, mod_api::LevelReadError> {
+        let world = self.native_level_view_world(level).ok_or_else(|| {
+            if self.level_handle_current(level) {
+                mod_api::LevelReadError::Unavailable
+            } else {
+                mod_api::LevelReadError::Stale
+            }
+        })?;
+        Ok(world.connection_group(pos[0], pos[1], pos[2]))
+    }
     /// Whether this is the level in place: the one the server ticks now, whose block entities
     /// the game's own capabilities read and write and whose capabilities
     /// `LevelRef::capability` looks up. False for a level parked while the server ticks

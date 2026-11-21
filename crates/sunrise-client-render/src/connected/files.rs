@@ -59,6 +59,10 @@ struct File {
     faces: Vec<String>,
     #[serde(default)]
     connect: FileConnect,
+    /// Require the block and each joining neighbour to share a mod-published connection group
+    /// (`LevelRef::set_connection_group`). Blocks with no group join nothing.
+    #[serde(default)]
+    connect_group: bool,
     #[serde(default)]
     orient: FileOrient,
     /// The sprite the tiles are cut from.
@@ -434,6 +438,7 @@ fn parse(
         connect,
         connect_blocks,
         connect_properties,
+        connect_group: file.connect_group,
         orient: match file.orient {
             FileOrient::Default => Orient::None,
             FileOrient::Axis => Orient::StateAxis,
@@ -656,7 +661,25 @@ mod tests {
         let rules = read(&root);
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].path, "assets/demo/sunrise/connected/good.json");
+        assert!(!rules[0].connect_group);
         // Nothing declared: nothing read (and the tag files are not even opened).
         assert!(read(&folder("none", &[]).1).is_empty());
+    }
+
+    #[test]
+    fn connect_group_field_defaults_false_and_parses_true() {
+        let (_scratch, root) = folder(
+            "connect_group",
+            &[
+                ("assets/demo/sunrise/connected_tables/row.json", ROW),
+                (
+                    "assets/demo/sunrise/connected/grouped.json",
+                    r#"{"method":"table","blocks":["demo:casing"],"connect_group":true,"sheet":"demo:block/casing_sheet","table":"row"}"#,
+                ),
+            ],
+        );
+        let rules = read(&root);
+        assert_eq!(rules.len(), 1);
+        assert!(rules[0].connect_group);
     }
 }

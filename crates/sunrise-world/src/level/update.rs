@@ -408,10 +408,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             let power = self.b.table.int(state, self.b.props.power) as u8;
             self.ticks.wire_graph.set_power(pos, power);
         }
-        self.level
-            .observe_block_changed(pos, old, state, update_flags);
         let new_block = self.block_of(state);
         let block_changed = self.block_of(old) != new_block;
+        self.level
+            .observe_block_changed(pos, old, state, update_flags);
         if block_changed && self.b.instance_of(old, super::classes::Class::Comparator) {
             // LevelChunk removes the old ComparatorBlockEntity with its output.
             self.ticks.comparator_outputs.remove(&pos);

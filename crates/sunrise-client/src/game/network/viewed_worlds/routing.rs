@@ -6,10 +6,13 @@ use super::{
     worlds::{Binding, ViewedWorld, stored_state},
 };
 use crate::game::remote_chunks::section_blocks;
-use crate::game::{Game, remote::Remote};
+use crate::game::{Game, native_connection_groups::block_groups, remote::Remote};
 use sunrise_client::blocks::BlockFacts;
-use sunrise_client::{text::Text, viewed_levels_net::MAX_LEVELS, world::World};
+use sunrise_client::{viewed_levels_net::MAX_LEVELS, world::World};
 use sunrise_protocol::{
+    Error,
+    connection_groups::Section,
+    ids::play::clientbound::CUSTOM_PAYLOAD,
     packets::play::{Clientbound as C, SpawnInfo},
     registry::DimensionType,
     viewed_levels::{
@@ -26,6 +29,7 @@ use sunrise_world::{
 pub(in crate::game) enum RouteError {
     /// The payload's bytes, refused by the codec.
     Codec(ViewedLevelsError),
+    Groups(Error),
     /// A level named by a Login index, which this client's revision does not use. (An `open`
     /// whose dimension is not a level id is the codec's `BadOpen`.)
     UnknownLevel,
@@ -36,11 +40,17 @@ pub(in crate::game) enum RouteError {
     /// An `open` of the player's own level.
     OwnLevel(i32),
     /// A slot past the levels the client answered it can view.
-    OverCap { level: i32, cap: u8 },
+    OverCap {
+        level: i32,
+        cap: u8,
+    },
     /// An `open` whose epoch is not newer than every epoch given before.
     OldEpoch(i32),
     /// A `run` or `close` at an epoch newer than any `open` gave.
-    UnknownEpoch { level: i32, epoch: i32 },
+    UnknownEpoch {
+        level: i32,
+        epoch: i32,
+    },
     /// A `run`'s chunk of a new column in a world that holds its cap of columns already.
     TooManyColumns(u32),
     /// An `open` whose column cap passes the client's ceiling, `viewed_levels::MAX_COLUMNS`.
@@ -60,6 +70,7 @@ impl std::fmt::Display for RouteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Codec(error) => write!(f, "{error}"),
+            Self::Groups(error) => write!(f, "{error}"),
             Self::UnknownLevel => write!(f, "{CHANNEL}: a level named by a Login index"),
             Self::UnsyncedType => {
                 write!(
@@ -162,17 +173,98 @@ impl Game<'_> {
         let Err(error) = self.route_viewed_levels(data) else {
             return Ok(());
         };
-        log::warn!("Sunrise: {error}");
-        let reason = Text::translate(
-            "disconnect.genericReason",
-            &[Text::literal(error.to_string())],
-        );
-        self.leave_server(Some(reason))
+        self.refuse_play_payload(error)
+    }
+
+    /// Route the scoped variant of a completed vanilla-first group bundle.
+    /// Its first run holds one vanilla companion; the remaining runs only
+    /// hold group data for that same slot and epoch.
+    pub(in crate::game) fn route_viewed_bundle(
+        &mut self,
+        runs: &[(&C, &[u8])],
+        negotiated: bool,
+    ) -> Result<(), RouteError> {
+        let sounds = super::sounds::listened();
+        let messages = runs
+            .iter()
+            .map(|(_, data)| Message::decode_with(data, REVISION, sounds))
+            .collect::<Result<Vec<_>, _>>()?;
+        let has_groups = messages.iter().any(|message|
+            matches!(message, Message::Run { packets, .. } if packets.iter().any(|&(id, _)| id == CUSTOM_PAYLOAD)));
+        if !has_groups {
+            for ((outer, _), message) in runs.iter().zip(messages) {
+                self.observe_client_packet(outer);
+                self.route_viewed_message(message)?;
+            }
+            return Ok(());
+        }
+        let invalid = || RouteError::Groups(Error::new("connection groups: invalid viewed bundle"));
+        if !negotiated {
+            return Err(RouteError::Groups(Error::new(
+                "connection groups: channel was not negotiated",
+            )));
+        }
+        let [Message::Run { level, packets }, rest @ ..] = messages.as_slice() else {
+            return Err(invalid());
+        };
+        let [(id, body)] = packets.as_slice() else {
+            return Err(invalid());
+        };
+        if rest.is_empty() || *id == CUSTOM_PAYLOAD {
+            return Err(invalid());
+        }
+        let (slot, epoch) = bound(*level)?;
+        let mut sections = Vec::new();
+        for run in rest {
+            let Message::Run {
+                level: scoped,
+                packets,
+            } = run
+            else {
+                return Err(invalid());
+            };
+            if scoped != level {
+                return Err(invalid());
+            }
+            for &(id, body) in packets {
+                if id != CUSTOM_PAYLOAD {
+                    return Err(invalid());
+                }
+                let C::CustomPayload(payload) = C::decode(id, body).map_err(RouteError::Groups)?
+                else {
+                    return Err(invalid());
+                };
+                sections.push(Section::decode(&payload.data).map_err(RouteError::Groups)?);
+            }
+        }
+        if sections.is_empty() {
+            return Err(invalid());
+        }
+        let packet = C::decode(*id, body).map_err(RouteError::Groups)?;
+        let [(primary, _), rest @ ..] = runs else {
+            return Err(invalid());
+        };
+        self.observe_client_packet(primary);
+        if self.live(slot, epoch)? {
+            self.apply_viewed_world_packet(slot, packet, &sections)?;
+        }
+        for (outer, _) in rest {
+            self.observe_client_packet(outer);
+        }
+        Ok(())
     }
 
     pub(in crate::game) fn route_viewed_levels(&mut self, data: &[u8]) -> Result<(), RouteError> {
         // A run's sounds are kept only for a listener: without one they are skipped unread.
-        match Message::decode_with(data, REVISION, super::sounds::listened())? {
+        self.route_viewed_message(Message::decode_with(
+            data,
+            REVISION,
+            super::sounds::listened(),
+        )?)
+    }
+
+    fn route_viewed_message(&mut self, message: Message<'_>) -> Result<(), RouteError> {
+        match message {
             Message::Open {
                 level,
                 columns,
@@ -208,27 +300,9 @@ impl Game<'_> {
                         self.viewed_level_sound(level, id, body)?;
                         continue;
                     }
-                    let facts = self.res.facts();
-                    let Some(world) = self.remote.as_mut().and_then(|r| r.viewed.get_mut(level))
-                    else {
-                        return Ok(());
-                    };
-                    // The codec read each one exactly already.
                     let packet =
                         C::decode(id, body).map_err(|_| ViewedLevelsError::MalformedPacket(id))?;
-                    if let C::BlockEntityData(p) = packet {
-                        let [x, y, z] = p.pos;
-                        let entity_block = block_entity_block(facts, world.world.block(x, y, z));
-                        world.block_entity_data(p, entity_block);
-                        continue;
-                    }
-                    for (pos, state) in other_blocks(facts, &world.world, &packet) {
-                        world.forget_block_entity(pos);
-                        if block_entity_block(facts, state) {
-                            world.placed_block_entity(pos);
-                        }
-                    }
-                    world.apply(packet)?;
+                    self.apply_viewed_world_packet(level, packet, &[])?;
                 }
                 Ok(())
             }
@@ -242,6 +316,45 @@ impl Game<'_> {
                 Ok(())
             }
         }
+    }
+
+    fn apply_viewed_world_packet(
+        &mut self,
+        level: i32,
+        packet: C,
+        sections: &[Section],
+    ) -> Result<(), RouteError> {
+        let facts = self.res.facts();
+        let Some(world) = self.remote.as_mut().and_then(|r| r.viewed.get_mut(level)) else {
+            return Ok(());
+        };
+        if matches!(packet, C::CustomPayload(_)) {
+            return Err(RouteError::Groups(Error::new(
+                "connection groups: payload outside its bundle",
+            )));
+        }
+        let (groups, snapshot) =
+            if sections.is_empty() || matches!(packet, C::LevelChunkWithLight(_)) {
+                (Default::default(), sections)
+            } else {
+                (
+                    block_groups(&world.world, &packet, sections).map_err(RouteError::Groups)?,
+                    &[][..],
+                )
+            };
+        if let C::BlockEntityData(p) = packet {
+            let [x, y, z] = p.pos;
+            let entity_block = block_entity_block(facts, world.world.block(x, y, z));
+            world.block_entity_data(p, entity_block);
+            return Ok(());
+        }
+        for (pos, state) in other_blocks(facts, &world.world, &packet) {
+            world.forget_block_entity(pos);
+            if block_entity_block(facts, state) {
+                world.placed_block_entity(pos);
+            }
+        }
+        world.apply(packet, groups, snapshot)
     }
 
     /// Whether a `run` or `close` of `slot` at `epoch` goes to its world: false for one of a level

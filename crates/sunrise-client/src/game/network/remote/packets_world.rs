@@ -13,10 +13,14 @@ impl Game<'_> {
         self.destroy_block_progress(p.id, p.pos, i32::from(p.progress));
     }
 
-    /// `C::SectionBlocksUpdate`: its arms of `apply_packet`, guard and order kept.
-    pub(super) fn apply_section_blocks_update_packet(&mut self, p: play::SectionBlocksUpdate) {
-        for (pos, state) in super::super::remote_chunks::section_blocks(&p) {
-            self.server_block(pos, state);
+    /// `C::SectionBlocksUpdate`: apply verified states in packet order.
+    pub(in crate::game) fn apply_section_blocks_update_packet(
+        &mut self,
+        p: &play::SectionBlocksUpdate,
+        mut groups: crate::game::native_connection_groups::GroupUpdates,
+    ) {
+        for (pos, state) in super::super::remote_chunks::section_blocks(p) {
+            self.server_block(pos, state, groups.remove(&pos));
         }
     }
 

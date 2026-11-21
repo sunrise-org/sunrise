@@ -76,7 +76,17 @@ impl<T> Producer<T> {
     /// Reserve before reporting acceptance. Allocation traversal occurs before
     /// taking the channel lock, and all failure values leave that lock intact.
     pub fn prepare(&self, value: T) -> Result<Prepared<T>, Refused<T>> {
-        match self.sender.reserve((self.charge)(&value)) {
+        self.prepare_with(value, byte_channel::Sender::reserve)
+    }
+    fn prepare_with(
+        &self,
+        value: T,
+        reserve: impl FnOnce(
+            &byte_channel::Sender<T>,
+            usize,
+        ) -> Result<byte_channel::Permit<T>, byte_channel::ReserveError>,
+    ) -> Result<Prepared<T>, Refused<T>> {
+        match reserve(&self.sender, (self.charge)(&value)) {
             Ok(permit) => Ok(Prepared { value, permit }),
             Err(error) => Err(Refused {
                 reason: match error {
@@ -90,6 +100,29 @@ impl<T> Producer<T> {
     pub fn send(&self, value: T) -> Result<(), Refused<T>> {
         self.prepare(value)?.publish()
     }
+    /// Apply backpressure on the receiving thread without refusing this record.
+    pub(crate) fn send_wait(&self, value: T) -> Result<(), Refused<T>> {
+        let charge = (self.charge)(&value);
+        self.sender.send_wait(value, charge).map_err(|error| {
+            use byte_channel::TrySendError;
+            match error {
+                TrySendError::Full(value) => Refused {
+                    value,
+                    reason: Refusal::Pressure,
+                },
+                TrySendError::Disconnected(value) => Refused {
+                    value,
+                    reason: Refusal::Closed,
+                },
+            }
+        })
+    }
+
+    pub(crate) fn send_terminal(&self, value: T) -> Result<(), Refused<T>> {
+        self.prepare_with(value, byte_channel::Sender::reserve_terminal)?
+            .publish()
+    }
+
     pub fn stats(&self) -> Stats {
         self.sender.stats()
     }

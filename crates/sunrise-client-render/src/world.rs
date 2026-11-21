@@ -96,6 +96,7 @@ impl DirtySections {
         self.columns.values().map(SectionMask::len).sum()
     }
 }
+
 pub struct World {
     // Initialized only for a logical server level, then borrowed by every AI worker.
     path_type_cache: OnceLock<path_type_cache::PathTypeCache>,
@@ -186,6 +187,12 @@ pub struct World {
     /// Writes of this tick's block events and block entities, held out of
     /// the log while it is sent: they go out with the next tick's.
     pub block_log_held: Vec<(i32, i32, i32)>,
+    /// Positions whose group changed or was cleared since publication. Kept only while
+    /// the world is open to the network, alongside the vanilla block log.
+    pub connection_group_log: Option<FxHashSet<(i32, i32, i32)>>,
+    /// Only an authoritative world expires groups on storage replacement. Client group data
+    /// comes with the verified block from the server.
+    group_lifetime: Option<Arc<sunrise_world::level::Behaviours>>,
     /// Every write since the mobs last ticked (position, old and new state),
     /// for `ServerLevel.sendBlockUpdated`'s path recomputing; kept only while
     /// the mobs of this world tick (`game/mobs/creatures/mod.rs`).
@@ -383,6 +390,8 @@ impl World {
             weather: Weather::default(),
             block_log: None,
             block_log_held: Vec::new(),
+            connection_group_log: None,
+            group_lifetime: None,
             path_writes: None,
             bulk_log: Default::default(),
             light_log: None,
@@ -495,6 +504,183 @@ impl World {
     pub fn set(&mut self, x: i32, y: i32, z: i32, state: BlockStateId) -> crate::Result<()> {
         self.set_with_notification(x, y, z, state, true)
     }
+    /// Mark sections whose mesh depends on `(x, y, z)` dirty: the containing section, its
+    /// vertical neighbours on section borders (`height_above`: also `local_y == 1` for
+    /// `Connect::Height` two-above checks), and horizontal neighbours (including diagonals) on
+    /// chunk borders.
+    pub fn mark_remesh_at(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        min_y: i32,
+        sections: i32,
+        height_above: bool,
+    ) {
+        let sy = (y - min_y) >> 4;
+        let local_y = y & 15;
+        let below_reach = if height_above { 1 } else { 0 };
+        let mark = |dirty: &mut DirtySections, bx: i32, bz: i32| {
+            dirty.insert((bx >> 4, sy, bz >> 4));
+            if local_y <= below_reach && sy > 0 {
+                dirty.insert((bx >> 4, sy - 1, bz >> 4));
+            }
+            if local_y == 15 && sy + 1 < sections {
+                dirty.insert((bx >> 4, sy + 1, bz >> 4));
+            }
+        };
+        let (bx, bz) = (x & 15, z & 15);
+        mark(&mut self.dirty_sections, x, z);
+        if bx == 0 {
+            mark(&mut self.dirty_sections, x - 1, z);
+        } else if bx == 15 {
+            mark(&mut self.dirty_sections, x + 1, z);
+        }
+        if bz == 0 {
+            mark(&mut self.dirty_sections, x, z - 1);
+        } else if bz == 15 {
+            mark(&mut self.dirty_sections, x, z + 1);
+        }
+        if (bx == 0 || bx == 15) && (bz == 0 || bz == 15) {
+            mark(
+                &mut self.dirty_sections,
+                if bx == 0 { x - 1 } else { x + 1 },
+                if bz == 0 { z - 1 } else { z + 1 },
+            );
+        }
+    }
+    /// Read the mod-published connection group at `(x, y, z)`, or `None` if unset / unloaded /
+    /// out of height.
+    #[inline]
+    pub fn connection_group(&self, x: i32, y: i32, z: i32) -> Option<u64> {
+        self.chunks
+            .get(&(x >> 4, z >> 4))?
+            .connection_group(x & 15, y, z & 15)
+    }
+    /// Write or clear the connection group in resident storage only: no log or remesh
+    /// for speculative writes. Returns `false` if the chunk is unloaded, `y` is out of
+    /// height, or the group was unchanged.
+    pub fn set_connection_group_stored(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        group: Option<u64>,
+    ) -> bool {
+        self.write_connection_group((x, y, z), group, false)
+    }
+
+    /// Publish a server-side group without changing save or lighting state.
+    pub fn set_connection_group(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        group: Option<u64>,
+        notify: bool,
+    ) -> bool {
+        if !self.write_connection_group((x, y, z), group, true) {
+            return false;
+        }
+        if notify && let Some(log) = &mut self.connection_group_log {
+            log.insert((x, y, z));
+        }
+        true
+    }
+
+    fn write_connection_group(
+        &mut self,
+        (x, y, z): (i32, i32, i32),
+        group: Option<u64>,
+        publish: bool,
+    ) -> bool {
+        let Some(chunk) = self.chunks.get_mut(&(x >> 4, z >> 4)) else {
+            return false;
+        };
+        let Some(cell) = chunk.dynamic_cell(x & 15, y, z & 15) else {
+            return false;
+        };
+        if chunk.connection_groups.get(&cell).copied() == group {
+            return false;
+        }
+        let chunk = Arc::make_mut(chunk);
+        chunk.write_group(cell, group);
+        if publish {
+            let (min_y, sections) = (chunk.min_y(), chunk.sections.len() as i32);
+            self.mark_remesh_at(x, y, z, min_y, sections, false);
+        }
+        true
+    }
+
+    pub fn authoritative_group_lifetime(
+        &mut self,
+        behaviours: Arc<sunrise_world::level::Behaviours>,
+    ) {
+        self.group_lifetime = Some(behaviours);
+    }
+
+    /// Commit the group lifetime of a resident storage replacement. Both the scalar and the
+    /// palette-run writer use this boundary; speculative storage uses `set_stored` instead.
+    pub(crate) fn block_storage_changed(
+        &mut self,
+        pos: (i32, i32, i32),
+        old: BlockStateId,
+        new: BlockStateId,
+    ) -> bool {
+        if self
+            .group_lifetime
+            .as_ref()
+            .is_some_and(|b| !b.keeps_block_entity(old, new))
+        {
+            self.invalidate_replaced_group(pos);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// A committed replacement (including a fresh block entity of the same state)
+    /// clears this cell and publishes the clear with the current block state.
+    pub fn invalidate_replaced_group(&mut self, (x, y, z): (i32, i32, i32)) -> bool {
+        self.set_connection_group(x, y, z, None, true)
+    }
+
+    /// Attach a fresh instance, even over a block of the same state. Payload updates to an
+    /// existing instance use `BlockEntities::insert` instead.
+    pub fn replace_block_entity(
+        &mut self,
+        pos: (i32, i32, i32),
+        entity: crate::containers::BlockEntity,
+    ) {
+        if self.group_lifetime.is_some() && self.is_loaded_at(pos.0, pos.1, pos.2) {
+            self.invalidate_replaced_group(pos);
+        }
+        self.block_entities.replace(pos, entity);
+    }
+
+    /// A replacement column carries its complete group map. Compare by cell once, before
+    /// adopting it, so a bundle never removes and re-adds an unchanged group.
+    pub(crate) fn dirty_connection_group_diff(&mut self, old: &Chunk, next: &Chunk) {
+        let removed_or_changed = old.connection_groups.iter().filter_map(|(&cell, &value)| {
+            (next.connection_groups.get(&cell) != Some(&value)).then_some(cell)
+        });
+        let new = next
+            .connection_groups
+            .keys()
+            .copied()
+            .filter(|cell| !old.connection_groups.contains_key(cell));
+        for cell in removed_or_changed.chain(new) {
+            let (x, y, z) = next.dynamic_cell_coords(cell);
+            self.mark_remesh_at(
+                next.x * 16 + i32::from(x),
+                y,
+                next.z * 16 + i32::from(z),
+                next.min_y(),
+                next.sections.len() as i32,
+                false,
+            );
+        }
+    }
     /// Store a state while controlling whether the change enters the client block log.
     pub fn set_with_notification(
         &mut self,
@@ -513,6 +699,7 @@ impl World {
         }
         let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0);
         if previous != state.0 {
+            self.block_storage_changed((x, y, z), BlockStateId(previous), state);
             self.block_entities
                 .state_changed((x, y, z), previous, state.0);
             let watches = |id: u32| self.watched.get(id as usize).copied().unwrap_or(false);
@@ -532,36 +719,7 @@ impl World {
             // can reach: this section, the one above only on its top layer, the one below on
             // its bottom two layers, and a neighbour column only on a chunk
             // border (the diagonal only where both borders meet).
-            let sy = (y - min_y) >> 4;
-            let local_y = y & 15;
-            let mark = |dirty: &mut DirtySections, bx: i32, bz: i32| {
-                dirty.insert((bx >> 4, sy, bz >> 4));
-                if local_y <= 1 && sy > 0 {
-                    dirty.insert((bx >> 4, sy - 1, bz >> 4));
-                }
-                if local_y == 15 && sy + 1 < sections {
-                    dirty.insert((bx >> 4, sy + 1, bz >> 4));
-                }
-            };
-            let (bx, bz) = (x & 15, z & 15);
-            mark(&mut self.dirty_sections, x, z);
-            if bx == 0 {
-                mark(&mut self.dirty_sections, x - 1, z);
-            } else if bx == 15 {
-                mark(&mut self.dirty_sections, x + 1, z);
-            }
-            if bz == 0 {
-                mark(&mut self.dirty_sections, x, z - 1);
-            } else if bz == 15 {
-                mark(&mut self.dirty_sections, x, z + 1);
-            }
-            if (bx == 0 || bx == 15) && (bz == 0 || bz == 15) {
-                mark(
-                    &mut self.dirty_sections,
-                    if bx == 0 { x - 1 } else { x + 1 },
-                    if bz == 0 { z - 1 } else { z + 1 },
-                );
-            }
+            self.mark_remesh_at(x, y, z, min_y, sections, true);
             if self.chunks.get(&(x >> 4, z >> 4)).is_some_and(|c| c.lit) {
                 self.light_edits.push(((x, y, z), previous, state.0));
             } else {
@@ -683,6 +841,20 @@ impl World {
     pub fn unload_chunk(&mut self, key: (i32, i32)) -> Option<Arc<Chunk>> {
         self.capability_generations.unload_chunk(key);
         let chunk = self.chunks.remove(&key)?;
+        // A surviving quad may join across any side or corner of the dropped column.
+        for &cell in chunk.connection_groups.keys() {
+            let (x, y, z) = chunk.dynamic_cell_coords(cell);
+            if x == 0 || x == 15 || z == 0 || z == 15 {
+                self.mark_remesh_at(
+                    key.0 * 16 + i32::from(x),
+                    y,
+                    key.1 * 16 + i32::from(z),
+                    chunk.min_y(),
+                    chunk.sections.len() as i32,
+                    false,
+                );
+            }
+        }
         self.retain_border(key, &chunk);
         Some(chunk)
     }
@@ -1068,6 +1240,65 @@ mod tests {
         // Past the top, and the palette of air below it.
         assert!(!world.may_hold([0, 400, 0], [0, 401, 0], nine));
         assert!(world.may_hold([0, 400, 0], [0, 401, 0], |s| s.0 == 0));
+    }
+
+    #[test]
+    fn connection_groups_dirty_only_meshes_log_changes_and_invalidate_unload_edges() {
+        let mut world = World::new(BlockStateId(0), 0);
+        world.connection_group_log = Some(Default::default());
+        world.chunks.insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        world.chunks.insert((1, 0), Arc::new(Chunk::empty(1, 0)));
+        world.chunks.insert((0, 1), Arc::new(Chunk::empty(0, 1)));
+        world.chunks.insert((1, 1), Arc::new(Chunk::empty(1, 1)));
+
+        // Unloaded chunk and out-of-height return false without logging or dirtying.
+        assert!(!world.set_connection_group(32, 64, 0, Some(1), true));
+        assert!(!world.set_connection_group(15, 999, 15, Some(1), true));
+        assert!(world.connection_group_log.as_ref().unwrap().is_empty());
+        assert!(world.dirty_sections.is_empty());
+
+        // Setting group 0 (valid u64 value) succeeds, logs, and marks
+        // remesh across borders without touching dirty_light, light_edits, or modified.
+        assert!(world.set_connection_group(15, 64, 15, Some(0), true));
+        assert_eq!(world.connection_group(15, 64, 15), Some(0));
+        assert!(!world.set_connection_group(15, 64, 15, Some(0), true));
+        assert_eq!(
+            world.connection_group_log.as_ref().unwrap(),
+            &[(15, 64, 15)].into_iter().collect()
+        );
+        let sy = (64 - MIN_Y) >> 4;
+        assert!(world.dirty_sections.contains(&(0, sy, 0)));
+        assert!(world.dirty_sections.contains(&(1, sy, 0)));
+        assert!(world.dirty_sections.contains(&(0, sy, 1)));
+        assert!(world.dirty_sections.contains(&(1, sy, 1)));
+        assert!(world.dirty_sections.contains(&(0, sy - 1, 0)));
+        assert!(world.dirty_light.is_empty());
+        assert!(world.light_edits.is_empty());
+        assert!(world.modified.is_empty());
+
+        // Automatic clear publishes the cell's final empty value; repeating it is a no-op.
+        assert!(world.invalidate_replaced_group((15, 64, 15)));
+        assert_eq!(world.connection_group(15, 64, 15), None);
+        assert!(!world.invalidate_replaced_group((15, 64, 15)));
+        assert!(
+            world
+                .connection_group_log
+                .as_ref()
+                .unwrap()
+                .contains(&(15, 64, 15))
+        );
+
+        // Forget a grouped column with no visibility hooks. Its surviving neighbours
+        // must retire their joins; groups farther from the edge do not affect them.
+        assert!(world.set_connection_group(15, 64, 15, Some(42), true));
+        assert!(world.set_connection_group(7, 128, 7, Some(99), true));
+        world.dirty_sections.clear();
+        world.unload_chunk((0, 0));
+        assert_eq!(world.connection_group(15, 64, 15), None);
+        assert!(world.dirty_sections.contains(&(1, sy, 0)));
+        assert!(world.dirty_sections.contains(&(0, sy, 1)));
+        assert!(world.dirty_sections.contains(&(1, sy, 1)));
+        assert!(!world.dirty_sections.contains(&(1, sy + 4, 0)));
     }
 }
 

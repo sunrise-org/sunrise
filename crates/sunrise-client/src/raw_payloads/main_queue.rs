@@ -11,14 +11,18 @@ use mod_api::PayloadContextError;
 
 pub enum MainQueue {
     Client(Producer<Event>),
+    ClientBundle(BundleWork),
     Server {
         events: Producer<NetEvent>,
         endpoint: Endpoint,
         conn: Option<u32>,
     },
 }
+type BundleWork = std::sync::Arc<std::sync::Mutex<Vec<Incoming>>>;
+
 pub(crate) enum PreparedMain {
     Client(Prepared<Event>),
+    ClientBundle(Box<(BundleWork, Incoming)>),
     Server(Prepared<NetEvent>),
 }
 /// Keeps failed opaque work alive until after the caller releases its epoch gate.
@@ -46,6 +50,14 @@ impl MainQueue {
                 .prepare(Event::RawPayload(Box::new(incoming)))
                 .map(PreparedMain::Client)
                 .map_err(|error| refusal(error.reason)),
+            Self::ClientBundle(work) => {
+                // Incoming (including enqueued work) already holds its payload
+                // lease. This root stays inside the one charged bundle turn.
+                Ok(PreparedMain::ClientBundle(Box::new((
+                    work.clone(),
+                    incoming,
+                ))))
+            }
             Self::Server {
                 events,
                 endpoint,
@@ -67,6 +79,11 @@ impl PreparedMain {
             Self::Client(prepared) => prepared
                 .publish()
                 .map_err(|error| FailedMain::Client(Box::new(error))),
+            Self::ClientBundle(work) => {
+                let (pending, incoming) = *work;
+                pending.lock().unwrap().push(incoming);
+                Ok(())
+            }
             Self::Server(prepared) => prepared
                 .publish()
                 .map_err(|error| FailedMain::Server(Box::new(error))),

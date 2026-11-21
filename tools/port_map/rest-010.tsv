@@ -143,7 +143,7 @@ HiddenByteBuf.unpack	skip:java		Netty in-memory channel wrapper
 HiddenByteBuf.retain	skip:java		Netty reference counting
 HiddenByteBuf.touch	skip:java		Netty leak detection
 MonitoredLocalFrameDecoder.channelRead	port	crates/sunrise-protocol/src/connection.rs::ConnReader::recv	bytes_in counter for the bandwidth chart
-PacketBundlePacker.decode	inline	crates/sunrise-client/src/net.rs::receive_play	gap: minor: BundleDelimiter is dropped; bundled packets are dispatched one by one
+PacketBundlePacker.decode	port	crates/sunrise-client/src/net/play_bundle.rs::PlayBundle::accept	collects delimiters, passes ordinary packets and refuses terminal or oversized bundles
 PacketBundleUnpacker.encode	port	crates/sunrise-client/src/lan/entity.rs::ServerEntity::send_changes	gap: minor: delimiters only around the projectile motion and power pair
 PacketDecoder.decode	port	crates/sunrise-protocol/src/packets/mod.rs::decode	rejects leftover bytes (larger than expected)
 PacketEncoder.encode	port	crates/sunrise-protocol/src/packets/mod.rs::encode	gap: minor: no error log and no skippable-packet path

@@ -91,9 +91,9 @@ ClientPacketListener.handleSetChunkCacheRadius	port	crates/sunrise-client/src/ga
 ClientPacketListener.handleSetSimulationDistance	inline	crates/sunrise-client/src/game/network/remote/mod.rs::Game::apply_packet	SetSimulationDistance arm: ClientLevel.serverSimulationDistance
 ClientPacketListener.handleSetChunkCacheCenter	port	crates/sunrise-client/src/game/network/remote/mod.rs::Game::apply_packet	SetChunkCacheCenter arm
 ClientPacketListener.handleBlockChangedAck	port	crates/sunrise-client/src/game/network/remote/mod.rs::Game::end_predictions
-ClientPacketListener.handleBundlePacket	inline	crates/sunrise-client/src/net.rs::receive_play	bundle delimiters are dropped; the packets inside arrive as a stream and are handled one by one, in order
+ClientPacketListener.handleBundlePacket	port	crates/sunrise-client/src/game/network/remote/raw_ingress.rs::Game::handle_play_bundle	complete bundle applied in one main turn, in packet order
 ClientPacketListener.handleProjectilePowerPacket	port	crates/sunrise-client/src/game/network/remote/packets_object.rs::Game::apply_projectile_power_packet	ProjectilePower arm: a hurting projectile's acceleration power, by id
-ClientPacketListener.handleChunkBatchFinished	inline	crates/sunrise-client/src/net.rs::receive_play	ChunkBatchFinished arm: answered on the network thread with the measured rate
+ClientPacketListener.handleChunkBatchFinished	inline	crates/sunrise-client/src/net.rs::PlayIo::handle	ChunkBatchFinished arm: answered with the measured rate
 ClientPacketListener.handleTestInstanceBlockStatus	skip:debug		status for the test instance block editor (developer blocks); Sunrise has no editor
 ClientPacketListener.handleDebugChunkValue	skip:debug		debug overlay values from the server
 ClientPacketListener.handleDebugBlockValue	skip:debug		debug overlay values from the server

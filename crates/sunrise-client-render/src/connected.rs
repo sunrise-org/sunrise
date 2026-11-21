@@ -159,6 +159,9 @@ pub struct ConnectedTextures {
     /// By block state: the highest point of its collision shape, for the rules that join by
     /// height ([`Self::set_heights`]); an empty shape has none.
     heights: Vec<f64>,
+    /// True if any loaded rule has `connect_group: true`. Cached at build time so the mesher
+    /// skips group-map checks completely when no rule uses connection groups.
+    has_group_rules: bool,
 }
 
 /// `list` appended to `lists`, as its range there.
@@ -188,6 +191,28 @@ fn sprite_name(resource: &str) -> String {
         Some((ns, path)) => format!("{ns}:{path}"),
         None => resource.to_owned(),
     }
+}
+
+/// Lazy, statically dispatched samples for a face at the block's origin.
+pub struct FaceNeighbours<State, Group, FullFaces, Biome, Texture> {
+    /// State at the given relative offset.
+    pub state: State,
+    /// Published group at that offset, including the origin; only sampled by group rules.
+    pub group: Group,
+    /// Full-face mask for a sampled state.
+    pub full_faces: FullFaces,
+    /// Biome at the origin; sampled by rules that test one.
+    pub biome: Biome,
+    /// Quad texture axes; sampled by rules with `orient=texture`.
+    pub texture: Texture,
+}
+
+#[derive(Clone, Copy)]
+struct FaceSample {
+    state: u32,
+    layer: u16,
+    face: Face,
+    pos: [i32; 3],
 }
 
 impl ConnectedTextures {
@@ -528,11 +553,18 @@ impl ConnectedTextures {
         for (r, chain) in out.rules.iter_mut().zip(chains) {
             r.chain = chain;
         }
+        out.has_group_rules = out.rules.iter().any(|r| r.rule.connect_group);
         out
     }
 
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
+    }
+
+    /// Whether any loaded rule checks per-position mod connection groups (`connect_group`).
+    #[inline]
+    pub fn has_group_rules(&self) -> bool {
+        self.has_group_rules
     }
 
     /// Whether a rule joins by height, and the collision heights are needed.
@@ -593,21 +625,27 @@ impl ConnectedTextures {
     }
 
     /// What the `face` of the block `state` at `pos` draws, for a quad with sprite `layer`.
-    /// `neighbour` answers the state at an offset from the block; `biome` its biome, asked only
-    /// by rules that test one; `texture` the quad's own texture directions, asked only by rules
-    /// with `orient=texture`.
     pub fn pick<'b>(
         &self,
         state: u32,
         layer: u16,
         face: Face,
         pos: [i32; 3],
-        neighbour: impl Fn([i32; 3]) -> u32,
-        full_faces: impl Fn(u32) -> u8,
-        biome: impl Fn() -> Option<&'b str>,
-        texture: impl Fn() -> Option<Axes>,
+        neighbours: FaceNeighbours<
+            impl Fn([i32; 3]) -> u32,
+            impl Fn([i32; 3]) -> Option<u64>,
+            impl Fn(u32) -> u8,
+            impl Fn() -> Option<&'b str>,
+            impl Fn() -> Option<Axes>,
+        >,
         mut overlay: impl FnMut(Overlay),
     ) -> Pick {
+        let sample = FaceSample {
+            state,
+            layer,
+            face,
+            pos,
+        };
         let (mut by_state, mut by_layer) = (
             self.list(&self.by_state, state as usize),
             self.list(&self.by_layer, layer as usize),
@@ -637,18 +675,7 @@ impl ConnectedTextures {
             let r = &self.rules[usize::from(i)];
             if (block || r.rule.match_blocks.is_empty())
                 && (tile || r.rule.match_tiles.is_empty())
-                && let Some((pick, index)) = self.apply(
-                    r,
-                    state,
-                    layer,
-                    face,
-                    pos,
-                    &neighbour,
-                    &full_faces,
-                    &biome,
-                    &texture,
-                    &mut overlay,
-                )
+                && let Some((pick, index)) = self.apply(r, sample, &neighbours, &mut overlay)
             {
                 // "Tiles output by CTM rules can also be matched by another rule": once, by the
                 // tile rules naming the picked tile by name (and this block, if they name blocks).
@@ -674,18 +701,7 @@ impl ConnectedTextures {
                     });
                 for (_, r) in again {
                     // Joins by tile still compare the face's own sprite with its neighbours'.
-                    match self.apply(
-                        r,
-                        state,
-                        layer,
-                        face,
-                        pos,
-                        &neighbour,
-                        &full_faces,
-                        &biome,
-                        &texture,
-                        &mut overlay,
-                    ) {
+                    match self.apply(r, sample, &neighbours, &mut overlay) {
                         Some((Pick::Keep, _)) => return pick,
                         Some((chained, _)) => return chained,
                         None => {}
@@ -698,20 +714,32 @@ impl ConnectedTextures {
 
     /// One rule on a face: `None` when it doesn't apply, picks `<skip>` or draws an overlay
     /// (handed to `overlay`: the rules after it still choose the face's own sprite).
-    #[allow(clippy::too_many_arguments)]
     fn apply<'b>(
         &self,
         r: &LoadedRule,
-        state: u32,
-        layer: u16,
-        face: Face,
-        pos: [i32; 3],
-        neighbour: &impl Fn([i32; 3]) -> u32,
-        full_faces: &impl Fn(u32) -> u8,
-        biome: &impl Fn() -> Option<&'b str>,
-        texture: &impl Fn() -> Option<Axes>,
+        sample: FaceSample,
+        neighbours: &FaceNeighbours<
+            impl Fn([i32; 3]) -> u32,
+            impl Fn([i32; 3]) -> Option<u64>,
+            impl Fn(u32) -> u8,
+            impl Fn() -> Option<&'b str>,
+            impl Fn() -> Option<Axes>,
+        >,
         overlay: &mut impl FnMut(Overlay),
     ) -> Option<(Pick, usize)> {
+        let FaceSample {
+            state,
+            layer,
+            face,
+            pos,
+        } = sample;
+        let FaceNeighbours {
+            state: neighbour,
+            group,
+            full_faces,
+            biome,
+            texture,
+        } = neighbours;
         let rule = &r.rule;
         // `Rule::applies_at`, with the biome looked up only for rules that test one. Rules with
         // a custom name are not loaded.
@@ -727,49 +755,65 @@ impl ConnectedTextures {
         }
         let info = self.states.get(state as usize).copied().unwrap_or_default();
         let join = &r.overlay;
+        let own_group = if rule.connect_group {
+            group([0, 0, 0])
+        } else {
+            None
+        };
         let joins = |offset: [i32; 3]| {
             let other = neighbour(offset);
-            if join.any() {
+            let base = if join.any() {
                 // An overlay joins the blocks it is drawn beside.
-                return join.states.binary_search(&other).is_ok()
+                join.states.binary_search(&other).is_ok()
                     || self
                         .face_layers
                         .get(other as usize)
-                        .is_some_and(|f| join.tiles.binary_search(&f[face as usize]).is_ok());
-            }
-            match rule.connect {
-                Connect::Block => {
-                    self.states.get(other as usize).map(|s| s.block) == Some(info.block)
+                        .is_some_and(|f| join.tiles.binary_search(&f[face as usize]).is_ok())
+            } else {
+                match rule.connect {
+                    Connect::Block => {
+                        self.states.get(other as usize).map(|s| s.block) == Some(info.block)
+                    }
+                    Connect::State => other == state,
+                    Connect::Blocks => r.listed.binary_search(&other).is_ok(),
+                    Connect::Height(h) => {
+                        let own = self.height(state);
+                        let at = |cell: [i32; 3]| {
+                            let above = self.height(neighbour([cell[0], cell[1] + 1, cell[2]]));
+                            (self.height(neighbour(cell)), above)
+                        };
+                        let (height, above) = at(offset);
+                        let listed = r.rule.connect_blocks.is_empty()
+                            || r.listed.binary_search(&other).is_ok();
+                        h.joins(own, height, above, listed)
+                            || (h.side
+                                && geometry::beside(face.normal(), offset).is_some_and(|beside| {
+                                    beside.into_iter().any(|cell| {
+                                        let (height, above) = at(cell);
+                                        h.joins_beside(own, height, above)
+                                    })
+                                }))
+                    }
+                    Connect::Properties => r
+                        .keys
+                        .get(other as usize)
+                        .is_some_and(|&k| k != u32::MAX && Some(&k) == r.keys.get(state as usize)),
+                    Connect::Tile => self
+                        .face_layers
+                        .get(other as usize)
+                        .is_some_and(|f| f[face as usize] == layer),
                 }
-                Connect::State => other == state,
-                Connect::Blocks => r.listed.binary_search(&other).is_ok(),
-                Connect::Height(h) => {
-                    let own = self.height(state);
-                    let at = |cell: [i32; 3]| {
-                        let above = self.height(neighbour([cell[0], cell[1] + 1, cell[2]]));
-                        (self.height(neighbour(cell)), above)
-                    };
-                    let (height, above) = at(offset);
-                    let listed =
-                        r.rule.connect_blocks.is_empty() || r.listed.binary_search(&other).is_ok();
-                    h.joins(own, height, above, listed)
-                        || (h.side
-                            && geometry::beside(face.normal(), offset).is_some_and(|beside| {
-                                beside.into_iter().any(|cell| {
-                                    let (height, above) = at(cell);
-                                    h.joins_beside(own, height, above)
-                                })
-                            }))
-                }
-                Connect::Properties => r
-                    .keys
-                    .get(other as usize)
-                    .is_some_and(|&k| k != u32::MAX && Some(&k) == r.keys.get(state as usize)),
-                Connect::Tile => self
-                    .face_layers
-                    .get(other as usize)
-                    .is_some_and(|f| f[face as usize] == layer),
+            };
+            if !base {
+                return false;
             }
+            if rule.connect_group {
+                let Some(own) = own_group else {
+                    return false;
+                };
+                return group(offset) == Some(own);
+            }
+            true
         };
         let axes = |face| match (rule.orient, info.axis) {
             (Orient::StateAxis, Some(axis)) => Axes::column(face, axis),
@@ -1013,10 +1057,13 @@ mod tests {
             layer,
             face,
             [0, 64, 0],
-            at,
-            full,
-            || None,
-            || None,
+            FaceNeighbours {
+                state: at,
+                group: |_| None,
+                full_faces: full,
+                biome: || None,
+                texture: || None,
+            },
             |_| {},
         )
     }
@@ -1466,10 +1513,13 @@ mod tests {
                 3,
                 Face::North,
                 [x, 64, 0],
-                |_| 0,
-                |_| 0,
-                || None,
-                || None,
+                FaceNeighbours {
+                    state: |_| 0,
+                    group: |_| None,
+                    full_faces: |_| 0,
+                    biome: || None,
+                    texture: || None,
+                },
                 |_| {},
             );
             let upper = ctm.pick(
@@ -1477,10 +1527,13 @@ mod tests {
                 3,
                 Face::North,
                 [x, 65, 0],
-                |_| 0,
-                |_| 0,
-                || None,
-                || None,
+                FaceNeighbours {
+                    state: |_| 0,
+                    group: |_| None,
+                    full_faces: |_| 0,
+                    biome: || None,
+                    texture: || None,
+                },
                 |_| {},
             );
             assert_eq!(lower, upper, "{x}");
@@ -1501,10 +1554,13 @@ mod tests {
                 3,
                 Face::Up,
                 [0, y, 0],
-                |_| 0,
-                |_| 0,
-                || Some(biome),
-                || None,
+                FaceNeighbours {
+                    state: |_| 0,
+                    group: |_| None,
+                    full_faces: |_| 0,
+                    biome: || Some(biome),
+                    texture: || None,
+                },
                 |_| {},
             )
         };
@@ -1547,10 +1603,13 @@ mod tests {
                 3,
                 Face::North,
                 pos,
-                |_| 0,
-                |_| 0,
-                || None,
-                || None,
+                FaceNeighbours {
+                    state: |_| 0,
+                    group: |_| None,
+                    full_faces: |_| 0,
+                    biome: || None,
+                    texture: || None,
+                },
                 |_| {},
             )
         };
@@ -1632,10 +1691,13 @@ mod tests {
             3,
             face,
             [0, 64, 0],
-            at,
-            |_| 0,
-            || None,
-            || None,
+            FaceNeighbours {
+                state: at,
+                group: |_| None,
+                full_faces: |_| 0,
+                biome: || None,
+                texture: || None,
+            },
             |o| out.push(o.layer),
         );
         (out, pick)
@@ -1671,10 +1733,13 @@ mod tests {
             3,
             Face::Up,
             [0, 64, 0],
-            |o| if o == [0, 0, -1] { 1 } else { 0 },
-            |_| 0,
-            || None,
-            || None,
+            FaceNeighbours {
+                state: |o| if o == [0, 0, -1] { 1 } else { 0 },
+                group: |_| None,
+                full_faces: |_| 0,
+                biome: || None,
+                texture: || None,
+            },
             |o| {
                 tint = Some((o.tint, o.translucent));
             },
@@ -1710,10 +1775,13 @@ mod tests {
             7,
             Face::Up,
             [0, 64, 0],
-            door_north,
-            |_| 0,
-            || None,
-            || None,
+            FaceNeighbours {
+                state: door_north,
+                group: |_| None,
+                full_faces: |_| 0,
+                biome: || None,
+                texture: || None,
+            },
             |o| got.push(o),
         );
         assert_eq!(
@@ -1835,10 +1903,13 @@ mod tests {
                 3,
                 Face::North,
                 [0, 64, 0],
-                east,
-                |_| 0,
-                || None,
-                mirrored,
+                FaceNeighbours {
+                    state: east,
+                    group: |_| None,
+                    full_faces: |_| 0,
+                    biome: || None,
+                    texture: mirrored,
+                },
                 |_| {},
             )
         };
@@ -1865,10 +1936,13 @@ mod tests {
             7,
             Face::Up,
             [0, 64, 0],
-            north,
-            |_| 0,
-            || None,
-            turned,
+            FaceNeighbours {
+                state: north,
+                group: |_| None,
+                full_faces: |_| 0,
+                biome: || None,
+                texture: turned,
+            },
             |o| got.push(o.layer),
         );
         assert_eq!(got, [1015]);
@@ -2094,10 +2168,13 @@ mod tests {
             u16::try_from(face.layer).unwrap(),
             Face::North,
             [0; 3],
-            |_| 0,
-            |_| 0,
-            || None,
-            || None,
+            FaceNeighbours {
+                state: |_| 0,
+                group: |_| None,
+                full_faces: |_| 0,
+                biome: || None,
+                texture: || None,
+            },
             |_| {},
         ) else {
             panic!("the named rule must match the baked face");
@@ -2173,5 +2250,148 @@ mod tests {
             "a sheet that is not a grid of square tiles drops its rule"
         );
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn connect_group_requires_matching_group_including_zero_and_cover() {
+        use std::sync::Arc;
+        use sunrise_connected::{L, R, Rule, Table, TableSheet};
+
+        let none = BlockProperties::default();
+        let states = [
+            ("minecraft:air", &none),
+            ("demo:tank", &none),
+            ("minecraft:stone", &none),
+        ];
+        // Table with left/right tests and cover=true: 4 outcomes -> tiles 0..4.
+        let table = Table::new(vec![L, R], true, (4, 1), vec![0, 1, 2, 3]).unwrap();
+        let mut rule = Rule::table(
+            "assets/demo/sunrise/connected/tank.json".into(),
+            TableSheet {
+                sprite: "demo:block/tank_sheet".into(),
+                table: Arc::new(table),
+            },
+        );
+        rule.match_blocks = vec![sunrise_connected::BlockSel {
+            id: "demo:tank".into(),
+            states: Vec::new(),
+        }];
+        rule.connect_group = true;
+        let mut plain = rule.clone();
+        plain.connect_group = false;
+
+        let build = |r: Rule| {
+            let cells = (0u16..4)
+                .map(|i| {
+                    Some(TileLayer::Layer {
+                        layer: 100 + i,
+                        translucent: false,
+                        opaque: false,
+                    })
+                })
+                .collect();
+            let loaded = LoadedRule {
+                rule: r,
+                tiles: Vec::new(),
+                cells,
+                listed: Vec::new(),
+                keys: Vec::new(),
+                chain: Vec::new(),
+                overlay: OverlayJoin::default(),
+            };
+            ConnectedTextures::build(vec![loaded], states.iter().map(|&s| Some(s)), |_| None)
+        };
+
+        let plain_ctm = build(plain);
+        assert!(!plain_ctm.has_group_rules());
+        // A rule without `connect_group` must join normally and never invoke the group callback.
+        assert_eq!(
+            plain_ctm.pick(
+                1,
+                0,
+                Face::Up,
+                [0, 64, 0],
+                FaceNeighbours {
+                    state: |o| if o == [-1, 0, 0] { 1 } else { 0 },
+                    group: |_| panic!(
+                        "group callback must not run for rules without connect_group"
+                    ),
+                    full_faces: |_| 0,
+                    biome: || None,
+                    texture: || None,
+                },
+                |_| {},
+            ),
+            tile(101)
+        );
+        let ctm = build(rule);
+        assert!(ctm.has_group_rules());
+
+        // On Face::Up, left is [-1, 0, 0], right is [1, 0, 0], front (cover) is [0, 1, 0].
+        let full_down = 1u8 << (Face::Down as u8);
+        let pick_with =
+            |neighbours: &[([i32; 3], u32)], groups: &[([i32; 3], u64)], cover_full: bool| {
+                ctm.pick(
+                    1,
+                    0,
+                    Face::Up,
+                    [0, 64, 0],
+                    FaceNeighbours {
+                        state: |o| {
+                            neighbours
+                                .iter()
+                                .find(|(p, _)| *p == o)
+                                .map_or(0, |&(_, s)| s)
+                        },
+                        group: |o| groups.iter().find(|(p, _)| *p == o).map(|&(_, g)| g),
+                        full_faces: |s| if cover_full && s == 1 { full_down } else { 0 },
+                        biome: || None,
+                        texture: || None,
+                    },
+                    |_| {},
+                )
+            };
+
+        // Group None joins nothing — not even another None neighbour of the same block.
+        assert_eq!(
+            pick_with(&[([-1, 0, 0], 1), ([1, 0, 0], 1)], &[], false),
+            tile(100)
+        );
+        // Same group (including group 0) joins; different group does not.
+        assert_eq!(
+            pick_with(
+                &[([-1, 0, 0], 1), ([1, 0, 0], 1)],
+                &[([0, 0, 0], 0), ([-1, 0, 0], 0), ([1, 0, 0], 7)],
+                false,
+            ),
+            tile(101)
+        );
+        // Different block with the same group still does NOT join under Connect::Block.
+        assert_eq!(
+            pick_with(
+                &[([-1, 0, 0], 2)],
+                &[([0, 0, 0], 5), ([-1, 0, 0], 5)],
+                false,
+            ),
+            tile(100)
+        );
+        // Cover suppresses left join only when the front-of-left cell [-1, 1, 0] ALSO matches
+        // the block and shares the connection group.
+        assert_eq!(
+            pick_with(
+                &[([-1, 0, 0], 1), ([-1, 1, 0], 1)],
+                &[([0, 0, 0], 5), ([-1, 0, 0], 5), ([-1, 1, 0], 9)],
+                true,
+            ),
+            tile(101)
+        );
+        assert_eq!(
+            pick_with(
+                &[([-1, 0, 0], 1), ([-1, 1, 0], 1)],
+                &[([0, 0, 0], 5), ([-1, 0, 0], 5), ([-1, 1, 0], 5)],
+                true,
+            ),
+            tile(100)
+        );
     }
 }

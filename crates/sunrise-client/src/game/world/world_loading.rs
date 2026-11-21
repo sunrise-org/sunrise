@@ -319,7 +319,7 @@ impl WorldRequest {
         )?;
         drop(streaming_step);
         streaming.radius = settings.render_distance;
-        let mut world = Game::world_for_mods(res.facts().air, level.seed);
+        let mut world = Game::authoritative_world_for_mods(res, level.seed);
         world.attachments = save.load_attachments();
         world.shape = shape;
         world.fast_lava = sunrise_world::dimension_type::DimensionFacts::of_level(

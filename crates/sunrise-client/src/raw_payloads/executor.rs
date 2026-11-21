@@ -39,6 +39,16 @@ pub fn dispatch(incoming: Incoming, endpoint: Endpoint, main: MainQueue) {
     }
 }
 
+/// `ClientNetworkRegistry.handleModdedPayload` invokes NETWORK listeners on
+/// the caller, which is already main inside a bundle. The bundle is itself the
+/// ordered main turn; don't enqueue these roots behind work received later.
+pub fn dispatch_bundle(incoming: Incoming, endpoint: &Endpoint) -> Vec<Incoming> {
+    let work = Arc::new(std::sync::Mutex::new(Vec::new()));
+    execute(incoming, endpoint, &MainQueue::ClientBundle(work.clone()));
+    let mut pending = work.lock().unwrap();
+    std::mem::take(&mut *pending)
+}
+
 /// The pooled play receiver calls this from its existing maintenance turn.
 pub fn dispatch_pending(endpoint: &Endpoint, main: &MainQueue) {
     let Some(connection) = endpoint.transport().connection.as_ref() else {

@@ -616,9 +616,29 @@ fn a_column_too_large_to_wrap_is_not_counted_as_sent() {
     let mut oversized = Writer::new();
     oversized.varint(ids::LEVEL_CHUNK_WITH_LIGHT);
     oversized.bytes(&vec![0; 1 << 21]);
-    let taken = [(3, ()), (5, ()), (8, ())];
+    // The rejected column has a valid section payload. It must not escape
+    // into the next accepted column's run.
+    use sunrise_protocol::connection_groups::{self, Cell, Entry, Section};
+    let group = || {
+        C::CustomPayload(sunrise_protocol::packets::custom_payload::CustomPayload {
+            channel: connection_groups::CHANNEL.into(),
+            data: Section {
+                pos: [9, 4, 1],
+                entries: vec![Entry {
+                    cell: Cell::of([0, 0, 0]),
+                    group: Some(30),
+                }],
+            }
+            .encode()
+            .unwrap(),
+        })
+        .encode()
+    };
+    let taken = [(3, false), (5, true), (8, false)];
     let bodies = [body((0, 0)), oversized.data.clone(), body((1, 0))];
-    let (payloads, sent) = batch_runs(Level::Index(NETHER_INDEX), &taken, &bodies);
+    let (payloads, sent) = batch_runs(Level::Index(NETHER_INDEX), &taken, &bodies, |grouped| {
+        if *grouped { vec![group()] } else { Vec::new() }
+    });
     assert_eq!(sent, vec![3, 8], "the queue places of the columns sent");
     let mut columns = Vec::new();
     for payload in &payloads {
@@ -641,7 +661,12 @@ fn a_column_too_large_to_wrap_is_not_counted_as_sent() {
         }
     }
     assert_eq!(columns, vec![(0, 0), (1, 0)]);
-    let (payloads, sent) = batch_runs(Level::Index(NETHER_INDEX), &[(0, ())], &[oversized.data]);
+    let (payloads, sent) = batch_runs(
+        Level::Index(NETHER_INDEX),
+        &[(0, ())],
+        &[oversized.data],
+        |_| vec![group()],
+    );
     assert!(payloads.is_empty() && sent.is_empty(), "no empty batch");
 }
 

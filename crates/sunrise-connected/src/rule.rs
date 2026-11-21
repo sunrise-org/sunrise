@@ -216,6 +216,10 @@ pub struct Rule {
     pub connect_blocks: Vec<BlockSel>,
     /// [`Connect::Properties`]: the state properties that must be equal.
     pub connect_properties: Vec<String>,
+    /// Also require the block and each joining neighbour to hold the same mod-published
+    /// per-position connection group (`LevelRef::set_connection_group`). Blocks without a group
+    /// join nothing.
+    pub connect_group: bool,
     pub inner_seams: bool,
     /// One per tile (`random`); empty when every tile counts the same.
     pub weights: Vec<u32>,
@@ -256,6 +260,7 @@ impl Rule {
             connect_tiles: Vec::new(),
             connect_blocks: Vec::new(),
             connect_properties: Vec::new(),
+            connect_group: false,
             inner_seams: false,
             weights: Vec::new(),
             random_loops: 0,

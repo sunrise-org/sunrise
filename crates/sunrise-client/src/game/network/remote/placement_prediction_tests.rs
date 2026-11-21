@@ -1,5 +1,7 @@
 use super::*;
-use crate::game::native_entity_refs::tests::with_game_role;
+use crate::game::{
+    native_connection_groups::ReceivedGroup, native_entity_refs::tests::with_game_role,
+};
 use mod_api::{
     BlockPart, BlockState, CanSurviveEvent, CanSustainPlantEvent, FenceGateInWallEvent, Hooks,
     LevelSide, MayPlaceOnEvent, Registrar, StateForPlacementEvent,
@@ -328,7 +330,7 @@ fn a_predicted_break_reconciles_its_neighbour_s_shape_change() {
             ],
             "dependent notice precedes support notice; both read the completed shape writes"
         );
-        game.server_block([1, 65, 0], cobblestone.0 as i32);
+        game.server_block([1, 65, 0], cobblestone.0 as i32, None);
         game.end_predictions(6);
         assert_eq!(game.world.block(1, 65, 0), air);
         assert_eq!(game.world.block(0, 65, 0), air, "the Part saw the break");
@@ -341,7 +343,7 @@ fn a_predicted_break_reconciles_its_neighbour_s_shape_change() {
             "the dependent write rolled back too"
         );
 
-        game.server_block([1, 65, 0], air.0 as i32);
+        game.server_block([1, 65, 0], air.0 as i32, None);
         assert_eq!(game.world.block(1, 65, 0), air);
         assert_eq!(
             game.world.block(0, 65, 0),
@@ -422,7 +424,7 @@ fn a_denied_break_restores_wall_sign_text_and_synced_attachments() {
                 .collect::<Vec<_>>()
         };
         game.world.set(1, 65, 0, support).unwrap();
-        game.server_block([0, 65, 0], oak.0 as i32);
+        game.server_block([0, 65, 0], oak.0 as i32, None);
         let Some(BlockEntity::Sign(sign)) = game.world.block_entities.get_mut(&pos) else {
             panic!("wall sign was not created");
         };
@@ -460,7 +462,7 @@ fn a_denied_break_restores_wall_sign_text_and_synced_attachments() {
         // A different authoritative block must not inherit the old data, even if
         // its block entity has the same type.
         game.predict_break([1, 65, 0], support, 8);
-        game.server_block([0, 65, 0], spruce.0 as i32);
+        game.server_block([0, 65, 0], spruce.0 as i32, None);
         game.end_predictions(8);
         assert_eq!(game.world.block(0, 65, 0), spruce);
         let Some(BlockEntity::Sign(replacement)) = game.world.block_entities.get(&pos) else {
@@ -468,6 +470,17 @@ fn a_denied_break_restores_wall_sign_text_and_synced_attachments() {
         };
         assert_eq!(replacement, &Default::default());
         assert!(attachment_values(game).is_empty());
+
+        // A bare verification can supersede the block state, not the last explicit group.
+        let cell = [0, 65, 0];
+        game.server_block(cell, spruce.0 as i32, Some(ReceivedGroup(Some(23))));
+        game.predict_break([1, 65, 0], support, 9);
+        game.server_block(cell, spruce.0 as i32, Some(ReceivedGroup(None)));
+        game.server_block(cell, spruce.0 as i32, None);
+        assert_eq!(game.world.connection_group(0, 65, 0), Some(23));
+        game.end_predictions(9);
+        assert_eq!(game.world.block(0, 65, 0), spruce);
+        assert_eq!(game.world.connection_group(0, 65, 0), None);
     });
 }
 

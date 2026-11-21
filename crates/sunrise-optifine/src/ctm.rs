@@ -248,6 +248,7 @@ impl Rule {
             connect_tiles: get("connectTiles").map_or_else(Vec::new, |v| sprite_list(path, v)),
             connect_blocks: get("connectBlocks").map_or_else(Vec::new, block_list),
             connect_properties: Vec::new(),
+            connect_group: false,
             inner_seams: flag("innerSeams") == Some(true),
             weights,
             random_loops: int("randomLoops", 0).clamp(0, 9) as u32,
