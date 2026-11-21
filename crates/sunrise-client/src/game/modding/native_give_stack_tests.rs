@@ -54,6 +54,8 @@ fn item_from_snbt_refuses_what_is_not_one_item_compound() {
             Some(1),
             "stone is minecraft:stone"
         );
+        assert_eq!(count(r#"{id:"minecraft:stone",Count:3}"#), Some(1));
+        assert_eq!(count(r#"{id:"minecraft:stone",count:3,Count:9}"#), Some(3));
         assert_eq!(count(r#"{id:"minecraft:stone",count:99}"#), Some(99));
         assert_eq!(count(r#"{id:"minecraft:stone",count:1}"#), Some(1));
         assert_eq!(

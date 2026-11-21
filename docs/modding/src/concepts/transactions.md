@@ -142,7 +142,6 @@ The player `set_inventory_slot`, `set_ender_chest_slot`, `give_stack` and
 the old values; equipment effects and given-stack overflow wait for root commit.
 
 These writes reach a player in another level than the hook's: their inventory and data
-change at once, wherever they are. What would land in the world at them does not happen
-there: `give_stack` returns what did not fit instead of dropping it (drop it from a hook in
-the player's own level if you want), `drop_stack` returns the stack, `destroy_block` breaks
-nothing, and no pickup or equip sound plays.
+change at once, wherever they are. `give_stack`'s overflow and pickup sounds go to the
+player's own level at root commit. `drop_stack` still returns the stack, `destroy_block`
+breaks nothing, and no equip sound plays when the player's level is not in place.

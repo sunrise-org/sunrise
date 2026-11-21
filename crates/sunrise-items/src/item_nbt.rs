@@ -85,13 +85,19 @@ pub fn encode_item(
 pub fn item_to_nbt(stack: &crate::items::ItemStack, items: &crate::items::Items) -> Tag {
     Tag::compound(encode_item(stack, items))
 }
-/// A stack from a command or data file: a `components` patch naming a transient
-/// component (`DataComponentPatch.PatchKey`'s codec) makes no stack.
+/// A stack from a command or data file, without legacy save handling. `ItemStack.CODEC`
+/// ignores unknown fields (including `Count`); `count` defaults to 1 and must be 1 to 99
+/// if present. A `components` patch naming a transient component makes no stack.
 pub fn item_from_persistent_nbt(tag: &Tag) -> Option<crate::items::ItemStack> {
-    if let Some(components) = tag.get("components") {
+    let count = match tag.get("count") {
+        Some(value) => number(Some(value)).filter(|n| (1..=99).contains(n))? as u32,
+        None => 1,
+    };
+    let components = tag.get("components");
+    if let Some(components) = components {
         sunrise_world::item_defaults::validate_component_map_tag(components).ok()?;
     }
-    item_from_nbt(tag)
+    decode_stack(tag, count, components)
 }
 /// A stack read from a save. Earlier Sunrise saves can hold transient components
 /// (`creative_slot_lock`, `additional_trade_cost`, `map_post_processing`), so only
@@ -105,11 +111,6 @@ pub fn item_from_persistent_nbt(tag: &Tag) -> Option<crate::items::ItemStack> {
 /// command's NBT often leaves the namespace out), and an id that is no valid
 /// identifier makes no stack.
 pub fn item_from_nbt(tag: &Tag) -> Option<crate::items::ItemStack> {
-    let (namespace, path) = sunrise_world::datafix::identifier(&text(tag.get("id"))?)?;
-    let id = format!("{namespace}:{path}");
-    if id == "minecraft:air" {
-        return None;
-    }
     let count = number(tag.get("count"))
         .or_else(|| number(tag.get("Count")))
         .filter(|count| (1..=99).contains(count))
@@ -125,6 +126,19 @@ pub fn item_from_nbt(tag: &Tag) -> Option<crate::items::ItemStack> {
         }
         components => components,
     };
+    decode_stack(tag, count, components)
+}
+
+fn decode_stack(
+    tag: &Tag,
+    count: u32,
+    components: Option<&Tag>,
+) -> Option<crate::items::ItemStack> {
+    let (namespace, path) = sunrise_world::datafix::identifier(&text(tag.get("id"))?)?;
+    let id = format!("{namespace}:{path}");
+    if id == "minecraft:air" {
+        return None;
+    }
     let (damage, extra) = crate::item_data::decode_components(components);
     Some(crate::items::ItemStack {
         item: Arc::from(id.as_str()),

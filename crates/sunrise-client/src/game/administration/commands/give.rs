@@ -1,5 +1,5 @@
 //! `/give`'s handing over of one stack.
-use super::{Game, Target};
+use super::{Dim, Game, Target};
 use sunrise_client::items::ItemStack;
 use sunrise_core::random::RandomSource;
 
@@ -7,8 +7,8 @@ impl Game<'_> {
     /// `GiveCommand.giveItem`'s handing over of one stack to the acting player:
     /// `Inventory.add`, then what did not fit thrown from the eyes with no pickup delay and
     /// `owner` (the player's UUID) its only taker, or the pickup sound when it all went in.
-    /// For a player in another level than the one in place nothing lands in the world: what
-    /// did not fit is returned and no sound plays.
+    /// Effects go to the player's level, even if the turn borrows them into another one.
+    /// If their level is unavailable, return what did not fit rather than drop it elsewhere.
     pub(in crate::game) fn give_acting_stack(
         &mut self,
         stack: ItemStack,
@@ -17,12 +17,15 @@ impl Game<'_> {
         let uuid = self.native_acting_id();
         self.journal_player(uuid);
         let left = self.add_stack_to_inventory(stack);
-        if !self.acting_in_level_in_place() {
+        // A borrowed player's body is in place but their world may be parked. The shared
+        // give effects put that world in place only while replaying the sound or drop.
+        let dim = self
+            .lan_acting
+            .and_then(|conn| self.command_guest(conn))
+            .map_or(self.dim, |guest| Dim::from_id(&guest.dimension));
+        if dim != self.dim && self.levels.parked_world(dim).is_none() {
             return left;
         }
-        // At the player who gets them, in the level in place now: a root commit may replay
-        // this after the command put the caller's level back.
-        let dim = self.dim;
         if let Some(rest) = left {
             let eye = self.give_eye();
             self.after_commit(crate::game::transactions::After::GiveRest {

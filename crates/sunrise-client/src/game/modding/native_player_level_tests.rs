@@ -1,6 +1,5 @@
-//! #2875: a mod's write to a player in another level than the hook's reaches their inventory at
-//! once, and nothing it would set down lands in the world: not in the hook's level, where the
-//! player isn't, and not in theirs, which isn't in place.
+//! A mod's write to a player in another level reaches their inventory at once. A give drops
+//! overflow in the player's level; a raw throw or block break still needs that level in place.
 use super::Dim;
 use super::native_guest_turn_tests::with_guests;
 use mod_api::{HostTransaction, ItemPlace, ServerHost};
@@ -59,17 +58,16 @@ fn diamonds(game: &super::Game<'_>, conn: u32) -> u32 {
 }
 
 /// A stack given from an Overworld hook to a player in the Nether goes into their inventory
-/// at once, directly and inside a committed transaction, for the owner and another guest. What
-/// doesn't fit comes back to the mod, and an item-place insert takes only what fits; nothing
-/// drops in either level.
+/// at once, for the owner and another guest. What doesn't fit drops only in the Nether, after
+/// commit in a transaction; aborting restores the inventory and drops nothing.
 #[test]
 #[ignore = "daily"]
-fn a_give_to_a_player_in_another_level_fills_their_inventory_and_returns_the_rest() {
+fn a_give_to_a_player_in_another_level_drops_overflow_there() {
     with_guests(|game| {
         let diamond = in_the_nether(game);
         let resource = mod_api::ItemResource::of(&diamond);
-        let before = dropped(game);
         for conn in [12, 13] {
+            let before = dropped(game);
             let player = game.player(u128::from(conn)).unwrap();
             let case = format!("guest {conn}");
             // Slot 8 takes a diamond and then 63 more.
@@ -94,7 +92,7 @@ fn a_give_to_a_player_in_another_level_fills_their_inventory_and_returns_the_res
             let host: &mut dyn ServerHost = game;
             assert_eq!(
                 player.give_stack(host, diamond.clone()),
-                Ok(Some(diamond.clone())),
+                Ok(None),
                 "{case}: full"
             );
             let taken = host
@@ -109,9 +107,10 @@ fn a_give_to_a_player_in_another_level_fills_their_inventory_and_returns_the_res
                 .unwrap();
             assert_eq!(taken, 0, "{case}: a full slot takes nothing");
             assert_eq!(diamonds(game, conn), 0, "{case}");
+            assert_eq!(dropped(game), [before[0], before[1] + 1], "{case}: full");
             // One unit of room in the only matching stack, three offered: one is taken, two
-            // come back, directly and in a transaction.
-            let (three, two) = (some_diamonds(game, 3), some_diamonds(game, 2));
+            // drop, directly and in a transaction.
+            let three = some_diamonds(game, 3);
             for in_transaction in [false, true] {
                 game.lan
                     .as_mut()
@@ -122,28 +121,51 @@ fn a_give_to_a_player_in_another_level_fills_their_inventory_and_returns_the_res
                     })
                     .unwrap();
                 let host: &mut dyn ServerHost = game;
-                let rest = if in_transaction {
+                let given = if in_transaction {
+                    let aborted = host.transaction(|host, _| {
+                        Err::<(), _>(player.give_stack(host, three.clone()))
+                    });
+                    assert_eq!(aborted, Err(Ok(None)), "{case}: abort");
+                    assert_eq!(diamonds(game, conn), 63, "{case}: inventory restored");
+                    assert_eq!(
+                        dropped(game),
+                        [before[0], before[1] + 2],
+                        "{case}: no abort drop"
+                    );
+                    let host: &mut dyn ServerHost = game;
                     host.transaction(|host, _| Ok::<_, ()>(player.give_stack(host, three.clone())))
                         .unwrap()
                 } else {
                     player.give_stack(host, three.clone())
                 };
                 let case = format!("{case}, partial, in transaction: {in_transaction}");
-                assert_eq!(rest, Ok(Some(two.clone())), "{case}");
+                assert_eq!(given, Ok(None), "{case}");
                 assert_eq!(diamonds(game, conn), 64, "{case}");
+                assert_eq!(game.dim, Dim::Overworld, "{case}: hook level restored");
             }
-            assert_eq!(dropped(game), before, "{case}: nothing dropped anywhere");
-            assert_eq!(game.dim, Dim::Overworld);
+            assert_eq!(dropped(game), [before[0], before[1] + 3], "{case}");
+            game.enter_level(Dim::Nether).unwrap();
+            for (item, count) in game.dropped.iter().skip(before[1]).zip([1, 2, 2]) {
+                assert_eq!(&*item.stack.item, "minecraft:diamond", "{case}");
+                assert_eq!(item.stack.count, count, "{case}");
+                assert_eq!([item.position.x, item.position.z], [3.0, 5.0], "{case}");
+                assert_eq!(item.pickup_delay, 0, "{case}");
+                assert_eq!(
+                    item.target,
+                    Some(playerdata::uuid_ints(u128::from(conn))),
+                    "{case}"
+                );
+            }
+            game.enter_level(Dim::Overworld).unwrap();
         }
     });
 }
 
-/// A guest borrowed into an Overworld turn while they are in the Nether (as a harvest query
-/// borrows the requested player) gets the same: inside their own turn a full inventory's
-/// overflow comes back and nothing drops.
+/// A guest borrowed into an Overworld turn while they are in the Nether gets a give's
+/// overflow in the Nether and cannot throw a stack in the Overworld.
 #[test]
 #[ignore = "daily"]
-fn a_player_borrowed_into_another_levels_turn_drops_nothing_there() {
+fn a_give_to_a_borrowed_player_drops_in_their_level() {
     with_guests(|game| {
         let diamond = in_the_nether(game);
         game.lan
@@ -164,9 +186,10 @@ fn a_player_borrowed_into_another_levels_turn_drops_nothing_there() {
                 (given, thrown)
             })
             .unwrap();
-        assert_eq!(given, Ok(Some(diamond.clone())));
+        assert_eq!(given, Ok(None));
         assert_eq!(thrown, Ok(Some(diamond)));
-        assert_eq!(dropped(game), before);
+        assert_eq!(game.dim, Dim::Overworld);
+        assert_eq!(dropped(game), [before[0], before[1] + 1]);
     });
 }
 

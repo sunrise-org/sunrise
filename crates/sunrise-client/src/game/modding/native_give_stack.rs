@@ -9,8 +9,7 @@ const MAX_SNBT_BYTES: usize = 2 * 1024 * 1024;
 
 impl Game<'_> {
     /// `GiveCommand.giveItem` for one stack: `Inventory.add`, the rest thrown for the player
-    /// alone to pick up, in the player's turn. For a player in another level the rest comes
-    /// back instead.
+    /// alone to pick up in their level, even when the hook is running in another one.
     pub(super) fn player_give_stack(
         &mut self,
         player: PlayerRef,
@@ -43,14 +42,6 @@ impl Game<'_> {
         }
         let (tag, end) = sunrise_core::nbt::parse_snbt(snbt).ok()?;
         if !snbt.as_bytes()[end..].iter().all(u8::is_ascii_whitespace) {
-            return None;
-        }
-        // `ItemStack.CODEC`'s `count` is 1 to 99 and is refused outside it: a stack read here
-        // is never a different count from the one written.
-        if let Some(count) = tag.get("count")
-            && sunrise_client_core::nbt_value::number(Some(count))
-                .is_none_or(|n| !(1..=99).contains(&n))
-        {
             return None;
         }
         let stack = sunrise_items::item_nbt::item_from_persistent_nbt(&tag)?;

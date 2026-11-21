@@ -106,10 +106,9 @@ pub trait PlayerInventoryBackendMut {
     /// the player's eyes with no pickup delay and only they may pick it up; a stack that went
     /// in whole plays the pickup sound. Refuses, with nothing given, with `Stale`, `Client`,
     /// `Dead` or `Stack`, as `player_set_inventory_slot` does.
-    /// For a player in another level than the hook's, what fits goes into their inventory at
-    /// once and nothing lands in the world: what does not fit comes back as `Ok(Some(rest))`
-    /// and no sound plays, so drop it from a hook in the player's own level if you want it
-    /// dropped. Otherwise `Ok(None)`.
+    /// This happens in the player's own level, even when the hook runs in another one.
+    /// Returns `Ok(None)` when all items went in or were thrown. If the player's level is
+    /// unavailable, returns the overflow as `Ok(Some(rest))` rather than throwing it elsewhere.
     /// An open transaction journals this write; an abort restores the previous value.
     /// Overflow drops and pickup sounds wait for the outermost commit.
     #[access(WorldOnly)]
