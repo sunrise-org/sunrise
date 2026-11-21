@@ -6013,6 +6013,9 @@ impl Game<'_> {
                     };
                     self.shot_post_attack(p, who, direct, "minecraft:arrow");
                     self.arrow_post_hurt_effects(p, who);
+                    if who == Who::Player {
+                        self.arrow_hit_sound_to_shooter(p);
+                    }
                 }
                 match (hurt, who) {
                     (true, _) => self.finish_arrow_hit(arrow, EntityHit::Hurt),

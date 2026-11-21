@@ -1,0 +1,1 @@
+sunrise-client game::lan_pvp::arrow_hit_sound_tests::an_arrow_that_hurts_another_player_dings_its_shooter lib daily resources

@@ -344,6 +344,26 @@ impl Game<'_> {
         result.unwrap_or(Ok(()))
     }
 
+    /// `AbstractArrow.onHitEntity`: an arrow that hurt a player tells its owner, a player other
+    /// than the one hit, with `PLAY_ARROW_HIT_SOUND`, unless the arrow is silent.
+    pub(super) fn arrow_hit_sound_to_shooter(&self, p: &Projectile) {
+        let (Some(host), Some(shooter)) = (self.lan.as_ref(), p.guest) else {
+            return;
+        };
+        if self.lan_acting == Some(shooter) || self.entity_silent(p.id) {
+            return;
+        }
+        host.hub.send_to(
+            shooter,
+            &sunrise_protocol::packets::play::Clientbound::GameEvent(
+                sunrise_protocol::packets::play::GameEvent {
+                    event: sunrise_client::lan::hub::game_event::PLAY_ARROW_HIT_SOUND,
+                    param: 0.0,
+                },
+            ),
+        );
+    }
+
     pub(super) fn player_attacker(&self, conn: Option<u32>) -> Option<(u32, Text)> {
         match conn {
             Some(conn) => {
@@ -733,5 +753,127 @@ impl Game<'_> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod arrow_hit_sound_tests {
+    use super::{Victim, Who};
+    use std::sync::{Arc, atomic::AtomicUsize, mpsc};
+    use sunrise_client::{
+        lan::{Out, PlayerSender},
+        motion::PlayerMotion,
+        projectiles::{Hit, Projectile, ProjectileKind},
+    };
+    use sunrise_core::geometry::Vec3;
+    use sunrise_protocol::packets::play::Clientbound;
+
+    /// The game events a guest's connection was sent.
+    fn game_events(receiver: &mpsc::Receiver<Out>) -> Vec<u8> {
+        let mut events = Vec::new();
+        for sent in receiver.try_iter() {
+            let bodies = match sent {
+                Out::Packet(p) => vec![p],
+                Out::Packets(p) => p,
+                Out::Disconnect(_) => panic!("unexpected disconnect"),
+            };
+            for body in bodies {
+                let mut reader = sunrise_protocol::buf::Reader::new(&body);
+                let id = reader.varint().unwrap();
+                if let Ok(Clientbound::GameEvent(e)) = Clientbound::decode(id, reader.rest()) {
+                    events.push(e.event);
+                }
+            }
+        }
+        events
+    }
+
+    /// Guest 13, in survival, hit by an arrow guest `shooter` shot: the game events guests 12
+    /// and 13 were sent.
+    fn arrow_hit(shooter: u32, silent: bool) -> (Vec<u8>, Vec<u8>) {
+        let mut sent = (Vec::new(), Vec::new());
+        crate::game::native_guest_turn_tests::with_guests(|game| {
+            let mut receivers = Vec::new();
+            for conn in [12, 13] {
+                let (tx, rx) = mpsc::channel();
+                game.lan
+                    .as_mut()
+                    .unwrap()
+                    .hub
+                    .update_guest(conn, |g| {
+                        g.sender = PlayerSender::new(tx, Arc::new(AtomicUsize::new(0)));
+                    })
+                    .unwrap();
+                receivers.push(rx);
+            }
+            let mut body = PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0)).unwrap();
+            body.entity_id = 13;
+            game.lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .update_guest(13, |g| {
+                    g.motion = Some(Box::new(body));
+                    g.load_timeout = 0;
+                })
+                .unwrap();
+            game.as_guest(13, |g| {
+                use sunrise_client::command::args::GameMode;
+                g.set_game_mode(GameMode::Creative);
+                g.set_game_mode(GameMode::Survival);
+            })
+            .unwrap();
+            let mut arrow = Projectile::new(
+                ProjectileKind::Arrow {
+                    base_damage: 2.0,
+                    critical: false,
+                    effect: None,
+                },
+                Vec3::new(1.0, 65.0, 5.0),
+                Some(Who::Player),
+            );
+            arrow.guest = Some(shooter);
+            arrow.velocity = Vec3::new(2.0, 0.0, 0.0);
+            if silent {
+                game.persist.raw.insert(
+                    arrow.id,
+                    sunrise_core::nbt::Tag::compound([("Silent", sunrise_core::nbt::Tag::Byte(1))]),
+                );
+            }
+            let hit = Hit::Entity {
+                who: Who::Player,
+                at: Vec3::new(2.7, 65.0, 5.0),
+            };
+            game.projectile_hits_player(&arrow, hit, Victim::Guest(13))
+                .unwrap();
+            assert!(
+                game.lan.as_ref().unwrap().hub.guest(13).unwrap().health < 20.0,
+                "the arrow did not hurt the victim"
+            );
+            for g in &game.lan.as_ref().unwrap().hub.guests {
+                g.sender.flush();
+            }
+            sent = (game_events(&receivers[0]), game_events(&receivers[1]));
+        });
+        sent
+    }
+
+    /// `AbstractArrow.onHitEntity`: `PLAY_ARROW_HIT_SOUND` (6) goes to the shooter of an arrow
+    /// that hurt another player, never to the player hit, and not for a silent arrow or a
+    /// player's own arrow.
+    #[test]
+    #[ignore = "daily"]
+    fn an_arrow_that_hurts_another_player_dings_its_shooter() {
+        let (shooter, victim) = arrow_hit(12, false);
+        assert_eq!(
+            shooter.iter().filter(|&&e| e == 6).count(),
+            1,
+            "{shooter:?}"
+        );
+        assert!(!victim.contains(&6), "{victim:?}");
+        let (shooter, _) = arrow_hit(12, true);
+        assert!(!shooter.contains(&6), "a silent arrow dinged: {shooter:?}");
+        let (_, own) = arrow_hit(13, false);
+        assert!(!own.contains(&6), "an own arrow dinged: {own:?}");
     }
 }
