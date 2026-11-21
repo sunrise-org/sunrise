@@ -2,7 +2,7 @@
 use std::collections::{HashMap, HashSet};
 use sunrise_client::blocks::BlockFacts;
 use sunrise_client::items::Items;
-use sunrise_world::level::classes::Class;
+use sunrise_world::level::classes::{Class, is_generated_tag};
 
 fn prepare(
     datapack: &HashMap<String, HashSet<String>>,
@@ -25,7 +25,7 @@ pub fn merge<'a>(
 ) -> HashMap<String, HashSet<String>> {
     let mut tags = datapack.clone();
     tags.retain(|tag, _| {
-        if tag.starts_with("sunrise:class/") {
+        if is_generated_tag(tag) {
             log::warn!("Ignoring reserved generated block tag {tag}");
             false
         } else {
@@ -54,9 +54,9 @@ pub fn install(items: &mut Items, facts: &BlockFacts) {
     let generated = prepare(&items.block_tags, facts);
     items
         .block_tag_order
-        .retain(|tag, _| !tag.starts_with("sunrise:class/"));
+        .retain(|tag, _| !is_generated_tag(tag));
     for (tag, members) in &generated {
-        if tag.starts_with("sunrise:class/") {
+        if is_generated_tag(tag) {
             let mut members: Vec<_> = members.iter().cloned().collect();
             members.sort_unstable();
             items.block_tag_order.insert(tag.clone(), members);

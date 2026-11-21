@@ -232,10 +232,7 @@ impl Catalog {
         let tags = resource_tags(root, overlay, |id, _| catalog.ids.get(id).copied())?;
         // TagLoader.loadPendingTags leaves the registry alone if no tag bound.
         if !tags.is_empty() {
-            catalog.tags = tags
-                .into_iter()
-                .map(|(id, values)| (id, values.into_iter().collect()))
-                .collect();
+            catalog.tags = tags;
         }
         Ok(catalog)
     }

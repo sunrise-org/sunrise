@@ -1461,6 +1461,39 @@ impl Items {
         );
         table
     }
+    /// `TagLoader.loadPendingTags`: no successfully built tags means no update
+    /// for that registry. A built tag with no members still replaces the map.
+    pub fn retain_unbound_tags(&mut self, previous: &Self) {
+        use sunrise_world::level::classes::is_generated_tag;
+        if self.block_tag_order.is_empty() {
+            self.set_tags(
+                TagRegistry::Block,
+                previous
+                    .block_tag_order
+                    .iter()
+                    // These are installed from the current block facts, not the pack stack.
+                    .filter(|(tag, _)| !is_generated_tag(tag))
+                    .map(|(tag, members)| (tag.clone(), members.clone()))
+                    .collect(),
+            );
+        }
+        if self.item_tag_order.is_empty() {
+            self.set_tags(TagRegistry::Item, previous.item_tag_order.clone());
+        }
+        if self.fluid_tag_order.is_empty() {
+            self.set_tags(TagRegistry::Fluid, previous.fluid_tag_order.clone());
+        }
+    }
+
+    /// Ordered bindings for data loaders, keyed by the vanilla registry directory.
+    pub fn ordered_tags(&self) -> [(&'static str, &sunrise_world::loot::RegistryTags); 3] {
+        [
+            ("block", &self.block_tag_order),
+            ("item", &self.item_tag_order),
+            ("fluid", &self.fluid_tag_order),
+        ]
+    }
+
     /// Replace one registry's tags with `tags`, each tag's members in order.
     pub fn set_tags(&mut self, registry: TagRegistry, tags: HashMap<String, Vec<String>>) {
         let (sets, order) = match registry {

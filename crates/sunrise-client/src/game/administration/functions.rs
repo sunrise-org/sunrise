@@ -294,6 +294,10 @@ impl Game<'_> {
                 tables
                     .tables
                     .as_ref()
+                    .map_or_else(|| self.res.shared_items(), |tables| tables.items.clone()),
+                tables
+                    .tables
+                    .as_ref()
                     .map(|tables| tables.packed_registries.clone()),
                 tables.advancements.clone(),
             )

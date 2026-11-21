@@ -35,6 +35,9 @@ pub use fill::ContainerLootContext;
 #[path = "loot/tags.rs"]
 mod loot_tags;
 pub use loot_tags::LootTags;
+
+/// Ordered tag bindings for a single registry, keyed by tag ID.
+pub type RegistryTags = HashMap<String, Vec<String>>;
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -724,15 +727,16 @@ impl LootData {
         defaults: &crate::item_defaults::ItemDefaults,
         types: types::Types,
     ) -> io::Result<Self> {
-        Self::load_generation(root, overlay, defaults, types, None)
+        Self::load_generation(root, overlay, defaults, types, None, &[])
     }
 
-    /// Load server loot with the damage catalog already bound for this generation.
-    pub fn load_with_damage(
+    /// Load server loot with the registry tags already bound for this generation.
+    pub fn load_with_bound_tags(
         root: &Path,
         overlay: &PackOverlay,
         defaults: &crate::item_defaults::ItemDefaults,
         damage: &crate::damage_source::Catalog,
+        bound_tags: &[(&str, &RegistryTags)],
     ) -> io::Result<Self> {
         Self::load_generation(
             root,
@@ -740,6 +744,7 @@ impl LootData {
             defaults,
             types::Types::capture(),
             Some(damage),
+            bound_tags,
         )
     }
 
@@ -749,8 +754,10 @@ impl LootData {
         defaults: &crate::item_defaults::ItemDefaults,
         types: types::Types,
         damage: Option<&crate::damage_source::Catalog>,
+        bound_tags: &[(&str, &RegistryTags)],
     ) -> io::Result<Self> {
-        let mut loaded = Self::load_table_candidate(root, overlay, defaults, types, damage)?;
+        let mut loaded =
+            Self::load_table_candidate(root, overlay, defaults, types, damage, bound_tags)?;
         let mut recipes = HashMap::new();
         load_kind(&root.join("data"), "recipe", &mut recipes)?;
         overlay_map(overlay, "recipe", &mut recipes);
@@ -795,8 +802,14 @@ impl LootData {
         overlay: &PackOverlay,
         defaults: &crate::item_defaults::ItemDefaults,
     ) -> io::Result<Self> {
-        let mut loaded =
-            Self::load_table_candidate(root, overlay, defaults, types::Types::capture(), None)?;
+        let mut loaded = Self::load_table_candidate(
+            root,
+            overlay,
+            defaults,
+            types::Types::capture(),
+            None,
+            &[],
+        )?;
         loaded.prepare_types()?;
         Ok(loaded)
     }
@@ -807,6 +820,7 @@ impl LootData {
         defaults: &crate::item_defaults::ItemDefaults,
         types: types::Types,
         damage: Option<&crate::damage_source::Catalog>,
+        bound_tags: &[(&str, &RegistryTags)],
     ) -> io::Result<Self> {
         let all = root.join("data");
         let tables = shared_tables(root, overlay)?;
@@ -891,6 +905,11 @@ impl LootData {
                 })
                 .collect(),
         )]);
+        tags.extend(
+            bound_tags
+                .iter()
+                .map(|(kind, tags)| ((*kind).to_owned(), (*tags).clone())),
+        );
         for registry in [
             "item",
             "block",
@@ -903,6 +922,9 @@ impl LootData {
             // What `location_check`'s `biomes` names.
             "worldgen/biome",
         ] {
+            if tags.contains_key(registry) {
+                continue;
+            }
             let raw = crate::tag_layers::layers(root, registry, overlay)?;
             if matches!(registry, "predicate" | "item_modifier") {
                 loot_tags::check_cycles(registry, &raw)?;
@@ -2410,7 +2432,8 @@ mod namespace_tests {
         // retains the damage registry and binds only these new tag files.
         let overlay = PackOverlay::new(&files);
         let damage = damage.reload_tags(&root, &overlay).unwrap();
-        let loot = LootData::load_with_damage(&root, &overlay, &defaults, &damage).unwrap();
+        let loot =
+            LootData::load_with_bound_tags(&root, &overlay, &defaults, &damage, &[]).unwrap();
         let params = EntityLootParams {
             damage: Some(LootDamage {
                 kind: "test:hit".into(),

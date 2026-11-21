@@ -250,13 +250,13 @@ fn conditions_skip_winning_definitions_before_decode_but_not_tag_layers() {
     assert!(catalog.id("demo:heat").is_none());
     // Definitions obey conditions; tags ignore them, including replace.
     assert_eq!(
-        catalog.tags["minecraft:bypasses_armor"],
-        std::collections::BTreeSet::from([catalog.id("minecraft:starve").unwrap()])
+        catalog
+            .tag_members("minecraft:bypasses_armor")
+            .collect::<Vec<_>>(),
+        ["minecraft:starve"]
     );
-    assert_eq!(
-        catalog.tags.get("demo:absent"),
-        Some(&std::collections::BTreeSet::new())
-    );
+    assert!(catalog.tags().any(|tag| tag == "demo:absent"));
+    assert_eq!(catalog.tag_members("demo:absent").count(), 0);
 }
 
 #[test]

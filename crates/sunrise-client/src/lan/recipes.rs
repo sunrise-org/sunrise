@@ -75,21 +75,30 @@ pub(super) fn network_recipes(
     sources: &sunrise_client::crafting::ResolvedSources,
     damage: sunrise_client_core::registries::RegistryIds,
     packed: Option<&super::data::PackRegistryDefinitions>,
+    world_items: Option<&sunrise_client::items::Items>,
 ) -> crate::Result<(BTreeMap<String, Box<str>>, HashMap<String, i32>)> {
-    // The resolved copy: the load's `ingredient` answers are in place, and
-    // none of them leaves it (`forget_answers` below).
-    let items = sunrise_client::items::Items::catalog_with_damage_registry(
-        resources,
-        overlay,
-        defaults,
-        damage,
-        |items| match packed {
-            Some(packed) => packed.install_items(items, resources, overlay, defaults),
-            None => items.load_resource_registries(resources, overlay, defaults),
-        },
-    )?;
+    // A world has already bound its item tables. Catalogs built from the pack
+    // files alone do not know about tags retained at reload.
+    let standalone;
+    let items = match world_items {
+        Some(items) => items,
+        None => {
+            standalone = sunrise_client::items::Items::catalog_with_damage_registry(
+                resources,
+                overlay,
+                defaults,
+                damage,
+                |items| match packed {
+                    Some(packed) => packed.install_items(items, resources, overlay, defaults),
+                    None => items.load_resource_registries(resources, overlay, defaults),
+                },
+            )?;
+            &standalone
+        }
+    };
+    // The load's `ingredient` answers are in place and none leaves this copy.
     let accepted =
-        sunrise_client::crafting::Recipes::from_resolved(resources, &items, overlay, sources)?;
+        sunrise_client::crafting::Recipes::from_resolved(resources, items, overlay, sources)?;
     let accepted: std::collections::HashSet<&str> = accepted
         .by_type
         .values()
@@ -110,7 +119,7 @@ pub(super) fn network_recipes(
                 .then(|| (id, (*recipe.resolved).clone()))
         })
         .collect();
-    all.retain(|_, recipe| normalize_ingredients(recipe, &items));
+    all.retain(|_, recipe| normalize_ingredients(recipe, items));
     all.values_mut().for_each(|r| {
         sunrise_client::crafting::Ingredient::forget_answers(r);
     });

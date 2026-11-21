@@ -7,10 +7,7 @@ use crate::{
     worldgen::tags::{TagDefinitions, identifier},
 };
 use serde_json::Value;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    io,
-};
+use std::{collections::BTreeMap, io};
 mod resources;
 pub use resources::{resource_files, resource_tags};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -43,7 +40,7 @@ pub struct Definition {
 pub struct Catalog {
     definitions: Vec<Definition>,
     ids: BTreeMap<String, DamageTypeId>,
-    tags: BTreeMap<String, BTreeSet<DamageTypeId>>,
+    tags: BTreeMap<String, Vec<DamageTypeId>>,
 }
 fn string(v: &Value) -> io::Result<&str> {
     v.as_str()
@@ -120,11 +117,7 @@ impl Catalog {
         Ok(Self {
             definitions,
             ids,
-            tags: tags
-                .tags
-                .into_iter()
-                .map(|(id, v)| (id, v.into_iter().collect()))
-                .collect(),
+            tags: tags.tags,
         })
     }
     pub fn id(&self, name: &str) -> Option<DamageTypeId> {
