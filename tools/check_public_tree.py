@@ -22,6 +22,9 @@ ORIGINAL_JDK_TOOLS = {
     # Original differential-fuzz driver for vanilla's math helpers: no game source; it calls the 26.3 jar's methods at
     # run time (public ones, and Entity's private getInputVector by reflection) from the player's own prepared jars.
     "tools/jmath_fuzz/VanillaMathFuzz.java",
+    # Original speed driver for modified UTF-8: times only the public DataOutputStream.writeUTF and
+    # DataInputStream.readUTF API on the kit's generated strings; no JDK or game source.
+    "tools/modified_utf8_kit/java/Mutf8Bench.java",
     # HISTORY-ONLY: this original comparison driver is no longer in the current tree.
     # Keep its old path allowed so --history/--pre-push accept its legitimate historical addition.
     "tools/refactors/api-pr3/JsonNbtOracle.java",

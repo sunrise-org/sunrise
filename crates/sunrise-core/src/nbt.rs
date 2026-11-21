@@ -1,6 +1,7 @@
 //! Java Edition NBT with lossless UTF-16 strings and 26.3 mixed-list wrappers.
 use crate::{
     java_hash_map::{IntoIter, Iter, JavaHashMap, JavaKey},
+    modified_utf8,
     random::java_string_hash,
 };
 use std::{
@@ -39,14 +40,7 @@ impl JavaString {
     }
     /// Encoded byte length for Java's `DataOutput.writeUTF`, including each surrogate separately.
     pub fn modified_utf8_len(&self) -> usize {
-        self.0
-            .iter()
-            .map(|&unit| match unit {
-                1..=127 => 1,
-                0..=2047 => 2,
-                _ => 3,
-            })
-            .sum()
+        modified_utf8::encoded_len(&self.0)
     }
 }
 
@@ -1025,39 +1019,9 @@ fn is_key(name: &JavaString, key: &str) -> bool {
     name.0.iter().copied().eq(key.encode_utf16())
 }
 
-/// `DataInput.readUTF`'s decoding, accepting its overlong sequences; `None`
-/// for bytes that aren't modified UTF-8.
+/// `DataInput.readUTF`'s decoding; `None` for bytes that aren't modified UTF-8.
 fn modified_utf8(bytes: &[u8]) -> Option<JavaString> {
-    if bytes.is_ascii() {
-        return Some(JavaString(bytes.iter().map(|&b| u16::from(b)).collect()));
-    }
-    let len = bytes.len();
-    let mut units = Vec::with_capacity(len);
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        let (unit, size) = match b {
-            0..=127 => (u16::from(b), 1),
-            192..=223 if i + 1 < len && bytes[i + 1] & 0xc0 == 0x80 => {
-                ((u16::from(b & 31) << 6) | u16::from(bytes[i + 1] & 63), 2)
-            }
-            224..=239
-                if i + 2 < len && bytes[i + 1] & 0xc0 == 0x80 && bytes[i + 2] & 0xc0 == 0x80 =>
-            {
-                (
-                    (u16::from(b & 15) << 12)
-                        | (u16::from(bytes[i + 1] & 63) << 6)
-                        | u16::from(bytes[i + 2] & 63),
-                    3,
-                )
-            }
-            _ => return None,
-        };
-        // Match DataInput.readUTF, including accepted overlong sequences.
-        units.push(unit);
-        i += size;
-    }
-    Some(JavaString(units))
+    modified_utf8::decode(bytes).map(JavaString)
 }
 
 /// Read a file root (type, modified-UTF name, payload), returning bytes consumed.
@@ -1229,31 +1193,23 @@ impl Writer {
         self.put(&len.to_be_bytes())
     }
     fn string(&mut self, string: &JavaString) -> Result<(), Error> {
-        let Ok(len) = u16::try_from(string.modified_utf8_len()) else {
+        let len = modified_utf8::encoded_len(&string.0);
+        let Ok(prefix) = u16::try_from(len) else {
             if self.empty_long_strings {
                 return self.put(&0u16.to_be_bytes());
             }
             return Err(self.error("modified UTF-8 exceeds 65535 bytes"));
         };
-        self.put(&len.to_be_bytes())?;
-        // One byte per unit (most strings): written at once while they fit.
-        if usize::from(len) == string.0.len()
-            && usize::from(len) <= self.limits.max_bytes.saturating_sub(self.bytes.len())
-        {
-            self.bytes.extend(string.0.iter().map(|&c| c as u8));
-            return Ok(());
+        self.put(&prefix.to_be_bytes())?;
+        let room = self.limits.max_bytes.saturating_sub(self.bytes.len());
+        if len > room {
+            // Where writing one unit at a time stops: at the first unit that doesn't fit.
+            return Err(Error {
+                offset: self.bytes.len() + modified_utf8::fitting_len(&string.0, room),
+                reason: "byte limit exceeded",
+            });
         }
-        for &c in &string.0 {
-            match c {
-                1..=127 => self.put(&[c as u8])?,
-                0..=2047 => self.put(&[0xc0 | (c >> 6) as u8, 0x80 | (c & 63) as u8])?,
-                _ => self.put(&[
-                    0xe0 | (c >> 12) as u8,
-                    0x80 | ((c >> 6) & 63) as u8,
-                    0x80 | (c & 63) as u8,
-                ])?,
-            }
-        }
+        modified_utf8::encode(&string.0, len, &mut self.bytes);
         Ok(())
     }
     fn payload(&mut self, tag: &Tag, depth: usize) -> Result<(), Error> {
