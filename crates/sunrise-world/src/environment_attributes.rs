@@ -769,8 +769,13 @@ impl std::fmt::Debug for AttributeMap {
 }
 
 impl AttributeMap {
-    /// `EnvironmentAttributeMap.CODEC`: a JSON object from attribute id to entry.
+    /// `EnvironmentAttributeMap.CODEC`: a JSON object from attribute id to entry. Biomes and
+    /// dimension types read their `attributes` with `optionalFieldOf("attributes", EMPTY)`, so
+    /// an absent field (`null`) is the empty map.
     pub fn parse(json: &Json) -> Result<Self, String> {
+        if json.is_null() {
+            return Ok(Self::default());
+        }
         let map = json.as_object().ok_or("attributes are not an object")?;
         map.iter()
             .map(|(id, entry)| {
@@ -966,5 +971,36 @@ mod finite_tests {
         let refused = AttributeMap::parse(&json!({"minecraft:visual/cloud_height": 1e300}));
         assert!(refused.unwrap_err().contains("not a finite float"));
         assert!(AttributeMap::parse(&json!({"minecraft:visual/cloud_height": 192.5})).is_ok());
+    }
+
+    #[test]
+    fn a_biome_without_attributes_has_the_empty_map() {
+        // A biome as a LimboAPI lobby sends it (#3388): the 1.18 layout, no `attributes`.
+        let biome = json!({
+            "category": "plains",
+            "depth": 0.125,
+            "downfall": 0.4,
+            "effects": {
+                "fog_color": 12638463,
+                "mood_sound": {
+                    "block_search_extent": 8,
+                    "offset": 2.0,
+                    "sound": "minecraft:ambient.cave",
+                    "tick_delay": 6000
+                },
+                "sky_color": 7907327,
+                "water_color": 415920,
+                "water_fog_color": 415920
+            },
+            "has_precipitation": true,
+            "scale": 0.05,
+            "temperature": 0.8
+        });
+        assert!(
+            AttributeMap::parse(&biome["attributes"])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(AttributeMap::parse(&json!([])).is_err());
     }
 }

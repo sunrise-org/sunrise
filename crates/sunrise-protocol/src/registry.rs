@@ -280,10 +280,7 @@ impl Dynamic {
             .unwrap_or("minecraft:overworld");
         let mut d = DimensionType::vanilla(name);
         if let Some(Tag::Compound(map)) = self.data("minecraft:dimension_type", id) {
-            let int = |k: &str| match map.get(&JavaString::from(k)) {
-                Some(Tag::Int(v)) => Some(*v),
-                _ => None,
-            };
+            let int = |k: &str| map.get(&JavaString::from(k)).and_then(int_value);
             if let Some(v) = int("min_y") {
                 d.min_y = v;
             }
@@ -300,21 +297,21 @@ impl Dynamic {
                 d.min_y = vanilla.min_y;
                 d.height = vanilla.height;
             }
-            if let Some(Tag::Byte(v)) = map.get(&JavaString::from("has_skylight")) {
-                d.has_skylight = *v != 0;
+            let flag = |k: &str| map.get(&JavaString::from(k)).and_then(flag_value);
+            if let Some(v) = flag("has_skylight") {
+                d.has_skylight = v;
             }
-            if let Some(Tag::Byte(v)) = map.get(&JavaString::from("has_ceiling")) {
-                d.has_ceiling = *v != 0;
+            if let Some(v) = flag("has_ceiling") {
+                d.has_ceiling = v;
             }
             // Any number, as vanilla's codec reads it (Sunrise's own server sends a
             // world pack's JSON numbers as doubles).
-            d.ambient_light = match map.get(&JavaString::from("ambient_light")) {
-                Some(Tag::Float(v)) => f32::from_bits(*v),
-                Some(Tag::Double(v)) => f64::from_bits(*v) as f32,
-                Some(Tag::Int(v)) => *v as f32,
-                Some(Tag::Byte(v)) => f32::from(*v),
-                _ => d.ambient_light,
-            };
+            if let Some(v) = map
+                .get(&JavaString::from("ambient_light"))
+                .and_then(float_value)
+            {
+                d.ambient_light = v;
+            }
             // DimensionType.defaultClock: the world clock this level's day
             // time follows (absent in the Nether).
             d.default_clock = match map.get(&JavaString::from("default_clock")) {
@@ -327,6 +324,37 @@ impl Dynamic {
             };
         }
         d
+    }
+}
+/// `NbtOps.getNumberValue(tag).intValue()`: every numeric tag is a number.
+fn int_value(tag: &Tag) -> Option<i32> {
+    Some(match *tag {
+        Tag::Byte(v) => i32::from(v),
+        Tag::Short(v) => i32::from(v),
+        Tag::Int(v) => v,
+        Tag::Long(v) => v as i32,
+        Tag::Float(v) => f32::from_bits(v) as i32,
+        Tag::Double(v) => f64::from_bits(v) as i32,
+        _ => return None,
+    })
+}
+/// `NbtOps.getNumberValue(tag).floatValue()`.
+fn float_value(tag: &Tag) -> Option<f32> {
+    Some(match *tag {
+        Tag::Byte(v) => f32::from(v),
+        Tag::Short(v) => f32::from(v),
+        Tag::Int(v) => v as f32,
+        Tag::Long(v) => v as f32,
+        Tag::Float(v) => f32::from_bits(v),
+        Tag::Double(v) => f64::from_bits(v) as f32,
+        _ => return None,
+    })
+}
+/// `NbtOps.getBooleanValue`: a number's `doubleValue() != 0`.
+fn flag_value(tag: &Tag) -> Option<bool> {
+    match *tag {
+        Tag::Double(v) => Some(f64::from_bits(v) != 0.0),
+        _ => float_value(tag).map(|v| v != 0.0),
     }
 }
 /// A dimension type's tag as JSON (see `Dynamic::dimension_json`).
@@ -629,6 +657,29 @@ mod tests {
         assert_eq!(shape(-64, 100), (-64, 384));
         assert_eq!(shape(-2048, 256), (-64, 384));
         assert_eq!(shape(1024, 1024), (-64, 384));
+    }
+
+    /// `NbtOps` reads any numeric tag as a number or a flag: a world pack's JSON numbers as
+    /// doubles (Sunrise's server sends them so) or a proxy's shorts keep the server's shape.
+    #[test]
+    fn a_dimension_shape_in_any_numeric_tag_is_the_servers() {
+        let mut d = Dynamic::default();
+        d.add(RegistryData {
+            registry: "minecraft:dimension_type".into(),
+            entries: vec![RegistryEntry {
+                id: "minecraft:overworld".into(),
+                data: Some(Tag::compound([
+                    ("min_y", Tag::Double(0f64.to_bits())),
+                    ("height", Tag::Short(256)),
+                    ("logical_height", Tag::Long(256)),
+                    ("has_skylight", Tag::Int(0)),
+                    ("has_ceiling", Tag::Double(0.5f64.to_bits())),
+                ])),
+            }],
+        });
+        let t = d.dimension(0);
+        assert_eq!((t.min_y, t.height, t.logical_height), (0, 256, 256));
+        assert!(!t.has_skylight && t.has_ceiling);
     }
 
     #[test]
