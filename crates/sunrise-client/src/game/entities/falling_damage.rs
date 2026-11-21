@@ -106,7 +106,17 @@ impl Game<'_> {
 
     /// `FallingBlockEntity.tick`: finish a landing, including the placed block
     /// entity and the carried `TileEntityData` applied through loadWithComponents.
-    pub(super) fn finish_falling_block(&mut self, block: FallingBlock, pos: [i32; 3]) {
+    pub(super) fn finish_falling_block(
+        &mut self,
+        block: FallingBlock,
+        pos: [i32; 3],
+    ) -> Option<FallingBlock> {
+        // A moving piston's cell skips the place, drop and discard branch
+        // before cancelDrop is even read: the block stays and is pushed on.
+        let at = self.world.block(pos[0], pos[1], pos[2]);
+        if &*self.res.facts().get(at).name == "minecraft:moving_piston" {
+            return Some(block);
+        }
         let name = self.res.facts().get(block.state).name.clone();
         let anvil = name.ends_with("anvil");
         // Fallable.onBrokenAfterFall: the anvil's, the pointed dripstone's and
@@ -146,7 +156,7 @@ impl Game<'_> {
                     state: None,
                 });
             }
-            return;
+            return None;
         }
         let landing = self.with_level(|b, level, ticks| {
             b.falling_block_landed(
@@ -157,6 +167,9 @@ impl Game<'_> {
                 false,
             )
         });
+        if landing == Landing::Continue {
+            return Some(block);
+        }
         if let Landing::Placed(state) = landing {
             let name = self.res.facts().get(state).name.clone();
             // LevelChunk.setBlockState creates the new block entity even when
@@ -217,6 +230,7 @@ impl Game<'_> {
             // came to rest (on top of a turtle egg, not inside its cell).
             self.drop_falling_block(block.state, block.position);
         }
+        None
     }
     fn falling_hurt_player(&mut self, entity: u32, position: Vec3, amount: f32, kind: &str) {
         if self.creative || self.spectator() {

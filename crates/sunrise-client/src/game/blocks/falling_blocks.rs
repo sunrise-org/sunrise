@@ -111,7 +111,16 @@ impl Game<'_> {
             }
             Ok(FallStep::Gone) => {}
             Ok(FallStep::Dropped(at)) => self.drop_falling_block(f.state, at),
-            Ok(FallStep::Landed(pos)) => self.finish_falling_block(f, pos),
+            Ok(FallStep::Landed(pos)) => {
+                if let Some(mut kept) = self.finish_falling_block(f, pos) {
+                    // Entity.scale(getAirDrag()) ends the tick of a block that stays.
+                    kept.velocity = sunrise_client::entity_rules::scale_air_drag(kept.velocity);
+                    let state = kept.state;
+                    self.falling.put_back(i.min(self.falling.len()), kept);
+                    self.note_falling_tick(id, join, state);
+                    return Ok(());
+                }
+            }
             Err(error) => {
                 sunrise_client::join_seq::store_back(&mut f, original);
                 self.falling.put_back(i.min(self.falling.len()), f);
@@ -328,6 +337,8 @@ impl Game<'_> {
             });
         }
         if on_ground {
+            // On the ground, before the landing decision.
+            f.velocity = f.velocity.multiply(Vec3::new(0.7, -0.5, 0.7));
             return Ok(FallStep::Landed([
                 f.position.x.floor() as i32,
                 f.position.y.floor() as i32,
@@ -359,6 +370,10 @@ impl Game<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "falling_blocks/moving_piston_tests.rs"]
+mod moving_piston_tests;
 
 #[cfg(test)]
 mod geometry_tests {
