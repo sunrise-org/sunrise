@@ -1,0 +1,3 @@
+ids = ["trait:TagsRegistrar", "method:TagsRegistrar::tag_key"]
+why = "Mods name a tag during registration: Registrar::tag_key resolves a validated name (a bare name uses the minecraft namespace) to the same TagKey Tags::key answers later, so a Part or a recipe kind can be built with its tag in hand before any tag data is loaded. An invalid name refuses the mod at load. New trait and method only; no existing wire layout changes."
+migrate = "Nothing to change. Replace a tag name you kept as text for a later Tags::key lookup with r.tag_key(\"minecraft:logs\") in Hooks::register."

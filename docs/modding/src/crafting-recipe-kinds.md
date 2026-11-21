@@ -49,12 +49,12 @@ unknown tag returns `Some(false)` membership and `Some(0)` members; an out-of-ra
 index returns `None`. Reload/sync publishes a new snapshot, not a mutable live tag
 service, so one callback cannot mix generations.
 
-`RegistrationContext` does **not** resolve `TagKey`s. Resolve an identifier through
-`host.tags().key(&id)` in a hook that supplies a `Host` (for example `tags_updated`),
-and retain the process-lifetime key in state shared with the registered kind.
-Matching can return false until that state has its key. Keep the key across
-reloads; only the generation's membership changes. Registration-time key
-resolution is not part of this API.
+`RegistrationContext` does **not** resolve `TagKey`s. Resolve the name with
+`r.tag_key("minecraft:logs")` on the `Registrar` in `Hooks::register` and build the
+registered kind with the key it returns. The key is a process-lifetime identity that
+does not need the tag to have members yet, and it stays valid across reloads; only
+the generation's membership changes. A hook that supplies a `Host` (for example
+`tags_updated`) can resolve the same key with `host.tags().key(&id)`.
 
 `default_remainder(cell)` reads that cell's original, **pre-take** stack and runs
 the caller's existing default rule, including `ItemPart::crafting_remainder` on

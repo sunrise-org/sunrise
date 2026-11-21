@@ -10,7 +10,8 @@ pub trait Hooks {
     /// For food items, `stack` is the food being consumed. For cake and candle
     /// cake, `stack` is `None` regardless of the held item. Vanilla computes
     /// eligibility with always-eat false for cake, or the stack's food component
-    /// for food. `vanilla_can_eat` is that answer (creative, always-eat, or hungry). Answer `Some(false)` to refuse the food,
+    /// for food. `vanilla_can_eat` is that answer (creative, always-eat, or
+    /// hungry). Answer `Some(false)` to refuse the food,
     /// `Some(true)` to let a full player eat; `can_eat` left `None` keeps
     /// `vanilla_can_eat`. Both sides (the client starts eating as the
     /// server does), so answer from the stack and the player alone.

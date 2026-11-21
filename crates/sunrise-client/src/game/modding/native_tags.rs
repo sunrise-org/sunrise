@@ -115,6 +115,11 @@ mod tests {
         impl_tags!(UnloadedTags, _view, None);
         let name = Identifier::parse("minecraft:registrar_tag_lookup").unwrap();
         assert_eq!(*found.get().unwrap(), UnloadedTags.key(&name).unwrap());
+        // The bare name took vanilla's namespace, as the book promises.
+        assert_eq!(
+            mod_api::__private::with_tag_name(*found.get().unwrap(), |n| n.map(str::to_owned)),
+            Some("minecraft:registrar_tag_lookup".to_owned())
+        );
     }
 
     #[test]

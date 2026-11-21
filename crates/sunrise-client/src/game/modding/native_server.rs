@@ -884,11 +884,6 @@ impl Game<'_> {
         }
     }
 
-    /// The entity id of player `uuid` where the shared resolver finds one.
-    pub(in crate::game) fn player_lookup_entity(&self, uuid: u128) -> Option<u32> {
-        self.player_lookup(uuid).map(|(_, entity)| entity)
-    }
-
     fn player_lookup(&self, uuid: u128) -> Option<(PlayerRead<'_>, u32)> {
         if self.lan_acting_uuid == Some(uuid) && !self.lan_acting_fake {
             return Some((

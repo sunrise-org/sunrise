@@ -5,6 +5,9 @@ impl TagsRegistrar for PartRegistrar {
         let reason =
             match crate::Identifier::parse(id).map(|name| mod_vocab::__private::tag_key(&name)) {
                 Ok(Some(key)) => return key,
+                // No test reaches this: the name table refuses only when its lock is poisoned
+                // or its slot space is exhausted. It stays because `tag_slot` answers `None`
+                // there and a mod's load must be refused with a reason, never a panic.
                 Ok(None) => format!("could not allocate a name slot for tag {id:?}"),
                 Err(error) => format!("invalid tag name {id:?}: {error}"),
             };

@@ -515,11 +515,7 @@ impl Game<'_> {
                     .player_uuid
                     .map(sunrise_client::lan::playerdata::ints_uuid)
             })?;
-            let entity = self.player_lookup_entity(uuid)?;
-            Some(mod_api::__private::game::player_ref(
-                mod_api::EntityRef::new(self.native_lifecycle.epoch()?, entity),
-                uuid,
-            ))
+            self.player(uuid)
         });
         let Some(player) = player else { return vanilla };
         let mut answer = None;
@@ -1444,6 +1440,59 @@ pub(super) mod interact_vibration_tests {
                     7,
                     "client dry-level path asks the hook"
                 );
+            })
+            .expect("SUNRISE_TEST_RESOURCES must name prepared resources");
+        });
+        can_eat_player_on_client_and_without_eater();
+    }
+
+    /// The listener sees the logged-in remote player on a client, and a food
+    /// stack with no resolvable eater keeps vanilla's answer without asking it.
+    fn can_eat_player_on_client_and_without_eater() {
+        use mod_api::{CanEatEvent, Hooks};
+        use std::sync::{Arc, Mutex};
+        const REMOTE: u128 = 0xC0FF_EE00_0000_0000_0000_0000_0000_002A;
+        struct Allow(Arc<Mutex<Vec<(u32, u128)>>>);
+        #[mod_api::__subscriptions]
+        impl Hooks for Allow {
+            fn can_eat(&self, _: &dyn mod_api::Host, event: &mut CanEatEvent<'_>) -> Option<bool> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((event.player.entity().id(), event.player.uuid()));
+                Some(true)
+            }
+        }
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+            "allow-eating",
+            Box::new(Allow(seen.clone())),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game("minecraft:rotten_flesh", |game| {
+                let food = ItemStack::new("minecraft:rotten_flesh", 1);
+                game.player.as_mut().unwrap().health.food.food = 20;
+                // A client: its logged-in player is the eater.
+                game.options.execution_role = crate::game::execution_role::ExecutionRole::Client;
+                let (client, _server) = sunrise_protocol::connection::Pipe::pair();
+                game.connect_local(client, "Eater").unwrap();
+                let remote = game.remote.as_mut().unwrap();
+                remote.logged_in = true;
+                remote.profile = REMOTE;
+                remote.entity_id = 55;
+                assert!(
+                    game.can_eat(Some(&food), false),
+                    "the listener lets a full player eat"
+                );
+                assert_eq!(*seen.lock().unwrap(), [(55, REMOTE)]);
+                // No eater resolves: vanilla's answer (full, so no) stands.
+                game.remote = None;
+                game.lan_acting_uuid = None;
+                game.level.player_uuid = None;
+                seen.lock().unwrap().clear();
+                assert!(!game.can_eat(Some(&food), false));
+                assert!(seen.lock().unwrap().is_empty(), "no eater, no question");
             })
             .expect("SUNRISE_TEST_RESOURCES must name prepared resources");
         });
