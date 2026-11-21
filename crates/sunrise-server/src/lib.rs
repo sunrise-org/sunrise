@@ -26,6 +26,7 @@ mod query;
 mod rcon;
 #[cfg(test)]
 mod reference;
+mod self_update;
 mod service;
 mod settings;
 mod signals;
@@ -83,10 +84,15 @@ Usage: sunrise-server [--dir DIR] <command>
   panel       A one-time login link for the web panel ([panel] in server.toml; 127.0.0.1:8130 by
               default)
   update [--check [--json]] [--version TAG] [--timeout SECONDS]
-              Install the newest release (checked against GitHub's SHA-256), back up the world and
-              restart on it; goes back by itself if the game isn't up within the timeout (300 s).
+              Install the newest game release (verified first), back up the world and restart on it;
+              goes back by itself if the game isn't up within the timeout (300 s).
               --archive FILE --version NAME installs an archive you have
-  rollback    Back to the release used before the update
+  rollback    Back to the game release used before the update
+  self-update [--check | --rollback]
+              Update only the server manager (verified first), check for a newer one, or go back
+              to the previous manager. Does not restart the game
+  --version [--json]
+              Print the manager version, or its commit, date and supported game contracts as JSON
   config [--json]
               The settings in server.toml
   config set KEY=VALUE... [--json]
@@ -133,6 +139,9 @@ pub fn main() -> ExitCode {
             print!("{HELP}");
             Ok(())
         }
+        Some("version" | "-V" | "--version") if args.get(1).is_some_and(|a| a == "--json") => {
+            self_update::Build::running().map(|build| println!("{}", serde_json::json!(build)))
+        }
         Some("version" | "-V" | "--version") => {
             println!("sunrise-server {VERSION}");
             Ok(())
@@ -178,6 +187,7 @@ pub fn main() -> ExitCode {
         Some("config") => settings::command(&dir, &args[1..]),
         Some("update") => update::command(&dir, &args[1..]),
         Some("rollback") => update::rollback(&dir, &args[1..]),
+        Some("self-update") => cli::self_update(&dir, &args[1..]),
         Some(command @ ("op" | "deop" | "whitelist")) => lists::run(&dir, command, &args[1..]),
         Some("players") => cli::players(&dir, args[1..].iter().any(|a| a == "--json")),
         Some(command @ ("kick" | "ban" | "pardon" | "ban-ip" | "pardon-ip")) => {

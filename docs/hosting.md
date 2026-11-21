@@ -317,10 +317,12 @@ sunrise-server config [--json]           the settings in server.toml
 sunrise-server config set KEY=VALUE... [--json]
                                          change settings, checked first (below)
 sunrise-server update [--check [--json]] [--version TAG] [--timeout SECONDS]
-                                         install the newest release and restart on it (below);
+                                         install the newest game release and restart on it (below);
                                          --archive FILE --version NAME installs an archive you have
 sunrise-server rollback [--timeout SECONDS]
-                                         back to the release used before
+                                         back to the game release used before
+sunrise-server self-update [--check | --rollback]
+                                         update, check or roll back the manager without changing the game
 ```
 
 While the server runs, `op`, `whitelist` and `cmd` go to the game's console, so they act exactly as vanilla's
@@ -403,8 +405,8 @@ ends the server. Single player keeps the owner's file the same way.
 The server restarts the game by itself if it crashes: after 5 s, then waiting longer each time, up to 5
 minutes. It keeps the crash report and gives up after 5 crashes in 10 minutes, and `status` says why.
 
-**Updates** (a server installed with the install script). The server checks for a newer release a minute
-after it starts and every 6 hours after, and says so in its log, in `status` and in the panel; it never
+**Game updates** (a server installed with the install script). The server checks for a newer game release
+a minute after it starts and every 6 hours after, and says so in its log, in `status` and in the panel; it never
 updates by itself. `sunrise-server update --check` (add `--json` for machine output) asks once. `sunrise-server update`:
 
 1. downloads the current Nightly and checks it against its signed SHA-256;
@@ -420,6 +422,15 @@ archive you have, such as your own build. A server still on a release from befor
 that 0.2 comes after the dated releases and says it is up to date: run `sunrise-server update --version v0.2.0`
 once ([versioning](versioning.md)). A stopped server is switched and starts on the new release next
 time. Set `SUNRISE_NO_UPDATE_CHECK=1` in the server's environment to turn the check off.
+
+**Manager updates.** `sunrise-server self-update --check` looks for a newer manager on the separate signed
+`server-tool` release. Run `sunrise-server self-update` to install it; it refuses a manager that cannot run
+this server's installed game. Use `--dir DIR` to check a specific server's configured game. The command
+replaces only the manager executable and keeps the previous one for `sunrise-server self-update --rollback`.
+Neither command stops the game. Use `sunrise-server stop` and then `sunrise-server start` (or restart the
+system service) when you want a running server to pick up the new manager.
+Installs whose command wrapper still uses `current/sunrise-server` need the separate-tool installer to keep
+manager and game updates independent.
 
 Release checks and downloads, and the Discord webhook, use the first nonblank setting in this order:
 `HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, `all_proxy` for HTTPS, or `HTTP_PROXY`, `http_proxy`,

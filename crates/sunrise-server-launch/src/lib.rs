@@ -21,7 +21,7 @@ use sunrise_platform::server_files::dedicated_launch;
 /// The game's program names, most specific first: the server build (the game without sound or
 /// controllers, so it needs neither ALSA nor udev on Linux; `sunrise-server-linux-x86_64.tar.gz` holds it),
 /// else the full game.
-const PROGRAMS: [&str; 2] = ["sunrise-engine", "sunrise-client"];
+pub const GAME_PROGRAMS: [&str; 2] = ["sunrise-engine", "sunrise-client"];
 
 fn exe(name: &str) -> String {
     format!("{name}{}", std::env::consts::EXE_SUFFIX)
@@ -63,7 +63,7 @@ fn program_near(
     let path_dirs = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
         .unwrap_or_default();
-    PROGRAMS
+    GAME_PROGRAMS
         .iter()
         .flat_map(|name| {
             beside

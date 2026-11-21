@@ -9,7 +9,7 @@
 use crate::{api::Client, backup, supervisor};
 use serde_json::{Value, json};
 use std::{
-    io::Read,
+    io::{Read, Write},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -49,7 +49,7 @@ static ASSETS: std::sync::LazyLock<&'static [&'static str]> = std::sync::LazyLoc
     )
 });
 
-fn exe(name: &str) -> String {
+pub(crate) fn exe(name: &str) -> String {
     format!("{name}{}", std::env::consts::EXE_SUFFIX)
 }
 
@@ -64,8 +64,19 @@ impl UpdateInstall for Install {
     /// Points `current` at the release `tag`, and remembers the one it pointed at as `previous`.
     fn switch(&self, tag: &str) -> Result<(), String> {
         let target = self.release(tag);
-        if !target.join(exe("sunrise-server")).is_file() {
-            return Err(format!("{} holds no sunrise-server", target.display()));
+        if !launch::GAME_PROGRAMS
+            .iter()
+            .any(|name| target.join(exe(name)).is_file())
+        {
+            return Err(format!("{} holds no Sunrise game", target.display()));
+        }
+        // Old installer wrappers still run `current/sunrise-server`. Don't break their next start.
+        let manager = exe("sunrise-server");
+        if !target.join(&manager).is_file()
+            && self.programs().join(&manager).is_file()
+            && !self.root.join("tool").join(&manager).is_file()
+        {
+            return Err("this install still takes its manager from the game release: rerun the installer before switching to a game-only release".into());
         }
         if let Some(old) = self.current().filter(|old| old != tag) {
             std::fs::write(self.root.join("previous"), format!("{old}\n"))
@@ -247,7 +258,7 @@ pub struct Release {
 }
 
 /// GitHub's API, or a release asset: the body of `url`.
-fn fetch(url: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn fetch(url: &str) -> Result<Vec<u8>, String> {
     let mut body = Vec::new();
     sunrise_proxy::get(
         url,
@@ -268,14 +279,19 @@ fn fetch(url: &str) -> Result<Vec<u8>, String> {
     Ok(body)
 }
 
+pub(crate) fn fetch_tag(tag: &str) -> Result<Vec<u8>, String> {
+    fetch(&format!(
+        "https://api.github.com/repos/{REPO}/releases/tags/{tag}"
+    ))
+}
+
 /// The current Nightly (or `tag`: a release, `nightly` or a dated `nightly-<date>`), from GitHub's
 /// API, with the SHA-256 its signed checksums give for this computer's archive. With no Nightly
 /// published, GitHub's latest release.
 pub fn release(tag: Option<&str>) -> Result<Release, String> {
-    let api = |tag: &str| format!("https://api.github.com/repos/{REPO}/releases/tags/{tag}");
     let text = match tag {
-        Some(tag) => fetch(&api(tag)),
-        None => match fetch(&api(sunrise_release_sign::NIGHTLY)) {
+        Some(tag) => fetch_tag(tag),
+        None => match fetch_tag(sunrise_release_sign::NIGHTLY) {
             Err(e) if e == "404" => fetch(&format!(
                 "https://api.github.com/repos/{REPO}/releases/latest"
             )),
@@ -311,6 +327,11 @@ fn pick_for_assets(
     let tag = release["tag_name"]
         .as_str()
         .ok_or("GitHub's answer has no tag")?;
+    if tag == crate::self_update::TAG {
+        return Err(format!(
+            "{tag} contains the server manager, not a game release"
+        ));
+    }
     let assets = release["assets"].as_array().cloned().unwrap_or_default();
     let asset = candidates
         .iter()
@@ -469,47 +490,52 @@ pub fn update_available(tag: &str, current: &str) -> bool {
 
 /// Downloads a release's archive into `<root>/downloads/` and checks its SHA-256; the archive's path.
 pub fn download(install: &Install, release: &Release) -> Result<PathBuf, String> {
-    use sha2::Digest;
     let folder = install.root.join("downloads");
     std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     let path = folder.join(&release.asset);
     let part = folder.join(format!("{}.part", release.asset));
     let result = (|| {
-        let mut reader =
-            sunrise_proxy::get(&release.url, &[("User-Agent", "sunrise-server")], None)
-                .map_err(|e| format!("downloading {}: {e}", release.asset))?
-                .into_reader();
-        let mut file =
-            std::fs::File::create(&part).map_err(|e| format!("{}: {e}", part.display()))?;
-        let mut hasher = sha2::Sha256::new();
-        let mut buffer = vec![0; 1 << 16];
-        loop {
-            let n = reader
-                .read(&mut buffer)
-                .map_err(|e| format!("downloading {}: {e}", release.asset))?;
-            if n == 0 {
-                break;
-            }
-            hasher.update(&buffer[..n]);
-            std::io::Write::write_all(&mut file, &buffer[..n]).map_err(|e| e.to_string())?;
-        }
-        let got: String = hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        if got != release.sha256 {
-            return Err(format!(
-                "{} doesn't match its SHA-256 (got {got}, expected {}): not installed",
-                release.asset, release.sha256
-            ));
-        }
+        let file = std::fs::File::create(&part).map_err(|e| format!("{}: {e}", part.display()))?;
+        download_to(&release.asset, &release.url, &release.sha256, file)?;
         std::fs::rename(&part, &path).map_err(|e| e.to_string())
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&part);
     }
     result.map(|()| path)
+}
+
+/// Download one asset with the common proxy policy, checking its signed checksum before use.
+pub(crate) fn download_to(
+    asset: &str,
+    url: &str,
+    expected: &str,
+    out: impl Write,
+) -> Result<(), String> {
+    let reader = sunrise_proxy::get(url, &[("User-Agent", "sunrise-server")], None)
+        .map_err(|e| format!("downloading {asset}: {e}"))?
+        .into_reader();
+    copy_verified(asset, expected, reader, out)
+}
+
+pub(crate) fn copy_verified(
+    asset: &str,
+    expected: &str,
+    mut reader: impl Read,
+    mut out: impl Write,
+) -> Result<(), String> {
+    let mut hash = sunrise_release_sign::Sha256::default();
+    let mut buffer = vec![0; 1 << 16];
+    loop {
+        let n = reader
+            .read(&mut buffer)
+            .map_err(|e| format!("downloading {asset}: {e}"))?;
+        if n == 0 {
+            return sunrise_release_sign::check(asset, expected, &hash.hex());
+        }
+        hash.update(&buffer[..n]);
+        out.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
+    }
 }
 
 /// Unpacks a release archive into `<root>/releases/<tag>`, with its `.local/sunrise-client` linked to the
@@ -560,16 +586,16 @@ pub fn unpack(install: &Install, archive: &Path, tag: &str) -> Result<PathBuf, S
                 archive.display()
             ));
         }
-        let source = find_program(&scratch, &exe("sunrise-server"))
+        let source = launch::GAME_PROGRAMS
+            .iter()
+            .find_map(|name| find_program(&scratch, &exe(name)))
             .and_then(|p| p.parent().map(Path::to_path_buf))
-            .ok_or_else(|| format!("{} holds no sunrise-server", archive.display()))?;
+            .ok_or_else(|| format!("{} holds no Sunrise game", archive.display()))?;
         #[cfg(unix)]
-        for name in [
-            "sunrise-server",
-            "sunrise-engine",
-            "sunrise-client",
-            "sunrise-prepare",
-        ] {
+        for name in launch::GAME_PROGRAMS
+            .into_iter()
+            .chain(["sunrise-prepare", "sunrise-server"])
+        {
             use std::os::unix::fs::PermissionsExt;
             let path = source.join(name);
             if path.is_file() {
@@ -918,6 +944,7 @@ mod tests {
             let release = root.join("releases").join(tag);
             std::fs::create_dir_all(&release).unwrap();
             std::fs::write(release.join("sunrise-server"), tag).unwrap();
+            std::fs::write(release.join("sunrise-engine"), tag).unwrap();
         }
         std::os::unix::fs::symlink(root.join("releases").join(tags[0]), root.join("current"))
             .unwrap();
@@ -938,6 +965,7 @@ mod tests {
             let release = root.join("releases").join(tag);
             std::fs::create_dir_all(&release).unwrap();
             std::fs::write(release.join(exe("sunrise-server")), tag).unwrap();
+            std::fs::write(release.join(exe("sunrise-engine")), tag).unwrap();
         }
         let install = Install { root: root.clone() };
         let running = root.join("current").join(exe("sunrise-server"));
@@ -1237,9 +1265,36 @@ mod tests {
             install
                 .switch("v3")
                 .unwrap_err()
-                .contains("no sunrise-server")
+                .contains("no Sunrise game")
         );
         assert_eq!(install.current().as_deref(), Some("v1"));
+        std::fs::remove_dir_all(&install.root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_separate_manager_can_install_and_switch_to_a_game_only_release() {
+        let install = installed("separate-manager", &["v1"]);
+        let archive = install.root.join("game-only.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        zip.start_file("sunrise-engine", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"new game").unwrap();
+        zip.finish().unwrap();
+        let game = unpack(&install, &archive, "v2")
+            .unwrap()
+            .join("sunrise-engine");
+        assert_eq!(std::fs::read(&game).unwrap(), b"new game");
+        assert!(install.switch("v2").is_err());
+        assert_eq!(install.current().as_deref(), Some("v1"));
+
+        let tool = install.root.join("tool/sunrise-server");
+        std::fs::create_dir_all(tool.parent().unwrap()).unwrap();
+        std::fs::write(&tool, "manager").unwrap();
+        assert_eq!(Install::around(&tool), Some(install.clone()));
+        install.switch("v2").unwrap();
+        assert_eq!(install.current().as_deref(), Some("v2"));
+        assert_eq!(std::fs::read_to_string(tool).unwrap(), "manager");
         std::fs::remove_dir_all(&install.root).unwrap();
     }
 
@@ -1350,7 +1405,7 @@ mod tests {
         assert!(
             unpack(&install, &empty, "v3")
                 .unwrap_err()
-                .contains("holds no sunrise-server")
+                .contains("holds no Sunrise game")
         );
         assert!(!install.release("v3").exists());
         std::fs::remove_dir_all(&install.root).unwrap();

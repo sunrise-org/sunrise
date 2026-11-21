@@ -619,6 +619,7 @@ sunrise-server service install|uninstall|print [--system]
 sunrise-server panel                     the panel's address and a one-time login link
 sunrise-server update [--check [--json]] [--version vX.Y.Z] [--timeout S]     rollback [--timeout S]
 sunrise-server update --archive FILE --version NAME     an archive you have (your own build)
+sunrise-server self-update [--check | --rollback]       the manager, not the game
 sunrise-server mcp                       MCP server on stdio (section 8)
 sunrise-server import-resources <dir>    copy game files prepared elsewhere into place (checked first)
 
@@ -700,7 +701,7 @@ runtime or new dependency. Server-sent events can replace the polling later if a
   (the last 2000 log lines stay in `logs` and the panel, and the engine's crash report in `crash-reports/`),
   and doubles the wait up to 5 minutes. It gives up after 5 crashes in 10 minutes, so it doesn't loop on a
   broken world, and shows the reason in `status` and the panel.
-- **Updates** (`crates/sunrise-server/src/update.rs`), for a `sunrise-server` installed by `install.sh` or
+- **Game updates** (`crates/sunrise-server/src/update.rs`), for a `sunrise-server` installed by `install.sh` or
   `install.ps1`. Releases ship often (release-flow.md), so updates stay opt-in: a running server looks for a
   newer release a minute after it starts and then every 6 hours, and only says so, in its log, in `status`
   and in the panel (`SUNRISE_NO_UPDATE_CHECK=1` turns the check off). `update --check` asks GitHub once.
@@ -722,14 +723,22 @@ runtime or new dependency. Server-sent events can replace the polling later if a
   points at the release before, `previous` is left as it was, the world is put back from the backup (the
   one the new game left is kept in `backups/replaced-<time>/`), and the game starts again on the old
   release. `rollback` switches to `previous` by hand, through the same path (the world is backed up first
-  and kept as it is). The supervisor keeps running as it was: the new `sunrise-server` itself takes over
-  the next time the server starts (`stop` and `start`, or the service's restart). A stopped server is
-  switched and its new game checked to load; it starts on the new release next time. One install serves
+  and kept as it is). A stopped server is switched and its new game checked to load; it starts on the new
+  release next time. In the separate-tool layout, switching `current` never switches `sunrise-server`.
+  Legacy installer wrappers that run the manager from `current` must be migrated by the installer. One install serves
   every server folder on the machine, so each one runs the new release from its next start. Once the new
   game is up (or a stopped server is switched), old releases are deleted from `<dir>/releases/`: the one in
   use, the one `previous` names (where `rollback` goes), the one the running `sunrise-server` itself came
   from, and the `updates.keep` newest of the others (1 by default) stay. A release that can't be deleted (a
   program still running from it on Windows) is left for the next update.
+- **Manager updates** (`crates/sunrise-server/src/self_update.rs`). `self-update --check` reads the signed
+  `server-tool.json` from the separate `server-tool` release and compares its commit and commit time with
+  the running manager. A previously signed but older release is refused; only `self-update --rollback`
+  goes back. `self-update` also checks the release's signed archive checksum and refuses to
+  replace the manager if its supported contract range excludes the installed game. It stages the new
+  executable beside the resolved manager path, replaces it, and keeps the previous executable as
+  `<exe>.previous` for `self-update --rollback`. A running supervisor continues on its old executable until
+  restarted. Neither command changes the game release, game files or world.
 
 ## 8. Control API and MCP
 

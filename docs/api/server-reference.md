@@ -46,10 +46,15 @@ Usage: sunrise-server [--dir DIR] <command>
   panel       A one-time login link for the web panel ([panel] in server.toml; 127.0.0.1:8130 by
               default)
   update [--check [--json]] [--version TAG] [--timeout SECONDS]
-              Install the newest release (checked against GitHub's SHA-256), back up the world and
-              restart on it; goes back by itself if the game isn't up within the timeout (300 s).
+              Install the newest game release (verified first), back up the world and restart on it;
+              goes back by itself if the game isn't up within the timeout (300 s).
               --archive FILE --version NAME installs an archive you have
-  rollback    Back to the release used before the update
+  rollback    Back to the game release used before the update
+  self-update [--check | --rollback]
+              Update only the server manager (verified first), check for a newer one, or go back
+              to the previous manager. Does not restart the game
+  --version [--json]
+              Print the manager version, or its commit, date and supported game contracts as JSON
   config [--json]
               The settings in server.toml
   config set KEY=VALUE... [--json]

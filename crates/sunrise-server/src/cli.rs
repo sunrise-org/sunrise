@@ -384,6 +384,16 @@ pub fn panel(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `self-update [--check | --rollback]` affects the manager alone.
+pub fn self_update(dir: &Path, args: &[String]) -> Result<(), String> {
+    match args {
+        [] => crate::self_update::update(dir, false),
+        [arg] if arg == "--check" => crate::self_update::update(dir, true),
+        [arg] if arg == "--rollback" => crate::self_update::rollback(),
+        _ => Err("self-update takes either --check or --rollback, not both".into()),
+    }
+}
+
 /// `status [--json]`.
 pub fn status(dir: &Path, as_json: bool) -> Result<(), String> {
     let Some(client) = Client::open(dir)? else {

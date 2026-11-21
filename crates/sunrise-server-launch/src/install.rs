@@ -13,15 +13,20 @@ impl Install {
         Self::around(&std::env::current_exe().ok()?)
     }
 
-    /// The install holding `program` (`<root>/releases/<tag>/sunrise-server`, reached directly or through
-    /// `current`).
+    /// The install holding `program`: the manager in `<root>/tool/` or a legacy manager in
+    /// `<root>/releases/<tag>/`, reached directly or through `current`.
     pub fn around(program: &Path) -> Option<Self> {
         let program = dunce::canonicalize(program).ok()?;
-        let releases = program.parent()?.parent()?;
-        if releases.file_name()? != "releases" {
+        let folder = program.parent()?;
+        let parent = folder.parent()?;
+        let root = if folder.file_name()? == "tool" {
+            parent
+        } else if parent.file_name()? == "releases" {
+            parent.parent()?
+        } else {
             return None;
         }
-        let root = releases.parent()?.to_path_buf();
+        .to_path_buf();
         root.join("current").is_dir().then_some(Self { root })
     }
 
