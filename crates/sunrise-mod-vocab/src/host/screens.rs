@@ -103,8 +103,9 @@ pub trait ScreensClientHost {
     #[access(WorldOnly)]
     fn mod_screen_open(&mut self, mod_id: &str) -> bool;
     /// Side: client.
-    /// Closes mod `mod_id`'s own screen, if it is open.
-    #[access(WorldOnly)]
+    /// Closes mod `mod_id`'s own screen, if it is open, including one opened from the title's
+    /// Mods list. This follows the same return path as Escape.
+    #[access(ClientSetup)]
     fn mod_screen_close(&mut self, mod_id: &str);
     /// Side: client.
     /// Closes the open screen as its Escape key does: a container screen
@@ -141,6 +142,10 @@ pub trait ScreensClientHost {
     /// replacing it, closes it).
     #[access(ClientSetup)]
     fn mod_screen(&self) -> Option<&str>;
+    /// The owner-local action key that opened the current owned screen from the Mods list.
+    /// `Ok(None)` for other opening routes or when called by a different mod.
+    #[access(ClientSetup)]
+    fn mod_list_action_key(&self) -> Result<Option<&str>, ModListActionUnavailable>;
     /// Side: client.
     /// The open menu's title (the block's name, or the one it was given),
     /// as plain text.

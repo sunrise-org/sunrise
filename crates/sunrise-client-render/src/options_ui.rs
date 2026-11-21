@@ -1679,6 +1679,8 @@ pub enum Event {
     /// Data Packs' Open Pack Folder: create the folder if needed and open it.
     OpenDataPackFolder(std::path::PathBuf),
     OpenModFolder,
+    /// Press an action declared by the selected package on the Mods screen.
+    ActivateModListAction(mod_api::__private::ModListActionId),
     /// A link on the Mods screen (Homepage, Issues, a license): confirm and open it.
     OpenLink(String),
     /// A click on the Mods screen's mod id or version: copy it.
@@ -2419,6 +2421,15 @@ impl OptionsUi {
         }
         if page == Page::Studio {
             self.studio.refresh();
+        }
+    }
+    /// Move focus within the Mods page without pressing a button.
+    pub fn focus_mods_control(&mut self, target: crate::widgets::Target) {
+        if self.page() == Page::Mods
+            && self.resource_error.is_none()
+            && let Some(mods) = &mut self.mods_screen
+        {
+            mods.focus_control(target);
         }
     }
     /// A controller's or the keyboard's focus landed on `rect`: a row of a shell screen's list
@@ -3207,6 +3218,7 @@ impl OptionsUi {
                     self.push(Page::NativeMod(i));
                     events.push(Event::NativeSettings(i));
                 }
+                Do::Activate(id) => events.push(Event::ActivateModListAction(id)),
                 Do::Link(url) => events.push(Event::OpenLink(url)),
                 Do::Copy(text) => events.push(Event::CopyText(text)),
             }

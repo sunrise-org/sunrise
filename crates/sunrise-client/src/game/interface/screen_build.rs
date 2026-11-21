@@ -301,6 +301,8 @@ pub(super) struct ScreenState {
     /// A mod's `ScreenOpening::Vanilla` answer is opening its screen: that
     /// change fires no screen hook again.
     pub(super) replacing: bool,
+    /// The action that opened this owned screen, whose parent is Options > Mods.
+    pub(super) mod_list_action: Option<mod_api::__private::ModListActionId>,
     /// The last change the screen hooks decided went another way than asked
     /// (a mod's `Cancel`, `ModScreen` or `Vanilla`): a caller's grab after it
     /// leaves the screen that shows its pointer. Never set with no listener.

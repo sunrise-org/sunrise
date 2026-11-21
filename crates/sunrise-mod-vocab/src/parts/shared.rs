@@ -60,6 +60,8 @@ pub struct Parts {
     pub(crate) key_mappings: Vec<(&'static str, crate::KeyRegistration)>,
     /// Settings by owner, in registration order (`Registrar::register_setting`).
     pub(crate) settings: Vec<(&'static str, crate::SettingSpec)>,
+    /// Owner ID → resolved code slot and actions in declaration order.
+    pub(crate) mod_list_actions: HashMap<&'static str, (usize, Vec<ModListAction>)>,
     /// Block parts, and block entity parts as the block parts they also are.
     pub(crate) blocks: HashMap<Box<str>, Vec<Attached<dyn BlockPart>>>,
     /// Block entity parts by block, for the hooks asked by block (`block_entity`).

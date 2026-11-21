@@ -3691,8 +3691,17 @@ mod server_side_tests {
         }
     }
 
+    struct Actions;
+    #[mod_api::__subscriptions]
+    impl Hooks for Actions {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            r.register_mod_list_action("details", "gui.done", |_, _| ModListActionResult::Stay)
+                .unwrap();
+        }
+    }
+
     /// What a joining client must have is named for its own mod only: a client hook, a part
-    /// listening to one, the first required clientbound payload. An optional payload is not.
+    /// listening to one, a Mods-list action or a required clientbound payload. An optional payload is not.
     #[test]
     fn what_a_client_must_have_is_named_for_its_mod_only() {
         let mods: Mods = vec![
@@ -3700,6 +3709,7 @@ mod server_side_tests {
             ModEntry::new("hides_logs", Box::new(HidesLogs)),
             ModEntry::new("pings", Box::new(Pings)),
             ModEntry::new("quiet", Box::new(Quiet)),
+            ModEntry::new("actions", Box::new(Actions)),
         ]
         .into();
         mod_platform::__private::part_tests::install_parts_fixture(&mods).unwrap();
@@ -3718,6 +3728,10 @@ mod server_side_tests {
             assert_eq!(
                 mod_api::__private::client_requirement("pings").unwrap(),
                 "sends the required payload pings:ping to clients"
+            );
+            assert_eq!(
+                mod_api::__private::client_requirement("actions").as_deref(),
+                Some("registers the client Mods-list action details")
             );
             assert_eq!(mod_api::__private::client_requirement("quiet"), None);
         });

@@ -474,6 +474,7 @@ impl Game<'_> {
                     let _ = std::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
                 }
+                Event::ActivateModListAction(id) => self.activate_mod_list_action(id),
                 // The Mods screen's links go through ConfirmLinkScreen, back to the options.
                 Event::OpenLink(url) => self.confirm_untrusted_link(&url, Screen::Options),
                 Event::CopyText(text) => {

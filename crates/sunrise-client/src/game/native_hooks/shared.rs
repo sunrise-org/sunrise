@@ -48,8 +48,10 @@ mod world_helpers;
 
 use super::screen_build::ObservedScreen;
 use crate::game::api_values::{TryIntoApi, TryIntoEngine};
+use mod_api::__private::{ModListAction, ModListActionId, mod_list_actions};
 use screen_chars::chars_to_type;
 use sunrise_client::containers::ModBlockEntity as EngineBlockEntity;
+use sunrise_client::options_ui::Page;
 
 struct ContentsChangedGuard<'a, 'game> {
     game: &'a mut Game<'game>,
@@ -180,6 +182,85 @@ impl Game<'_> {
         }
         self.apply_screen_with_mod_book(screen, owner);
     }
+    /// Actions from the last frame can be stale before a redraw or after a page change.
+    pub(in crate::game) fn mod_list_action_visible(
+        &self,
+        id: ModListActionId,
+        rect: Option<[f32; 4]>,
+    ) -> bool {
+        self.screen == Screen::Options
+            && self.ui.options.page() == Page::Mods
+            && self.ui.options.resource_error.is_none()
+            && self
+                .ui
+                .options
+                .mods_screen
+                .as_ref()
+                .is_some_and(|screen| screen.action_visible(id, self.gui_size(), rect))
+    }
+
+    /// Resolve a press against the same package, not the row that now occupies its position.
+    fn current_mod_list_action(&self, id: ModListActionId) -> Option<&'static ModListAction> {
+        if !self.mod_list_action_visible(id, None)
+            || !self.options.execution_role.is_client()
+            || self.mod_screen_blocked()
+            || self.ui.options.mods_screen.as_ref()?.selected_package() != Some(id.owner)
+        {
+            return None;
+        }
+        let mods = &self.settings.mods;
+        let (index, row) = mods
+            .installed
+            .iter()
+            .enumerate()
+            .find(|(_, row)| row.id == id.owner)?;
+        if row.native.is_none() || row.problem.is_some() || !mods.is_on(index) {
+            return None;
+        }
+        mod_list_actions(id.owner)
+            .iter()
+            .find(|action| action.id == id)
+    }
+
+    pub(in crate::game) fn activate_mod_list_action(&mut self, id: ModListActionId) {
+        let Some(action) = self.current_mod_list_action(id) else {
+            return;
+        };
+        let result = {
+            let _owner = mod_api::__private::enter(id.owner, "mod_list_action");
+            match mod_api::__private::contain_outside_world(|| (action.activate)(self, id.key)) {
+                Ok(result) => result,
+                Err(refusal) => {
+                    refusal.report();
+                    return;
+                }
+            }
+        };
+        if result != mod_api::ModListActionResult::OpenScreen
+            || self.current_mod_list_action(id).is_none()
+        {
+            return;
+        }
+        if self.screen_hooks_heard() {
+            let current = self.screen_change_view(Screen::Options);
+            let new = self.screen_change_view(Screen::Mod);
+            match self.screen_decision(self.screen_change(&current, &new, true, false)) {
+                ScreenDecision::Open => {}
+                ScreenDecision::ModScreen(owner) if owner == id.owner => {}
+                // A replacement is not acceptance of this owner's request.
+                _ => return,
+            }
+            self.native_screen_closing(&current);
+            if self.current_mod_list_action(id).is_none() {
+                return;
+            }
+        }
+        self.ui.options.discard_draw();
+        self.dragging = false;
+        self.apply_screen(Screen::Mod, Some(id.owner));
+        self.screen_state.mod_list_action = Some(id);
+    }
+
     /// Whether a change of screen asks the screen hooks: a mod listens to
     /// `screen_opening` or `screen_closing`, on a client's own `Game` (not a
     /// server's, not on a guest's behalf, not the screen a mod's `Vanilla`
@@ -286,6 +367,7 @@ impl Game<'_> {
     /// What `set_screen` does once the hooks have answered: `screen` opens,
     /// and the mod `owner`'s own screen when one answered `ModScreen`.
     fn apply_screen(&mut self, screen: Screen, owner: Option<&str>) {
+        self.screen_state.mod_list_action = None;
         self.screen = screen;
         if let Some(owner) = owner {
             self.native_mod_screen = Some(owner.to_owned());

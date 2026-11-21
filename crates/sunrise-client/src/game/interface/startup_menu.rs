@@ -40,7 +40,7 @@ pub(super) struct StartupMenu {
     /// The focused slider's arrows change its value (`canChangeValue`).
     key_slider_edit: bool,
     /// What the last click landed on, for the next Tab or arrow.
-    key_origin: Option<[f32; 4]>,
+    key_origin: Option<Target>,
     /// The focused slider being nudged and where the keyboard put its handle.
     key_nudge: Option<([f32; 4], f32)>,
     /// A click the keyboard sends is being handled.
@@ -168,6 +168,9 @@ impl StartupMenu {
             game.ui.options = std::mem::take(&mut self.options);
             game.ui.options.resource_error =
                 game.ui.options.resource_error.take().or(resource_error);
+            if let Some(mods) = &mut game.ui.options.mods_screen {
+                mods.update_installed(&game.settings.mods);
+            }
             game.set_screen(Screen::Options);
             game.options_from_title = true;
             game.dragging = self.dragging;
@@ -225,7 +228,7 @@ impl StartupMenu {
         let Some(focus) = self.key_focus.take() else {
             return false;
         };
-        self.key_origin = Some(focus.rect);
+        self.key_origin = Some(focus);
         self.key_nudge = None;
         true
     }
@@ -756,9 +759,12 @@ impl Loading {
                 Event::AccessibilityHelp => {
                     super::packs::open_uri(super::options::ACCESSIBILITY_HELP_LINK)
                 }
-                // Mods' settings pages open only in a running game.
-                // The HUD editor needs a world: its button is inactive here.
-                Event::NativeSettings(_) | Event::NativeSetting(..) | Event::HudEditor => {}
+                // A package cannot offer an action until the game has admitted its code.
+                // Mods' settings pages also need the game; the HUD editor needs a world.
+                Event::ActivateModListAction(_)
+                | Event::NativeSettings(_)
+                | Event::NativeSetting(..)
+                | Event::HudEditor => {}
                 // The startup menu runs before the game opens a control socket,
                 // and before its sound engine (no clicks, no volume previews,
                 // and no music tracks to list or play).
@@ -922,14 +928,10 @@ impl Loading {
                 }
                 if *state == ElementState::Pressed && *button == MouseButton::Left {
                     let (cx, cy) = self.menu.cursor;
-                    self.menu.key_origin = self
-                        .menu_key_targets()
-                        .into_iter()
-                        .find(|t| {
-                            let [x, y, w, h] = t.rect;
-                            cx >= x && cy >= y && cx < x + w && cy < y + h
-                        })
-                        .map(|t| t.rect);
+                    self.menu.key_origin = self.menu_key_targets().into_iter().find(|t| {
+                        let [x, y, w, h] = t.rect;
+                        cx >= x && cy >= y && cx < x + w && cy < y + h
+                    });
                 }
             }
             WindowEvent::MouseWheel { .. } if self.menu.key_focus_release() => {
@@ -979,19 +981,18 @@ impl Loading {
         if targets.is_empty() {
             return false;
         }
-        let find = |rect: [f32; 4]| {
-            targets
-                .iter()
-                .find(|t| t.rect.iter().zip(rect).all(|(a, b)| (a - b).abs() < 0.5))
-                .copied()
-        };
+        let find = |target| key_focus::refind(target, &targets);
         let mut slider_edit = self.menu.key_slider_edit;
-        let mut focus = self.menu.key_focus.and_then(|f| find(f.rect));
+        let mut focus = self.menu.key_focus.and_then(find);
         if focus.is_none()
             && let Some(clicked) = self.menu.key_origin.and_then(find)
         {
             focus = Some(clicked);
             slider_edit = true;
+        }
+        let mods_list = self.menu.options_open && self.menu.options.page() == Page::Mods;
+        if mods_list && focus.is_none() && matches!(key, KeyCode::ArrowUp | KeyCode::ArrowDown) {
+            return false;
         }
         let (typing, rows_take_enter) = if self.menu.options_open {
             (self.menu.options.typing(), false)
@@ -1008,6 +1009,7 @@ impl Loading {
             slider_edit,
             typing,
             rows_take_enter,
+            single_list: mods_list,
             gui: (batch.width, batch.height),
         };
         let act = key_focus::act(nav, focus, &targets, ctx);
@@ -1076,6 +1078,9 @@ impl Loading {
         self.menu.key_nudge = None;
         self.menu.key_slider_edit = false;
         self.menu.cursor = target.center();
+        if self.menu.options_open {
+            self.menu.options.focus_mods_control(target);
+        }
         if left.is_some_and(|l| l.rect == target.rect) {
             return;
         }

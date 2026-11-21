@@ -1,0 +1,1 @@
+sunrise-client game::native_hooks::base::screen_open_tests::mods_actions_route_pointer_and_keyboard_to_the_owner_and_close_to_the_selection lib daily resources

@@ -94,6 +94,8 @@ pub struct Widget {
 pub enum Kind {
     /// Clicked with A (buttons, icon buttons, keys).
     Button,
+    /// A Mods-list button whose focus stays with its package and action, not its rectangle.
+    ModListAction(mod_api::__private::ModListActionId),
     /// Left and right move the value instead of focus; A does nothing (a
     /// click would jump the handle to the middle). `value` is 0..1 as drawn;
     /// `track` is where a click sets 0 and the width a click spans to 1.
@@ -1246,7 +1248,7 @@ impl Kind {
     /// The kind's name in the control socket's `ui` reply.
     pub fn name(self) -> &'static str {
         match self {
-            Kind::Button => "button",
+            Kind::Button | Kind::ModListAction(_) => "button",
             Kind::Slider { .. } => "slider",
             Kind::Field => "field",
             Kind::Row => "row",

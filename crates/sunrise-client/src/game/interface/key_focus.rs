@@ -72,6 +72,8 @@ pub(super) struct Context {
     /// The screen joins its list's selected row on Enter itself
     /// (`WorldListEntry.keyPressed`): a focused row passes Enter on.
     pub rows_take_enter: bool,
+    /// A single list shares one Tab stop even when controls beside it interleave in reading order.
+    pub single_list: bool,
     /// The GUI size: an arrow from no focus starts at the screen's edge.
     pub gui: (f32, f32),
 }
@@ -85,7 +87,8 @@ fn horizontal(button: Button) -> bool {
 pub(super) fn act(nav: Nav, focus: Option<Target>, targets: &[Target], ctx: Context) -> Act {
     match (nav, focus) {
         (Nav::Tab { forward }, _) => {
-            tab_step(targets, focus.map(|t| t.rect), forward).map_or(Act::Pass, Act::Focus)
+            tab_step_in(targets, focus.map(|t| t.rect), forward, ctx.single_list)
+                .map_or(Act::Pass, Act::Focus)
         }
         // EditBox.keyPressed takes left and right for its caret.
         (
@@ -156,6 +159,18 @@ fn same(a: Rect, b: Rect) -> bool {
     a.iter().zip(b).all(|(p, q)| (p - q).abs() < 0.5)
 }
 
+/// A Mods action follows its owner and key, never the rectangle it used to occupy.
+pub(super) fn refind(from: Target, targets: &[Target]) -> Option<Target> {
+    targets
+        .iter()
+        .copied()
+        .find(|target| match (from.kind, target.kind) {
+            (Kind::ModListAction(a), Kind::ModListAction(b)) => a == b,
+            (Kind::ModListAction(_), _) | (_, Kind::ModListAction(_)) => false,
+            _ => same(from.rect, target.rect),
+        })
+}
+
 /// The tab order (`children()` sorted by `getTabOrderGroup`): the order
 /// vanilla added the widgets in, which its layouts do row by row. Sunrise
 /// has no widget tree (a screen registers buttons and other targets
@@ -173,10 +188,26 @@ pub(super) fn tab_order(targets: &[Target]) -> Vec<usize> {
 /// again). A list's rows are one stop, as vanilla's list is one widget: Tab
 /// enters it on its first row (Shift+Tab on its last) and leaves it at once.
 pub(super) fn tab_step(targets: &[Target], from: Option<Rect>, forward: bool) -> Option<usize> {
-    // The stops in tab order: a run of rows is one.
+    tab_step_in(targets, from, forward, false)
+}
+
+fn tab_step_in(
+    targets: &[Target],
+    from: Option<Rect>,
+    forward: bool,
+    single_list: bool,
+) -> Option<usize> {
     let mut stops: Vec<Vec<usize>> = Vec::new();
+    let mut list_stop: Option<usize> = None;
     for i in tab_order(targets) {
         let row = targets[i].kind == Kind::Row;
+        if single_list && row {
+            if let Some(at) = list_stop {
+                stops[at].push(i);
+                continue;
+            }
+            list_stop = Some(stops.len());
+        }
         match stops.last_mut() {
             Some(stop) if row && targets[stop[0]].kind == Kind::Row => stop.push(i),
             _ => stops.push(vec![i]),
@@ -322,6 +353,7 @@ mod tests {
         slider_edit: false,
         typing: false,
         rows_take_enter: false,
+        single_list: false,
         gui: (427.0, 240.0),
     };
 
@@ -403,6 +435,17 @@ mod tests {
         // Backwards: in on the last row, out to the search box.
         assert_eq!(tab_step(&targets, Some(targets[4].rect), false), Some(3));
         assert_eq!(tab_step(&targets, Some(targets[1].rect), false), Some(0));
+
+        // The Mods screen puts its details buttons alongside its only list.
+        let targets = [search, row(40.0), button(200.0, 60.0), row(76.0)];
+        let ctx = Context {
+            single_list: true,
+            ..CTX
+        };
+        assert_eq!(
+            act(Nav::Tab { forward: true }, Some(targets[3]), &targets, ctx),
+            Act::Focus(2)
+        );
     }
 
     #[test]

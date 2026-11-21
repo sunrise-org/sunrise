@@ -78,3 +78,31 @@ A mod reads and writes only its own settings: another mod's id, or a key its own
 The settings folder is settings only, not bulk storage: ordinary files there are read as setting keys and
 subfolders or unsafe entries still warn during snapshots. Use the bulk services above instead; their files are
 not included in settings snapshots.
+
+## Extra actions on your Mods entry
+
+Use `Registrar::register_mod_list_action` from `Hooks::register` for a button such as **View statistics**.
+It appears after the stock controls on your own package's selected entry, both on the title screen and in
+in-game Options. This does not change **Config**, which still opens the generated settings page.
+
+```rust,ignore
+use mod_api::ModListActionResult;
+
+registrar.register_mod_list_action("statistics", "example.mods.statistics", |host, key| {
+    // This is a client UI callback. There may be no player or world.
+    // `key` is "statistics" and `host` is the current client host.
+    ModListActionResult::OpenScreen
+})?;
+```
+
+Put the label's translation in your language assets. Action keys are local to your package; a duplicate or
+invalid declaration returns `ModListActionError` and leaves earlier declarations intact. Actions appear in
+registration order, and only while their package is active. A package declared `side = "server"` cannot register
+client Mods-list actions.
+
+Return `ModListActionResult::Stay` to leave the list open. `OpenScreen` requests your existing owned
+screen (`host.mod_screen()` identifies its owner); use `host.mod_list_action_key()` in your screen hooks
+to distinguish how it opened; it returns `Ok(Some("statistics"))` for the example above. Escape or your Back
+control using `host.mod_screen_close(your_id)` returns
+to the Mods list with the same package selected. If `screen_opening` vetoes the request or the entry is
+no longer current, the list stays open. That does not undo any effects your callback already performed.

@@ -4542,6 +4542,18 @@ impl Game<'_> {
             .as_deref()
             .filter(|_| self.screen == Screen::Mod)
     }
+    pub(in crate::game) fn mod_list_action_key(
+        &self,
+    ) -> Result<Option<&str>, mod_api::ModListActionUnavailable> {
+        Ok(self
+            .screen_state
+            .mod_list_action
+            .filter(|id| {
+                self.screen == Screen::Mod
+                    && mod_api::content::crash::current_native_mod() == Some(id.owner)
+            })
+            .map(|id| id.key))
+    }
     /// The open menu's title (the block's name, or the one it was given),
     /// as plain text.
     pub(in crate::game) fn screen_title(&self) -> Option<String> {

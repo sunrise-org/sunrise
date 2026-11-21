@@ -11,7 +11,9 @@ use crate::{
     pack_screen,
     screen_draw::{self as d, Draw, Measure, TextField},
     text::{Style, Text},
+    widgets::{self, Kind as WidgetKind, Target},
 };
+use mod_api::__private::{ModListAction, ModListActionId, mod_list_actions};
 use std::{cell::Cell, collections::HashMap, sync::Arc};
 
 /// `HeaderAndFooterLayout(8, 38)`: the room above and below the content.
@@ -37,6 +39,7 @@ const ROW_H: i32 = ICON + 4;
 const BANNER_H: i32 = 50;
 /// The panel's button row.
 const BUTTONS_H: i32 = 26;
+const ACTION_ROW_H: i32 = CONTROL_H + 2;
 const MAIN_PAD: i32 = 4;
 const SCROLLBAR_W: i32 = 6;
 const WHEEL_STEP: f64 = 18.0;
@@ -55,6 +58,8 @@ pub enum Action {
     Back,
     /// Config: the settings page of the native mod at this index of `ModList::installed`.
     Config(usize),
+    /// An action on this package, not an index into the visible rows.
+    Activate(ModListActionId),
     /// Homepage, Issues or the license: this link, through a confirmation.
     Link(String),
     /// A click to copy the mod id or version.
@@ -80,6 +85,8 @@ struct Entry {
     index: Option<usize>,
     /// It has a settings page for Config to open.
     config: bool,
+    /// An admitted code mod, not an early title-screen or unbuilt package row.
+    active_native: bool,
     /// Why it is not running, or that it is not on; stays above the scroller.
     status: Option<Text>,
     /// Dependency-policy notices, independently scrollable below the status.
@@ -159,7 +166,8 @@ impl Scroll {
             return;
         }
         let bar = Self::bar(content, view);
-        let y = (self.amount as i32 * (view - bar) / max + top).max(top);
+        let offset = (self.amount as i64 * i64::from(view - bar) / i64::from(max)) as i32;
+        let y = (offset + top).max(top);
         d::sprite(out, "widget/scroller_background", x, top, SCROLLBAR_W, view);
         d::sprite(out, "widget/scroller", x, y, SCROLLBAR_W, bar);
     }
@@ -176,11 +184,18 @@ struct Geo {
     frame: [i32; 4],
     /// Homepage, Issues and Config.
     buttons: [[i32; 4]; 3],
+    /// Optional scrollable extension below the stock buttons.
+    actions: [i32; 4],
     /// Open Mods Folder and Back.
     footer: [[i32; 4]; 2],
 }
 
 impl Geo {
+    fn action_track(&self) -> [i32; 4] {
+        let [x, y, w, h] = self.actions;
+        [x + w - SCROLLBAR_W, y, SCROLLBAR_W, h]
+    }
+
     fn panel_track(&self, pinned: i32) -> [i32; 4] {
         [
             self.frame[0] + self.frame[2] - FRAME_PAD - SCROLLBAR_W,
@@ -270,6 +285,9 @@ pub struct ModsScreen {
     list: Scroll,
     list_focused: bool,
     panel: Scroll,
+    actions: Scroll,
+    /// The painted hit targets: selection or layout changes invalidate them before another draw.
+    drawn_actions: Vec<([i32; 4], ModListActionId)>,
     /// The panel's contents' height as last drawn, for scrolling.
     panel_content: Cell<i32>,
     panel_pinned: Cell<i32>,
@@ -338,13 +356,16 @@ impl ModsScreen {
                     .native
                     .as_ref()
                     .is_some_and(|page| !page.settings.is_empty()),
+                active_native: installed.native.is_some() && status.is_none(),
                 status,
                 note,
             });
         }
         let mut search = TextField::new(0, 0, SIDEBAR_W - SORT_W - 4, CONTROL_H);
         search.max_length = 64;
-        search.hint = Some(tr("sunrise.mods.screen.search").with_color(d::GRAY));
+        let search_label = tr("sunrise.mods.screen.search");
+        search.message = search_label.plain();
+        search.hint = Some(search_label.with_color(d::GRAY));
         let mut screen = Self {
             width,
             height,
@@ -358,6 +379,8 @@ impl ModsScreen {
             list: Scroll::default(),
             list_focused: false,
             panel: Scroll::default(),
+            actions: Scroll::default(),
+            drawn_actions: Vec::new(),
             panel_content: Cell::new(0),
             panel_pinned: Cell::new(0),
         };
@@ -377,7 +400,10 @@ impl ModsScreen {
         let top = HEADER_H - FRAME_PAD;
         let frame_x = left + SIDEBAR_W + GAP;
         let panel_x = frame_x + pad;
-        let view = (content - BUTTONS_H).max(0);
+        let space = (content - BUTTONS_H).max(0);
+        let action_rows = ((space / 2).max(ACTION_ROW_H).min(space) / ACTION_ROW_H) as usize;
+        let actions_h = action_rows.min(self.current_actions().len()) as i32 * ACTION_ROW_H;
+        let view = space - actions_h;
         let gap = 2;
         let button_w = (frame_w - 4 * gap) / 3;
         let button_y = HEADER_H + view + (BUTTONS_H - CONTROL_H);
@@ -403,6 +429,12 @@ impl ModsScreen {
                     CONTROL_H,
                 ]
             }),
+            actions: [
+                frame_x + gap,
+                button_y + ACTION_ROW_H,
+                frame_w - 2 * gap,
+                actions_h,
+            ],
             footer: [0, 1].map(|i| [footer_x + i * (footer_w + 4), footer_y, footer_w, 20]),
         }
     }
@@ -418,6 +450,7 @@ impl ModsScreen {
     }
     pub fn resize(&mut self, width: i32, height: i32) {
         (self.width, self.height) = (width, height);
+        self.drawn_actions.clear();
         self.place();
         self.clamp_scrolls();
     }
@@ -426,9 +459,14 @@ impl ModsScreen {
     }
     fn clamp_scrolls(&mut self) {
         let g = self.geo();
-        let (list, panel) = (self.list_content(), self.panel_content.get());
+        let (list, panel, actions) = (
+            self.list_content(),
+            self.panel_content.get(),
+            self.action_content(),
+        );
         self.list.set(self.list.amount, list, g.list[3]);
         self.panel.set(self.panel.amount, panel, g.panel[3]);
+        self.actions.set(self.actions.amount, actions, g.actions[3]);
     }
     /// `updateModsList`: the search's matches, in the sort order; the selection stays when it can,
     /// and a lone match is selected.
@@ -446,19 +484,57 @@ impl ModsScreen {
             self.selected = (shown.len() == 1).then(|| shown[0]);
         }
         if self.selected != before {
-            self.panel.amount = 0.0;
+            self.reset_panel_scroll();
         }
         self.shown = shown;
         self.clamp_scrolls();
     }
     fn select(&mut self, entry: usize) {
         if self.selected != Some(entry) {
-            self.panel.amount = 0.0;
+            self.reset_panel_scroll();
         }
         self.selected = Some(entry);
     }
+    fn reset_panel_scroll(&mut self) {
+        self.panel.amount = 0.0;
+        self.actions = Scroll::default();
+        self.drawn_actions.clear();
+    }
     fn current(&self) -> Option<&Entry> {
         self.entries.get(self.selected?)
+    }
+    /// Identity of the selected installed package, excluding built-in rows.
+    pub fn selected_package(&self) -> Option<&str> {
+        self.current()
+            .filter(|e| e.index.is_some())
+            .map(|e| e.id.as_str())
+    }
+    fn current_actions(&self) -> &'static [ModListAction] {
+        self.current()
+            .filter(|e| e.active_native)
+            .map_or(&[], |e| mod_list_actions(&e.id))
+    }
+    fn action_content(&self) -> i32 {
+        self.current_actions()
+            .len()
+            .min((i32::MAX / ACTION_ROW_H) as usize) as i32
+            * ACTION_ROW_H
+    }
+    /// The pre-handoff title only knew the file inventory. Rebuild from the admitted
+    /// packages at handoff without losing the search, order or selected package.
+    pub fn update_installed(&mut self, mods: &ModList) {
+        let selected = self.current().map(|e| (e.index.is_some(), e.id.clone()));
+        let mut fresh = Self::new(self.width, self.height, self.in_world, mods);
+        fresh.search = self.search.clone();
+        fresh.descending = self.descending;
+        fresh.selected = selected.and_then(|(installed, id)| {
+            fresh
+                .entries
+                .iter()
+                .position(|e| e.index.is_some() == installed && e.id == id)
+        });
+        fresh.refresh();
+        *self = fresh;
     }
     /// The up and down keys: the previous or next mod in the list.
     pub fn step(&mut self, delta: i32) {
@@ -482,6 +558,38 @@ impl ModsScreen {
             self.list.set(f64::from(top), content, view);
         } else if f64::from(bottom) > amount + f64::from(view) {
             self.list.set(f64::from(bottom - view), content, view);
+        }
+    }
+
+    /// Whether a press still names a button painted at the current GUI size. A focus press
+    /// also supplies its rectangle: a held button must not follow a move between press and release.
+    pub fn action_visible(
+        &self,
+        id: ModListActionId,
+        size: (f32, f32),
+        rect: Option<[f32; 4]>,
+    ) -> bool {
+        (self.width, self.height) == (size.0 as i32, size.1 as i32)
+            && self.drawn_actions.iter().any(|(r, painted)| {
+                *painted == id && rect.is_none_or(|rect| rect == r.map(|v| v as f32))
+            })
+    }
+
+    fn row_at(&self, y: f64, list_top: i32) -> Option<usize> {
+        let below = y - f64::from(list_top + 2) + self.list.amount.trunc();
+        (below >= 0.0)
+            .then_some((below / f64::from(ROW_H)) as usize)
+            .filter(|&position| position < self.shown.len())
+    }
+
+    /// Apply focus to the list, search field, or one of the screen's buttons.
+    pub(crate) fn focus_control(&mut self, target: Target) {
+        self.search.focused = target.kind == WidgetKind::Field;
+        self.list_focused = target.kind == WidgetKind::Row;
+        if self.list_focused
+            && let Some(position) = self.row_at(f64::from(target.center().1), self.geo().list[1])
+        {
+            self.select(self.shown[position]);
         }
     }
 
@@ -703,6 +811,7 @@ impl ModsScreen {
         for (i, r) in g.footer.into_iter().enumerate() {
             if hit(r, x, y) {
                 self.search.focused = false;
+                self.list_focused = false;
                 let action = if i == 0 {
                     Action::OpenFolder
                 } else {
@@ -717,7 +826,17 @@ impl ModsScreen {
             self.search.click(m, x, false, false);
             return (Action::None, false);
         }
+        if hit(g.actions, x, y) {
+            if hit(g.action_track(), x, y) && self.action_content() > g.actions[3] {
+                self.actions.held = Some(y);
+            } else if let Some(&(_, id)) = self.drawn_actions.iter().find(|(r, _)| hit(*r, x, y)) {
+                // Leave focus alone: asking for a screen need not actually leave this one.
+                return (Action::Activate(id), true);
+            }
+            return (Action::None, false);
+        }
         self.search.focused = false;
+        self.list_focused = false;
         if hit(g.sort, x, y) {
             self.descending = !self.descending;
             self.refresh();
@@ -733,13 +852,10 @@ impl ModsScreen {
                 return (Action::None, false);
             }
             let row_w = lw - 6 - if scrollable { SCROLLBAR_W } else { 0 };
-            if (f64::from(lx + 3)..f64::from(lx + 3 + row_w)).contains(&x) {
-                let below = y - f64::from(ly + 2) + self.list.amount;
-                if below >= 0.0
-                    && let Some(&entry) = self.shown.get((below / f64::from(ROW_H)) as usize)
-                {
-                    self.select(entry);
-                }
+            if (f64::from(lx + 3)..f64::from(lx + 3 + row_w)).contains(&x)
+                && let Some(position) = self.row_at(y, ly)
+            {
+                self.select(self.shown[position]);
             }
             return (Action::None, false);
         }
@@ -816,10 +932,16 @@ impl ModsScreen {
             self.panel_content.get() - pinned,
             g.panel[3] - pinned,
         );
+        if self.actions.held.is_some() {
+            let content = self.action_content();
+            self.actions.drag(y, g.actions[1], content, g.actions[3]);
+            self.drawn_actions.clear();
+        }
     }
     pub fn release(&mut self) {
         self.list.held = None;
         self.panel.held = None;
+        self.actions.held = None;
     }
     /// The mouse wheel over the list or the panel.
     pub fn scroll(&mut self, x: f64, y: f64, amount: f64) {
@@ -828,6 +950,17 @@ impl ModsScreen {
             let content = self.list_content();
             self.list
                 .set(self.list.amount - amount * WHEEL_STEP, content, g.list[3]);
+        } else if hit(g.actions, x, y) {
+            let content = self.action_content();
+            let previous = self.actions.amount;
+            self.actions.set(
+                previous - amount.signum() * f64::from(ACTION_ROW_H),
+                content,
+                g.actions[3],
+            );
+            if self.actions.amount != previous {
+                self.drawn_actions.clear();
+            }
         } else if hit([g.frame[0], g.panel[1], g.frame[2], g.panel[3]], x, y) {
             let content = self.panel_content.get();
             self.panel
@@ -875,17 +1008,11 @@ impl ModsScreen {
         crate::widgets::widget_cursor(sort_hover, true);
         let sort = if self.descending { "z_to_a" } else { "a_to_z" };
         let name = format!("sunrise.mods.screen.sort.{sort}");
+        let sort_text = tr(&name);
+        widgets::record(&sort_text.plain(), g.sort.map(|v| v as f32), true);
+        widgets::target(g.sort.map(|v| v as f32));
         d::button(
-            &mut out,
-            m,
-            &tr(&name),
-            sx,
-            sy,
-            sw,
-            sh,
-            true,
-            sort_hover,
-            now_ms,
+            &mut out, m, &sort_text, sx, sy, sw, sh, true, sort_hover, now_ms,
         );
         if sort_hover {
             tooltip = Some(tr(&format!("{name}.hover")));
@@ -907,7 +1034,7 @@ impl ModsScreen {
         separator_at(&mut out, "header", fx, fy, frame_w);
         separator_at(&mut out, "footer", fx, py + view, frame_w);
 
-        self.draw_list(&mut out, m, &g);
+        self.draw_list(&mut out, m, &g, mouse);
 
         // The info panel's contents.
         if let Some(e) = self.current() {
@@ -1017,6 +1144,11 @@ impl ModsScreen {
             let hover = d::inside(mouse, r[0], r[1], r[2], r[3]);
             crate::widgets::widget_cursor(hover, active);
             let text = tr(&format!("sunrise.mods.screen.{label}"));
+            let rect = r.map(|v| v as f32);
+            widgets::record(&text.plain(), rect, active);
+            if active {
+                widgets::target(rect);
+            }
             d::button(
                 &mut out,
                 m,
@@ -1031,11 +1163,52 @@ impl ModsScreen {
             );
         }
 
+        self.drawn_actions.clear();
+        let [x, y, w, h] = g.actions;
+        let actions = self.current_actions();
+        let content = self.action_content();
+        if h > 0 {
+            self.actions.set(self.actions.amount, content, h);
+            let scrollable = content > h;
+            let start = self.actions.amount as usize / ACTION_ROW_H as usize;
+            let count = (h / ACTION_ROW_H) as usize;
+            let width = w - if scrollable { SCROLLBAR_W + 2 } else { 0 };
+            for (row, action) in actions.iter().skip(start).take(count).enumerate() {
+                let r = [x, y + row as i32 * ACTION_ROW_H, width, CONTROL_H];
+                let rect = r.map(|v| v as f32);
+                let label = tr(action.label);
+                let hover = d::inside(mouse, r[0], r[1], r[2], r[3]);
+                crate::widgets::widget_cursor(hover, true);
+                let kind = WidgetKind::ModListAction(action.id);
+                widgets::target_as(rect, kind);
+                widgets::record_as(&label.plain(), rect, true, kind);
+                d::button(
+                    &mut out, m, &label, r[0], r[1], r[2], r[3], true, hover, now_ms,
+                );
+                widgets::last_narratable(|item| {
+                    item.key = widgets::key_of(&(action.id.owner, action.id.key));
+                });
+                self.drawn_actions.push((r, action.id));
+            }
+            if scrollable {
+                self.actions
+                    .draw(&mut out, g.action_track()[0], y, content, h);
+                crate::widgets::scroll_area(
+                    g.actions.map(|v| v as f32),
+                    self.actions.amount as f32,
+                    (content - h) as f32,
+                );
+            }
+        }
+
         // The footer.
         let labels = [tr("sunrise.mods.open_folder"), tr("gui.back")];
         for (i, (r, label)) in g.footer.into_iter().zip(&labels).enumerate() {
             let hover = d::inside(mouse, r[0], r[1], r[2], r[3]);
             crate::widgets::widget_cursor(hover, true);
+            let rect = r.map(|v| v as f32);
+            widgets::record(&label.plain(), rect, true);
+            widgets::target(rect);
             if i == 1 {
                 crate::widgets::declare_action(
                     crate::widgets::Action::Back,
@@ -1054,7 +1227,7 @@ impl ModsScreen {
     }
 
     /// The sidebar's `ModsList`: an `ObjectSelectionList` of 28 px rows.
-    fn draw_list(&self, out: &mut Vec<Draw>, m: &Measure, g: &Geo) {
+    fn draw_list(&self, out: &mut Vec<Draw>, m: &Measure, g: &Geo, mouse: (i32, i32)) {
         let [x, y, w, h] = g.list;
         let prefix = if self.in_world { "inworld_" } else { "" };
         let amount = self.list.amount as i32;
@@ -1078,11 +1251,46 @@ impl ModsScreen {
         let scrollable = Scroll::max(content, h) > 0;
         let row_w = w - 6 - if scrollable { SCROLLBAR_W } else { 0 };
         let left = x + 3;
+        let rect = g.list.map(|v| v as f32);
+        if scrollable {
+            widgets::scroll_area(rect, self.list.amount as f32, (content - h) as f32);
+        }
+        widgets::narratable(|| {
+            let row = |position: usize| {
+                let entry = &self.entries[self.shown[position]];
+                let name = Text::literal(entry.name.clone());
+                widgets::Row::new(
+                    position,
+                    Text::translate("narrator.select", &[name]).plain(),
+                )
+            };
+            let hovered = d::inside(mouse, left, y, row_w, h)
+                .then(|| self.row_at(f64::from(mouse.1), y))
+                .flatten();
+            let selected = self
+                .selected
+                .and_then(|i| self.shown.iter().position(|&j| i == j));
+            widgets::Narratable::list(
+                widgets::ListKind::Object,
+                self.shown.len(),
+                hovered.map(row),
+                selected.map(row),
+                rect,
+            )
+            .key(widgets::key_of(&"mods_list"))
+            .focused(self.list_focused)
+        });
         for (position, &i) in self.shown.iter().enumerate() {
             let top = y + 2 - amount + position as i32 * ROW_H;
-            if top + ROW_H < y || top > y + h {
+            let visible_top = top.max(y);
+            let visible_bottom = (top + ROW_H).min(y + h);
+            if visible_top >= visible_bottom {
                 continue;
             }
+            widgets::target_as(
+                [left, visible_top, row_w, visible_bottom - visible_top].map(|v| v as f32),
+                WidgetKind::Row,
+            );
             let e = &self.entries[i];
             if self.selected == Some(i) {
                 let border = if self.list_focused { -1 } else { -8355712 };
@@ -1279,6 +1487,110 @@ mod tests {
             press(&mut screen, 1),
             (Action::Link("https://bugs.mojang.com".into()), true)
         );
+    }
+
+    #[test]
+    fn actions_follow_the_package_through_sort_search_and_resize() {
+        use mod_api::{Hooks, ModEntry, ModListActionResult, Registrar, RegistrationContext};
+
+        struct Actions(&'static [(&'static str, &'static str)]);
+        #[mod_api::__subscriptions]
+        impl Hooks for Actions {
+            fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+                for &(key, label) in self.0 {
+                    r.register_mod_list_action(key, label, |_, _| ModListActionResult::Stay)
+                        .unwrap();
+                }
+            }
+        }
+        let entries = vec![
+            ModEntry::new(
+                "stats",
+                Box::new(Actions(&[
+                    ("overview", "stats.summary"),
+                    ("graphs", "stats.graphs"),
+                ])),
+            ),
+            ModEntry::new("trails", Box::new(Actions(&[("overview", "trails.route")]))),
+        ];
+        mod_platform::testing::with_mods(entries.into(), || {
+            mod_platform::__private::part_tests::install_parts_fixture(mod_api::__private::mods())
+                .unwrap();
+            let language = crate::lang::Language::of(
+                "en_us",
+                [
+                    ("stats.summary".into(), "See statistics".into()),
+                    ("stats.graphs".into(), "View graphs".into()),
+                    ("trails.route".into(), "Follow route".into()),
+                ],
+            );
+            crate::lang::scoped(language, || {
+                let atlas = atlas();
+                let m = Measure(&atlas.font);
+                let mut list = mods(&[
+                    installed("stats", "Stats", Some(NativePage::default())),
+                    installed("trails", "Trails", Some(NativePage::default())),
+                    installed("quiet", "Quiet", Some(NativePage::default())),
+                ]);
+                let mut screen = ModsScreen::new(427, 240, false, &list);
+                let select = |screen: &mut ModsScreen, id| {
+                    let at = screen.entries.iter().position(|e| e.id == id).unwrap();
+                    screen.select(at);
+                };
+                let draw_labels = |screen: &mut ModsScreen| -> Vec<String> {
+                    crate::widgets::cover_frame();
+                    screen.draw(&m, (0, 0), 0, 0);
+                    crate::widgets::end_frame(crate::widgets::generation() + 1);
+                    crate::widgets::last_labelled()
+                        .into_iter()
+                        .filter(|w| matches!(w.kind, WidgetKind::ModListAction(_)))
+                        .map(|w| w.label)
+                        .collect()
+                };
+                select(&mut screen, "quiet");
+                assert!(draw_labels(&mut screen).is_empty());
+                assert_eq!(screen.geo().actions[3], 0);
+                select(&mut screen, "stats");
+                assert_eq!(draw_labels(&mut screen), ["See statistics", "View graphs"]);
+                let (x, y) = centre(screen.drawn_actions[1].0);
+                assert_eq!(
+                    screen.click(&m, x, y),
+                    (
+                        Action::Activate(ModListActionId::new("stats", "graphs")),
+                        true
+                    )
+                );
+                let (x, y) = centre(screen.geo().sort);
+                screen.click(&m, x, y);
+                screen.resize(360, 220);
+                assert_eq!(draw_labels(&mut screen), ["See statistics", "View graphs"]);
+                let (old_x, old_y) = centre(screen.drawn_actions[0].0);
+                let (x, y) = centre(screen.geo().search);
+                screen.click(&m, x, y);
+                screen.type_text(&m, "Trails");
+                assert!(!matches!(
+                    screen.click(&m, old_x, old_y).0,
+                    Action::Activate(_)
+                ));
+                assert_eq!(draw_labels(&mut screen), ["Follow route"]);
+                let (x, y) = centre(screen.drawn_actions[0].0);
+                assert_eq!(
+                    screen.click(&m, x, y),
+                    (
+                        Action::Activate(ModListActionId::new("trails", "overview")),
+                        true
+                    )
+                );
+                list.disabled.insert("trails".into());
+                screen.update_installed(&list);
+                assert_eq!(screen.selected_package(), Some("trails"));
+                assert!(draw_labels(&mut screen).is_empty());
+                list.disabled.clear();
+                list.installed[1].problem = Some("load failed".into());
+                screen.update_installed(&list);
+                assert!(draw_labels(&mut screen).is_empty());
+            });
+        });
     }
 
     #[test]

@@ -161,9 +161,9 @@ pub fn installed_code_ids() -> impl Iterator<Item = &'static str> {
 }
 
 /// What the installed code mod `id` carries that a joining client must have, as the end of a
-/// sentence about the mod: its first subscription to a client-side hook, its first part that
-/// subscribes to one, a synced attachment, or a required payload channel sent to clients. The engine refuses
-/// a `side = "server"` mod that has one. Read once the parts are installed.
+/// sentence about the mod: a subscription to a client-side hook, a part that subscribes to one,
+/// a client Mods-list action, a synced attachment, or a required payload channel sent to clients.
+/// The engine refuses a `side = "server"` mod that has one. Read once the parts are installed.
 pub fn client_requirement(id: &str) -> Option<String> {
     let mine = || crate::mods().iter().filter(|entry| entry.id == id);
     if let Some(hook) = mine().find_map(|entry| entry.client_hook()) {
@@ -173,6 +173,14 @@ pub fn client_requirement(id: &str) -> Option<String> {
     if let Some((part, hook)) = installed.client_part(id) {
         return Some(format!(
             "attaches the part {part}, which listens to the client hook {hook}"
+        ));
+    }
+    if let Some((_, actions)) = installed.keys.mod_list_actions.get(id)
+        && let Some(action) = actions.first()
+    {
+        return Some(format!(
+            "registers the client Mods-list action {}",
+            action.id.key
         ));
     }
     if let Some(types) = installed.attachment_types.get(id)
