@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject local game artifacts even when somebody uses git add -f."""
+"""Reject local game artifacts and removed commercial features even when somebody uses git add -f."""
 
 import argparse
 import collections
@@ -16,20 +16,59 @@ ORIGINAL_JDK_TOOLS = {
     # Original generator of the Java character tables: calls only the public Character API and prints ranges; no JDK implementation source.
     "tools/JavaCharacterTables.java",
     "tests/java/JfrFixture.java",
+    # Original differential-fuzz driver for java.lang.Math: calls only the public Math API on generated inputs (its
+    # "mthtable" case applies Mth's one-line sine-table formula, as crates/sunrise-core/src/geometry/trig.rs does).
+    "tools/jmath_fuzz/JmathFuzz.java",
+    # Original differential-fuzz driver for vanilla's math helpers: no game source; it calls the 26.3 jar's methods at
+    # run time (public ones, and Entity's private getInputVector by reflection) from the player's own prepared jars.
+    "tools/jmath_fuzz/VanillaMathFuzz.java",
+    # HISTORY-ONLY: the modified UTF-8 speed driver moved to mods/sunrise/src/test/java/dev/sunriselab/parity/.
+    # Keep its old path allowed so --history/--pre-push accept its legitimate historical addition.
+    "tools/modified_utf8_kit/java/Mutf8Bench.java",
     # HISTORY-ONLY: this original comparison driver is no longer in the current tree.
     # Keep its old path allowed so --history/--pre-push accept its legitimate historical addition.
     "tools/refactors/api-pr3/JsonNbtOracle.java",
 }
-# The prepared folder's files in one file (crates/horizon-core/src/prepared_files.rs): Mojang's data.
-PRIVATE_NAMES = {"horizon-data.bin"}
-# Vanilla's 1.13 data fixer tables, copied from its code until 2026-11; horizon-prepare now exports them from the
+# The prepared folder's files in one file (crates/sunrise-core/src/prepared_files.rs): Mojang's data.
+PRIVATE_NAMES = {"sunrise-data.bin"}
+# Vanilla's 1.13 data fixer tables, copied from its code until 2026-11; sunrise-prepare now exports them from the
 # player's jar (datafix-tables.json). Their old paths stay in history, so only the current tree is checked.
-RETIRED_TABLES = {"crates/horizon-world/src/datafix/flat_tables.rs",
-                  "crates/horizon-world/src/datafix/block_state_data.txt"}
+RETIRED_TABLES = {"crates/sunrise-world/src/datafix/flat_tables.rs",
+                  "crates/sunrise-world/src/datafix/block_state_data.txt"}
 # A file with this many entries like those tables' holds a copy of them, whatever its name or format:
 # ItemStackTheFlatteningFix's `id.damage` keys, and BlockStateData's `id<TAB>name<TAB>` rows (raw or JSON-escaped).
 TABLE_FINGERPRINTS = [r"minecraft:[a-z_]+\.[0-9]+", "[0-9]+(\t|\\\\t)minecraft:[a-z_]+(\t|\\\\t)"]
 TABLE_ENTRIES = 50
+
+# Commercial features #1473 removed from this fork. A sync from a tree that still
+# has them must not bring the paths back. Checked on the current tree only, not
+# on --history/--range/--pre-push: the files remain in git history from before
+# the removal, and main's history scan would otherwise fail.
+REMOVED_COMMERCIAL_PREFIXES = (
+    "crates/sunrise-cosmetics",
+    # Upstream's in-game side of the cosmetics (emotes, the emote wheel, their effects).
+    "crates/sunrise-client/src/game/cosmetics",
+    "crates/sunrise-client/src/game/interface/cosmetics",
+    "crates/sunrise-official-servers",
+)
+# The launcher lives in sunrise-org/sunrise-launcher (launcher split D1); its removed commercial pages and sculk art
+# went with the tree, so nothing under launcher/ comes back.
+REMOVED_TREE = "launcher/"
+
+
+def commercial(path):
+    """True when `path` is a removed commercial crate or game module, or anything under the removed launcher/ tree."""
+    if path.startswith(REMOVED_TREE):
+        return True
+    parsed = PurePosixPath(path)
+    for prefix in REMOVED_COMMERCIAL_PREFIXES:
+        if path == prefix or path.startswith(prefix + "/"):
+            return True
+        parent = PurePosixPath(prefix)
+        # partner.rs besides a partner/ folder, and the same for cosmetics, shop, wardrobe, wardrobe_page.
+        if parsed.parent == parent.parent and parsed.stem == parent.name:
+            return True
+    return False
 
 
 def prohibited(path):
@@ -37,9 +76,11 @@ def prohibited(path):
     # Original JDK-only tools are an exact allowlist; recovered game Java stays private.
     if path in ORIGINAL_JDK_TOOLS:
         return False
-    # Original Horizon mod sources may also be tracked.
-    if parsed.suffix == ".java" and path.startswith(("mods/horizon/src/", "mods/horizon-lab/src/")):
-        return not ("/dev/horizonlab/" in path)
+    # Original Sunrise mod sources may also be tracked.
+    # History keeps the paths from before the Sunrise rename (mods/horizon, dev.horizonlab).
+    if parsed.suffix == ".java" and path.startswith(("mods/sunrise/src/", "mods/sunrise-lab/src/",
+                                                     "mods/horizon/src/", "mods/horizon-lab/src/")):
+        return not ("/dev/sunriselab/" in path or "/dev/horizonlab/" in path)
     return (
         bool(parsed.parts and parsed.parts[0] in PRIVATE_ROOTS)
         or parsed.suffix.lower() in PRIVATE_EXTENSIONS
@@ -101,12 +142,20 @@ def main():
                  else ["HEAD"] if args.history else None)
     history = args.history or args.pre_push or bool(args.range)
     # Millions of entries in a long history repeat a few thousand paths: judge each path once.
-    rejected = sorted(path for path in set(paths_in_repository(history, revisions)) if path and prohibited(path))
+    tracked = set(paths_in_repository(history, revisions))
+    rejected = sorted(path for path in tracked if path and prohibited(path))
     tables = [] if history else sorted(copied_tables())
+    # The current tree only: history still contains the pre-removal paths.
+    brought_back = [] if history else sorted(path for path in tracked if path and commercial(path))
     if tables:
-        print("Vanilla's data fixer tables come from the player's jar (horizon-prepare), not from Git:",
+        print("Vanilla's data fixer tables come from the player's jar (sunrise-prepare), not from Git:",
               file=sys.stderr)
         for path in tables:
+            print(f"  {path}", file=sys.stderr)
+        return 1
+    if brought_back:
+        print("Removed commercial features must not come back:", file=sys.stderr)
+        for path in brought_back:
             print(f"  {path}", file=sys.stderr)
         return 1
     if rejected:

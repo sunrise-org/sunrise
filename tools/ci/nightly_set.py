@@ -47,8 +47,7 @@ REVIEWERS = ".github/trusted-reviewers.txt"
 COUNCIL = ".github/council.txt"
 CODEOWNERS = ".github/CODEOWNERS"
 # What CODEOWNERS guards today, refused even if the file moved: what builds, signs and checks releases.
-ALWAYS_GUARDED = ["/.github/", "/tools/ci/", "/crates/horizon-release-sign/", "/crates/horizon-server/src/update.rs",
-                  "/launcher/src/backend.rs", "/launcher/links.json"]
+ALWAYS_GUARDED = ["/.github/", "/tools/ci/", "/crates/sunrise-release-sign/", "/crates/sunrise-server/src/update.rs"]
 STATE_BRANCH = "nightly-state"
 BUILD_PREFIX = "nightly/build-"
 MAX_PRS = 30

@@ -5,12 +5,15 @@ use std::path::{Path, PathBuf};
 fn main() {
     let mut build = cc::Build::new();
 
-    // Horizon vendors only mimalloc v3 (THIRD_PARTY_NOTICES.md).
+    // Sunrise vendors only mimalloc v3 (THIRD_PARTY_NOTICES.md).
     assert!(
         env::var("CARGO_FEATURE_V2").is_err(),
         "third_party/libmimalloc-sys holds only mimalloc v3: the v2 feature is not available"
     );
     let version = "v3";
+    // cc's rerun-if-env-changed lines would otherwise leave Cargo blind to edits of the vendored sources.
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=c_src/mimalloc/{version}");
 
     let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let include_root = Path::new(&cargo_manifest_dir)

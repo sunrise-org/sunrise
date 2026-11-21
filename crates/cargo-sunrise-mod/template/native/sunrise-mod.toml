@@ -1,0 +1,7 @@
+id = "{id}"
+name = "{name}"
+version = "0.1.0"
+description = ""
+authors = []
+# A native mod: Rust in src/, compiled by `cargo sunrise-mod build` against the game build [native] pins, beside data/ and assets/.
+side = "both"

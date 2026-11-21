@@ -31,7 +31,7 @@ including custom types sent by another server.
 `Hooks::register`:
 
 ```rust,ignore
-#[mod_api::horizon_mod]
+#[mod_api::sunrise_mod]
 impl Hooks for MyMod {
     fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
         r.register_dimension(
@@ -63,8 +63,12 @@ range: the level's fluids, mobs, beds and time follow the type the server sent, 
 whether or not the client has the mod that registered the level.
 
 `sky_color`, `fog_color` (`#rrggbb`) and `cloud_height` set the sky overhead, the fog at the
-horizon and the clouds' height; left as None they are the Overworld's. A client of a server draws a
-level of a mod or a pack with the sky the server's type gives it, as the host does.
+sunrise and the clouds' height; left as None they are the Overworld's. A client of a server draws a
+level with the sky the server's type gives it, as the host does: a level of a mod or a pack, and a
+built-in level whose type a data pack changed. Resource packs' Polytone dimension modifiers apply
+over that type only when it is one of the three vanilla types (`minecraft:overworld`,
+`minecraft:the_nether`, `minecraft:the_end`); a mod's dimension type is drawn without them, even in a
+built-in level.
 
 `day_cycle` picks the timelines and the clock the dimension type names: `overworld` (the day and moon
 cycles, the villagers' schedule and the Overworld's clock, the default), `nether` (the schedule only,
@@ -95,10 +99,6 @@ A registered dimension is the level stem and dimension type a data pack would gi
 data pack: a pack with `data/mymod/dimension/pocket.json` or `data/mymod/dimension_type/pocket.json`
 replaces that half of it, in the worlds that have the pack.
 
-`register_dimension` is the same call in a mod built to `mod.wasm`, as the settings are plain
-data. A wasm mod's dimension can name only the game's own generator, `minecraft:noise`, with a
-vanilla biome source or one a native mod registered: a chunk generator and a biome source are code,
-and `register_chunk_generator` and `register_biome_source` are native only.
 
 ## Sending a player to a dimension
 
@@ -166,6 +166,13 @@ goes back. Match it with a final `Custom(_)` arm. The game's own rules read the 
 too (water that evaporates, fast lava, infiniburn, piglin portals), and `player_respawn_position` may send a player to
 a `Custom` level.
 
+`crop_grow_post` version 2 always reports the growing plant's pre-growth state as
+`original_state`, including sugar cane and kelp or vine heads. This diverges from
+NeoForge. `state` is the current block at the reported position: the new cane or
+head for those plants. Age-only sugar cane steps emit no Post; a full-age stem
+still emits Post if no fruit was placed. Cactus and chorus report the plant's
+position, not the position above it used by Pre.
+
 ## Players, structures and chunk watchers
 
 `level.online_players(host)` lists the real online players in that server level, including
@@ -192,7 +199,7 @@ Removal returns whether that ticket was removed; overlapping tickets remain inde
 Only the mod that added a ticket can remove it. `level.has_water_ticket(host, pos)` tests
 whether any ticket covers a block. Both calls reach active or parked server levels without
 loading chunks; unavailable/stale handles and clients answer `false` (adding answers `None`).
-Adding requires an enabled mod call, and native and wasm use the same generated boundary.
+Adding requires an enabled mod call.
 
 Tickets are chunk-indexed, in memory only, and never force chunks to load. They are removed
 on explicit removal, level unload, or their owner's disable; re-enabling does not restore
@@ -259,7 +266,7 @@ place of the noise.
 
 A generator in an unowned namespace, an empty name, a name that is not a folder of the world (as
 for a dimension), an id registered twice and `minecraft:noise` stop the game at startup with a
-message naming the mod. Wasm mods can register dimensions using `minecraft:noise`, but cannot register a chunk generator.
+message naming the mod.
 
 A level stem naming a generator nobody registered, say after its mod was removed, is an error for
 whoever opens that level, not for the world: a teleport there fails and is logged, and a player
@@ -294,5 +301,4 @@ for a dimension), an id registered twice and an empty `possible_biomes` stop the
 with a message naming the mod, and so does a dimension whose `mod_biome_source` nobody registered.
 The source may come from a mod that loads later. A level whose world lacks one of the possible
 biomes refuses to open, naming the source and the biome, as does a level stem naming a source that
-is gone. A wasm mod's registrar refuses `register_biome_source`, naming the source: `BiomeSource`
-is not bound by the generated wasm worker interface.
+is gone.

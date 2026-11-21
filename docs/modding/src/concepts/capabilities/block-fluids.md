@@ -2,7 +2,7 @@
 
 Look up `level.capability(host, &FLUIDS, pos, side)` to access a block's
 `ResourceHandler<FluidResource>`. Transfer fluids inside a transaction with
-`move_resources`, as you transfer items. `FLUIDS` corresponds to NeoForge's
+`resource_util::move_resources`, as you transfer items. `FLUIDS` corresponds to NeoForge's
 `Capabilities.Fluid.BLOCK`. Amounts are millibuckets (mB); one bucket is 1000 mB.
 
 ## Resources and tanks
@@ -24,9 +24,9 @@ Cauldrons are position-based providers, not block entities. They accept register
 fluids regardless of components and discard those components; extracted fluid is
 plain. An empty cauldron accepts any fluid with registered cauldron content.
 
-If a destination accepts only part of a transfer, `move_resources` rolls back and
-retries with that amount. A full water cauldron asked for a bucket when the
-destination has room for 500 mB supplies one level, 334 mB, without overanswering.
+The source must extract exactly what the destination accepted. If it cannot, the
+step rolls back. For example, a full water cauldron cannot supply exactly 500 mB:
+request 334 mB to move one level into a tank with 500 mB of room.
 
 ## Cauldron contents
 
@@ -39,8 +39,7 @@ typed state's current level (water at level 2 answers 2); an always-full content
 answers its maximum. Unregistered contents, including powder snow, answer `None`.
 These `WorldOnly` reads work on both sides, over the existing registration table,
 including mods and rebuilt resource generations. A client that has not built that table
-answers `None`. Native and wasm consumers receive the same plain values; there is no
-work unless called. A content lookup scans the existing content table without a mod
+answers `None`. The lookup does no work unless called. A content lookup scans the existing content table without a mod
 scan, clones its shared snapshot, and allocates only the returned level-property string
 when present; the scalar level read allocates no result.
 

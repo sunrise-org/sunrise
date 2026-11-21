@@ -1,5 +1,27 @@
 # Attachments
 
+Declare every attachment during `Hooks::register`:
+
+```rust,ignore
+let _ = registrar.register_attachment_type("example:counter", false);
+```
+
+The registrar records any refusal even if the returned result is ignored.
+The boolean states whether the attachment syncs to clients. A persistence codec
+alone does not make it synced. Only a package that owns the namespace (through
+its manifest or `served_by` delegation) may declare an id.
+The owner's declaration allows other packages to use that id.
+An undeclared use returns `AttachmentError::Undeclared` with the calling package
+id and attachment id. Synced declarations refuse a `side = "server"` package
+(or a `side = "both"` host declaring into a `side = "server"` served package's
+namespace) before registration is installed. Here “carries a synced attachment” means
+**declares** one: a server package may use A's synced attachment if A is a
+client-compared package. If A is itself a server package, A is refused.
+Load checks declaration conflicts (including foreign namespaces) first, then
+undeclared uses naming the caller, then server-package declarations.
+Declarations must match the key's sync policy.
+
+
 Use `AttachmentType<T>` to store mod data on a player, entity, block entity,
 chunk or level. Declare a type once, then pass the hook's host and a `Holder`
 to read or update its value.
@@ -42,7 +64,7 @@ keeps a copy for any holder it is asked about (see the sync paragraph below).
 without a codec) and `InvalidSyncPolicy` (sync without a codec), `HolderBusy` (storage temporarily
 unavailable; retry after the pass) and `UnsupportedHolder` (the holder family has
 no attachment storage; retrying does not help).
-Use the same typed methods in native and wasm mods. `host.attachments()` exposes
+`host.attachments()` exposes
 the host's `AttachmentStore`. Reading clones the value; copying a holder's data
 shares its stored values without cloning them.
 
@@ -77,9 +99,6 @@ retaining many batches keeps their old bindings alive. Values from an incompatib
 falling back to saved decoding.
 
 
-
-For injection listeners, see [The typed API from injection listeners](injections/typed-api.md).
-
 ## Holders and persistence
 
 Use `Holder::Level`, `Holder::Chunk([x, z])`, `Holder::BlockEntity([x, y, z])`,
@@ -93,10 +112,10 @@ orbs, and only the first keeps the attachments. Player UUIDs cover online guests
 the acting player. Mutable level
 hosts can access their level, loaded chunks and block entities; read-only level hosts
 cannot access attachments. Unserialized values disappear on unload or restart. A saved
-value is stored under `horizon:attachments`, then the mod namespace and attachment name,
+value is stored under `sunrise:attachments`, then the mod namespace and attachment name,
 as `{value: <compound>, copy_on_death: 1b, sync: 1b}` (a flag is omitted when false).
 Unknown mods' saved entries survive load and save without being decoded. Level
-attachments use the dimension's `data/horizon/attachments.dat` SavedData
+attachments use the dimension's `data/sunrise/attachments.dat` SavedData
 file, not `level.dat`.
 
 ## Synchronization
@@ -106,7 +125,7 @@ recipient predicate or partial synchronization updates. The default is `fn() -> 
 copying uses the declared policy, and synchronization uses the disk codec rather
 than a separate wire codec.
 
-A type with `sync: true` sends its value to Horizon clients when `get` creates the
+A type with `sync: true` sends its value to Sunrise clients when `get` creates the
 default, on `set` and `remove`, and on demand with `AttachmentType::sync_data(host,
 holder)`; changes made in one tick are sent once, at its end. The recipients are the
 players who track the holder: guests who were sent a chunk for a chunk or block entity,
@@ -116,7 +135,7 @@ when it starts seeing it: a chunk sent (with its block entities), a level joined
 re-entered, an entity tracked, and its own player. The wire form is the codec's compound, so `sync` requires
 a codec.
 
-Values travel on `horizon:attachment_sync`, an engine declaration in the negotiated
+Values travel on `sunrise:attachment_sync`, an engine declaration in the negotiated
 payload table (play, to the client, version 1, optional): only a client whose connection
 offered it is sent values, so a vanilla client is sent none. A message is prepared against
 the player's current connection epoch and published at the root commit, in order with the
@@ -131,6 +150,10 @@ On a client, `Host::attachments` returns a copy of what the server synced, which
 decodes; `set` and `remove` change only that copy, which is dropped when the chunk,
 entity or player goes. A client keeps no copy for the level hosts (`LevelRandomHost`):
 they stay server-only there, though their changes on a server are synced.
+
+A general entity row (`declare_general_entity`) has no data of its own on a client: its
+synced attachments are what a Sunrise client knows of it beyond its type, position and
+rotation. They arrive with the row, when the client starts tracking it, and go with it.
 
 ## Copying on respawn and conversion
 
@@ -149,7 +172,7 @@ spawn carries its synced entries).
 `event.player` UUID. During that hook, `event.original.attachment(host, &COUNTER)` reads
 the old value even when `copy_on_death` is false or the type has no codec;
 `COUNTER.get(host, Holder::Player(event.player))` reads the replacement's retained value
-or fresh default. This works on death and on return from the End, for native and wasm.
+or fresh default. This works on death and on return from the End.
 The original's `position`, `dimension`, `level`, and `inventory_slot` methods read the
 same pre-copy player. Inventory slot numbers are 0–35 for the main inventory,
 100–103 for boots through helmet, and -106 for the off hand. Every original read expires

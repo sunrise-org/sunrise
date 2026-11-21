@@ -1,0 +1,2 @@
+# A client mod rebinding and resetting its own key mapping (ClientInputClientHost::set_mod_key, part of #1177).
+sunrise-client game::native_key_mappings_tests::a_mod_rebinds_and_resets_its_own_mapping lib daily resources

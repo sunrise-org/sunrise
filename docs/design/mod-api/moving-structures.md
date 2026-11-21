@@ -1,5 +1,9 @@
 # Design: moving structures
 
+> Historical: this design predates the removal of WebAssembly mods.
+> See [transactions](../../modding/src/concepts/transactions.md) for the current native API.
+> The carrier handles and Parts below are proposals, not the current API. Guest dispatch, trap handling and the guest axis of the test matrix are historical; LAN guest players are unrelated.
+
 Proposed contract for arismoko/horizon issue #794; this document requests design
 agreement and does not claim an implemented feature. One game-owned carrier entity
 owns a sparse collection of local block cells, their block entities and attachments.
@@ -20,15 +24,15 @@ cannot express rigid rotation. Include rotation in the initial simulation contra
 do not ship translation semantics that later require replacement.
 
 The proposal's existing-source locations are historical. Verified current foundations
-are `crates/horizon-world/src/level/pistons.rs:22` (single-block MovingPiston),
-`crates/horizon-client-render/src/collisions.rs:85` (entity AABB collision channel),
-`crates/horizon-client/src/game/entities/minecarts.rs:2679` (transformed block models)
-and `crates/horizon-client/src/game/entities/text_displays.rs:299` (their display use).
+are `crates/sunrise-world/src/level/pistons.rs:22` (single-block MovingPiston),
+`crates/sunrise-client-render/src/collisions.rs:85` (entity AABB collision channel),
+`crates/sunrise-client/src/game/entities/minecarts.rs:2679` (transformed block models)
+and `crates/sunrise-client/src/game/entities/text_displays.rs:299` (their display use).
 These are integration foundations, not an existing moving-structure implementation.
 
 Vanilla 26.3 evidence: running `python3 tools/rea_vanilla.py method
 net.minecraft.world.level.block.piston.PistonMovingBlockEntity tick` from
-`/workspace/horizon` shows progress advancing by 0.5, collided/stuck entity movement,
+`/workspace/sunrise` shows progress advancing by 0.5, collided/stuck entity movement,
 and final replacement with neighbour updates; clients retain a completed piston for
 up to five death ticks. Retain ordinary stationary block semantics; do not generalize
 that short piston animation into structure lifetime. No vanilla carrier counterpart
@@ -42,7 +46,7 @@ block-entity payload and attachments. There is exactly one ticker and one invent
 owner per cell. Assembly transfers ownership; it never clones live block entities.
 Its world side, taking a block entity out with its attachments and none of its removal
 side effects and installing it elsewhere as a new holder, is `BlockEntities::carry` and
-`land` (`crates/horizon-client-render/src/block_entities/carry.rs`), which pistons use
+`land` (`crates/sunrise-client-render/src/block_entities/carry.rs`), which pistons use
 for a block whose part answers `piston_carries_block_entity` with `Some(true)` (#3184).
 
 Assembly preflights a bounded selection in loaded, ticking chunks, permissions,
@@ -85,8 +89,8 @@ Pathfinding may conservatively avoid moving geometry until navigation support la
 ## Route and lifecycle coverage
 
 The common server-level owner is currently
-`crates/horizon-client/src/game/world/levels.rs:652` (`tick_server`); guest action scope
-is `crates/horizon-client/src/game/network/lan_actions/turns.rs:6` (`as_guest`).
+`crates/sunrise-client/src/game/world/levels.rs:652` (`tick_server`); guest action scope
+is `crates/sunrise-client/src/game/network/lan_actions/turns.rs:6` (`as_guest`).
 Integrate the proposed carrier manager there so integrated, LAN and dedicated modes
 share simulation. The following are required routes for the staged implementation,
 not claims that the existing piston/display paths already support carriers.
@@ -101,7 +105,7 @@ not claims that the existing piston/display paths already support carriers.
 | Dimension crossing | Explicit atomic transfer after destination residency and collision preflight; otherwise refuse. Ordinary movement never changes dimension. |
 | Unload, shutdown, restart | Persist the complete carrier before releasing tickets; dormant carriers do not tick. Resume only after full residency. |
 | Disconnect or controller removal | Carrier survives independently; controller references are weak handles. No implicit disassembly. |
-| Save of a parked dimension | Same carrier serializer, integrated with the parked-level save route at `crates/horizon-client/src/game/world/levels.rs:1040`. |
+| Save of a parked dimension | Same carrier serializer, integrated with the parked-level save route at `crates/sunrise-client/src/game/world/levels.rs:1040`. |
 | Late join, tracking entry, tracking exit | Snapshot before deltas; exit disposes client state only. |
 | Resource reload, render disposal | Rebuild model caches using new resource generation; release meshes on tracking exit/disconnect. |
 | Occupied or unloaded disassembly target | Refuse atomically; ownership and counter remain in carrier. |

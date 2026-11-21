@@ -1,6 +1,14 @@
 # Design: Read-only typed loot context
 
+> Historical: this design predates the removal of WebAssembly mods.
+> See [loot functions and conditions](../../modding/src/how-to/items/loot-functions-and-conditions.md) for the current native API.
+> The guest snapshot and acceptance plan below is historical; use the current codec registration contract.
+
 Provisional proposal for [#2647](https://github.com/arismoko/horizon/issues/2647). Docs only; approval precedes code. Broaden the existing `LootContext` snapshot at the condition/function evaluation boundary. Do not provide a mutable Host, live world access, or another loot hook. [#2648](https://github.com/arismoko/horizon/issues/2648) owns the narrow tags view. [PR #2595](https://github.com/arismoko/horizon/pull/2595) owns `LevelRef::roll_loot` and its FISHING-shaped input; this proposal neither expands that input nor changes random ownership.
+
+The codec registration contract supersedes the seed convention in this older proposal:
+registered types borrow the actual selected random and snapshots carry seed zero. See the
+[loot type guide](../../modding/src/how-to/items/loot-functions-and-conditions.md).
 
 ## Evidence and current routes
 
@@ -12,14 +20,14 @@ Verified repository-relative owners:
 
 | Route | Owner |
 | --- | --- |
-| Existing API snapshot and nested Wire values | `crates/horizon-mod-vocab/src/world/snapshots.rs:104`, `:129`, `:140`, `:174`, `:187`, `:199` |
-| Condition/function catalog, authoritative server | `crates/horizon-mod-vocab/src/hooks/loot_condition.rs:9`, `loot_function.rs:10` |
-| Guarded conversion and dispatch, immutable context | `crates/horizon-client/src/game/modding/api_values/loot_values.rs:7`, `:24`, `:174` |
-| Engine callbacks and borrowed context | `crates/horizon-world/src/loot.rs:89`, `:103`, `:120`; forwarding `crates/horizon-world/src/native_load_hooks.rs:40`, `:51` |
-| World evaluator: custom condition, context capture, custom function | `crates/horizon-world/src/loot.rs:1583`, `:1613`, `:2107` |
-| Items evaluator: context capture, custom condition/function | `crates/horizon-items/src/items.rs:2049`, `:2234`, `:2627` |
-| Place scope shared by both evaluators | `crates/horizon-world/src/loot.rs:187`, `:200` |
-| Existing typed block value | `crates/horizon-mod-vocab/src/block/block_state.rs:9` |
+| Existing API snapshot and nested Wire values | `crates/sunrise-mod-vocab/src/world/snapshots.rs:104`, `:129`, `:140`, `:174`, `:187`, `:199` |
+| Registered condition/function map codecs, authoritative server | `crates/sunrise-mod-vocab/src/loot_types.rs`, `parts/loot_types.rs` |
+| Guarded conversion and type dispatch, immutable context | `crates/sunrise-client/src/game/modding/loot_types.rs`, `api_values/loot_values.rs` |
+| Engine type validation and borrowed random/context | `crates/sunrise-world/src/loot_types.rs` |
+| World evaluator: custom condition, context capture, custom function | `crates/sunrise-world/src/loot.rs:1583`, `:1613`, `:2107` |
+| Items evaluator: context capture, custom condition/function | `crates/sunrise-items/src/items.rs:2049`, `:2234`, `:2627` |
+| Place scope shared by both evaluators | `crates/sunrise-world/src/loot.rs:187`, `:200` |
+| Existing typed block value | `crates/sunrise-mod-vocab/src/block/block_state.rs:9` |
 
 Both evaluator routes must carry the same typed slots through the common boundary. Blocks, containers, fishing and command-driven item rolls reach the items evaluator; entity drops and world loot reach the world evaluator. Caller-specific context must be carried explicitly, never reconstructed from whichever Game fields happen to be selected. Before implementation, enumerate gameplay producers and prove their parameter-set selection with fixtures; these evaluation owners do not establish complete producer coverage for interaction/enchantment contexts currently missing from the snapshot.
 
@@ -54,11 +62,11 @@ Build first: independent this/attacker/direct/player facts, damage facts, origin
 
 Extend the existing API context in one clean break; remove renamed/redundant fields and update every caller, generated boundary, sample and catalog together. No parallel legacy context. Proposed `LootContext::get(&LootKey<T>) -> Result<Option<&T>, LootContextReadError>` and `require` distinguish absent optional (`None`), disallowed (`ParameterNotAllowed`), undeclared (`NotDeclared`) and unsupported (`UnsupportedLootParameter`). A read requires declaration, as vanilla validates the parameters a function references against the table's parameter set: an undeclared read answers the typed `NotDeclared` error, never the value and never a `None` that looks like an absent optional. Missing required values refuse evaluation as `MissingRequiredLootParameter` before invoking a mod. A typed key cannot be constructed with an arbitrary conflicting T. Presence is explicit: an empty required tool is present, zero radius and false enchantment activity are present, and Unit presence differs from absence.
 
-`LootContext`, proposed key/set descriptors, error enums and every new crossing snapshot explicitly use `#[derive(Wire)]` (the repository macro is `horizon_mod_api_macros::Wire`). Existing `LootEntity`, `LootDamage`, `LootStack`, `LootPlace`, `LootLevel` already derive it; `BlockState` also derives it. Use the existing API Tag representation and shared NBT codec. No engine types, Java objects, serde values as typed parameter payloads, arbitrary `Any`, or manual per-target encoding. Generate and validate native/wasm dispatch together.
+`LootContext`, proposed key/set descriptors, error enums and every new crossing snapshot explicitly use `#[derive(Wire)]` (the repository macro is `sunrise_mod_api_macros::Wire`). Existing `LootEntity`, `LootDamage`, `LootStack`, `LootPlace`, `LootLevel` already derive it; `BlockState` also derives it. Use the existing API Tag representation and shared NBT codec. No engine types, Java objects, serde values as typed parameter payloads, arbitrary `Any`, or manual per-target encoding. Generate and validate native/wasm dispatch together.
 
 Mods declare every parameter they read, required or optional, when registering a loot kind; a read outside the declaration is `NotDeclared`. Unknown built-in keys or deferred keys refuse registration with proposed `UnsupportedLootParameter { key }`; unsupported set families refuse as `UnsupportedLootParameterSet { set }`. A kind's required reads must be allowed by its declared sets, otherwise `LootParameterSetMismatch`. Optional reads may be absent, but unsupported capability must never masquerade as absence.
 
-Defer custom keys and custom sets in this first build. Proposed `UnsupportedCustomLootKey` and `UnsupportedCustomLootParameterSet` are load-time refusals on both targets. Later, permit namespaced load-time declarations with a fixed API-owned Wire schema, unique owner, duplicate/type-conflict refusals, and explicit producer binding plus required/allowed set descriptors. Freeze resolved numeric slots before world use; no runtime string-map registration. The public docs' unregistered Java keys do not establish a safe cross-process type contract for Horizon.
+Defer custom keys and custom sets in this first build. Proposed `UnsupportedCustomLootKey` and `UnsupportedCustomLootParameterSet` are load-time refusals on both targets. Later, permit namespaced load-time declarations with a fixed API-owned Wire schema, unique owner, duplicate/type-conflict refusals, and explicit producer binding plus required/allowed set descriptors. Freeze resolved numeric slots before world use; no runtime string-map registration. The public docs' unregistered Java keys do not establish a safe cross-process type contract for Sunrise.
 
 ## Safety, cost and action boundaries
 

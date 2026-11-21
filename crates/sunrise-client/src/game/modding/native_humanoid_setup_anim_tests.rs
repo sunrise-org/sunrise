@@ -1,0 +1,133 @@
+//! The real client-host adapter through CPU, skinned and layer-only setup routes.
+use super::native_entity_refs::tests::with_client_game;
+use mod_api::{Hooks, HumanoidPart, HumanoidSetupAnimEvent};
+use std::sync::{Arc, Mutex};
+use sunrise_client::mobs::{Mob, render, skin};
+
+struct PoseMod(Arc<Mutex<Vec<(u32, String)>>>);
+#[mod_api::__subscriptions]
+impl Hooks for PoseMod {
+    fn humanoid_setup_anim(
+        &self,
+        _: &dyn mod_api::ClientHost,
+        event: &mut HumanoidSetupAnimEvent<'_>,
+    ) {
+        assert_eq!(event.partial_tick, 0.5);
+        assert!(!event.humanoid.is_using_item);
+        self.0
+            .lock()
+            .unwrap()
+            .push((event.entity_id, event.entity_type.into()));
+        let [_, mut rotation] = event.parts.get(HumanoidPart::Body).unwrap();
+        rotation[1] = 0.19;
+        assert!(event.parts.set_rotation(HumanoidPart::Body, rotation));
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn client_humanoid_setup_reaches_body_skinned_and_layer_routes() {
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let mods = vec![mod_api::ModEntry::new(
+        "pose",
+        Box::new(PoseMod(heard.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_client_game(|game| {
+            let lookup = |_: &str| Some([0.0, 0.0, 1.0, 1.0]);
+            for kind in [
+                "minecraft:player",
+                "minecraft:zombie",
+                "minecraft:giant",
+                "minecraft:enderman",
+            ] {
+                let ty = if kind == "minecraft:player" {
+                    game.res.player_type().clone().unwrap()
+                } else {
+                    game.res.mob_types().get(kind).unwrap().clone()
+                };
+                let mob = Mob::new(73, ty, sunrise_core::geometry::Vec3::ZERO, 0.0);
+                let mut models = skin::SkinModels::default();
+                let mut frame = sunrise_client::gfx::entity_skin::SkinFrame::default();
+                let mut skin = skin::Skin::new(&mut models, &mut frame);
+                for route in 0..3 {
+                    heard.lock().unwrap().clear();
+                    let mut parts = None;
+                    let mut out = Vec::new();
+                    match route {
+                        0 => render::render_with_hidden(
+                            &mob,
+                            0.5,
+                            glam::DVec3::ZERO,
+                            &lookup,
+                            0xf0f0,
+                            game,
+                            &[],
+                            Default::default(),
+                            Some(&mut parts),
+                            &mut out,
+                        ),
+                        1 => render::render_skinned(
+                            &mob,
+                            0.5,
+                            glam::DVec3::ZERO,
+                            &lookup,
+                            0xf0f0,
+                            game,
+                            Default::default(),
+                            Some(&mut parts),
+                            &mut out,
+                            &mut skin,
+                        ),
+                        _ => render::render_layers(
+                            &mob,
+                            0.5,
+                            glam::DVec3::ZERO,
+                            &lookup,
+                            0xf0f0,
+                            game,
+                            &[],
+                            Some(&mut parts),
+                            &mut out,
+                        ),
+                    }
+                    let events = heard.lock().unwrap();
+                    assert!(!events.is_empty(), "{kind} route {route}");
+                    assert!(events.iter().all(|(id, ty)| *id == 73 && ty == kind));
+                    drop(events);
+                    if let Some(parts) = parts {
+                        let body = parts.get(HumanoidPart::Body).unwrap();
+                        assert_eq!(body.pose.y_rot, 0.19, "{kind} route {route}");
+                    } else {
+                        // The existing post-render snapshot intentionally covers
+                        // HumanoidMobRenderer families, not EndermanRenderer.
+                        // Prove its edit through actual geometry instead of
+                        // broadening that separate hook's publication contract.
+                        assert_eq!(kind, "minecraft:enderman", "route {route}");
+                        if route == 0 {
+                            let mut baseline = Vec::new();
+                            render::render_with_hidden(
+                                &mob,
+                                0.5,
+                                glam::DVec3::ZERO,
+                                &lookup,
+                                0xf0f0,
+                                game.res.mob_data(),
+                                &[],
+                                Default::default(),
+                                None,
+                                &mut baseline,
+                            );
+                            assert_eq!(out.len(), baseline.len());
+                            assert!(
+                                out.iter().zip(&baseline).any(|(a, b)| a.pos != b.pos),
+                                "enderman body edit must change drawn geometry"
+                            );
+                        }
+                    }
+                }
+            }
+        });
+    });
+}

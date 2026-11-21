@@ -112,8 +112,8 @@ class SessionCheckTests(unittest.TestCase):
     def loaded(self, *sessions):
         """Each session's log with its pack's load line, as the game prints it."""
         for name in sessions:
-            pack = identity.SESSIONS[name][1]['HORIZON_SHADER_PACK']
-            (self.dir / f'{name}.log').write_text(f'INFO shader pack {pack} 1.0.0: Warm horizon in 12 ms\n')
+            pack = identity.SESSIONS[name][1]['SUNRISE_SHADER_PACK']
+            (self.dir / f'{name}.log').write_text(f'INFO shader pack {pack} 1.0.0: Warm sunrise in 12 ms\n')
 
     def test_a_missing_scene_cannot_pass_when_other_screenshots_exist(self):
         scenes = identity.SESSIONS['vanilla'][2]
@@ -166,11 +166,11 @@ class SessionCheckTests(unittest.TestCase):
         for scene in identity.SESSIONS['terrain_pack'][2]:
             self.shot(f'terrain_pack.{scene}.png')
         log = self.dir / 'terrain_pack.log'
-        log.write_text('INFO shader pack golden_hour_0_2 1.0.0: Warm horizon in 12 ms\n')
+        log.write_text('INFO shader pack golden_hour_0_2 1.0.0: Warm sunrise in 12 ms\n')
         self.assertEqual(identity.session_checks(self.dir, ['terrain_pack']), [
             'terrain_pack: the log has no load line of shader pack frame_identity_terrain',
             'terrain_pack: no LabPBR maps were loaded'])
-        log.write_text('INFO Horizon: LabPBR maps at 16 px, 900 layers\n'
+        log.write_text('INFO Sunrise: LabPBR maps at 16 px, 900 layers\n'
                        'INFO shader pack frame_identity_terrain 1.0.0: Terrain, Colour in 40 ms\n')
         self.assertEqual(identity.session_checks(self.dir, ['terrain_pack']), [])
 
@@ -219,8 +219,8 @@ class SessionCheckTests(unittest.TestCase):
             (self.dir / label).mkdir()
             for scene in identity.SESSIONS['visbuffer'][2]:
                 encode(self.dir / label / f'visbuffer.{scene}.png', 4, 4, 8, self.rows, 0)
-        (self.dir / 'base' / 'visbuffer.log').write_text('Horizon: solid terrain through a visibility buffer')
-        (self.dir / 'change' / 'visbuffer.log').write_text('Horizon: drawing forward')
+        (self.dir / 'base' / 'visbuffer.log').write_text('Sunrise: solid terrain through a visibility buffer')
+        (self.dir / 'change' / 'visbuffer.log').write_text('Sunrise: drawing forward')
         self.assertEqual(identity.build_checks(self.dir, ['visbuffer']),
                          ["change: visbuffer: the visibility buffer didn't run"])
 
@@ -238,11 +238,11 @@ class SessionCheckTests(unittest.TestCase):
         for scene in identity.SESSIONS['visbuffer'][2]:
             self.shot(f'visbuffer.{scene}.png')
         log = self.dir / 'latest.log'
-        lines = [f'line {i}' for i in range(16)] + ['Horizon: solid terrain through a visibility buffer']
+        lines = [f'line {i}' for i in range(16)] + ['Sunrise: solid terrain through a visibility buffer']
         log.write_text('\n'.join(lines + [f'line {i}' for i in range(600)]) + '\n')
 
         def ctl(*words, **options):
-            # 🤖 Agent: horizon-ctl logs prints the log's last --lines lines.
+            # 🤖 Agent: sunrise-ctl logs prints the log's last --lines lines.
             return '\n'.join(log.read_text().splitlines()[-int(words[words.index('--lines') + 1]):])
         identity.save_log(SimpleNamespace(ctl=ctl), self.dir / 'visbuffer.log')
         self.assertEqual(identity.session_checks(self.dir, ['visbuffer']), [])
@@ -347,7 +347,7 @@ class BaseTests(unittest.TestCase):
     def test_only_files_no_binary_is_built_from_let_the_base_reuse_the_change(self):
         changed = ['tools/test_frame_identity_parity.py', 'tests/test_frame_identity.py', '.github/workflows/ci.yml',
                    'docs/parity-workflow.md', 'README.md', 'docs/modpacks/atm10-mods.csv', 'crates/x/README.md',
-                   'crates/horizon-client-render/src/gfx.rs', 'tools/native-hook-fragments/player.json']
+                   'crates/sunrise-client-render/src/gfx.rs', 'tools/layering/mod_vocab_state.json']
         original = identity.git
         identity.git = lambda *args, cwd=None: '\n'.join(changed)
         try:

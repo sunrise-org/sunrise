@@ -4,7 +4,7 @@ Clean-room capability audit of main `5c2583c030` (2026-11-08); no foreign mod or
 
 Source abbreviations: [items](https://wiki.aidancbrady.com/wiki/Logistical_Transporter), [fluids](https://wiki.aidancbrady.com/wiki/Mechanical_Pipe) (v9 upgrade note), [energy](https://wiki.aidancbrady.com/wiki/Universal_Cable) (V10 upgrade note), [chemicals](https://wiki.aidancbrady.com/wiki/Pressurized_Tube), [sides](https://wiki.aidancbrady.com/wiki/Machine_Configuration) are official Mekanism user wiki pages. They motivate operations, not engine implementation details.
 
-Repository references below are verified paths and lines. Prefix **API** = `crates/horizon-mod-vocab/src/`; **Game** = `crates/horizon-client/src/game/`.
+Repository references below are verified paths and lines. Prefix **API** = `crates/sunrise-mod-vocab/src/`; **Game** = `crates/sunrise-client/src/game/`.
 
 | Engine capability (public reason) | Status | Evidence and covered route |
 |---|---|---|
@@ -19,7 +19,7 @@ Repository references below are verified paths and lines. Prefix **API** = `crat
 | Expose a capability on an entity holder (items/energy/fluids). | **Works** | API `entity_capability.rs:95–123` checks the live level, selects entity-type providers, invokes them with the entity/context and falls through to the game answer. Game `blocks/machines/native_energy.rs:151` tests entity energy/fluid movement and rollback. |
 | Expose a capability on an item holder (items/energy). | **Works** | API `item_place.rs:561–591` resolves the current stack, selects providers by item type, invokes the Part with the item place and returns the typed answer. This traced provider path establishes lookup, not every provider's mutation/persistence behaviour. |
 | Reject a retained block-entity handle after replacement (machine data). | **Works** | Game `modding/native_block_entity_refs.rs:627` tests replacement refusal and identity restoration on rollback. This does not establish lifetime behaviour for every item/entity capability wrapper. |
-| Perform a fake-player action and restore its setup after success/refusal (#806 scope). | **Works** | Game `modding/native_server.rs:549` implements scoped actions; `:3739` tests returned items and persistent-state restoration; `:3832` tests viewpoint/secondary-use setup and refusal restoration; `:3980` tests hook visibility. API receiver is the player service's `player_perform_action_scoped` at `host/players.rs:406`. |
+| Perform a fake-player action and restore its setup after success/refusal (#806 scope). | **Works** | Game `modding/native_server.rs:549` implements scoped actions; `:3739` tests returned items and persistent-state restoration; `:3832` tests viewpoint/secondary-use setup and refusal restoration; `:3980` tests hook visibility. API receiver is the player service's `player_perform_action_scoped` at `host/player_fakes.rs` (`PlayerFakesBackendMut::player_perform_action_scoped`). |
 | Assemble blocks and block entities into one movable, rotating owner (#794). | **Gap** | API entity Parts and handles provide no structure assembly/carrier operation; searches for `StructureRef`, `assemble_structure`, `moving_structure` in API and Game find no implementation. Entity capability lookup above only queries existing holders; it does not transfer ownership of blocks/tickers. See the gap brief below. |
 
 ## Verified gap

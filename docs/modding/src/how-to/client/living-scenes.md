@@ -7,6 +7,10 @@ GuideME's living scene: a lit furnace shows its flames and smoke, a campfire smo
 flickers, and dripstone and leaves drip, the way the client's animate tick makes these
 particles for blocks near the player.
 
+When a scene block includes a mod block entity, `block_entity_submit` draws it using
+that supplied entity data and full-bright lighting. The hook's `pos` is relative to
+the scene; it does not identify a block in the client level.
+
 ```rust
 use mod_api::{GuiEntity, Scene, SceneClock, SceneEntity, SceneView};
 

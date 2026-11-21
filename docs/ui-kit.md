@@ -1,11 +1,11 @@
 # The HUD kit
 
-Horizon draws a few overlays of its own over the game, such as the controller notice and
-splitscreen's join strip. Vanilla has no screen for them, so nothing in vanilla tells them where
+Sunrise draws a few overlays of its own over the game, such as the controller notice and
+the radial menu. Vanilla has no screen for them, so nothing in vanilla tells them where
 they may go. The HUD kit is the small set of pieces they share, so they fit around vanilla's HUD
 and look alike.
 
-It lives in `crates/horizon-client-render/src/hud_kit/`, below gameplay. The game builds the
+It lives in `crates/sunrise-client-render/src/hud_kit/`, below gameplay. The game builds the
 inputs once a frame and the overlays draw with them. It is immediate mode, with no state of its
 own. Vanilla's display lists (`hud_layout`, `screen_draw`) never use it: they are vanilla's, and
 parity-tested against it.
@@ -18,7 +18,7 @@ The kit grows a piece at a time, each with something on screen that needs it:
 | `hud_kit::plate` | `Plate`: the box behind a notice's text, or a guide row's backing |
 | `hud_kit::shapes` | triangles, fans, arcs, discs and radial gradients for `HudBatch`; `alpha_since`, `translate_since` |
 | `hud_kit::motion` | `Clock` and `Tween`: quiet motion as pure functions of the frame's time |
-| `hud_kit::icon` | `Icon`: a sprite, an item, a glyph or the player's face, through an `IconPainter` |
+| `hud_kit::icon` | `Icon`: a sprite, an item or a glyph, through an `IconPainter` |
 | `hud_kit::tabs` | `collapsed`: a page list in one row, `‹ Name ›` with a pip per page; `tab_strip`: a row of tabs that falls back to it |
 | `pad_glyph`, with `GlyphOf` and `MenuJob` in `gamepad.rs` | `Glyph`: a controller button, asked for by what it does, in the player's `Glyphs` |
 | `hud_kit::fit` | `ellipsize`, `wrap`, `chord` and `fit_in_circle`: text cut or wrapped to the room it has |
@@ -39,29 +39,28 @@ and an area. There are two kinds:
 | `BossBars` | `hud_overlays::boss_bars_bottom(h, n)`: vanilla's `BossHealthOverlay` layout, y from 12 in steps of 19 until a third of the view's height; as wide as the 182 px bar or its widest name |
 | `StatusRows` | the survival rows above the hotbar (health with its absorption rows, armour, food or the mount's hearts, air), from the highest row's top to the view's bottom, as `hud_layout::draws_top` reports them; `room.bottom()` is the lowest y an overlay may reach |
 
-`Game::hud_room` (`crates/horizon-client/src/game/hud_room.rs`) gathers what is showing.
+`Game::hud_room` (`crates/sunrise-client/src/game/hud_room.rs`) gathers what is showing.
 Nothing shows while F1 or Replay Studio hides the HUD, or off a world. `hud` empties `ui.room` at
 the start of every frame, and `hud_layers` fills it in before the world's HUD draws, so every
 overlay in the frame reads the same room and never a stale one.
 
 A centred overlay asks `room.below_top(wanted)`. It keeps `wanted` unless a keep-out reaches past
 it (`top() > wanted`, a real overlap; touching isn't one), and otherwise goes 2 px (`GAP`) below
-that keep-out. The controller notice and splitscreen's join strip want y 18:
+that keep-out. The controller notice wants y 18:
 
-- with no boss bars, or one (it ends at y 17), they stay at 18
-- with two they go to 38, with three to 57
-- a notice under the join strip follows it, 38 px lower
+- with no boss bars, or one (it ends at y 17), it stays at 18
+- with two it goes to 38, with three to 57
 
 `room.usable()` is the view below the top keep-outs, with the same gap.
 
 ```rust
-use horizon_client::hud_kit::room::{Keep, Room};
+use sunrise_client::hud_kit::room::{Keep, Room};
 
 let room = Room::new(320.0, 240.0).with(Keep::BossBars, [69.0, 0.0, 182.0, 36.0]);
 assert_eq!(room.below_top(18.0), 38.0); // below two bars
 ```
 
-The other HUD boxes (the minimap, the PvP & HUD widgets, mods' corner panels) don't use the room
+The other HUD boxes (the PvP & HUD widgets, mods' corner panels) don't use the room
 yet. Chat, the hotbar, effect icons and subtitles aren't keep-outs yet either. #10125 asks for
 these push-aside points for mods.
 
@@ -69,7 +68,7 @@ these push-aside points for mods.
 
 Some overlays take the middle of the view for themselves, as the radial menu does once it shows.
 What vanilla draws there gives way to them through one query, `Game::overlay_holds_view()`
-(`crates/horizon-client/src/game/hud_room.rs`), not a check per overlay in each piece:
+(`crates/sunrise-client/src/game/hud_room.rs`), not a check per overlay in each piece:
 
 | Gives way | Where |
 |---|---|
@@ -89,7 +88,7 @@ its 1 px edge inside the area.
 
 | `Plate` | Look | Used by |
 |---|---|---|
-| `Notice` | dark fill (alpha 210), faint white edge | controller notices, splitscreen's prompts |
+| `Notice` | dark fill (alpha 210), faint white edge | controller notices |
 | `Backing { alpha }` | black at the player's Text Background Opacity, no edge | the gameplay guide's rows |
 
 It keeps the colours these overlays had before the kit, so moving them onto it changes nothing on
@@ -100,7 +99,6 @@ screen.
 - `hud_overlays` tests pin `boss_bars_bottom` to vanilla's numbers and to `boss_overlay`'s own
   sprites.
 - `hud_kit::room` tests cover an empty room and when an overlay moves.
-- `game/split/hud.rs` tests place the join strip and the notice with 0 to 3 bars.
 
 ## Shapes
 
@@ -110,7 +108,6 @@ screen.
 | Method | Draws |
 |---|---|
 | `fill_triangle(atlas, [a, b, c], colour)` | one triangle |
-| `fill_fan(atlas, centre, rim, colour)` | a triangle from the centre to each two neighbouring rim points |
 | `fill_arc(atlas, centre, [r0, r1], [a0, a1], colour)` | an annular sector; `r0 = 0` is a pie slice, a span of `TAU` a ring |
 | `fill_disc(atlas, centre, r, colour)` | a disc |
 | `fill_disc_gradient(atlas, centre, r, &[Stop(fraction, colour)...])` | a disc whose colour runs through the stops from the centre out |
@@ -125,7 +122,7 @@ screen.
   (`arc_segments`, `ARC_STEP`), at most 256.
 
 ```rust
-use horizon_client_render::hud_kit::shapes::Stop;
+use sunrise_client_render::hud_kit::shapes::Stop;
 use std::f32::consts::FRAC_PI_8;
 
 // The radial dial: a dark disc fading out, its track, and the top sector lit.
@@ -144,10 +141,10 @@ segment counts, a clip that keeps half a disc and its blend run, gradient stops,
 things happened and asks where a tween is now.
 
 - `Clock { now, still }` is built once a frame by the game (`Game::hud_clock`). `still` is set
-  while the game is paused, frame-stepped (`HORIZON_STILL`, a screenshot sequence) or a repro
+  while the game is paused, frame-stepped (`SUNRISE_STILL`, a screenshot sequence) or a repro
   recording or replay runs. A still clock shows every tween at its end, so recordings and
   screenshots are the same every run.
-- `Tween::new(duration, motion)` takes a curve from the design system (`horizon_theme::QUICK` for
+- `Tween::new(duration, motion)` takes a curve from the design system (`sunrise_theme::QUICK` for
   fades, `MOVE` for things that travel), and `Tween::of(motion)` its duration too. `progress`
   is 0 to 1, eased; `linear`, `done` and `lerp` are there too.
 - The helpers are `fade` and `fade_out` (an alpha), `scale_in(from)`, `slide(distance)` (an offset
@@ -155,7 +152,7 @@ things happened and asks where a tween is now.
 
 ```rust
 let clock = motion::Clock::new(now, still);
-let open = Tween::new(Duration::from_millis(90), horizon_theme::QUICK);
+let open = Tween::new(Duration::from_millis(90), sunrise_theme::QUICK);
 let alpha = motion::fade(open, clock, opened_at);
 let scale = motion::scale_in(open, clock, opened_at, 0.94);
 ```
@@ -172,10 +169,9 @@ sector is drawing.
 | `Sprite("statistics/item_dropped")` | the kit, from the atlas's `gui/sprites/`; proportions kept, centred |
 | `Item("minecraft:chest")` | the game's `IconPainter::item` (`game/item_draw.rs`): the item's model, scaled from 16 |
 | `Glyph(glyph)` | the kit, `pad_glyph::draw`, centred |
-| `PlayerFace` | the game's `IconPainter::face`: the player's skin face with its hat |
 
 `icon::draw(batch, atlas, painter, icon, area, alpha)` says whether anything was drawn. The render
-crate never reaches gameplay, so items and the face go through the painter the game passes in;
+crate never reaches gameplay, so items go through the painter the game passes in;
 tests and sprite-only screens pass `NoItems`. Every picture comes from the player's own resources,
 none is bundled, and a sprite the atlas lacks draws nothing.
 
@@ -228,7 +224,7 @@ twelve-screen pack in a real game).
 ## Pad capture
 
 Several overlays over play take the controller for themselves. `Game::pad_capture`
-(`crates/horizon-client/src/game/pad/capture.rs`) is the one place that says which owns it now,
+(`crates/sunrise-client/src/game/pad/capture.rs`) is the one place that says which owns it now,
 in one priority order:
 
 | `PadCapture` | Owns the pad while |
@@ -270,7 +266,7 @@ Code asks for a glyph by what the button does, never by a button. The chain runs
 going by its letters as parts (`PadState::by_letter`): the A on a Switch pad's right is South, which
 confirms and jumps. Inside `pad_glyph`, a `Glyph` turns its part back into the button that plays it for the
 art and the label, so South shows that A. `GlyphStyle` is only the setting: the Glyphs choice and
-`horizon-controller.txt` keep `nintendo` and `nintendoLetters` as before.
+`sunrise-controller.txt` keep `nintendo` and `nintendoLetters` as before.
 
 What the types guarantee: no code outside `pad_glyph` can turn a bare `Button` into art or a label, and none
 can make `Glyphs` without the `PadSettings` its letters come from. What they don't: a caller holding the
@@ -290,26 +286,21 @@ let back = self.menu_glyph(MenuJob::Back);
 let keys = [MenuJob::PagePrev, MenuJob::PageNext].map(|job| Glyph::menu(job, glyphs));
 ```
 
-The one exception is `Glyphs::unheld(&settings, family)`, for splitscreen's join and lost-controller
-prompts. They are answered by a controller nobody holds yet, whose letters aren't read yet, so they show its
-family's buttons by their places ([controllers.md](controllers.md)). A join prompt uses the joining pad's
-family.
-
 ### Glyph tests
 
-- A glyph test builds the test atlas (`HudAtlas::build` on a missing folder gives Horizon's own art),
+- A glyph test builds the test atlas (`HudAtlas::build` on a missing folder gives Sunrise's own art),
   draws into a `HudBatch`, and compares the quads or texture coordinates with the sprite expected.
 - Letter mode is checked against input: `pad_glyph`'s test builds the glyphs from real `PadSettings`,
   presses each physical button, reads it the way the game does (`PadState::by_letter`), and expects that
   part's glyph to be the pressed button's print.
-- In the e2e harness, `horizon-ctl pad family nintendo` makes the pad playing a Nintendo one, and
+- In the e2e harness, `sunrise-ctl pad family nintendo` makes the pad playing a Nintendo one, and
   `pad connection connected nintendo` raises a Nintendo pad's notice. With `nintendoLetters:true` in
-  the seeded `horizon-controller.txt`, that is letter mode with no real pad (`tools/pad_menu_e2e.py`,
+  the seeded `sunrise-controller.txt`, that is letter mode with no real pad (`tools/pad_menu_e2e.py`,
   `nintendo_letters`). `pad status` lists each declared glyph's part (`button`), `label` and `sprite`.
 
 ## Fitting text
 
-`hud_kit::fit` cuts, wraps and fits text for Horizon's own overlays and settings. Widths are GUI px
+`hud_kit::fit` cuts, wraps and fits text for Sunrise's own overlays and settings. Widths are GUI px
 in the HUD atlas's font (`Font::width`), so what fits is what draws. Vanilla's screens keep their
 own cutting (`screen_draw::clip`) and sliding labels (`scrolling_text`).
 
@@ -322,7 +313,7 @@ own cutting (`screen_draw::clip`) and sliding labels (`scrolling_text`).
 | `fit_in_circle(atlas, text, r, top, height, inset)` | `text` ellipsized to that room, less `inset` at each end |
 
 ```rust
-use horizon_client::hud_kit::fit;
+use sunrise_client::hud_kit::fit;
 
 // A name in a control's room; a short one comes back borrowed, not copied.
 let name = fit::ellipsize(atlas, &row.name, room);
@@ -333,7 +324,7 @@ let x = cx - atlas.font.width(&label) / 2.0;
 
 `graphics_style::fit`, which the settings shell, Controller and Shaders use for names and values, is
 `ellipsize` under its old name. It used to rebuild and measure the whole string once per character;
-a test cuts every Horizon string in seven languages, at widths from 0 to 240 px, both ways and
+a test cuts every Sunrise string in seven languages, at widths from 0 to 240 px, both ways and
 expects the same text.
 
 ## Hint rows
@@ -345,7 +336,6 @@ A `Look` says how it reads, and the kit has one for each overlay that shows them
 |---|---|---|---|
 | `hint::GUIDE` | white, shadowed | 3 px (glyphs 1 px apart) | the gameplay guide's rows; the right column's take `Side::Trailing` |
 | `hint::NOTICE` | light grey | 5 px | the controller notice's line under its title |
-| `hint::PROMPT` | a lighter grey | 5 px | splitscreen's join and lost-controller answers |
 
 - `measure(atlas, look)` is the row's width: its glyphs, the gap, its caption.
 - `fitted(atlas, look, width)` cuts the caption with `ellipsize` to the room the glyphs leave. The
@@ -358,8 +348,8 @@ A `Look` says how it reads, and the kit has one for each overlay that shows them
   no art: the on-screen keyboard's hint line, in the launcher's font.
 
 ```rust
-use horizon_client::hud_kit::hint::{self, HintRow, Look, Side};
-use horizon_client::hud_kit::plate::Plate;
+use sunrise_client::hud_kit::hint::{self, HintRow, Look, Side};
+use sunrise_client::hud_kit::plate::Plate;
 
 let row = HintRow::new(self.glyph(GlyphOf::Bound("key.jump")), lang::get("key.jump"));
 // Against the view's right edge, cut to the room it has.
@@ -377,8 +367,6 @@ Each overlay's captions now fit their room:
   only if even that overlaps does it move down, as before. A row wider than the view is cut to it
   (`row_room`) instead of being dropped. The right column comes first, as before.
 - **The controller notice.** Its title and any word wider than the notice are cut to it.
-- **Splitscreen's prompts.** The title is cut to the view, and when the answers don't fit on one
-  line each caption is cut to an equal share.
 
 ### Tests
 
@@ -388,8 +376,7 @@ Each overlay's captions now fit their room:
   places and compare the vertices with `draw_hint` and `draw_plated`, so each migrated overlay draws
   what it drew before when its text fits.
 - `gameplay_guide` tests place a left row beside a right column it would overlap, keep a row whole
-  where nothing is beside it, and cut a row wider than the view; and
-  `game/split/hud.rs` tests fit a prompt's answers to a narrow view.
+  where nothing is beside it, and cut a row wider than the view.
 
 ## The settings shell
 
@@ -417,7 +404,7 @@ Polytone config entries, a page per section, with Undo from a snapshot taken whe
    (Controller Settings: "Editing: <player>" and the controller the game sees); they are read-only.
    `link` makes a row open a page (Shaders' links to a pack's screens): the shell opens it alone, and
    Escape goes back. A slider's `slider_released` says what its change does once the drag ends, or a key stepped
-   it (a Horizon shader pack saves its options once a drag).
+   it (a Sunrise shader pack saves its options once a drag).
 4. **Fingerprint what the rows read** in `stamp` (`stamp_of`), besides the presses: the rows are built
    again only when it changes. A screen that keeps its own values can count its changes instead
    (Pack Options' values are floats, which don't hash).

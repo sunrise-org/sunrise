@@ -10,6 +10,8 @@ the exhaustion. The player needn't reach or look at the block. It is true when t
 removed. With `into_inventory`, the drops `block_drops` leaves go to the player's inventory, and
 what doesn't fit drops from them.
 
+For a player in another level than the hook's it breaks nothing and returns false: a break lands in the world, and the hook's level is the one in place.
+
 ## A vein miner
 
 A vein miner keeps the drops of its own breaks with `block_drops`: it takes the item list and the
@@ -67,7 +69,7 @@ breaker too when other players can break the same blocks while the vein runs. Wh
 sets loose (a torch losing its support, a container's contents) is not the block's own drop and
 still drops where it was.
 
-Keep a guard like `busy`: the engine only bounds the nesting as a safety net of Horizon's own, not
+Keep a guard like `busy`: the engine only bounds the nesting as a safety net of Sunrise's own, not
 found in the reference. A break started from
 inside eight others is refused with `false`, which ends an unguarded listener's recursion but not
 its eight levels of work.

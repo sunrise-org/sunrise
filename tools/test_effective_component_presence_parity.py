@@ -11,6 +11,8 @@ import sys
 
 import test_command_exec_parity as runner
 
+PARITY_MANUAL = "a proof run by hand: --work-dir DIR --reference-only for the Java side, then --work-dir DIR2 --reference-dir DIR --binary BIN"  # not a harness: tools/parity.py leaves it out
+
 GROUP = "effective component presence"
 
 
@@ -89,10 +91,10 @@ def main():
             shutil.copyfile(reference / name, folder / name)
         scratch = folder / "rust"
         scratch.mkdir()
-        env = runner.lab.game_env(HORIZON_PLAYER_NAME="Player",
-                                 HORIZON_COMMAND_SCRIPT=folder / "script.jsonl",
-                                 HORIZON_COMMAND_OUTPUT=folder / "rust.jsonl",
-                                 HORIZON_API_DISCOVERY="http://127.0.0.1:9/")
+        env = runner.lab.game_env(SUNRISE_PLAYER_NAME="Player",
+                                 SUNRISE_COMMAND_SCRIPT=folder / "script.jsonl",
+                                 SUNRISE_COMMAND_OUTPUT=folder / "rust.jsonl",
+                                 SUNRISE_API_DISCOVERY="http://127.0.0.1:9/")
         with (folder / "rust.log").open("w") as log:
             result = runner.run_game([str(binary), "--resources", str(runner.lab.RESOURCES),
                                       "--world", "harness", "--seed", str(runner.SEED), "--radius", "4"],

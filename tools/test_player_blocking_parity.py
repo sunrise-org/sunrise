@@ -24,7 +24,10 @@ def corpus():
                 stack({'!minecraft:max_damage': {}}),
                 stack({'!minecraft:damage': {}}),
                 stack({'minecraft:unbreakable': {}, 'minecraft:enchantments': {'minecraft:unbreaking': 3}}),
-                stack({'!minecraft:damage': {}, 'minecraft:enchantments': {'minecraft:unbreaking': 3}})]
+                stack({'!minecraft:damage': {}, 'minecraft:enchantments': {'minecraft:unbreaking': 3}}),
+                stack({'minecraft:blocks_attacks': {
+                    'item_damage': {'threshold': 0, 'base': 1, 'factor': 0}}}),
+                ]
     for item in variants:
         for damage in [0, 2, 8]:
             for pierce, behind, creative in [(False, False, False), (True, False, False),
@@ -50,25 +53,25 @@ def main():
     cases.write_text(''.join(json.dumps(case) + '\n' for case in corpus()), encoding='utf-8')
     classes = work / 'classes'
     classes.mkdir(exist_ok=True)
-    java_root = lab.ROOT / 'mods/horizon/src/test/java'
+    java_root = lab.ROOT / 'mods/sunrise/src/test/java'
     cp = os.pathsep.join(map(str, [jars['server'], *libraries]))
     subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none',
                     '-sourcepath', str(java_root), '-cp', cp, '-d', str(classes),
-                    str(java_root / 'dev/horizonlab/parity/VanillaPlayerBlockingOracle.java')], check=True)
+                    str(java_root / 'dev/sunriselab/parity/VanillaPlayerBlockingOracle.java')], check=True)
     native = work / 'native.txt'
     subprocess.run(['java', '-Xmx512M', '-cp', str(classes) + os.pathsep + cp,
-                    'dev.horizonlab.parity.VanillaPlayerBlockingOracle', str(cases), str(native)], check=True)
+                    'dev.sunriselab.parity.VanillaPlayerBlockingOracle', str(cases), str(native)], check=True)
     binary = args.binary
     if binary is None:
-        subprocess.run(['cargo', 'build', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT, check=True)
-        binary = lab.cargo_target() / 'debug' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
-    resources = args.resources or lab.LOCAL / 'horizon-client' / lock['minecraft']['version']
+        subprocess.run(['cargo', 'build', '-p', 'sunrise-game', '--bin', 'sunrise-client'], cwd=lab.ROOT, check=True)
+        binary = lab.cargo_target() / 'debug' / ('sunrise-client.exe' if os.name == 'nt' else 'sunrise-client')
+    resources = args.resources or lab.LOCAL / 'sunrise-client' / lock['minecraft']['version']
     rust = work / 'rust.txt'
     rust.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix='hz-player-blocking-') as game_dir:
         run_game([str(binary.resolve()), '--headless', '--game-dir', game_dir,
                   '--resources', str(resources.resolve())], cwd=game_dir, check=True, timeout=args.timeout,
-                 env=lab.game_env(HORIZON_DISPENSE_FIXTURE=f'{cases.resolve()},{rust.resolve()}'))
+                 env=lab.game_env(SUNRISE_DISPENSE_FIXTURE=f'{cases.resolve()},{rust.resolve()}'))
     expected = native.read_text(encoding='utf-8').splitlines()
     rust_lines = rust.read_text(encoding='utf-8').splitlines()
     actual = [line for line in rust_lines

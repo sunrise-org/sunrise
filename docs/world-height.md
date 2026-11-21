@@ -35,7 +35,7 @@ dimension type codec checks them (`LevelShape::new`). **`LevelShapes`** holds a 
 | World, streaming, meshing, renderer | `World::layout()`, the chunk's `min_y`, the renderer's layout |
 | Saves (`save.rs`) | `SaveDir.shape` (sections, `yPos`, heightmaps, light layers, far tiles) |
 | Network (`lan/`, `game/network/remote_chunks.rs`) | the level's shape on the host, the server's dimension type on the client |
-| Section caches, generation glue, far terrain, minimap, flat worlds | the chunk's column, the generator's level range |
+| Section caches, generation glue, far terrain, flat worlds | the chunk's column, the generator's level range |
 | Gameplay (bounds, searches, commands, mobs) | `World::bottom_y`/`top_y` (the column), `World.shape`, `Game.level_shapes` |
 
 Section sets are `SectionMask`s (256 bits: vanilla's tallest level has 254 sections, light data one more
@@ -56,17 +56,17 @@ of a vanilla server does.
 - Unit tests: a 131-section chunk stores, lights, relights, saves, loads, encodes and random-ticks its whole
   height; `tests/tall_column.rs` streams, lights and meshes a 131-section level to its top and remeshes after an
   edit at y 1800.
-- `HORIZON_PARITY_DATAPACKS=tools/fixtures/tall_datapacks python3 tools/test_datapack_worldgen_parity.py`
-  generates the fixture's 2096-high Overworld (`horizon_tall_test`, Horizon's own MIT pack, terrain from about
+- `SUNRISE_PARITY_DATAPACKS=tools/fixtures/tall_datapacks python3 tools/test_datapack_worldgen_parity.py`
+  generates the fixture's 2096-high Overworld (`sunrise_tall_test`, Sunrise's own MIT pack, terrain from about
   y 475 to 1900) with the vanilla oracle, which takes each level's range from its dimension type, and with
-  Horizon, and compares every block, biome and block entity.
+  Sunrise, and compares every block, biome and block entity.
 - Vanilla worlds are unchanged at every step: `chunkgen_bench --snapshot`, `test_light_parity.py` and the save
   and LAN tests give the same results as before.
 
 ## What is left
 
 - **Nether and End at their own height.** They keep the vanilla column (`-64..320`). Holding exactly their 16
-  sections would save memory and match vanilla's `LevelChunk`, but Horizon's light only spreads inside a
+  sections would save memory and match vanilla's `LevelChunk`, but Sunrise's light only spreads inside a
   chunk's column while vanilla's spreads one section past the level, so it needs that border in the flood fill
   and the relighter first, checked with `test_light_parity.py`.
 - The vanilla constants `MIN_Y`, `HEIGHT` and `SECTIONS` remain as the default column and in tests.

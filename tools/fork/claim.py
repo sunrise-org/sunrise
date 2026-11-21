@@ -13,7 +13,7 @@ import nightly_set as ns  # noqa: E402
 
 ns.OWNER = os.environ["FORK_OWNER"]
 ns.OWNER_ID = int(os.environ["FORK_OWNER_ID"])
-ns.REVIEWERS = ".github/fork-reviewers.txt"
+ns.REVIEWERS = ".github/trusted-reviewers.txt"
 
 if __name__ == "__main__":
     sys.argv[0] = str(CI / "claim_command.py")

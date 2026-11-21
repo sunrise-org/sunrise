@@ -31,11 +31,11 @@ class ReadmeTests(unittest.TestCase):
 
     def test_rewrite_replaces_the_block_and_the_badge(self):
         text = ("<p align=\"center\">\n  <img src=\"https://img.shields.io/badge/other-1-F0795A\" alt=\"x\">\n</p>\n\n"
-                "# Horizon\n\n## Project status\n\nThe table.\n")
+                "# Sunrise\n\n## Project status\n\nThe table.\n")
         once = pg.rewrite(text, pg.block(lists(7)), 7)
         self.assertIn("player--visible%20gaps-7%20open-", once)
         self.assertLess(once.index("badge/other-1"), once.index("player--visible%20gaps-7"))
-        self.assertLess(once.index("player--visible%20gaps-7"), once.index("</p>\n\n# Horizon"))
+        self.assertLess(once.index("player--visible%20gaps-7"), once.index("</p>\n\n# Sunrise"))
         self.assertIn("## Project status\n\n**Player-visible gaps: 7 open**", once)
         twice = pg.rewrite(once, pg.block(lists(3)), 3)
         self.assertEqual(twice.count("**Player-visible gaps:"), 1)

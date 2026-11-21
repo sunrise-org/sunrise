@@ -1,6 +1,6 @@
-# Operations: running Horizon by hand
+# Operations: running Sunrise by hand
 
-How the Horizon Team and the council keep Horizon working when no AI agent is running and the maintainer's machines
+How the Sunrise Team and the council keep Sunrise working when no AI agent is running and the maintainer's machines
 are off. Each section says what normally happens by itself, who can do it by hand, and what to do when it breaks.
 How decisions are made is in [GOVERNANCE.md](../GOVERNANCE.md); how a change reaches players is in
 [release-flow.md](release-flow.md). This page only says how to operate them.
@@ -9,7 +9,7 @@ How decisions are made is in [GOVERNANCE.md](../GOVERNANCE.md); how a change rea
 
 | Who | Can |
 | --- | --- |
-| **Horizon Team** (GitHub team `horizon-team`, write access) | Review, label and merge pull requests; approve a fork's workflow runs; re-run failed jobs; start workflows by hand (`gh workflow run`); add `release-blocker` to an issue; merge in horizon-mods (form pull requests too) and upload its `staging` files |
+| **Sunrise Team** (GitHub team `sunrise-team`, write access) | Review, label and merge pull requests; approve a fork's workflow runs; re-run failed jobs; start workflows by hand (`gh workflow run`); add `release-blocker` to an issue; merge in sunrise-mods (form pull requests too) and upload its `staging` files |
 | **Trusted reviewers** (`.github/trusted-reviewers.txt`) | `/nightly`, `/close`, `/reopen`, `/label`, `/unlabel`, `/unclaim` by comment ([release-flow.md](release-flow.md#trusted-reviewers)) |
 | **Council** (🏛️ Council on Discord) | Decide by poll (`/vote`, `/poll start`); emergency actions (GOVERNANCE.md 4.6) |
 | **Organisation owners** (Ludovic and rdbtCVS since 2026-11-11, council poll P28) | Repository variables and secrets (`SELF_HOSTED_CI`, `RELEASES_PAUSED`), branch protection, adding people to GitHub teams, merging past a missing review, the security advisories |
@@ -22,7 +22,7 @@ The organisation has two owners since the council's poll P28, so the last two ro
 Nobody merges automatically. A Team member:
 
 1. Reads the whole diff. For a fork, do it before approving its workflow runs (they wait under **Actions**:
-   "Approve and run") and before adding `run-parity`.
+   "Approve and run").
 2. Waits for `verify`, the one required check. A pull request that changes no Rust finishes it in about a minute.
 3. Merges with a merge commit once `verify` passed, no change request is open and every comment has been read. A
    "don't merge" from anyone holds it. Never merge your own pull request, never use `gh pr merge --auto`, never
@@ -48,18 +48,17 @@ Everything below runs by itself on GitHub; you only step in when something is wr
   whenever a player-facing pull request merged since the published one, with no batch or age rule, and only from the
   commit `daily-green` points to ([release-flow](release-flow.md#daily-run)). A hand dispatch of the train
   (`release.yml`) keeps the batch rules: one after 5 player-facing merges, or when the oldest has waited 6 hours, or
-  at once for a pull request labelled `release-now`; upstream ships only a commit where both `checks` and
-  `parity-main` passed. Who may add `release-now` is the
+  at once for a pull request labelled `release-now`. Who may add `release-now` is the
   council's choice; until it decides, leave the label to the maintainer.
 - **Stopping Nightlies:** open an issue about the problem and label it `release-blocker`. Nothing is published
   while it is open, forced builds included. Close it when the fix is on main.
 - **Rolling back:** revert the pull request and merge the revert. Players can pick an earlier build on the
   launcher's Versions page meanwhile.
 - **The reviewers' picks:** `/nightly status` shows the set, `/nightly clear` builds main alone.
-- **Launcher releases** follow the same train (`launcher.yml`).
+- **Launcher releases** are made in sunrise-org/sunrise-launcher and signed here by `launcher-bridge.yml`.
 
-The Nightly's macOS builds, its smoke test and parity-main run on the maintainer's Mac mini. While it is off,
-**no Nightly and no launcher release can be published**: players keep the last ones, which keep working. See below.
+Daily vanilla parity uses Dyna's runners, separate from the Mac builds and smoke tests. A red or incomplete
+required parity run holds the automatic Nightly; see [Parity on main](release-flow.md#parity-on-main).
 
 ## Self-hosted runners are offline
 
@@ -70,11 +69,11 @@ is waiting, and closes it once the runners are back.
 
 | Runner label | What waits | What to do |
 | --- | --- | --- |
-| `horizon-light` (bots) | Triage and claim commands, labels, overlap notes, the Mojang check | An organisation owner sets `SELF_HOSTED_CI` to `off` (Settings → Secrets and variables → Actions → Variables). Then everything runs on GitHub |
-| `horizon-checks` | `verify` of this repository's own pull requests ending in 0 or 1 | Same switch (`off` or `light`), then re-run the waiting checks. Forks' pull requests never use these runners |
-| `horizon-game` | A pull request's own parity job | It isn't required: merge on `verify`, and label pull requests that touch gameplay `needs-proof` |
-| `horizon-parity-main` | parity-main on main | Nothing can be done on GitHub. Nightlies wait for the last commit it passed on |
-| `horizon-nightly`, `horizon-release` | The Nightly's and the launcher's macOS builds | Nothing can be done on GitHub. No Nightly or launcher release until the Mac is back |
+| `sunrise-light` (bots) | Triage and claim commands, labels, overlap notes, the Mojang check | An organisation owner sets `SELF_HOSTED_CI` to `off` (Settings → Secrets and variables → Actions → Variables). Then everything runs on GitHub |
+| `sunrise-checks` | `verify` of this repository's own pull requests ending in 0 or 1 | Same switch (`off` or `light`), then re-run the waiting checks. Forks' pull requests never use these runners |
+| `sunrise-game` | By-hand game tools | Use local tools or wait for the maintainer's runner |
+| `dyna-large` | Daily vanilla parity | Inspect Dyna's runner pool; no other CI workflow runs it |
+| `sunrise-nightly`, `sunrise-release` | The Nightly's and the launcher's macOS builds | Nothing can be done on GitHub. No Nightly or launcher release until the Mac is back |
 
 What keeps working without them: `verify` and merging, triage and labels (once `SELF_HOSTED_CI=off`), Kira, the
 website, the mods registry and its checks, the official server.
@@ -114,7 +113,7 @@ Kira runs on Railway and needs nobody's machine.
 
 ## The official server
 
-The server (play.playhorizon.dev) runs on its host's panel, not on the maintainer's machines, and keeps running the
+The server (play.playsunrise.net) runs on its host's panel, not on the maintainer's machines, and keeps running the
 engine it has. Engine updates, backups and disk clean-ups are done by people with panel access; who has it, and the
 steps, are in the council's private notes. Players' reports go to #mod-chat as usual. If the server is down, a
 council member tells the panel holders and the host.
@@ -129,7 +128,7 @@ council member tells the panel holders and the host.
 
 ## Who to ask
 
-- Code and merges: the Horizon Team, in #horizon-team.
+- Code and merges: the Sunrise Team, in #sunrise-team.
 - Decisions: the council, by poll.
 - Accounts (GitHub organisation, Discord ownership, Railway, the server panel, domains): the account holders; the
   list is in GOVERNANCE.md section 11.

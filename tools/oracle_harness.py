@@ -3,9 +3,11 @@
 A harness supplies a Java oracle (compiled against the pinned client jar and its
 libraries), a Rust example probe, and a text input; both programs write one
 result line per input line and the outputs must be byte-identical."""
+import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 try:
     from . import lab, test_rust_parity as base, test_model_baking_parity as baking
@@ -16,26 +18,46 @@ except ImportError:
 
 
 def run_logged(command, build, name, timeout=900, **kwargs):
-    with (build / (name + '.log')).open('w') as log:
-        runner = run_game if Path(command[0]).name == 'horizon-client' else subprocess.run
-        runner([str(c) for c in command], cwd=lab.ROOT, check=True, timeout=timeout,
-                       stdout=log, stderr=subprocess.STDOUT, **kwargs)
+    path = build / (name + '.log')
+    with path.open('w') as log:
+        runner = run_game if Path(command[0]).name == 'sunrise-client' else subprocess.run
+        result = runner([str(c) for c in command], cwd=lab.ROOT, timeout=timeout,
+                        stdout=log, stderr=subprocess.STDOUT, **kwargs)
+    if result.returncode:
+        # The log stays in the build folder, which CI doesn't keep: a failed cargo build says why here, in the
+        # harness's own output. Only cargo's: its text is compiler output, never a program's (vanilla) data.
+        if Path(command[0]).name == 'cargo':
+            print(cargo_failure(path.read_text(errors='replace')), file=sys.stderr, flush=True)
+        raise subprocess.CalledProcessError(result.returncode, result.args)
+
+
+def cargo_failure(log, tail=30):
+    """What a failed cargo run's log says: its rendered compiler errors and the last `tail` lines of its own text."""
+    errors, text = [], []
+    for line in log.splitlines():
+        if not line.startswith('{'):
+            text.append(line)
+            continue
+        record = json.loads(line)
+        if record.get('reason') == 'compiler-message' and record['message']['level'] == 'error':
+            errors.append(record['message']['rendered'].rstrip())
+    return '\n'.join(['cargo failed:', *errors, *text[-tail:]])
 
 
 def compile_oracle(build, oracle_name, jars, libraries, java_major):
-    oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity' / (oracle_name + '.java')
+    oracle = lab.ROOT / 'mods/sunrise/src/test/java/dev/sunriselab/parity' / (oracle_name + '.java')
     classes = build / 'classes'
     classes.mkdir(parents=True, exist_ok=True)
     dependencies = os.pathsep.join(map(str, [jars['client'], *libraries]))
     run_logged(['javac', '--release', java_major, '-proc:none', '-sourcepath',
-                lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
+                lab.ROOT / 'mods/sunrise/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                build, 'compile-java-' + oracle_name)
     return classes, dependencies, oracle
 
 
 def build_probe(build, example):
-    """Build the horizon-client probe binary; returns the command that runs probe `example`."""
-    run_logged(['cargo', 'build', '--locked', '-p', 'horizon-client-lib', '--example', 'client_probe'],
+    """Build the sunrise-client probe binary; returns the command that runs probe `example`."""
+    run_logged(['cargo', 'build', '--locked', '-p', 'sunrise-client-lib', '--example', 'client_probe'],
                build, 'compile-rust-' + example, env=dict(os.environ, CARGO_BUILD_JOBS='3'))
     import json
     metadata = json.loads(subprocess.check_output(
@@ -45,7 +67,7 @@ def build_probe(build, example):
 
 def java_run(build, classes, dependencies, main_class, args, name, jvm=()):
     run_logged(['java', '-Xmx2g', '-Djava.awt.headless=true', *jvm, '-cp', str(classes) + os.pathsep + dependencies,
-                'dev.horizonlab.parity.' + main_class, *args], build, name)
+                'dev.sunriselab.parity.' + main_class, *args], build, name)
 
 
 def compare(client_out, rust_out, expected_lines):
@@ -64,11 +86,11 @@ def differential(name, oracle, probe, make_input, scope, sources=(), expected_li
     build.mkdir(exist_ok=True)
     report = build / 'report.json'
     report.unlink(missing_ok=True)
-    oracle_path = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity' / (oracle + '.java')
+    oracle_path = lab.ROOT / 'mods/sunrise/src/test/java/dev/sunriselab/parity' / (oracle + '.java')
     all_sources = [Path(__file__).resolve(), lab.ROOT / 'tools/oracle_harness.py', lab.ROOT / 'tools/test_rust_parity.py',
                    lab.ROOT / 'tools/lab.py', oracle_path, lab.ROOT / 'Cargo.toml', lab.ROOT / 'Cargo.lock',
-                   lab.ROOT / 'crates/horizon-client/Cargo.toml', lab.ROOT / 'crates/horizon-client/src/lib.rs',
-                   lab.ROOT / f'crates/horizon-client/examples/probe/{probe}.rs', *map(Path, sources)]
+                   lab.ROOT / 'crates/sunrise-client/Cargo.toml', lab.ROOT / 'crates/sunrise-client/src/lib.rs',
+                   lab.ROOT / f'crates/sunrise-client/examples/probe/{probe}.rs', *map(Path, sources)]
     tested = base.source_hashes(all_sources)
     input_path, units = make_input(build)
     input_hash = lab.digest(input_path, 'sha256') if input_path.is_file() else None

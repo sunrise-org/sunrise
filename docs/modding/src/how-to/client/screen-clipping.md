@@ -4,7 +4,7 @@ A scrolling list, a label that scrolls when it is too long, or a viewport into a
 and shows only the part inside a box. `DrawContext::push_clip(rect)` opens such a box (vanilla's
 `GuiGraphics.enableScissor`) and `pop_clip()` closes it (`disableScissor`). Everything the hook call draws
 between the two is cut to `rect`, `[x, y, w, h]` in GUI pixels as `fill` takes it: the visible part of a sprite,
-a glyph or an item stays. Native and wasm mods use the same methods.
+a glyph or an item stays.
 
 ```rust,ignore
 fn gui_render_post(&self, _: &dyn ClientHost, event: &mut GuiRenderPostEvent<'_>) {

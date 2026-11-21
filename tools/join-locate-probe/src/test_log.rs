@@ -1,8 +1,8 @@
 //! One logger for this probe's test binary, with thread-local diagnostic capture.
 //!
 //! `join_seq`'s tests read the diagnostics the residency table logs
-//! (`residency/table/completion_tests.rs`), which `horizon-client` keeps in
-//! `crate::test_log` (crates/horizon-client/src/test_log.rs). The probe imports the production
+//! (`residency/table/completion_tests.rs`), which `sunrise-client` keeps in
+//! `crate::test_log` (crates/sunrise-client/src/test_log.rs). The probe imports the production
 //! sources, so it carries the same shim, reduced to the two items those tests call.
 use std::cell::RefCell;
 

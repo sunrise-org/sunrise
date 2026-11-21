@@ -6,7 +6,7 @@ struct Mod;
 /// The counter's block and its block entity type.
 const COUNTER: &str = "fnr_loop_second:counter";
 
-#[mod_api::horizon_mod]
+#[mod_api::sunrise_mod]
 impl mod_api::Hooks for Mod {
     fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
         let kind = r.block_entity_type("counter").blocks(&[COUNTER]).build();
@@ -14,16 +14,16 @@ impl mod_api::Hooks for Mod {
     }
     fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
         event
-            .blocks
-            .push(mod_api::Block::new(COUNTER, "minecraft:stone"));
+            .register(mod_api::Block::new(COUNTER, "minecraft:stone"))
+            .unwrap();
     }
 }
 
 /// Makes the counter's block entity tick.
 struct Counter;
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for Counter {}
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockEntityPart for Counter {
     fn block_entity_ticks(
         &self,

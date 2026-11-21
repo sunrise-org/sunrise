@@ -8,15 +8,17 @@ Some packets are not the tick's: the server's own timing decides them (keep-aliv
 acknowledgements, teleport acceptances and the move that follows one, chat acknowledgements). They are kept
 apart (`frame`), never compared tick by tick, and `misplaced` checks vanilla's rule for them instead: the
 client processes the server's packets at the start of a frame (Minecraft.runTick: processQueuedPackets before
-the ticks), so none of them lands between two packets of one tick. Keep-alive answers are the exception: the
-network thread sends them (ClientCommonPacketListenerImpl.handleKeepAlive).
+the ticks), so none of them lands between two packets of one tick. Keep-alive answers and chunk batch
+acknowledgements are the exception: the network thread sends them (ClientCommonPacketListenerImpl.handleKeepAlive,
+ClientPacketListener.handleChunkBatchFinished), so they may land anywhere.
 """
 import struct
 
 # Sent from the frame (the server's packets), not from a tick.
 FRAME = {'keep_alive', 'pong', 'chunk_batch_received', 'accept_teleportation', 'chat_ack'}
-# Answers to the server that also come from the frame; `misplaced` checks them.
-ASYNC = FRAME - {'keep_alive'}
+# Answers to the server that also come from the frame; `misplaced` checks them. The network thread's own
+# answers are left out: they may come between two packets of a tick.
+ASYNC = FRAME - {'keep_alive', 'chunk_batch_received'}
 
 
 class Reader:
@@ -128,9 +130,16 @@ def self_id(entries):
     return None
 
 
+def is_mark(command):
+    """Whether a chat command is a scenario marker: /wire-mark, or /wire-mark NN naming the scenario's number."""
+    return command is not None and command.split(' ', 1)[0] == 'wire-mark'
+
+
 def scenarios(entries):
     """One list of ticks for each /wire-mark in the play stream, in order (the ticks after a mark run to the
-    next mark); a tick is {'packets': [(name, fields)], 'frame': [(name, fields)], 'misplaced': [name]}.
+    next mark); a tick is {'packets': [(name, fields)], 'frame': [(name, fields)], 'misplaced': [name],
+    'raw': [(where, name, payload hex)]}: 'raw' holds every serverbound packet as it was on the wire, in order,
+    before any of the rewrites below.
 
     A click's state id becomes `stale`: how far it is behind the last one the server sent for that container
     (0 = up to date). The ids themselves count every change the server made since the login, so two runs
@@ -150,13 +159,14 @@ def scenarios(entries):
         if name == 'container_click':
             last = server_state.get(fields['container'], fields['state'])
             fields = {'container': fields['container'], 'stale': last - fields.pop('state'), **fields}
-        if name == 'chat_command' and fields.get('command') == 'wire-mark':
+        if name == 'chat_command' and is_mark(fields.get('command')):
             current = [new_tick()]
             runs.append(current)
             continue
         if current is None:
             continue
         tick = current[-1]
+        tick['raw'].append(('frame' if name in FRAME else 'packets', name, e.get('data', '')))
         if 'entity' in fields and fields['entity'] == me:
             fields['entity'] = 'self'
         if name in FRAME:
@@ -178,7 +188,7 @@ def first_frame(run, name):
 
 
 def new_tick():
-    return {'packets': [], 'frame': [], 'misplaced': []}
+    return {'packets': [], 'frame': [], 'misplaced': [], 'raw': []}
 
 
 def name_entities(run):
@@ -191,19 +201,19 @@ def name_entities(run):
                 fields['entity'] = names.setdefault(entity, f'e{len(names) + 1}')
 
 
-def compare(vanilla, horizon, ticks):
-    """The ticks 0..ticks where the two streams differ: [(tick, vanilla packets, Horizon packets)]. Fields
+def compare(vanilla, sunrise, ticks):
+    """The ticks 0..ticks where the two streams differ: [(tick, vanilla packets, Sunrise packets)]. Fields
     compare exactly, floats included: they are what vanilla's client sends."""
     out = []
     for i in range(ticks + 1):
         v = vanilla[i]['packets'] if i < len(vanilla) else None
-        h = horizon[i]['packets'] if i < len(horizon) else None
+        h = sunrise[i]['packets'] if i < len(sunrise) else None
         if v != h:
             out.append((i, v, h))
     return out
 
 
-def compare_answered(vanilla, horizon, ticks, av, ah):
+def compare_answered(vanilla, sunrise, ticks, av, ah):
     """compare, for a scenario the server answers once (a teleport): the tick each client received the answer
     in (`av`, `ah`) compares with the other client's, every other tick with the same tick, on the script's
     clock. A loaded server answers a few ticks later in one run than in the other, while the script's own
@@ -212,13 +222,13 @@ def compare_answered(vanilla, horizon, ticks, av, ah):
     The moves of the two answer ticks (LocalPlayer.sendPosition, at the end of the player's tick) keep the
     script's clock too: an answer that doesn't move the player (`tp @s ~ ~ ~`) leaves them to the 20-tick
     position reminder, which a later answer can land on in one run and not in the other."""
-    out = [d for d in compare(vanilla, horizon, ticks) if d[0] not in (av, ah)]
+    out = [d for d in compare(vanilla, sunrise, ticks) if d[0] not in (av, ah)]
     packets = lambda run, i: run[i]['packets'] if i < len(run) else None  # noqa: E731
-    v, h = packets(vanilla, av), packets(horizon, ah)
+    v, h = packets(vanilla, av), packets(sunrise, ah)
     if strip_moves(v) != strip_moves(h):
         out.append((av, v, h))
     for i in sorted({av, ah}):
-        vi, hi = packets(vanilla, i), packets(horizon, i)
+        vi, hi = packets(vanilla, i), packets(sunrise, i)
         if moves(vi) != moves(hi) and all(d[0] != i for d in out):
             out.append((i, vi, hi))
     return sorted(out, key=lambda d: d[0])
@@ -247,7 +257,7 @@ def describe(packets):
     return '\n'.join(lines)
 
 
-def field_diff(v, h, names=('vanilla', 'Horizon')):
+def field_diff(v, h, names=('vanilla', 'Sunrise')):
     """One line per differing field of packets paired by position, with the exact values."""
     a, b = names
     lines = []

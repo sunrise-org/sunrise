@@ -38,12 +38,12 @@ def main():
     parser.add_argument('--label', default='candidate')
     parser.add_argument('--resources', type=Path, default=lab.RESOURCES)
     args = parser.parse_args()
-    path = 'crates/horizon-client-render/src/gfx.rs'
+    path = 'crates/sunrise-client-render/src/gfx.rs'
     if args.ref:
-        # gfx.rs moved from horizon-client to horizon-client-render; older refs have it at its old path.
+        # gfx.rs moved from sunrise-client to sunrise-client-render; older refs have it at its old path.
         shown = subprocess.run(['git', 'show', f'{args.ref}:{path}'], cwd=ROOT, text=True, capture_output=True)
         source = shown.stdout if shown.returncode == 0 else subprocess.check_output(
-            ['git', 'show', f'{args.ref}:crates/horizon-client/src/gfx.rs'], cwd=ROOT, text=True)
+            ['git', 'show', f'{args.ref}:crates/sunrise-client/src/gfx.rs'], cwd=ROOT, text=True)
     else:
         source = (ROOT / path).read_text()
     build = ROOT / '.local/sprite-mips-bench' / args.label
@@ -54,14 +54,22 @@ def main():
         code += source[source.index('const ANIMATION_MIP_BUDGET'):source.index('#[cfg(test)]\nmod sprite_upload_tests')]
     else:
         code += function(source, 'animate_sprites')
-    baseline = subprocess.check_output(['git', 'show', '89b58991bbc02eb79b6965fc4ca56357fe2297d9:crates/horizon-client/src/gfx.rs'], cwd=ROOT, text=True)
+    baseline = subprocess.check_output(['git', 'show', '89b58991bbc02eb79b6965fc4ca56357fe2297d9:crates/sunrise-client/src/gfx.rs'], cwd=ROOT, text=True)
     code += '\n' + function(baseline, 'animate_sprites').replace('fn animate_sprites(', 'fn reference_animate_sprites(', 1)
     if args.test:
         # sprites.rs holds it since the gfx -> sprites cut; older refs kept it in gfx.rs.
         code += '\n' + (function(source, 'sprite_mipmap_limit') if 'fn sprite_mipmap_limit' in source
                          else 'use sprites::sprite_mipmap_limit;')
-        code += '\n' + source[source.index('#[cfg(test)]\nmod sprite_upload_tests'):]
-    modules = '\n'.join(f'#[path = {json.dumps(str(ROOT / "crates/horizon-client-render/src" / (name + ".rs")))}] mod {name};'
+        tests = source[source.index('#[cfg(test)]\nmod sprite_upload_tests'):]
+        if 'mod sprite_upload_tests;' in tests:
+            # The tests moved to gfx/sprite_upload_tests.rs; the generated main.rs has no such sibling
+            # file, so inline them from the same ref (or the working tree). Older refs hold them inline.
+            tests_path = 'crates/sunrise-client-render/src/gfx/sprite_upload_tests.rs'
+            body = (subprocess.check_output(['git', 'show', f'{args.ref}:{tests_path}'], cwd=ROOT, text=True)
+                    if args.ref else (ROOT / tests_path).read_text())
+            tests = tests.replace('mod sprite_upload_tests;', 'mod sprite_upload_tests {\n' + body + '\n}', 1)
+        code += '\n' + tests
+    modules = '\n'.join(f'#[path = {json.dumps(str(ROOT / "crates/sunrise-client-render/src" / (name + ".rs")))}] mod {name};'
                         for name in ('mipmap', 'sprites', 'fast_hash'))
     (build / 'main.rs').write_text(modules + '\nuse sprites::SpriteAnimation;\n'
                                   + code + '\n' + (ROOT / 'tools/bench_sprite_mips.rs').read_text())
@@ -74,7 +82,7 @@ edition = "2024"
 name = "sprite-mips-{args.label}"
 path = "main.rs"
 [dependencies]
-horizon-assets = {{ path = "{ROOT / 'crates/horizon-assets'}" }}
+sunrise-assets = {{ path = "{ROOT / 'crates/sunrise-assets'}" }}
 png = "0.18"
 serde_json = {{ version = "1.0.151", features = ["raw_value"] }}
 log = "0.4"

@@ -1,0 +1,2 @@
+sunrise-client game::block_entity_part_state_tests::a_nested_item_write_marks_the_level_written_not_the_level_committing lib daily child-process
+sunrise-client game::block_entity_part_state_tests::item_slot_writes_save_but_menu_data_is_transient lib daily child-process

@@ -1,6 +1,6 @@
 # Windows allocator experiments
 
-The normal client already uses mimalloc through `horizon_threads::Allocator`,
+The normal client already uses mimalloc through `sunrise_threads::Allocator`,
 including its startup configuration and memory-release behavior. The Windows
 prebuilt archive that native mods build against is the exception: it uses the
 system heap (feature `system-allocator`), because std is a separate DLL there
@@ -12,21 +12,17 @@ experiment with the Win32 heap used by native libraries:
 | Feature | Effect on Windows |
 | --- | --- |
 | `windows-segment-heap` | Embeds a manifest requesting Segment Heap for Win32 heap APIs in this package's executables. |
-| `windows-mimalloc` | Compatibility no-op for earlier experiment commands; the client already uses mimalloc without this feature. |
 
-Neither feature changes non-Windows builds relative to the current main branch.
-Segment Heap is a build option, not a mod or runtime setting; changing it requires
+This feature has no effect on non-Windows builds. Segment Heap is a build option,
+not a mod or runtime setting; changing it requires
 rebuilding and restarting the client. It does not replace or reconfigure the Rust
 allocator. Native libraries can still use Windows heap APIs even though Rust uses
 mimalloc. No frame-rate improvement is guaranteed.
 
 ```sh
 # Current mimalloc baseline, then add Segment Heap. Keep the same profile.
-cargo build --profile fast -p horizon-game --bin horizon-client
-cargo build --profile fast -p horizon-game --bin horizon-client --features windows-segment-heap
-# Older commands still build, but these repeat the two variants above.
-cargo build --profile fast -p horizon-game --bin horizon-client --features windows-mimalloc
-cargo build --profile fast -p horizon-game --bin horizon-client --features windows-segment-heap,windows-mimalloc
+cargo build --profile fast -p sunrise-game --bin sunrise-client
+cargo build --profile fast -p sunrise-game --bin sunrise-client --features windows-segment-heap
 ```
 
 Copy each executable to a separate experiment directory before building the next
@@ -48,13 +44,13 @@ On Windows, extract the manifest from a built executable using the Windows SDK's
 `mt.exe` (PowerShell syntax):
 
 ```powershell
-mt.exe '-inputresource:target/fast/horizon-client.exe;#1' '-out:client.manifest'
+mt.exe '-inputresource:target/fast/sunrise-client.exe;#1' '-out:client.manifest'
 mt.exe -manifest client.manifest -validate_manifest
 ```
 
 Check that the feature build contains `SegmentHeap` in the
 `http://schemas.microsoft.com/SMI/2020/WindowsSettings` namespace. The baseline
-must not contain this element. Confirm Explorer still shows Horizon's icon for
+must not contain this element. Confirm Explorer still shows Sunrise's icon for
 both builds. Inspecting the final executable matters: a valid source XML file
 alone does not prove that the linker embedded it.
 
@@ -68,6 +64,5 @@ rate and driver-level VSync: a driver override can cap FPS even when game VSync
 is disabled.
 
 Compare the current mimalloc baseline with that same build plus Segment Heap.
-The compatibility feature cannot measure system allocation versus mimalloc.
 Results from older system-allocator builds, or builds that also change meshing
 or LOD retirement, cannot establish the benefit of Segment Heap on current main.

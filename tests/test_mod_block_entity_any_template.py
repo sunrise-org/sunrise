@@ -8,8 +8,8 @@ import unittest
 from test_world_input_capture import method
 
 ROOT = Path(__file__).resolve().parents[1]
-LEVEL = ROOT / "crates/horizon-world/src/level"
-CLIENT = ROOT / "crates/horizon-client/src"
+LEVEL = ROOT / "crates/sunrise-world/src/level"
+CLIENT = ROOT / "crates/sunrise-client/src"
 
 
 def between(source, start, end):
@@ -26,10 +26,14 @@ struct Facts { block_entity: bool }
 struct Res;
 impl Res { fn facts(&self) -> &Self { self } fn get(&self, s: BlockStateId) -> Facts { Facts { block_entity: s.0 == 1 } } }
 struct Blocks { templated: Vec<BlockStateId> }
-impl Blocks { fn has_flag(&self, s: BlockStateId, _f: u32) -> bool { self.templated.contains(&s) } }
+impl Blocks {
+    fn has_flag(&self, s: BlockStateId, _f: u32) -> bool { self.templated.contains(&s) }
+    // The fixture's distinct states represent different non-copper blocks.
+    fn keeps_block_entity(&self, old: BlockStateId, new: BlockStateId) -> bool { old == new }
+}
 #[derive(Default)] struct Entities(std::collections::HashMap<(i32, i32, i32), BlockEntity>);
 impl std::ops::Deref for Entities { type Target = std::collections::HashMap<(i32, i32, i32), BlockEntity>; fn deref(&self) -> &Self::Target { &self.0 } }
-// BlockEntities::mods_near has its own test in horizon-client-render; here every mod entity is near.
+// BlockEntities::mods_near has its own test in sunrise-client-render; here every mod entity is near.
 impl Entities {
     fn stateful_entity(&self, state: u32) -> bool { state == 2 }
     fn has_mods(&self) -> bool { self.0.values().any(|e| matches!(e, BlockEntity::Mod(_))) }
@@ -56,7 +60,6 @@ impl Game {
 }
 struct Sim { b: Blocks, level: GameLevel }
 impl Sim {
-    fn keeps_block_entity(&self, _n: BlockStateId, _o: BlockStateId) -> bool { false }
     fn removes(&self, block_changed: bool, old: BlockStateId, state: BlockStateId, pos: BlockPos) -> bool {
         block_changed
             REMOVAL

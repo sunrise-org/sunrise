@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate what Horizon derives from vanilla, for a new version, in a candidate worktree
+"""Regenerate what Sunrise derives from vanilla, for a new version, in a candidate worktree
 (docs/version-ports.md, "Regenerate").
 
 Used through `version_port.py regen NEW`:
@@ -13,7 +13,7 @@ Used through `version_port.py regen NEW`:
 4. every generator run there, each recorded as unchanged, regenerated (with its diff stat) or failed (with the
    end of its output); the regenerated tree is committed on port/NEW, never pushed.
 
-Nothing here writes into the shared .local (~/code/horizon-parity/shared-local): the candidate links only what
+Nothing here writes into the shared .local (~/code/sunrise-parity/shared-local): the candidate links only what
 it reads.
 """
 
@@ -34,7 +34,7 @@ except ImportError:
 
 # Classes whose decompiled source a generator parses: (side, class).
 SOURCES = [("client", "net/minecraft/world/entity/EntityTypes")]
-PARITY = "mods/horizon/src/test/java/dev/horizonlab/parity"
+PARITY = "mods/sunrise/src/test/java/dev/sunriselab/parity"
 
 
 # --- the candidate -----------------------------------------------------------------------------------------
@@ -55,19 +55,15 @@ def candidate(version, base, path):
 
 
 def pinned_lock(lock, manifest, manifest_sha1):
-    """research-lock.json pinned to the version this manifest describes. The same version keeps its block (and
-    the republished version JSONs it accepts); another version gets a new one."""
-    game = lock["minecraft"]
-    same = (game["version"] == manifest["id"]
-            and manifest_sha1 in [game["manifest_sha1"], *game.get("accepted_manifest_sha1", [])]
-            and game["client_sha1"] == manifest["downloads"]["client"]["sha1"]
-            and game["server_sha1"] == manifest["downloads"]["server"]["sha1"])
-    if same:
+    """research-lock.json pinned to the version this manifest describes. A version JSON with the pinned content
+    (tools/lab.py pinned_content_differs) keeps the block; another version gets a new one."""
+    if not lab.pinned_content_differs(lock["minecraft"], manifest):
         return lock
     return {**lock, "minecraft": {
         "version": manifest["id"], "manifest_sha1": manifest_sha1,
         "client_sha1": manifest["downloads"]["client"]["sha1"],
         "server_sha1": manifest["downloads"]["server"]["sha1"],
+        "libraries_sha256": lab.libraries_digest(manifest),
         "java_major": manifest["javaVersion"]["majorVersion"],
     }}
 
@@ -106,7 +102,7 @@ def launcher_tree(store, manifest):
 
 def prepare_local(root, version, found, store):
     """The candidate's .local: tools from the shared one, the version's prepared jars and its reports."""
-    shared = Path(os.environ.get("HORIZON_SHARED_LOCAL", Path.home() / "code/horizon-parity/shared-local"))
+    shared = Path(os.environ.get("SUNRISE_SHARED_LOCAL", Path.home() / "code/sunrise-parity/shared-local"))
     local = root / ".local"
     if local.is_symlink():
         raise SystemExit(f"{local} links to a shared directory; a candidate needs its own")
@@ -214,7 +210,7 @@ def compile_oracle(root, version, classpath, sources, build):
     classes = build / "classes"
     classes.mkdir(parents=True, exist_ok=True)
     run(["javac", "--release", lock["minecraft"]["java_major"], "-proc:none", "-sourcepath",
-         root / "mods/horizon/src/test/java", "-cp", os.pathsep.join(map(str, classpath)), "-d", classes,
+         root / "mods/sunrise/src/test/java", "-cp", os.pathsep.join(map(str, classpath)), "-d", classes,
          *sources], root)
     return classes
 
@@ -231,20 +227,20 @@ def gen_suggestions(root, version, store, build):
                              build / "suggestions")
     tsv = build / "suggestions.tsv"
     run(["java", "-Xmx1G", "-cp", os.pathsep.join(map(str, [classes, *client])),
-         "dev.horizonlab.parity.VanillaCommandSuggestionsExporter", tsv], build)
+         "dev.sunriselab.parity.VanillaCommandSuggestionsExporter", tsv], build)
     return [python(), "tools/generate_command_suggestions.py", tsv]
 
 
 def gen_vanilla_order(root, version, store, build):
-    """vanilla's tree (the command-parse oracle's export) against Horizon's (command_parse_fixture tree)."""
+    """vanilla's tree (the command-parse oracle's export) against Sunrise's (command_parse_fixture tree)."""
     server = classpaths(root, version)["server"]
     classes = compile_oracle(root, version, server, [root / PARITY / "VanillaCommandParseOracle.java"],
                              build / "parse")
     run(["java", "-Xmx1G", "-cp", os.pathsep.join(map(str, [classes, *server])),
-         "dev.horizonlab.parity.VanillaCommandParseOracle", "tree", build], build)
+         "dev.sunriselab.parity.VanillaCommandParseOracle", "tree", build], build)
     env = dict(os.environ, CARGO_TARGET_DIR=str(root / ".local" / "port-target"))
     jobs = os.environ.get("FLEET_LOAD_JOBS")
-    run(["cargo", "build", "-p", 'horizon-client-lib', "--example", "client_probe",
+    run(["cargo", "build", "-p", 'sunrise-client-lib', "--example", "client_probe",
          *(["-j", jobs] if jobs else [])], root, env=env)
     fixture = root / ".local/port-target/debug/examples/client_probe"
     run([fixture, "command_parse_fixture", "tree", build / "rust_tree.json"], root)
@@ -253,17 +249,17 @@ def gen_vanilla_order(root, version, store, build):
 
 # (name, outputs, how to get the generator's command: a list, or a function that prepares its input first).
 GENERATORS = [
-    ("version_consts", ["crates/horizon-core/src/version.rs"],
+    ("version_consts", ["crates/sunrise-core/src/version.rs"],
      lambda root, version, store, build: [python(), "tools/gen_version_consts.py"]),
-    ("packet_ids", ["crates/horizon-protocol/src/ids.rs"],
+    ("packet_ids", ["crates/sunrise-protocol/src/ids.rs"],
      lambda root, version, store, build: [python(), "tools/generate_packet_ids.py"]),
-    ("entity_tracking", ["crates/horizon-client/src/lan/tracking.rs"],
+    ("entity_tracking", ["crates/sunrise-client/src/lan/tracking.rs"],
      lambda root, version, store, build: [python(), "tools/generate_entity_tracking.py", "--sources",
                                           store / "sources" / "client"]),
-    ("lan_command_order", ["crates/horizon-client/src/lan/command_order.rs"],
+    ("lan_command_order", ["crates/sunrise-client/src/lan/command_order.rs"],
      lambda root, version, store, build: [python(), "tools/generate_lan_command_order.py"]),
-    ("command_suggestions", ["crates/horizon-client/src/lan/command_suggestions.rs"], gen_suggestions),
-    ("vanilla_command_order", ["crates/horizon-command/src/vanilla_order.rs"], gen_vanilla_order),
+    ("command_suggestions", ["crates/sunrise-client/src/lan/command_suggestions.rs"], gen_suggestions),
+    ("vanilla_command_order", ["crates/sunrise-command/src/vanilla_order.rs"], gen_vanilla_order),
 ]
 
 

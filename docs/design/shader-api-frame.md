@@ -5,7 +5,7 @@ Shader API 0.2 is experimental. Change its two defaults now, with no new API lin
 This note specifies the intended contract. It does not claim that the executor already implements it.
 
 **Status: proposed.** Written against main plus the open HDR work (the entity stage #15942 and the
-`horizon_hdr` pack #16113). The tracing extensions are proposals in
+`sunrise_hdr` pack #16113). The tracing extensions are proposals in
 [#15624](https://github.com/horizon-rust/horizon/issues/15624) and
 [#16011](https://github.com/horizon-rust/horizon/issues/16011).
 
@@ -152,13 +152,13 @@ helper `set_environment_composite(destination_gain, ceiling)`: gain is a nonnega
 on the default destination contribution; ceiling is a linear RGB bound on the composed result. Default gain 1
 and no bound preserve the original blend. The executor converts these to the stored frame's basis and performs
 the neutral affine/min operations. The pack supplies all weights and peaks, including the soft halo transition.
-Internal blend alpha used for this operation is not surface coverage. No Horizon sun constants stay in the engine.
+Internal blend alpha used for this operation is not surface coverage. No Sunrise sun constants stay in the engine.
 
 **Additive later:** a pack's own volumetric clouds use `[sky] clouds = false`, then post or compute before resolve.
 They need R depth, the jittered inverse projection, sun direction (already present), time/weather, and kept
 colour/transmittance history. World-space caches use the pre-world compute slot; depth-based integration uses the
-scene chain. Denoise there before engine resolve; do not accumulate the tone-mapped sky. Horizon supplies no
-mandatory cloud density/noise model. Separate sun colour/irradiance and horizon-sky inputs can be added when an
+scene chain. Denoise there before engine resolve; do not accumulate the tone-mapped sky. Sunrise supplies no
+mandatory cloud density/noise model. Separate sun colour/irradiance and sunrise-sky inputs can be added when an
 engine source exists; `Frame.sky_color` is one vanilla colour, not a physical sky model.
 
 ## Mods: one route for lit models
@@ -171,7 +171,7 @@ engine source exists; `Frame.sky_color` is one vanilla colour, not a physical sk
 | World primitives, canvas text, debug lines | Intentionally unlit/precoloured; some canvas runs are explicitly marked `NONE`. | **No:** automatic relighting. Keep their existing appearance and frame conversion. Lit machines use the model route. |
 | A mod's raw wgpu render hooks | No automatic shader-pack stage evaluation. `WorldDrawn` currently follows native tone mapping. | **In now:** define the frame contract; **additive later:** a scene-draw hook for raw geometry before post/resolve. |
 
-The mod-author rule is: submit lit objects through Horizon's model path to receive the active pack's lighting.
+The mod-author rule is: submit lit objects through Sunrise's model path to receive the active pack's lighting.
 Raw draws own their shading and must follow `hdr-passes.md`. Give raw-hook events read-only encoding, primaries,
 scene/display phase, paper-white units, R/O sizes, jittered/unjittered matrices and history-reset information.
 An RGBA16F format alone does not say gamma or linear, or whether the curve already ran. Never guess from pack
@@ -279,7 +279,7 @@ FSR may be an in-repo backend, DLSS remains an optional native mod under CONTRIB
 | Item | Decision |
 | --- | --- |
 | Golden Hour | Both post passes now run at R. Its UV grade and height-scaled glow need no new algorithm; migrate any pixel offsets to `target_size`/`input_size`. It defaults to engine AA. Recheck 50/100/150% scale and TAA, not just 100% with AA off. |
-| `horizon_hdr` | No post chain to resize. Keep engine AA/coverage defaults. Its tone curve now receives resolved O light and runs on every output; sampled-light rounding can change. Its alpha return stops controlling terrain coverage. Add environment/overlay callers as they land. |
+| `sunrise_hdr` | No post chain to resize. Keep engine AA/coverage defaults. Its tone curve now receives resolved O light and runs on every output; sampled-light rounding can change. Its alpha return stops controlling terrain coverage. Add environment/overlay callers as they land. |
 | Other 0.2 users | Last-post window pixels and arbitrary material/entity alpha cease to be defaults. Own AA needs the declaration. Own holes, and own opacity on solid terrain or entities, need `coverage = "pack"`; translucent terrain's opacity stays the pack's under `engine`. Recheck depth reconstruction when jitter starts. Update manifests, templates, checker, generated reference and examples atomically with each behaviour change. |
 | Names and structs | **In now:** retain #14584's gated-name rule, nonconstructible engine inputs and fixed `Surface`. Do not rename existing `emission`, `resolution` or `normal` for tidiness. Explicit sizes, units and validity remove the ambiguity. |
 | Colour metadata | **In now:** engine resolve/generation inputs carry format, transfer/storage encoding, working primaries, paper-white scale and reset state. The all-linear post result is not the original gamma frame. Keep float light, tone-weight linear temporal blending, and adapt to library colour contracts once. |

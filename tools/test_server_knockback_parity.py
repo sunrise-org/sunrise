@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Knockback on a dedicated server, against vanilla's, seen by vanilla clients.
 
-A vanilla dedicated server and Horizon's (`horizon-client --dedicated --nogui`) each serve a copy of one flat
+A vanilla dedicated server and Sunrise's (`sunrise-client --dedicated --nogui`) each serve a copy of one flat
 world vanilla generated first, in survival on Normal, with Alice and Bob as operators. KnockbackClient, two
 players made of vanilla's protocol code, joins them both and runs one script on each:
 
@@ -21,11 +21,11 @@ players made of vanilla's protocol code, joins them both and runs one script on 
   velocity, before the server's next travel tick reduces it.
 
 The script waits on the server, not on the wall: `ticks N` is N ticks of its game clock (with a `sync` round trip
-before and after, so each client holds what the server sent), `tickstep` is one `/tick step` that has run, `frozen`
-a frozen game that has stopped, and `hit` a hit that has landed (a frozen server still ticks its players, so a hit
-lands in Alice's next tick). A server that stalls under load gets the same ticks as an idle one.
+before and after, so each client holds what the server sent), `tickstep [N]` runs one or N ticks while frozen,
+`frozen` waits for a frozen game to stop, and `hit` waits for a hit to land (a frozen server still ticks its
+players, so a hit lands in Alice's next tick). A server that stalls under load gets the same ticks as an idle one.
 
-Each case is compared on its own. KNOWN lists the cases Horizon still gets wrong and why; one that matches
+Each case is compared on its own. KNOWN lists the cases Sunrise still gets wrong and why; one that matches
 again is reported, and should leave the list.
 """
 import os
@@ -63,7 +63,7 @@ PROPERTIES = {
     'max-players': '5',
     'pause-when-empty-seconds': '-1',
 }
-# Cases Horizon still gets wrong, and why.
+# Cases Sunrise still gets wrong, and why.
 KNOWN = {
 }
 
@@ -237,12 +237,6 @@ SETUP = ['cmd Alice gamerule spawn_mobs false', 'cmd Alice gamerule spawn_monste
          f'cmd Alice tp Alice {A[0]} {A[1]} {A[2]} -90 0', f'cmd Alice tp Bob {V[0]} {V[1]} {V[2]} 90 0', 'ticks 40']
 
 
-def age_of(text):
-    """The number in a `/data get ... Age` reply (`60`, `4500s`)."""
-    digits = ''.join(c for c in text.split(':')[-1] if c.isdigit())
-    return int(digits) if digits else 0
-
-
 def server_data(server, selector, path, timeout=120):
     """An entity's data, asked from the console (its reply stays in the server's log, out of the clients')."""
     deadline = time.time() + timeout
@@ -321,29 +315,20 @@ def run_side(label, server_command, client_command, build, world):
                     while server_data(server, mob, 'Motion') == before:
                         time.sleep(0.05)
                     sync()
-                elif word == 'waitage':
-                    # Hold until an entity's `Age` has reached N. A value that
-                    # decays with the entity's own ticks (a blast's push on an
-                    # item) then belongs to a known age on both servers, whose
-                    # game clocks need not advance together between commands.
-                    # The console's own round trip can be two ticks, so the wait
-                    # is `>=` and the age is carried beside the value it pins.
-                    sync()
-                    selector, age = line.split()[1], int(line.split()[2])
-                    deadline = time.time() + 120
-                    while age_of(server_data(server, selector, 'Age')) < age:
-                        if time.time() > deadline:
-                            raise AssertionError(f'{server.log_path.name}: {selector} never reached Age {age}')
-                        time.sleep(0.05)
-                    sync()
                 elif word == 'tickstep':
-                    # `/tick step 1` answers at once and the tick runs after: the clock says when it has.
+                    # The command replies before the steps run. Wait for all of them before sampling.
                     sync()
-                    before = game_time(server)
-                    client.stdin.write('cmd Alice tick step 1\n')
+                    count = int(line.partition(' ')[2] or '1')
+                    end = game_time(server) + count
+                    client.stdin.write(f'cmd Alice tick step {count}\n')
                     client.stdin.flush()
-                    while game_time(server) == before:
+                    deadline = time.monotonic() + 120
+                    while (now := game_time(server, max(1, deadline - time.monotonic()))) < end:
+                        if time.monotonic() >= deadline:
+                            raise AssertionError(f'{label}: game time did not reach {end} after tick step {count}')
                         time.sleep(0.05)
+                    if now != end:
+                        raise AssertionError(f'{label}: game time advanced past {end} after tick step {count}: {now}')
                     sync()
                 elif word == 'takeoff-hit':
                     sync()
@@ -416,33 +401,33 @@ def main():
     build.mkdir(parents=True, exist_ok=True)
     report = build / 'report.json'
     report.unlink(missing_ok=True)
-    oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/KnockbackClient.java'
+    oracle = lab.ROOT / 'mods/sunrise/src/test/java/dev/sunriselab/parity/KnockbackClient.java'
     classes = build / 'classes'
     shutil.rmtree(classes, ignore_errors=True)
     classes.mkdir()
     dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
     subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-nowarn', '-sourcepath',
-                    lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
+                    lab.ROOT / 'mods/sunrise/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                    cwd=lab.ROOT, check=True, capture_output=True)
-    subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], cwd=lab.ROOT,
+    subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-game', '--bin', 'sunrise-client'], cwd=lab.ROOT,
                    check=True, capture_output=True)
     import json
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    binary = Path(metadata['target_directory']) / 'fast' / ('sunrise-client.exe' if os.name == 'nt' else 'sunrise-client')
     vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
-    horizon_server = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
-    client = ['java', '-Xmx1g', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.KnockbackClient']
+    sunrise_server = [binary, '--resources', lab.RESOURCES, '--dedicated', '--nogui']
+    client = ['java', '-Xmx1g', '-cp', str(classes) + os.pathsep + dependencies, 'dev.sunriselab.parity.KnockbackClient']
 
     world = generate_world(vanilla_server, build)
     vanilla = compared(run_side('vanilla', vanilla_server, client, build, world))
     takeoff = [line for line in vanilla.get('pvp-takeoff', []) if line.startswith('Alice motion self ')]
     if len(takeoff) != 1 or not 0.4 < float(takeoff[0].split()[4]) < 0.43:
         raise AssertionError(f'pvp-takeoff: vanilla did not hit after the jump and before travel: {takeoff}')
-    horizon = compared(run_side('horizon', horizon_server, client, build, world))
+    sunrise = compared(run_side('sunrise', sunrise_server, client, build, world))
     differ, fixed = [], []
     for case in CASES:
-        want, got = vanilla.get(case, []), horizon.get(case, [])
+        want, got = vanilla.get(case, []), sunrise.get(case, [])
         if case not in vanilla or any(' error ' in f' {l} ' or 'disconnected' in l for l in want):
             raise AssertionError(f'{case}: vanilla recorded nothing or failed: {want}')
         if want == got:
@@ -452,16 +437,16 @@ def main():
         if case in KNOWN:
             continue
         import difflib
-        differ.append(f'{case}:\n' + '\n'.join(difflib.unified_diff(want, got, 'vanilla', 'horizon', n=1, lineterm='')))
+        differ.append(f'{case}:\n' + '\n'.join(difflib.unified_diff(want, got, 'vanilla', 'sunrise', n=1, lineterm='')))
     if fixed:
         print('matching vanilla now, take them out of KNOWN: ' + ', '.join(fixed))
     if differ:
-        raise AssertionError(f'{len(differ)} cases differ (see {build}/vanilla.txt and horizon.txt):\n'
+        raise AssertionError(f'{len(differ)} cases differ (see {build}/vanilla.txt and sunrise.txt):\n'
                              + '\n'.join(differ)[:8000])
     lab.write_json(report, dict(
         schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
-        cases=len(CASES), known=sorted(KNOWN), output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
+        cases=len(CASES), known=sorted(KNOWN), output_sha256=lab.digest(build / 'sunrise.txt', 'sha256'),
         scope='Knockback on a dedicated server, as two vanilla-codec players get it: a player hitting a cow and '
               'a zombie (plain, sprinting, Knockback II, critical, in the air; the mob\'s motion and path over 20 '
               'ticks), a player hitting a player (the same, a raised shield, netherite, two hits, a mace smash; '

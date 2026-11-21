@@ -7,8 +7,8 @@ name: fn-replace-check
 # data is read. Checked by the daily run and by dispatch, never on pull requests or main pushes.
 # The launcher takes its SDK from an SDK release folder and checks its signature, so the check gets one: the
 # daily run's own SDK (its `sdk-leg-*` artifacts), gathered and indexed as sdk-publish.yml does and signed with a
-# throwaway key made for this run, whose public half the launcher trusts through HORIZON_SDK_TRUSTED_KEY. Only a
-# launcher built with debug_assertions reads that variable (horizon_release_sign::sdk_keys_for), so the launcher
+# throwaway key made for this run, whose public half the launcher trusts through SUNRISE_SDK_TRUSTED_KEY. Only a
+# launcher built with debug_assertions reads that variable (sunrise_release_sign::sdk_keys_for), so the launcher
 # here is built that way, and no release key enters this workflow. A commit whose sdk-<commit> is already released
 # (the daily run's sdk job then built nothing) is checked against that release, which needs no key; a hand dispatch
 # of anything else builds the server SDK itself.
@@ -19,6 +19,10 @@ on:
     inputs:
       commit:
         description: The commit to check (the daily run's)
+        type: string
+        default: ''
+      self_hosted:
+        description: The caller's pool routing (true or false), decided when its run started; empty routes here
         type: string
         default: ''
   workflow_dispatch:
@@ -36,18 +40,35 @@ env:
 jobs:
   route:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read  # the attempt's creation or start time (tools/ci/dyna_ci_route.sh)
     outputs:
       self_hosted: ${{ steps.runner.outputs.self_hosted }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # The pool's switch and lease (tools/ci/dyna_ci_route.sh): a snapshot is judged at the attempt's creation (a re-run's start), so a
+      # run that waited in a concurrency group or GitHub's queue is not sent off the pool by a lease that lapsed
+      # meanwhile.
       - id: runner
         env:
-          ENABLED: ${{ vars.DYNA_CI_SELF_HOSTED }}
-          LEASE: ${{ vars.DYNA_CI_POOL_UNTIL }}
+          GH_TOKEN: ${{ github.token }}
+          VARS_ENABLED: ${{ vars.DYNA_CI_SELF_HOSTED }}
+          VARS_LEASE: ${{ vars.DYNA_CI_POOL_UNTIL }}
           # Only dispatches (the daily run's included) run this workflow, from this repository.
           SAME_REPO: true
           EVENT: ${{ github.event_name }}
-        run: bash tools/ci/dyna_ci_runner.sh >> "$GITHUB_OUTPUT"
+          # The daily run routes at its start: this job starts after the SDK's Linux legs, past the hour within which
+          # the run's lease snapshot is judged, so routing here would send the check to GitHub's runners.
+          GIVEN: ${{ inputs.self_hosted }}
+        run: |
+          case "$GIVEN" in
+            true | false) echo "self_hosted=$GIVEN" >> "$GITHUB_OUTPUT" ;;
+            '') bash tools/ci/dyna_ci_route.sh >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::self_hosted is true, false or empty, not '$GIVEN'"; exit 1 ;;
+          esac
   fn-replace-check:
     needs: route
     runs-on: ${{ needs.route.outputs.self_hosted == 'true' && 'dyna-large' || 'ubuntu-latest' }}
@@ -55,6 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.commit }}
       # GitHub's 16 GB runner is short of memory for the game's release build with more than two crates at once.
       # A Dyna runner builds as many as its CPU quota allows within its memory, 4 GiB per release rustc
@@ -132,40 +154,26 @@ jobs:
           echo "source=$source" | tee -a "$GITHUB_OUTPUT"
       - name: Server SDK, warnings denied (hand dispatch)
         if: steps.sdk.outputs.source == 'build'
-        # Release with ThinLTO as published, but 16 codegen units instead of 1: the same features,
-        # flags, exports and link, built in parallel. A fault only one unit's inlining shows first
-        # appears at the prebuilt-game publish.
-        env:
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
         run: |
           python3 tools/prebuilt_game.py build "$FNR_SCRATCH/prebuilt" --server
-          python3 tools/prebuilt_game.py pack "$FNR_SCRATCH/prebuilt" "$FNR_SCRATCH/legs/sdk-leg-server"
+          python3 tools/prebuilt_game.py pack "$FNR_SCRATCH/prebuilt" "$FNR_SCRATCH/legs/sdk-leg-server" --with-tool
       # The daily run's SDK: the Linux legs only, the ones this check reads (sdk-publish.yml gathers every leg).
       - uses: actions/download-artifact@v4
         if: steps.sdk.outputs.source == 'legs'
         with:
           pattern: sdk-leg-linux*
           path: ${{ env.FNR_SCRATCH }}/legs
-      - name: The API source's wasm32 check
-        if: steps.sdk.outputs.source != 'published'
-        run: rustup target add wasm32-unknown-unknown
+      # The daily run starts this check when its sdk job failed too (a macOS leg leaves the Linux legs intact).
+      - name: The Linux legs are here
+        if: steps.sdk.outputs.source == 'legs'
+        run: |
+          for leg in sdk-leg-linux sdk-leg-linux-server; do
+            [ -d "$FNR_SCRATCH/legs/$leg" ] || { echo "::error::the daily run's sdk job left no $leg artifact"; exit 1; }
+          done
       # As sdk-publish.yml's index job: one build data and surface across the legs, the API source, sdk.json.
       - name: Assemble the SDK release folder
         if: steps.sdk.outputs.source != 'published'
-        run: |
-          commit=$(git rev-parse HEAD)
-          dist="$FNR_SCRATCH/dist"
-          python3 tools/prebuilt_game.py gather "$FNR_SCRATCH/legs" "$dist"
-          python3 tools/sdk_api_source.py build "$FNR_SCRATCH/api-source"
-          python3 tools/sdk_api_source.py archive "$FNR_SCRATCH/api-source" "$dist/api-source.tar.xz"
-          python3 tools/prebuilt_game.py index "$dist"
-          # A throwaway key made for this run: no release key is ever set here. Its public half goes to the launcher.
-          EPHEMERAL=yes bash tools/ci/sign_release.sh "sdk-$commit" "$dist"/*
-          key=$(cat "$dist/ephemeral.pub")
-          rm "$dist/ephemeral.pub"
-          mkdir -p "$FNR_SCRATCH/sdk-base"
-          mv "$dist" "$FNR_SCRATCH/sdk-base/sdk-$commit"
-          echo "HORIZON_SDK_TRUSTED_KEY=$key" >> "$GITHUB_ENV"
+        run: tools/ci/assemble_sdk_folder.sh "$FNR_SCRATCH/legs" "$FNR_SCRATCH/sdk-base" "$(git rev-parse HEAD)"
       # Already released and signed with the release key, which every launcher trusts: no key needed.
       - name: The published SDK release
         if: steps.sdk.outputs.source == 'published'
@@ -179,22 +187,31 @@ jobs:
       # everything else of the release profile. Built in a folder of its own, so the runner's normal release
       # artifacts stay valid for other jobs. A release-profile build ignores the variable: the test says so.
       - name: A release build does not trust the run's key
-        run: cargo test --release --locked -p horizon-release-sign sdk_key_variable_is_honoured_only_with_debug_assertions
+        run: cargo test --release --locked -p sunrise-release-sign sdk_key_variable_is_honoured_only_with_debug_assertions
+      # The launcher lives in sunrise-org/sunrise-launcher: this check builds the commit pinned in tools/ci/launcher-pin.
       - name: Build the launcher (debug assertions on)
         env:
           CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: true
         run: |
-          target="${CARGO_TARGET_DIR:-launcher/target}/launcher-debug-assertions"
-          cargo build --release --locked --manifest-path launcher/Cargo.toml --target-dir "$target"
-          echo "LAUNCHER=$(realpath "$target/release/horizon-launcher")" >> "$GITHUB_ENV"
+          launcher_src="$FNR_SCRATCH/sunrise-launcher"
+          tools/ci/launcher_checkout.sh "$launcher_src"
+          target="$launcher_src/target"
+          cargo build --release --locked --manifest-path "$launcher_src/Cargo.toml" --target-dir "$target"
+          echo "LAUNCHER=$(realpath "$target/release/sunrise-launcher")" >> "$GITHUB_ENV"
       - name: Function replacement check (build and link)
         run: |
-          # api_only has no [native] row; beside alpha the mixed set still takes the engine route.
+          # api_only has no native patches; beside alpha the mixed set still takes the engine route.
           FNR_ROUTE=prebuilt FNR_MODS="alpha beta one ten fdshape support registry lower loop loop_second api_only" \
             tools/ci/fn_replace_check.sh "$LAUNCHER" "$FNR_SCRATCH/sdk-base" "$FNR_SCRATCH/check" 2>&1 \
             | tee "$FNR_SCRATCH/fnr-check.log"
           grep -E 'Function replacement:|: [0-9]+ ms$|^Mods compiled against the prebuilt game in |^Runner load:' \
             "$FNR_SCRATCH/fnr-check.log" >> "$GITHUB_STEP_SUMMARY"
+      # Each mod is a dylib: the tip, depending on two mods that use the same crates.io crate, links
+      # only with the library the build links their registry crates from (#1379).
+      - name: Mods sharing a crates.io crate (build and link)
+        run: |
+          FNR_KEEP=1 FNR_MODS="shared_left shared_right shared_tip" tools/ci/fn_replace_check.sh \
+            "$LAUNCHER" "$FNR_SCRATCH/sdk-base" "$FNR_SCRATCH/check"
       - name: An API-only set takes the API route (build and link)
         run: |
           FNR_KEEP=1 FNR_ROUTE=prebuilt-api FNR_MODS="api_only" tools/ci/fn_replace_check.sh \

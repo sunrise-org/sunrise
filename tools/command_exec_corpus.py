@@ -216,9 +216,9 @@ def group_cleanup():
         own = (f'at @s if dimension minecraft:{level} positioned ~-1 {floor} ~-1 '
                'if entity @s[dx=2,dy=4096,dz=2] run')
         # The End's own dragon (EndDragonFight spawns it when the level loads) is no group's but flies above the
-        # floor at times: vanilla killed it there and Horizon, which had none up there, didn't.
+        # floor at times: vanilla killed it there and Sunrise, which had none up there, didn't.
         kept = 'type=!player,type=!minecraft:ender_dragon' if level == 'the_end' else 'type=!player'
-        # Horizon finds an @s of another level only from that level ('in').
+        # Sunrise finds an @s of another level only from that level ('in').
         ops += setup(*[f'/execute in minecraft:{level} as @e[type=minecraft:{kind}] {own} '
                        'data merge entity @s {Size:0}' for kind in ('slime', 'magma_cube', 'sulfur_cube')],
                      *[f'/execute in minecraft:{level} as @e[{kept}] {own} kill @s'] * 2)
@@ -1012,7 +1012,7 @@ def vehicle_item_stack_config():
     (applyComponentsFromItemStack), then minecraft:entity_data (updateCustomEntityTag) when its
     id is the vehicle's; command block and spawner minecarts take it from an op player only, never
     from a dispenser. (The op case by a player is left out: this harness's owner is an op in vanilla
-    and not in Horizon.)"""
+    and not in Sunrise.)"""
     ops = setup('/forceload add 0 0 15 15', '/fill 0 199 0 15 199 15 stone', '/fill 0 200 0 15 203 15 air',
                 '/gamemode creative', '/tp @s 4.5 200 4.5 0 0')
     ops += [{'op': 'settle'}]
@@ -1040,7 +1040,7 @@ def vehicle_item_stack_config():
     ops += setup('/tp @s 8.5 200 3.5 0 45',
                  '/item replace entity @s weapon.mainhand with minecraft:oak_boat[custom_name="Boaty",'
                  'entity_data={id:"minecraft:oak_boat",Tags:["boat_data"],Rotation:[90f,10f]}]')
-    # The packet's rotation, on both sides (the plain use_item op sends 0, 0 to Horizon).
+    # The packet's rotation, on both sides (the plain use_item op sends 0, 0 to Sunrise).
     ops += [{'op': 'use_item', 'sequence': 1, 'yaw': 0.0, 'pitch': 45.0}]
     boat = '@e[type=minecraft:oak_boat,x=8.5,y=200,z=5,distance=..2,limit=1]'
     # BoatItem.use turns the boat to the player's yaw after the data loads.
@@ -1484,14 +1484,14 @@ def snbt_trailing_commas():
     ops = []
     for value in ('{a:1b,}', '{a:1b,b:"x",}', '[1,2,]', '["a",]', '[{},]', '[I;1,2,]', '[B;1b,]', '[L;1L,]',
                   '{a:[1,],b:{c:2,},}', '{,}', '[,]', '[I;,]', '{a:1b,,}', '[1,,2]', '{a:1b,}x'):
-        ops += [cmd(f'/data modify storage horizon:snbt v set value {value}'),
-                cmd('/data get storage horizon:snbt v')]
+        ops += [cmd(f'/data modify storage sunrise:snbt v set value {value}'),
+                cmd('/data get storage sunrise:snbt v')]
     # A text component argument reads the same grammar.
     ops += [cmd('/tellraw @s {text:"comma",color:"red",}'), cmd('/tellraw @s ["a",{text:"b",},]')]
     ops += [cmd('/summon minecraft:marker 0 200 0 {Tags:["snbt_comma",],}'),
             cmd('/data get entity @e[type=minecraft:marker,tag=snbt_comma,limit=1] Tags'),
             cmd('/kill @e[type=minecraft:marker,tag=snbt_comma]'),
-            cmd('/data remove storage horizon:snbt v')]
+            cmd('/data remove storage sunrise:snbt v')]
     return ops
 
 
@@ -1529,7 +1529,7 @@ def dragon_command_damage():
             ops += [cmd(f'/damage {crystal} {damage}'),
                     cmd(f'/execute {"if" if stays else "unless"} entity {crystal}', expect_result=1)]
     # The dragons are summoned holding their pattern (0): a summoned dragon hovers (10), which
-    # is sitting, and Horizon summons it holding (a separate gap).
+    # is sitting, and Sunrise summons it holding (a separate gap).
     # One dragon at a time from here. dealDefaultKnockback: fireworks are #is_explosion (the
     # hit counts) and not #no_knockback, so the dragon is pushed away from the `at` position.
     knock = '@e[tag=dmg_knock,limit=1]'
@@ -2283,7 +2283,7 @@ def bird_flap_sensors():
             ops += [cmd('/execute if block 9 200 10 sculk_sensor[sculk_sensor_phase=inactive,power=0]')]
             # A bird's own random decides when it flaps: seed it here, not from the last sync before this group
             # (item honey bounce's), which every group in between can move. Entity ids far above those the
-            # world's loaded entities have: Horizon keeps an entity's UUID and tags by its id.
+            # world's loaded entities have: Sunrise keeps an entity's UUID and tags by its id.
             case = len([op for op in ops if op['op'] == 'sync_randoms'])
             ops += [{'op': 'sync_randoms', 'uniquifier': 19870 + case, 'entity_id': 1987000 + 1000 * case,
                      'level_seed': 1987}]
@@ -2513,7 +2513,7 @@ def world_misc():
         cmd('/summon minecraft:armor_stand 4.5 210 4.5 {NoGravity:1b,Tags:["w"],CustomName:{text:"Stand",color:"blue"}}'),
         cmd('/swing @e[tag=w]'),
         cmd('/summon minecraft:lightning_bolt 4.5 300 4.5'),
-        # Primed TNT is no command target in Horizon: still "Summoned new
+        # Primed TNT is no command target in Sunrise: still "Summoned new
         # Primed TNT" (it explodes high in the air, far from the rest).
         cmd('/summon minecraft:tnt 60.5 300 60.5 {fuse:1s}'),
         cmd('/summon minecraft:pig 4.5 210 4.5 {NoAI:1b,Invulnerable:1b,Tags:["w"],Passengers:[{id:"minecraft:chicken",NoAI:1b,Tags:["w"]}]}'),
@@ -2711,6 +2711,7 @@ def function_return_fixtures(group_names):
         functions.update(anger_functions())
     if 'macro source type error' in group_names:
         functions.update({'command_macro:apply': '$scoreboard players add #hits macro_error $(amount)\n',
+                          'command_macro:decimal': '$data modify storage command_macro:args written set value "$(amount)"\n',
                           'command_macro:admit': 'scoreboard players add #admit macro_error 1\n',
                           'command_macro:fail': 'return fail\n',
                           'command_macro:zero': 'return 0\n'})
@@ -2772,6 +2773,10 @@ def macro_source_type_error():
                 cmd('/scoreboard players get #r macro_error', expect_result=0),
                 cmd('/scoreboard players get #s macro_error', expect_result=int(name == 'zero')),
                 cmd('/scoreboard players get #hits macro_error', expect_result=count)]
+    for amount, text in [('0.1f', '.100000001490116'), ('-1e-16d', '-0')]:
+        ops += [cmd(f'/data modify storage command_macro:args decimal set value {{amount:{amount}}}', expect_result=1),
+                cmd('/function command_macro:decimal with storage command_macro:args decimal'),
+                cmd(f'/execute if data storage command_macro:args {{written:"{text}"}}', expect_result=1)]
     ops += setup('/execute store result score #elapsed macro_error run time query gametime',
                  '/scoreboard players operation #elapsed macro_error -= #clock macro_error')
     return ops + [cmd('/scoreboard players get #elapsed macro_error', expect_result=0)]
@@ -4727,7 +4732,7 @@ def mannequin_pose_anchors():
             for x, z in ((32, 0), (48, 0), (32, 16), (48, 16))]
     ops += setup('/tick freeze', '/fill 32 200 0 47 204 15 air')
     # Raw pose getter normalization is separate; this gate pins live anchors.
-    # Java 26.3 scale-1 eye positions, independent of Horizon's pose math.
+    # Java 26.3 scale-1 eye positions, independent of Sunrise's pose math.
     cases = ((None, '201.62000000476837'), ('standing', '201.62000000476837'),
              ('crouching', '201.2699999809265'), ('swimming', '200.40000000596046'),
              ('fall_flying', '200.40000000596046'), ('sleeping', '200.20000000298023'),
@@ -5581,7 +5586,7 @@ def cube_split():
         flags = 'PersistenceRequired:1b' + ('' if up else ',NoAI:1b')
         ops.append(cmd(f'/summon minecraft:{kind} {x} {y0 + up} {z} {{Size:{tag},{flags}}}', expect_result=1))
     for kind, _, x, z, up in cubes:
-        # A blow, not /kill: a /kill'ed mob starts dying a tick early in Horizon (#15443).
+        # A blow, not /kill: a /kill'ed mob starts dying a tick early in Sunrise (#15443).
         ops.append(cmd(f'/damage @e[type={kind},x={x},y={y0 + up},z={z},distance=..1,limit=1] 1000 minecraft:generic',
                        expect_result=1))
     # LivingEntity.tickDeath removes the body on the 20th tick after the death, and the split comes with it:
@@ -7298,6 +7303,41 @@ def loaded_dead_mob():
     return ops + setup(f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
                        f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} air',
                        f'/forceload remove {x0} {z0}')
+def dying_selector_candidates():
+    """`@e` and `@n` keep only `Entity.isAlive`: a pig `/damage` killed, and an armor stand loaded with no health,
+    stay in the level until `tickDeath` removes them, yet neither is selected. The dying pig is nearer the origin than
+    the living one, so `@n` shows which one it took."""
+    x0, y0, z0 = 4288, 260, 4288
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': [[x0 >> 4, z0 >> 4]]},
+           cmd(f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} stone', False)]
+    dying, living, stand = (f'000010c0-0000-0000-0000-{n:012x}' for n in (1, 2, 3))
+    ops += [
+        cmd(f'/summon pig {x0 + 4}.5 {y0} {z0 + 4}.5 {{UUID:[I;4288,0,0,1],NoAI:1b}}', expect_result=1),
+        cmd(f'/summon pig {x0 + 10}.5 {y0} {z0 + 4}.5 {{UUID:[I;4288,0,0,2],NoAI:1b}}', expect_result=1),
+        cmd(f'/summon armor_stand {x0 + 2}.5 {y0} {z0 + 4}.5 {{UUID:[I;4288,0,0,3],Health:0.0f}}', expect_result=1),
+        cmd(f'/damage {dying} 100'),
+    ]
+    origin = f'x={x0 + 3}.5,y={y0},z={z0 + 4}.5,distance=..12'
+
+    def reads(*bodies):
+        for uuid in bodies:
+            ops.append(cmd(f'/data get entity {uuid} Health'))
+        ops.append(cmd(f'/execute if entity @e[type=!item,{origin}]'))
+        ops.append(cmd(f'/execute if entity @e[type=pig,{origin}]'))
+        ops.append(cmd(f'/execute if entity @e[type=armor_stand,{origin}]'))
+        ops.append(cmd(f'/data get entity @n[type=pig,{origin}] UUID'))
+        ops.append(cmd(f'/data get entity @n[type=!item,{origin}] UUID'))
+        ops.append(cmd(f'/data get entity @e[type=!item,{origin},sort=nearest,limit=1] UUID'))
+
+    # The stand is read only before it ticks: how long its body then stays (`tickDeath`) is not this group's.
+    reads(dying, living, stand)
+    ops.append({'op': 'tick', 'n': 1})
+    reads(dying, living)
+    ops.append({'op': 'tick', 'n': 20})
+    reads(dying, living)
+    return ops + setup(f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
+                       f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} air',
+                       f'/forceload remove {x0} {z0}')
 def falling_block_fall_float():
     """#13701: `Entity.checkFallDamage` adds each step down narrowed to a float (`fallDistance -= (float)ya`);
     a falling block never runs `baseTick`, so it is never in water and every step counts."""
@@ -7446,6 +7486,15 @@ def zombie_villager_summoned_data():
         else:
             ops.append(cmd(f'/execute if data entity {uuid} VillagerData{{profession:"minecraft:none"}}'))
             ops.append(cmd(f'/data get entity {uuid} VillagerData'))
+    # Compare the whole compound: IsBaby and ConversionPlayer collide in the
+    # Java map, so a path query would miss the inherited field's insertion order.
+    # Load an existing longer Strength effect: the cure does not replace it or
+    # instantiate attack_damage, leaving no identity-hash attribute order to compare.
+    ops += [cmd(f'/summon zombie_villager {x0 + 12}.5 {y0} {z0 + 4}.5 '
+                '{UUID:[I;13262,0,4,1],NoAI:1b,ConversionTime:2000,ConversionPlayer:[I;1,2,3,4],'
+                'active_effects:[{id:"minecraft:strength",duration:4000,show_icon:1b}],'
+                'VillagerData:{type:"minecraft:taiga",profession:"minecraft:cleric",level:2}}', expect_result=1),
+            cmd('/data get entity 000033ce-0000-0000-0000-000400000001')]
     return ops + setup('/tick unfreeze', f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
                        f'/forceload remove {x0} {z0}')
 
@@ -8496,6 +8545,7 @@ def groups():
         ('beacon levels load', beacon_levels_load()),
         ('zombie villager summoned data', zombie_villager_summoned_data()),
         ('loaded dead mob', loaded_dead_mob()),
+        ('dying selector candidates', dying_selector_candidates()),
         ('falling block fall float', falling_block_fall_float()),
         ('explosion infested blocks', explosion_infested_blocks()),
         ('jigsaw default joint', jigsaw_default_joint()),

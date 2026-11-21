@@ -111,4 +111,9 @@ def cases(cmd, setup):
             *get(near('tnt', 9, 15), 'Motion'),
             *setup('/kill @e[type=!player]', '/setblock 8 201 15 minecraft:air'),
         )],
+        # A stand summoned with a UUID keeps it, yet its constructor still made a random and drew one: the next
+        # stand's UUID comes from the random after it.
+        sync(20), *setup('/summon armor_stand 6.5 201 3.5 {UUID:[I;1,2,3,4]}', '/summon armor_stand 10.5 201 3.5'),
+        *get(near('armor_stand', 6, 3), 'UUID'), *get(near('armor_stand', 10, 3), 'UUID'),
+        *setup('/kill @e[type=!player]'),
     ]

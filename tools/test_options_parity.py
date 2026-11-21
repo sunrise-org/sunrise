@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare options.txt loading and saving, and the key mapping table, with the
 pinned client: every file is loaded through the real Options.load and written
-back with Options.save. The Rust probe normalizes Horizon's intentional 33..128
+back with Options.save. The Rust probe normalizes Sunrise's intentional 33..128
 render-distance extension to vanilla's default; a Rust slider/persistence
 regression covers the extended range."""
 from pathlib import Path
@@ -146,6 +146,7 @@ def make_cases(build):
         'graphicsMode:0\nmenuBackgroundBlurriness:0.35\nchatOpacity:1e-3\n',
         'graphicsMode:1\nlang:Fr_Ca\nresourcePacks:["a","programer_art"]\nincompatibleResourcePacks:["programer_art"]\n',
         'key_key.forward:abc\n', 'key_key.forward:\n', 'key_key.attack:k\n', 'chatOpacity:Infinity\n',
+        'chatOpacity: \t0x1p-1d\n', 'menuBackgroundBlurriness: 0x1p-1f\n',
         'chatOpacity: 0.5d\n', 'menuBackgroundBlurriness:0.25\n', 'menuBackgroundBlurriness:1.04999\n',
         # OptionsForceVBOFix writes a key nothing reads; the lower-casing, key and graphics fixers on odd values.
         'useVbo:false\nao:true\nao:3\n', 'ao:\n', 'graphicsMode:3\nao:2\n', 'graphicsMode:abc\n', 'fancyGraphics:abc\n',
@@ -184,13 +185,13 @@ def main():
              'fields, lenient Gson parsing and syntax-error aborts, key mappings (names, scancode-number forms, unbinding), '
              'sound volumes, model parts, line endings, the OPTIONS data fixers across version boundaries, and the '
              'KeyMapping table (order, defaults, categories, toggle mappings). Does not cover option screens or '
-             'runtime side effects of setting an option. Horizon render distances 33..128 are normalized to vanilla\'s '
+             'runtime side effects of setting an option. Sunrise render distances 33..128 are normalized to vanilla\'s '
              'default by options_probe; the slider/persistence unit regression checks that intentional extension.')
     harness.differential(
         'rust-options-parity', 'VanillaOptionsOracle', 'options_probe', make_cases, scope,
-        sources=[lab.ROOT / 'crates/horizon-client-render/src/options_file.rs', lab.ROOT / 'crates/horizon-client-render/src/options_fixes.rs',
-                 lab.ROOT / 'crates/horizon-client-render/src/java_text.rs', lab.ROOT / 'crates/horizon-core/src/java_number.rs', lab.ROOT / 'crates/horizon-client-input/src/key_names.rs',
-                 lab.ROOT / 'crates/horizon-client-input/src/keybinds.rs'])
+        sources=[lab.ROOT / 'crates/sunrise-client-render/src/options_file.rs', lab.ROOT / 'crates/sunrise-client-render/src/options_fixes.rs',
+                 lab.ROOT / 'crates/sunrise-client-render/src/java_text.rs', lab.ROOT / 'crates/sunrise-core/src/java_number.rs', lab.ROOT / 'crates/sunrise-client-input/src/key_names.rs',
+                 lab.ROOT / 'crates/sunrise-client-input/src/keybinds.rs'])
 
 
 if __name__ == '__main__':

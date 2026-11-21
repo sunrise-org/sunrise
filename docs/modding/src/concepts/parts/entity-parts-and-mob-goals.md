@@ -1,6 +1,31 @@
 # Entity parts and mob goals
 
-Use entity Parts in native mods. `r.entity_part` is absent from wasm builds.
+Register an `EntityPart` with `r.entity_part` to attach code to an entity type. Individual
+entities of that type share the part, not their attachments.
+
+## Picking while riding
+
+`can_rider_interact` mirrors NeoForge's `IEntityExtension.canRiderInteract`. Attach an
+`EntityPart` to the candidate's entity type and set `event.allowed = true` to let a
+rider pick it like an unrelated entity. The output starts false; parts run in
+dependency order and the last write wins. The hook has version 1 and exposes
+`event.entity: EntityRef` and a writable `event.allowed: bool` with a `ClientHost`.
+
+The ordinary client pick excludes entities sharing the camera's root vehicle,
+including other passengers, not just the directly ridden entity. The shared
+accumulator preserves vanilla's running-nearest-zero exception: picking from
+inside a box sets nearest to zero, and a later same-root intersection can replace
+the hovered entity without changing nearest. The hook is asked only when a
+non-inside candidate reaches that same-vehicle branch; true applies ordinary
+nearest selection instead. No part subscription means no hook-buffer work or
+dispatch. Subscribed picks reuse a retained candidate buffer. Tick and frame picks
+both use it. Attack-range component rays do not exclude root-vehicle relatives
+and never ask this hook. Server interaction checks remain reach-only.
+
+The existing family traversal order is retained; exact vanilla section and
+within-section insertion ordering is a separate engine correction.
+
+## Goals
 
 `r.entity_part("minecraft:zombie", ZombieGoals)` attaches an `EntityPart` to one entity type, a mod's
 own or vanilla's. Its method `register_goals` runs at every `Mob` construction of that type —
@@ -9,7 +34,7 @@ mob's two selectors beside the species' own, with the same priorities, flag lock
 
 ```rust,ignore
 struct ZombieGoals;
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl EntityPart for ZombieGoals {
     fn register_goals(&self, goals: &mut GoalRegistrar<'_>) {
         // goals.mob().id() is "minecraft:zombie": branch as per-species code does.
@@ -95,8 +120,8 @@ let full = Robot::edit_state(host, robot, |_, charge| {
   `minecraft:player` (a player's respawn identity is not decided yet), every other vanilla family
   (boats, minecarts, items, projectiles, armor stands...) and an unknown id refuse the load with
   `PartStateRefusal::EntityKind`, naming the type. `entity_part` itself checks no type.
-- The declaration is refused at the call as for block entities, copying on death included. Like
-  `entity_part`, `entity_part_with_state` is native-only; Part state is server-side for now.
+- The declaration is refused at the call as for block entities, copying on death included. Part
+  state is server-side.
 
 ## Brain behaviors
 

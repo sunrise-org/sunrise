@@ -1,8 +1,8 @@
 """Which jobs may run on our own runners (docs/ci-runners.md).
 
-- horizon-light (playhorizon's and other small runners, which refuse a fork's pull request): main's own scripts only.
-- horizon-checks (isolated runners that take any pull request, forks included): no secret and no token that writes.
-- Neither takes a job that holds a secret or whose token can push, publish or start workflows: playhorizon is a
+- sunrise-light (playsunrise's and other small runners, which refuse a fork's pull request): main's own scripts only.
+- sunrise-checks (isolated runners that take any pull request, forks included): no secret and no token that writes.
+- Neither takes a job that holds a secret or whose token can push, publish or start workflows: playsunrise is a
   partner's server, and a checks runner keeps what a fork's job left behind.
 """
 import re
@@ -11,8 +11,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github/workflows"
-LIGHT = ("horizon-light", "playhorizon-light", "playhorizon-ci")
-CHECKS = ("horizon-checks",)
+LIGHT = ("sunrise-light", "playsunrise-light", "playsunrise-ci")
+CHECKS = ("sunrise-checks",)
 FORK_GUARD = "github.event.pull_request.head.repo.full_name == github.repository"
 # dyna-ci.yml decides trust once, in its changes job (a fork's pull request, dispatched with `pr` or not).
 TRUSTED = "needs.changes.outputs.trusted == 'true'"
@@ -78,7 +78,7 @@ class OwnRunnerTests(unittest.TestCase):
             count += 1
             # dyna-ci.yml (ours) routes through the changes job's self_hosted
             # output and dyna-medium, or SELF_HOSTED_CI=all with the fork guard
-            # before the playhorizon-ci labels; the carried upstream files use
+            # before the playsunrise-ci labels; the carried upstream files use
             # SELF_HOSTED_CI != 'off'. Both fall back to GitHub's runners.
             if "dyna-ci.yml" in where:
                 self.assertIn("needs.changes.outputs.self_hosted == 'true'", value, where)
@@ -148,16 +148,16 @@ class OwnRunnerTests(unittest.TestCase):
         import tempfile
         from unittest.mock import patch
 
-        safe = ("jobs:\n  verify:\n    runs-on: horizon-checks\n    steps:\n"
+        safe = ("jobs:\n  verify:\n    runs-on: sunrise-checks\n    steps:\n"
                 "      - run: |\n          with open('output') as environment:\n              pass\n")
         forbidden = [
             safe.replace("    steps:", f"    {key} deployment\n    steps:")
             for key in ("environment:", "\"environment\":", "'environment' :")
         ] + [
-            "jobs:\n    verify:\n        runs-on: horizon-checks\n        environment: deployment\n",
-            "jobs:\n  verify: {runs-on: horizon-checks, environment: deployment}\n",
+            "jobs:\n    verify:\n        runs-on: sunrise-checks\n        environment: deployment\n",
+            "jobs:\n  verify: {runs-on: sunrise-checks, environment: deployment}\n",
             "env: &defaults {environment: deployment}\njobs:\n  verify:\n"
-            "    <<: *defaults\n    runs-on: horizon-checks\n",
+            "    <<: *defaults\n    runs-on: sunrise-checks\n",
         ]
         with tempfile.TemporaryDirectory() as directory, patch(f"{__name__}.WORKFLOWS", Path(directory)):
             workflow = Path(directory) / "fixture.yml"
@@ -169,20 +169,21 @@ class OwnRunnerTests(unittest.TestCase):
                     with self.assertRaises(AssertionError):
                         self.test_no_deployment_environment_on_our_runners()
 
-    def test_checks_split_between_both_pools(self):
-        ci = dict(jobs((WORKFLOWS / "ci.yml").read_text()))
-        value = runs_on(ci["launcher"])
-        # A pull request by the last digit of its number unless SELF_HOSTED_CI=all; main's pushes keep GitHub's cache.
-        self.assertIn("github.event_name == 'pull_request' && ", value)
-        self.assertIn("vars.SELF_HOSTED_CI == 'all'", value)
-        self.assertIn("endsWith(format('{0}', github.event.pull_request.number), '0')", value)
-        self.assertIn(FORK_GUARD, value)
-        # verify's parts go where the launcher goes; verify itself only waits for them.
+    def test_checks_verify_runs_on_main_not_on_pull_requests(self):
+        text = (WORKFLOWS / "ci.yml").read_text()
+        # A push gets dyna-checks; a fork's push held GitHub's runners ahead of the release jobs (2026-11-18). A pull
+        # request runs verify only when a maintainer labels it, and never with a token that writes.
+        self.assertEqual(triggers(text), {"pull_request", "schedule", "workflow_dispatch"})
+        self.assertIn("  pull_request:\n    types: [labeled]\n", text)
+        self.assertNotRegex(text, r":\s*write")
+        ci = dict(jobs(text))
         for part in ("verify-tree", "verify-lint", "verify-test"):
             with self.subTest(part=part):
-                self.assertEqual(runs_on(ci[part]), value)
+                self.assertIn("needs: changes", ci[part])
+                self.assertIn("github.event_name == 'schedule' || inputs.verify ||", ci[part])
+                self.assertIn("github.event.label.name == 'ci:verify' &&", ci[part])
         self.assertIn("needs: [verify-tree, verify-lint, verify-test]", ci["verify"])
-        # Never skipped: GitHub counts a skipped required check as passed.
+        # Never skipped where its parts ran: GitHub counts a skipped required check as passed.
         self.assertIn("if: always()", ci["verify"])
 
     def test_the_light_runners_refuse_forks_themselves(self):

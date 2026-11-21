@@ -24,6 +24,49 @@ beside the bed with the normal wake animation, teleport and pose sync; the usual
 occupying a bed or playing a wake animation. The next entity sync publishes the changed pose and bed to clients.
 Villagers use `start_sleeping`/`stop_sleeping`, not the raw player position setters.
 
+## Sprinting
+
+`EntityRef::is_sprinting` reads `Entity.isSprinting` and `EntityRef::set_sprinting(host, sprinting)` sets it
+(`Entity.setSprinting`, server only): a player's flag with the movement speed modifier that goes with it, or a mob's flag, which the
+mob's movement speed already reads as that modifier (a cat's or ocelot's own AI may set it again on its next step). It returns `false` for a stale
+handle, on a client and for a kind with no sprinting flag. It is the flag `Entity.isSprinting` reads, not
+the player's sprint key: a player's own client sets its flag again from its input.
+
+## Fire, water and consumption
+
+`EntityRef::is_on_fire(host)` reads vanilla `Entity.isOnFire` on either side: an entity that is not
+fire immune and has positive fire ticks or, on a client, synced shared flag 0. It covers players,
+mobs, armor stands, dropped items and tracked remote players. On a client it reads that
+client's copy, including the local player's predicted timer, not a server query.
+
+`EntityRef::fire_immune(host)` reads type immunity or a live grant on that side, not
+separate species-specific damage rules. On the server, use `set_fire_immunity(host, immune)` for a player, mob or armor
+stand. Granting it stops ignition and fire damage and silently clears any existing burn.
+Clearing the grant cannot remove built-in immunity. The grant belongs to the live body:
+it is not saved, a replacement body (including a respawn) starts without it, and a level
+transfer keeps it only if it carries the same body. The last write wins.
+
+For equipment-driven immunity, recompute the grant from the wearer's gear on the server and
+use `set_client_fire_immunity(host, immune)` on the client copy from its synced equipment.
+There is no grant packet: fire itself still uses vanilla's synced flag. The client grant only
+affects local prediction and drawing, without replacing remote entities' synced fire state.
+It ends when that entity copy is discarded.
+
+`EntityRef::is_under_water(host)` reads `Entity.isUnderWater` for players and mobs on either side:
+the previous eye-in-water sample AND current water contact. The local client player follows the
+`LocalPlayer.isUnderWater` override instead: its saved eye sample alone, even when current water
+contact is false. It is deliberately not equivalent to checking `eye_fluid` now. Both reads return
+`None` for unsupported kinds or stale handles.
+
+`PlayerRef::trigger_consume_item(host, &stack)` is server-only and fires just
+`CriteriaTriggers.CONSUME_ITEM.trigger(serverPlayer, stack)`, the vanilla public call that NeoForge
+mods can also use. It uses the same advancement path as food and potions, with the supplied stack,
+in the player's own level. It does not eat, update inventory, or award a used statistic.
+`Ok(())` means reached, whether or not a criterion matched. Invalid stacks return
+`TriggerCriterionError::Stack` before firing; clients return `NotServer`, and stale, offline or
+nested-turn displaced players return `PlayerUnavailable`. The generic `trigger_criterion` still
+refuses `minecraft:` trigger identifiers.
+
 ## Portals and leashes
 
 `EntityRef::portal_cooldown` takes `&dyn Host` and reads the remaining portal cooldown in ticks from the
@@ -42,6 +85,12 @@ falling block and an ender pearl by name: each keeps its cooldown in a store of 
 states, the falling block's saved field, an End gateway traveller) that this write does not own, so a write can only
 reach them once that kind has its own owner decision.
 
+On the server, `EntityRef::tick_count(host)` reads the signed 32-bit `Entity.tickCount` for a player, mob, item entity, experience
+orb or minecart. A local player and the guest whose turn is running read their active `PlayerMotion`; a guest outside
+its turn reads the motion kept in the guest record, or its carried count while a teleport is between bodies. A newly
+admitted player with no body has count 0. The value wraps like Java's `int`, and a stale handle or another entity
+kind returns `None`.
+
 `MobRef::can_use_portal` reads the existing server portal decision for a mob in the current level, including mounts and player riders. It takes `&dyn Host`: `Some(false)` means the mob is ineligible, while `None` means a client, stale or unavailable handle, parked mob, or the separately modelled dragon. It does not load a level.
 
 `EntityRef::leash_holder` takes `&dyn Host` and reads the live lead of a mob or boat. `LeashHolder::Unleashed`
@@ -53,6 +102,9 @@ level is parked, or that a saved holder has not resolved; this read neither load
 fence as `Leashable.setLeashedTo` does: the entity lets go of any other holder and gets off its vehicle, and neither
 `canBeLeashed` nor the distance is asked, so a holder too far away snaps the lead on the next tick. `detach_leash`
 drops the lead as an item or removes it; a mob's removal fires `entity_unleash`.
+
+A successful mob mount through `EntityRef::start_riding` drops the mob's lead as an item without a sound
+and emits `entity_unleash`. A refused mount leaves the leash alone. Natural mob boarding follows the same rule.
 
 ## Physics
 
@@ -83,10 +135,13 @@ selectors, its navigation and its controls, for brain mobs (allays, piglins, vil
 `LivingEntity.aiStep` runs with every move input and the jump flag zeroed, so it still falls, swims, is pushed,
 knocked back, hurt and killed, which `NoAI` does not allow. Its path, move target, target, running goals and brain
 memories are kept and resume on the next AI step, and the navigation timeout does not count the pause. `NoAI` is
-neither read nor written. The pause is saved with the mob as an attachment-style value (`horizon:attachments`,
-`horizon` / `ai_paused`, never a vanilla key) and read back on load. A refusal is a `MobAiPauseRefusal`: `Stale`
+neither read nor written. The pause is saved with the mob as an attachment-style value (`sunrise:attachments`,
+`sunrise` / `ai_paused`, never a vanilla key) and read back on load. A refusal is a `MobAiPauseRefusal`: `Stale`
 (another epoch's handle or no such entity), `Client`, `HeldOut` (a mob held out of the level for its own tick),
 `NoAiStep` (the dragon and its parts) or `NotAMob` (a player, an armor stand). None changes anything.
+
+For an Allay, the expiring liked-player memory, liked-note-block cooldown and item-pickup cooldown also
+stop during the pause. Passive healing, the duplication countdown, dancing and animation continue.
 
 ```rust
 // A spawner's movable no-AI mob: paused once, and still paused after a reload.
@@ -105,8 +160,8 @@ runs, so a mod's own write in that hook is what stays.
 
 ## Riding topology and resident handles
 
-`EntityRef` names only an entity resident in the current level. A rejected Mob
-passenger can remain a full object in a riding tree without becoming resident;
+On the server, `EntityRef` names only an entity resident in the current level.
+A rejected Mob passenger can remain a full object in a riding tree without becoming resident;
 its saved UUID does not make another object's handle refer to it.
 
 `is_passenger` and `is_vehicle` describe the actual relationships, including
@@ -127,6 +182,26 @@ obtain its handle. Cyclic relationships have no root and return `None`.
 its handle can be returned. An off-level first passenger means `None`, not a later
 resident rider. All these reads refuse stale input handles; none loads a retained
 object into the level or exposes a handle for it.
+
+On a client, `vehicle`, `is_passenger`, `passengers`, `root_vehicle` and
+`is_vehicle` read the riding relationships sent in the server's passenger
+packets. They work for every tracked entity and the local player. A stale or
+untracked input returns `None`. Passenger lists for unknown vehicles and entities
+that cannot carry passengers (markers and ominous item spawners) are ignored.
+Unknown passengers and links that would form a cycle do not board.
+`passengers` returns client handles in the order they boarded from the list.
+The other riding reads and all riding writes are server-only.
+
+A declared general entity can ride a supported vehicle, and players, mobs and
+other general entities can ride a general vehicle. The vehicle type's optional
+`passenger_attachment` is a local offset in blocks: it rotates with the vehicle's
+yaw and defaults to the top center of the declared box. A rider sits at that point
+minus its own vehicle attachment. A general rider has no offset of its own.
+The client uses the same placement from the server's passenger lists.
+
+Saved passengers of either family go under the root's ordinary NBT `Passengers`
+list and leave with the root's chunk. A general type declared `NoSave` can ride
+but isn't written to disk and cannot carry a passenger, even when forced.
 
 During boat or cart destruction, mob dismount notifications run, but remaining
 riding relationships are unlinked even when a listener cancels. Each mob keeps its

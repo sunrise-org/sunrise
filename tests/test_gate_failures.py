@@ -27,7 +27,7 @@ class GateFailuresTests(unittest.TestCase):
                                  "import json, os, sys\n"
                                  "with open(os.environ['CALLS'], 'a') as f: f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
                                  "assert os.environ['RUSTC_WRAPPER'] == os.environ['GITHUB_WORKSPACE'] + '/tools/ci/test-compile-lock.sh'\n"
-                                 "assert os.environ['HORIZON_TEST_RUSTC_WRAPPER'] == '/configured/compiler-cache.sh'\n"
+                                 "assert os.environ['SUNRISE_TEST_RUSTC_WRAPPER'] == '/configured/compiler-cache.sh'\n"
                                  "mode = os.environ['MODE']\n"
                                  "if sys.argv[1] == 'test':\n"
                                  "    if mode == 'green' or ('-j1' in sys.argv and mode.endswith('-recovered')): sys.exit(0)\n"
@@ -36,7 +36,7 @@ class GateFailuresTests(unittest.TestCase):
                                  "            print('collect2: fatal error: ld terminated with signal 9 [Killed]', file=sys.stderr)\n"
                                  "        else:\n"
                                  "            print('signal: 9, SIGKILL: kill' if mode.startswith('rustc') else 'sccache: Compile terminated by signal 9', file=sys.stderr)\n"
-                                 "    print('error: could not compile `horizon-client-lib` (lib test)', file=sys.stderr)\n"
+                                 "    print('error: could not compile `sunrise-client-lib` (lib test)', file=sys.stderr)\n"
                                  "    sys.exit(1)\n"
                                  "sys.exit(0 if mode == 'red-build-success' else 1)\n")
                 cargo.chmod(0o755)
@@ -54,7 +54,7 @@ class GateFailuresTests(unittest.TestCase):
                     self.assertEqual(calls[1], ["test", "-j1", "--profile", "test", "--workspace",
                                                 "--lib", "--bins", "--tests", "--no-run", "--timings"])
                     self.assertIn("::warning::", result.stdout)
-                    self.assertIn("Failed units: error: could not compile `horizon-client-lib` (lib test)", result.stdout)
+                    self.assertIn("Failed units: error: could not compile `sunrise-client-lib` (lib test)", result.stdout)
                 else:
                     self.assertNotIn("::warning::", result.stdout)
                 if expected == 0:
@@ -75,13 +75,13 @@ class GateFailuresTests(unittest.TestCase):
 
     def test_independent_checks_continue_but_failed_setup_stops_them(self):
         workflow = yaml.load((ROOT / ".github/workflows/dyna-ci.yml").read_text(), Loader=yaml.BaseLoader)
-        for job in ("lint", "verify", "verify-static", "launcher"):
+        for job in ("lint", "verify", "verify-static"):
             steps = workflow["jobs"][job]["steps"]
             ids = {s.get("id") for s in steps}
             for step in steps:
                 for dependency in re.findall(r"steps\.([\w-]+)\.", step.get("if", "")):
                     self.assertIn(dependency, ids, (job, step))
-            checks = [s for s in steps[steps.index(next(s for s in steps if s.get("id") == "setup"))+1:] if s.get("name", "").startswith(("Lint ", "Test Rust", "Test launcher"))]
+            checks = [s for s in steps[steps.index(next(s for s in steps if s.get("id") == "setup"))+1:] if s.get("name", "").startswith(("Lint ", "Test Rust"))]
             for check in checks:
                 self.assertNotIn("success()", check["if"])
                 self.assertIn("!cancelled()", check["if"])

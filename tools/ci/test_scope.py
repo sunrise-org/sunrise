@@ -25,88 +25,103 @@ from tools.ci.rust_changes import changed_paths  # noqa: E402
 # own files had changed: whatever depends on it is selected too.
 # tests/test_ci_test_scope.py scans crates/ and xtask/ and fails on a read missing here. Entries outside every package
 # directory only document the read: a change there selects the whole workspace.
-HORIZON_CLIENT = [
+SUNRISE_CLIENT = [
     # The build script and the native hook tests read the hook targets' sources.
-    "crates/horizon-client-render/src", "crates/horizon-world/src", "crates/horizon-items/src",
-    "crates/horizon-guest-stack/src/guest_stack_constants.rs", "crates/horizon-mod-wasm/tests/fixture/src",
-    "docs/api/launch-reference.md", "docs/horizon-ctl-commands.md", "docs/modding/examples/src/worldgen.rs",
-    "docs/parity/random-chance-seeded.jsonl", "packaging/executable_link.rs", "packaging/windows/exe.rs",
+    "crates/sunrise-client-render/src", "crates/sunrise-world/src", "crates/sunrise-items/src",
+    "crates/sunrise-guest-stack/src/guest_stack_constants.rs",
+    "docs/api/launch-reference.md", "docs/sunrise-ctl-commands.md", "docs/modding/examples/src/worldgen.rs",
+    "docs/parity/block-entity-client-ticks.jsonl", "docs/parity/random-chance-seeded.jsonl",
+    "packaging/executable_link.rs", "packaging/windows/exe.rs",
     "research-lock.json", "tests/fixture_support/item_resource_properties.rs", "tests/fixtures",
 ]
-# The generator scans these to write the mod API, the points and the host boundary: its own sources, the vocabulary, the
+# The generator scans these to write the mod API and the host boundary: its own sources, the vocabulary, the
 # engine crates holding hook targets and their manifests.
 MOD_API_GEN = [
-    "Cargo.lock", "crates/horizon-assets/src", "crates/horizon-client", "crates/horizon-client-core/src",
-    "crates/horizon-client-render", "crates/horizon-core/src", "crates/horizon-engine-slots", "crates/horizon-items",
-    "crates/horizon-mod-api", "crates/horizon-mod-api-macros/src/lib.rs", "crates/horizon-mod-package/src",
-    "crates/horizon-mod-render", "crates/horizon-mod-runtime/src", "crates/horizon-mod-vocab/behaviours",
-    "crates/horizon-mod-vocab/src", "crates/horizon-world", "packaging/executable_link.rs",
+    "Cargo.lock", "crates/sunrise-assets/src", "crates/sunrise-client", "crates/sunrise-client-core/src",
+    "crates/sunrise-client-render", "crates/sunrise-core/src", "crates/sunrise-items",
+    "crates/sunrise-mod-api", "crates/sunrise-mod-api-macros/src/lib.rs", "crates/sunrise-mod-package/src",
+    "crates/sunrise-mod-render", "crates/sunrise-mod-runtime/src", "crates/sunrise-mod-vocab/behaviours",
+    "crates/sunrise-mod-vocab/src", "crates/sunrise-world", "packaging/executable_link.rs",
     "tools/layering/mod_vocab_state.json",
 ]
 READERS = {
-    "cargo-horizon-mod": [
-        "Cargo.lock", "crates/horizon-mod-api", "crates/horizon-mod-package/src/sdk/fixture.tar.xz",
-        "crates/horizon-mod-package/tests/index", "docs/modding/src/how-to/native-mods.md", "tools/ci/rust-version",
+    "cargo-sunrise-mod": [
+        "Cargo.lock", "crates/sunrise-mod-api", "crates/sunrise-mod-package/src/sdk/fixture.tar.xz",
+        "crates/sunrise-mod-package/tests/index", "docs/modding/src/how-to/native-mods.md", "tools/ci/rust-version",
     ],
-    "horizon-client": HORIZON_CLIENT,
-    # Shares horizon-client's sources, so its unit tests run the same reads.
-    "horizon-client-lib": HORIZON_CLIENT,
+    # The pinned Rust, and the mods library's template its tests render.
+    "sunrise-native-build": ["crates/sunrise-client/src/native_mod_entry.rs.template", "tools/ci/rust-version"],
+    "sunrise-client": SUNRISE_CLIENT,
+    # Shares sunrise-client's sources, so its unit tests run the same reads.
+    "sunrise-client-lib": SUNRISE_CLIENT,
     # lang.rs embeds the bundled language files.
-    "horizon-client-core": ["crates/horizon-client/assets/horizon/lang"],
-    "horizon-client-render": [
-        "crates/horizon-client/assets/horizon/lang", "crates/horizon-client/assets/horizon/textures/gui",
+    "sunrise-client-core": ["crates/sunrise-client/assets/sunrise/lang"],
+    "sunrise-client-render": [
+        "crates/sunrise-client/assets/sunrise/lang", "crates/sunrise-client/assets/sunrise/textures/gui",
+        # Its WGSL validation compiles the shader pack crate's shaders too.
+        "crates/sunrise-render-shaderpack/src",
+        "tools/light_storage_scenario.txt", "tools/light_storage_witness.txt",
     ],
     # The daily Character comparator reads the original public-JDK API helper.
-    "horizon-core": ["tools/JavaCharacterTables.java"],
-    # The build scripts hand the repository root to the generator.
-    "horizon-engine-slots": MOD_API_GEN,
-    "horizon-game": ["packaging/windows/exe.rs"],
+    "sunrise-core": ["tools/JavaCharacterTables.java"],
+    "sunrise-game": ["packaging/windows/exe.rs"],
     # Shared source-only module discovery reads the game's declarations and vocabulary export fragments.
-    "horizon-game-discovery": ["crates/horizon-client/src", "crates/horizon-mod-vocab/src"],
+    "sunrise-game-discovery": ["crates/sunrise-client/src", "crates/sunrise-mod-vocab/src"],
     # The shared guest-stack tests read the sources that use its constants, and the jobs they wait on.
-    "horizon-guest-stack": ["crates/horizon-client/src", "crates/horizon-threads/src"],
-    "horizon-mod-api": MOD_API_GEN,
-    "horizon-mod-api-gen": MOD_API_GEN,
-    "horizon-mod-api-gen-tests": MOD_API_GEN,
-    "horizon-mod-package": [
-        "Cargo.lock", "docs/modding/src/how-to/native-mods/07-local-developer-builds.md",
+    "sunrise-guest-stack": ["crates/sunrise-client/src", "crates/sunrise-threads/src"],
+    "sunrise-mod-api": MOD_API_GEN,
+    # Its daily stable-release test drives the release gate's Python through the real surface differ.
+    "sunrise-mod-api-gen": [
+        *MOD_API_GEN, "crates/sunrise-mod-vocab/extension-tags",
+        "tests/stable_mod_api_integration.py", "tests/test_stable_mod_api.py", "tools/ci/nightly.py",
+        "tools/release_train.py",
+    ],
+    "sunrise-mod-api-gen-tests": MOD_API_GEN,
+    # content_keys' source guard searches these crates' sources for the files that define declaration types.
+    "sunrise-mod-package": [
+        "Cargo.lock", "crates/sunrise-core/src", "crates/sunrise-mod-vocab/src", "docs/developer-install.md",
         "tools/mixins/narrow-reference-rule.patch",
     ],
-    "horizon-mod-points": MOD_API_GEN,
-    "horizon-mod-render": MOD_API_GEN,
-    "horizon-mod-wasm": [*MOD_API_GEN, "crates/horizon-guest-stack/src/guest_stack_constants.rs"],
-    "horizon-mod-wasm-wire-loopback": [
-        *MOD_API_GEN, "crates/horizon-guest-stack/src/guest_stack_constants.rs", "crates/horizon-mod-wasm/src/prepared.rs",
-        "crates/horizon-mod-wasm/tests/fixture/src", "crates/horizon-mod-wasm/tests/support",
+    "sunrise-mod-render": MOD_API_GEN,
+    "sunrise-official": ["packaging/windows/exe.rs"],
+    "sunrise-perf": ["crates/sunrise-perf-format/tests/fixtures", "tests/fixtures/pacing_slow_frames.hzperf"],
+    "sunrise-port-pack": ["docs/modpacks/atm10-mods.csv"],
+    "sunrise-prepare": [
+        "crates/sunrise-client/src/game/runtime/launch_api.rs", "mods/sunrise/src/test/java", "research-lock.json",
     ],
-    "horizon-official": ["packaging/windows/exe.rs"],
-    "horizon-perf": ["crates/horizon-perf-format/tests/fixtures", "tests/fixtures/pacing_slow_frames.hzperf"],
-    "horizon-port-pack": ["docs/modpacks/atm10-mods.csv"],
-    "horizon-prepare": [
-        "crates/horizon-client/src/game/runtime/launch_api.rs", "mods/horizon/src/test/java", "research-lock.json",
+    "sunrise-release-sign": [
+        "tests/install_ps1_signature.ps1", "tools/ci/sign_native_build.sh", "tools/ci/sign_release.sh",
     ],
-    "horizon-release-sign": ["tools/ci/sign_native_build.sh", "tools/ci/sign_release.sh"],
-    "horizon-server": [
-        "crates/horizon-theme/fonts", "crates/horizon-theme/icons", "docs/api/server-reference.md",
+    "sunrise-server": [
+        "crates/sunrise-theme/fonts", "crates/sunrise-theme/icons", "docs/api/server-reference.md",
         "packaging/executable_link.rs",
     ],
-    "horizon-shader-api": ["docs/api/shaders-reference.md", "docs/api/shaders-reference-0.2.md"],
-    "horizon-world": ["crates/horizon-core", "Cargo.lock"],
+    "sunrise-shader-api": ["docs/api/shaders-reference.md", "docs/api/shaders-reference-0.2.md"],
     # Commands (tokens, icons, package), not tests: listed so the scan finds nothing unexplained.
     "xtask": [
-        "crates/horizon-client/src", "crates/horizon-mod-vocab/src/hooks", "crates/horizon-perf/web",
-        "crates/horizon-prepare", "crates/horizon-theme", "docs/media/brand", "mods/horizon/src/test/java", "packaging",
+        "crates/sunrise-client/src", "crates/sunrise-mod-vocab/src/hooks", "crates/sunrise-perf/web",
+        "crates/sunrise-prepare", "crates/sunrise-theme", "docs/media/brand", "mods/sunrise/src/test/java", "packaging",
         "research-lock.json", "tools", "LICENSES/MIT-Horizon.txt",
     ],
 }
 # What a package's tests only read at run time and nothing else uses: the package is selected, its dependents are not.
-# horizon-client-core's lang.rs tests read the sources of every crate for the language keys the code names.
-SCANNED = {"horizon-client-core": ["crates"]}
+# sunrise-client-core's lang.rs tests read the sources of every crate for the language keys the code names.
+SCANNED = {"sunrise-client-core": ["crates"]}
 # Literals the scan takes for a walk up to crates/ that are not one (a ".." among path-traversal checks).
 # "machines/.." in a test's sample paths, "mods/" in an instance's file names: no read either.
 NOT_READS = {
-    "horizon-client": {"crates"}, "horizon-client-lib": {"crates"}, "horizon-mod-package": {"crates"},
-    "horizon-mod-vocab": {"."}, "horizon-port-pack": {"mods"}, "horizon-prepare": {"crates"},
+    "sunrise-client": {"crates"}, "sunrise-client-lib": {"crates"}, "sunrise-mod-package": {"crates"},
+    "sunrise-mod-vocab": {"."}, "sunrise-port-pack": {"mods"}, "sunrise-prepare": {"crates"},
+    # Paths inside a staged game source or a test's scratch folder, never this checkout's files.
+    "sunrise-native-build": {
+        "Cargo.lock", "crates/sunrise-client/Cargo.toml", "crates/sunrise-client/build.rs", "crates/sunrise-client/src",
+        "crates/sunrise-client/src/native_main.rs.template", "crates/sunrise-core/src", "crates/sunrise-core/src/storage.rs",
+        "crates/sunrise-mod-api", "crates/sunrise-mod-host", "crates/sunrise-mod-host/Cargo.toml", "crates/sunrise-official",
+        "crates/sunrise-official/Cargo.toml",
+        # The discovery tests' scratch game source (`discover_tests.rs`).
+        "crates/sunrise-client/src/entry.rs", "crates/sunrise-client/src/game.rs", "crates/sunrise-client/src/lib.rs",
+        "crates/sunrise-mod-api-gen/internals.txt",
+    },
 }
 
 
@@ -128,7 +143,7 @@ class Workspace:
         for package in metadata["packages"]:
             for target in package["targets"]:
                 source = relative(target["src_path"])
-                # horizon-client-lib builds horizon-client's files: all of that package's folder counts.
+                # sunrise-client-lib builds sunrise-client's files: all of that package's folder counts.
                 folder = max((d for d in home.values() if under(source, d)), key=len, default=None)
                 self.dirs[package["name"]].add(folder or posixpath.dirname(source))
         self.home = home
@@ -138,12 +153,42 @@ class Workspace:
                 if dependency["name"] in self.dependents:
                     self.dependents[dependency["name"]].add(package["name"])
 
+        # The stable mod API auditor reads every workspace package manifest, then indexes library
+        # sources reachable from the facade and its three seam crates. Discover both sets from
+        # Cargo metadata so adding a workspace member or an internal dependency needs no scope-list edit.
+        packages = {package["name"]: package for package in metadata["packages"]}
+        self.mod_api_gen_inputs = {relative(os.path.join(root, "Cargo.toml"))}
+        self.mod_api_gen_inputs.update(relative(package["manifest_path"]) for package in metadata["packages"])
+        pending = ["sunrise-mod-api", "sunrise-mod-vocab", "sunrise-core", "sunrise-mod-runtime"]
+        indexed = set()
+        while pending:
+            name = pending.pop()
+            if name in indexed or name not in packages:
+                continue
+            indexed.add(name)
+            package = packages[name]
+            for dependency in package["dependencies"]:
+                # OutsideSeam follows normal dependencies (including target-specific ones), not
+                # build or dev dependencies. Cargo metadata resolves workspace package names here.
+                if dependency.get("kind") in (None, "normal") and dependency["name"] in packages:
+                    pending.append(dependency["name"])
+            for target in package["targets"]:
+                if {"lib", "proc-macro"}.intersection(target.get("kind", ())):
+                    self.mod_api_gen_inputs.add(posixpath.dirname(relative(target["src_path"])))
+
     def owners(self, path):
         return {name for name, dirs in self.dirs.items() if any(under(path, d) for d in dirs)}
 
     def readers(self, path, table=None):
+        dynamic = table is None
         table = READERS if table is None else table
-        return {name for name, paths in table.items() if name in self.dirs and any(under(path, p) for p in paths)}
+        readers = {name for name, paths in table.items()
+                   if name in self.dirs and any(under(path, p) for p in paths)}
+        if dynamic and "sunrise-mod-api-gen" in self.dirs and any(
+            under(path, p) for p in self.mod_api_gen_inputs
+        ):
+            readers.add("sunrise-mod-api-gen")
+        return readers
 
     def scope(self, paths):
         """The packages to test, or None for the whole workspace."""

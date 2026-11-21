@@ -1,5 +1,9 @@
 # Design: level extracted state
 
+> Historical: this design predates the removal of WebAssembly mods.
+> See [the mod API reference](../../modding/src/reference/api.md) for the current native API.
+> The proposed guest extraction, draw views and unload requirements below are historical.
+
 Provisional answer to [#866](https://github.com/arismoko/horizon/issues/866):
 use a typed, frame-owned extension store, freeze it after base extraction and
 `extract_level_render_state`, and lend immutable values to drawing through a
@@ -8,7 +12,7 @@ or a claim that the issue is complete.
 
 ## Vanilla and NeoForge 26.3
 
-Verified with the pinned vanilla oracle from `/workspace/horizon`:
+Verified with the pinned vanilla oracle from `/workspace/sunrise`:
 `python3 tools/rea_vanilla.py class net.minecraft.client.renderer.LevelRenderer`
 and `python3 tools/rea_vanilla.py method net.minecraft.client.renderer.LevelRenderer render`.
 `render` passes `levelRenderState` to `submitFeatures`, then calls
@@ -25,27 +29,27 @@ thread guarantees, ordering and attachment limits are **unverified**. The issue'
 description is intent, not verification of NeoForge behavior. Require reachable
 public documentation before adopting the counterpart's full contract; do not
 infer it from older versions, source or patches. All limits below are proposed
-Horizon limits, not NeoForge limits.
+Sunrise limits, not NeoForge limits.
 
-## Verified Horizon owners and missing seam
+## Verified Sunrise owners and missing seam
 
 Paths below are relative to the repository at `731b0cae68`.
 
 | Owner | Evidence | Implication |
 | --- | --- | --- |
-| Frame preparation | `crates/horizon-client/src/game.rs:15048`, `render_with` | Builds frame before consumer; proposed extraction/freeze integration belongs here |
-| Renderer consumer | `crates/horizon-client/src/game.rs:15040`, `render_frame` | Calls renderer with prepared frame |
-| Deferred submission | `crates/horizon-client/src/game.rs:15029` | Submit thread may retain a frame after presentation |
-| Frame fields | `crates/horizon-client-render/src/gfx.rs:1104`, `Frame` | Existing borrowed frame is not proof of owned extension storage |
-| Renderer entry and resize | `crates/horizon-client-render/src/gfx.rs:8024`, `:5640` | Submission and target replacement need explicit epoch checks |
-| Renderer replacement | `crates/horizon-client/src/game.rs:14236`, `adopt_renderer` | Rebuild must retire old extension/resource generations |
-| Fog extraction | `crates/horizon-client/src/game/interface/render_tick.rs:133` | Existing base preparation must precede extension freeze |
-| Block-screen visibility | `crates/horizon-client/src/game/interface/render_tick.rs:529` | Keep existing extraction/cancellation decisions; do not rerun in draw |
-| Draw adapter | `crates/horizon-client/src/game/host/draw.rs:6` | Currently contains `&Game`; cannot certify snapshot-only access |
+| Frame preparation | `crates/sunrise-client/src/game.rs:15048`, `render_with` | Builds frame before consumer; proposed extraction/freeze integration belongs here |
+| Renderer consumer | `crates/sunrise-client/src/game.rs:15040`, `render_frame` | Calls renderer with prepared frame |
+| Deferred submission | `crates/sunrise-client/src/game.rs:15029` | Submit thread may retain a frame after presentation |
+| Frame fields | `crates/sunrise-client-render/src/gfx.rs:1104`, `Frame` | Existing borrowed frame is not proof of owned extension storage |
+| Renderer entry and resize | `crates/sunrise-client-render/src/gfx.rs:8024`, `:5640` | Submission and target replacement need explicit epoch checks |
+| Renderer replacement | `crates/sunrise-client/src/game.rs:14236`, `adopt_renderer` | Rebuild must retire old extension/resource generations |
+| Fog extraction | `crates/sunrise-client/src/game/interface/render_tick.rs:133` | Existing base preparation must precede extension freeze |
+| Block-screen visibility | `crates/sunrise-client/src/game/interface/render_tick.rs:529` | Keep existing extraction/cancellation decisions; do not rerun in draw |
+| Draw adapter | `crates/sunrise-client/src/game/host/draw.rs:6` | Currently contains `&Game`; cannot certify snapshot-only access |
 
 This is a verified integration census, not a complete proof of every submission,
 reload or early-return route. Implementation must audit normal world rendering,
-screenshot sequences, split views, loading/title frames, device loss and deferred
+screenshot sequences, loading/title frames, device loss and deferred
 submission. Early loading returns inside `render_with` must not fire a world hook.
 
 ## Proposed contract
@@ -159,10 +163,10 @@ path allocation and throughput measurements. No Rust API is added by this note.
 
 - Exact NeoForge fields, ordering, cancellation and limits are unverified.
   Recommend requiring public 26.3 Javadoc before final hook adoption; keep the
-  proposed store as Horizon design, not a claim of counterpart equivalence.
+  proposed store as Sunrise design, not a claim of counterpart equivalence.
 - Complete extraction/caller and async owner census remains unfinished.
   Recommend proving all world/view entry and early-return routes before coding
-  dispatch, using vanilla oracle callers and Horizon consumer tests.
+  dispatch, using vanilla oracle callers and Sunrise consumer tests.
 - How broad should snapshot-only DrawContext migration be? Recommend migrating
   every consumer of this store and refusing registrations requiring live reads;
   do not expose the store through the current Game-backed adapter unchanged.

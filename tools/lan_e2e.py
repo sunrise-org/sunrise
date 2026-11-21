@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """LAN multiplayer end to end: a host opens its world to LAN and a guest joins, both real games.
 
-The host's world runs on its integrated server thread. Two Horizon clients run under horizon-ctl in scratch folders. The host
+The host's world runs on its integrated server thread. Two Sunrise clients run under sunrise-ctl in scratch folders. The host
 creates a survival world and opens it to LAN with commands allowed; the guest connects to it by
 address. The script then checks, from both sides, what a guest's game used to get wrong (#366):
 
@@ -17,7 +17,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
              leaves the host's screen and mouse look alone;
 - datapack-recipe: (--server-thread) a crafting recipe from the world's data pack shows its result in the
              table of the host's window and of a guest, and taking it crafts (#6733);
-- recipes-hmod: opt-in, requires native Recipes: search original .hmod content, fill the server's
+- recipes-smod: opt-in, requires native Recipes: search original .smod content, fill the server's
              crafting grid, consume inputs and preserve both players' output after save/rejoin (#9647);
 - spawned:   the host and a guest new to the world join on different spots (PlayerSpawnFinder), and the
              guest opens a crafting table, a chest, a furnace and a stonecutter where it joined;
@@ -38,7 +38,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - arrows:    the guest and the host shoot each other with a bow; with the pvp game rule off, nothing (#484);
 - flame-arrows: an arrow the host or the guest shoots from a Flame bow burns in flight on both sides
              (Entity.DATA_SHARED_FLAGS_ID's fire flag), one from a plain bow doesn't (#7356);
-- server-profile: a guest at operator level 4 starts and stops a capture of the host's server over horizon:perf and
+- server-profile: a guest at operator level 4 starts and stops a capture of the host's server over sunrise:perf and
              the host's reports/ gets the file; at level 3 it is refused and no file is written; the host's log names
              the guest at the start and the end.
 - looks:     mobs look on both sides as the server has them (their synched data): a calf is a
@@ -362,8 +362,8 @@ both sides go to --out (host-*.png, guest-*.png).
     python3 tools/lan_e2e.py --check chest --check tab
     python3 tools/lan_e2e.py --check portals
 
-Needs the prepared resources in .local/horizon-client. On Linux the games run on vscreen (the
-desktop), or headless (offscreen, no pause) where there is none; on macOS both games render offscreen. Games started here have no audio (HORIZON_NO_AUDIO=1).
+Needs the prepared resources in .local/sunrise-client. On Linux the games run on vscreen (the
+desktop), or headless (offscreen, no pause) where there is none; on macOS both games render offscreen. Games started here have no audio (SUNRISE_NO_AUDIO=1).
 """
 import argparse
 import hashlib
@@ -406,8 +406,8 @@ class Game:
     def __init__(self, name, ctl, resources):
         self.name = name
         self.work = Path(tempfile.mkdtemp(prefix=f'hzlan-{name}-'))
-        (self.work / '.local/horizon-client').mkdir(parents=True)
-        lab.link_dir(resources, self.work / '.local/horizon-client' / lab.VERSION)
+        (self.work / '.local/sunrise-client').mkdir(parents=True)
+        lab.link_dir(resources, self.work / '.local/sunrise-client' / lab.VERSION)
         self.socket = self.work / 'c.sock'
         env = game_env(os.environ.get('VSCREEN', 'lan-e2e'), home=self.work / 'home')
         env = game_environment(env, self.work)
@@ -418,7 +418,7 @@ class Game:
         return self.d(tool, **args)
 
     def raw(self, *words):
-        """A game command horizon-ctl has no table entry for (lan, connect): the words as typed."""
+        """A game command sunrise-ctl has no table entry for (lan, connect): the words as typed."""
         result = subprocess.run(self.d.base + [str(w) for w in words], cwd=self.work, env=self.d.env,
                                 capture_output=True, text=True, timeout=600)
         lines = result.stdout.strip().splitlines()
@@ -643,6 +643,9 @@ def check_menu_transfer(host, guest, out):
         wait_dimension(guest, OVERWORLD, 400)
         guest.wait(20)
         open_chest()
+        # ServerPlayer.die drops the inventory (Player.dropEquipment) unless keep_inventory is on;
+        # the diamonds must come through the respawn to be counted in the new inventory menu.
+        host('command', command='gamerule keep_inventory true')
         guest('command', command='kill @s')
         guest.wait(20)
         guest.raw('respawn')
@@ -650,6 +653,7 @@ def check_menu_transfer(host, guest, out):
         guest.wait(40)
         settled('respawn')
     finally:
+        host('command', command='gamerule keep_inventory false')
         back_to_game(guest)
         # A failure after the trip must not leave the guest in the Nether for the checks that follow.
         if guest('state').get('dimension') != OVERWORLD:
@@ -667,7 +671,7 @@ def check_crafting(host, guest, out):
     guest.raw('wait-for', 'screen', 'inventory')
     inv = guest('inventory')
     slot = next(s['slot'] for s in inv['hotbar'] if s and s.get('item') == 'minecraft:oak_log')
-    # Horizon's slot ids (click-slot): the hotbar is 0-8, the grid 100-108, the result 200.
+    # Sunrise's slot ids (click-slot): the hotbar is 0-8, the grid 100-108, the result 200.
     guest.raw('click-slot', slot)
     guest.raw('click-slot', 100)
     guest.wait(5)
@@ -767,7 +771,9 @@ def check_effects(host, guest, out):
     bx, by, bz = x - 3, y, z - 3
     host('command', command=f'fill {bx - 1} {by - 1} {bz - 1} {bx + 1} {by - 1} {bz + 1} minecraft:iron_block')
     host('command', command=f'setblock {bx} {by} {bz} minecraft:beacon{{primary_effect:"minecraft:speed"}}')
-    # BeaconBlockEntity.tick applies its powers every 80 ticks, once the beam has reached the sky.
+    # BeaconBlockEntity.tick applies its powers every 80 ticks, once the beam has reached the sky: nothing
+    # over it up to the build limit (the trees by the world spawn would stop it).
+    host('command', command=f'fill {bx} {by + 1} {bz} {bx} 319 {bz} minecraft:air')
     seen = {}
     for _ in range(15):
         host.wait(20)
@@ -803,7 +809,7 @@ def lan_guest(host):
 
 def check_distance(host, guest, out):
     """IntegratedServer.tickServer: the server takes the host's render distance as its view distance
-    (past 32, which Horizon's options allow) and sends it to every player (SetChunkCacheRadius)."""
+    (past 32, which Sunrise's options allow) and sends it to every player (SetChunkCacheRadius)."""
     seen = {}
     try:
         for distance in (48, 6):
@@ -1240,8 +1246,9 @@ def check_player_armor_components(host, guest):
                                      f'equipment.{slot}.components."minecraft:damage"')
                 value = re.search(r'entity data: (-?\d+)\s*$', reply)
                 read_damage = int(value.group(1)) if value else None
+                # "Test passed" or "Test failed": not a late reply to the read before it.
                 exists = server_reply(guest, f'execute if items entity @s armor.{slot} '
-                                      f'minecraft:diamond_{item}')
+                                      f'minecraft:diamond_{item}', 'Test ')
                 observed[slot] = {'damage': read_damage, 'present': 'Test passed' in exists}
             after_health = health()
             cases[case] = {'health': after_health, 'equipment': observed}
@@ -1701,6 +1708,7 @@ def check_deaths(host, guest, out):
                 g.wait(40)
             back_to_game(g)
             g('command', command='effect give @s minecraft:instant_health 1 5')
+        platforms.append(pos_of(host))
         host('command', command='execute at @s run fill ~-5 200 ~-5 ~5 200 ~5 minecraft:stone')
         host('command', command='tp @s ~ 201 ~')
         host('command', command=f'tp {GUEST_NAME} {host.player}')
@@ -1711,6 +1719,7 @@ def check_deaths(host, guest, out):
         host.wait(5)
 
     said = {}
+    platforms = []
     try:
         host('command', command='gamerule pvp true')
         host('command', command='gamerule natural_health_regeneration false')
@@ -1797,6 +1806,11 @@ def check_deaths(host, guest, out):
         for g in (host, guest):
             g('command', command='item replace entity @s armor.chest with minecraft:air')
             g('command', command='clear @s')
+        # The platforms, holed by the TNT, go: one over the world spawn is where every later
+        # respawn would land (the heightmap's top).
+        for x, _, z in platforms:
+            host('command', command=f'fill {int(x // 1) - 6} 200 {int(z // 1) - 6} '
+                                    f'{int(x // 1) + 6} 200 {int(z // 1) + 6} minecraft:air')
     name = host.player
     want = {'sword': f'{GUEST_NAME} was slain by {name}',
             'host_death': f'{name} was slain by {GUEST_NAME}',
@@ -2040,7 +2054,7 @@ def check_leads(host, guest, out):
 
 
 def container_items(game):
-    """The open container's stacks by slot (Horizon's container slots are 300 and up) and its size."""
+    """The open container's stacks by slot (Sunrise's container slots are 300 and up) and its size."""
     slots = [s for s in game('screen').get('slots', []) if s.get('slot', 0) >= 300]
     return {s['slot'] - 300: s['item'] for s in slots if s.get('item')}, len(slots)
 
@@ -2278,8 +2292,8 @@ def check_stonecutter(host, guest, out):
     # StonecutterMenu.quickMoveStack: stone has recipes, so it goes to the input.
     guest.raw('click-slot', hotbar_slot(guest, 'minecraft:stone'), 'shift')
     guest.wait(10)
-    recipes = guest.raw('menu')['info']['recipes']
-    index = recipes.index('minecraft:stone_slab_from_stone_stonecutting')
+    results = guest.raw('menu')['info']['recipe_results']
+    index = results.index('minecraft:stone_slab')
     # StonecutterScreen's recipe grid: four columns of 16x18 cells from (52, 14).
     guest.raw('click-gui', 52 + index % 4 * 16 + 8, 14 + index // 4 * 18 + 9)
     guest.wait(10)
@@ -2702,7 +2716,7 @@ def held(game):
 
 
 def container_of(game, n):
-    """The open container's (most) slots by container index, Horizon's slots 300 and up."""
+    """The open container's (most) slots by container index, Sunrise's slots 300 and up."""
     return {s['slot'] - 300: (s.get('item'), s.get('count'))
             for s in game('screen').get('slots', []) if 300 <= s.get('slot', 0) < 300 + n}
 
@@ -2776,7 +2790,7 @@ def check_shift_double_click(host, guest, out):
         guest.raw('interact', *chest)
         guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
         guest.wait(5)
-        # Take the 32 on the cursor, then a wait past Horizon's 250 ms double click window.
+        # Take the 32 on the cursor, then a wait past Sunrise's 250 ms double click window.
         mouse(guest, hotbar_slot(guest, 'minecraft:diamond'))
         time.sleep(0.4)
 
@@ -3310,7 +3324,14 @@ def check_recipes(host, guest, out):
             book = guest('screen').get('recipe_book')
         known = book['known']
         assert known > 0, f'the guest\'s book is empty: {book}'
-        guest.raw('click-at', *centre(book['targets'][1]))
+        # The book lists every recipe the guest knows, in the order it learned them (earlier checks
+        # teach others): search for the planks, then press the first recipe button (25x25), after
+        # the search field (81x14).
+        guest.raw('click-at', *centre(next(t for t in book['targets'] if t[2:] == [81.0, 14.0])))
+        guest.raw('type', 'oak planks')
+        guest.wait(5)
+        book = guest('screen').get('recipe_book')
+        guest.raw('click-at', *centre(next(t for t in book['targets'] if t[2:] == [25.0, 25.0])))
         guest.wait(10)
         grid = grid_items(guest)
         guest.shot(out, 'recipes')
@@ -3619,6 +3640,9 @@ def check_piston_entities(host, guest, out):
     host('command', command=f'fill {x-4} {y-1} {z-4} {x+7} {y-1} {z+4} minecraft:stone')
     host('command', command=f'fill {x-4} {y} {z-4} {x+7} {y+5} {z+4} minecraft:air')
     host('command', command=f'setblock {x} {y} {z} minecraft:piston[facing=east]')
+    # piston-push's pig and arrow stay in this same arena: the arrow would be read as this one.
+    clear = f'kill @e[type=!minecraft:player,x={x-4},y={y-1},z={z-4},dx=11,dy=6,dz=8]'
+    host('command', command=clear)
     host('command', command=f'tp @s {x+5.5} {y} {z+3.5}')
     kinds = {
         'falling_block': '{BlockState:{Name:"minecraft:sand"},Time:1,NoGravity:1b}',
@@ -3635,10 +3659,14 @@ def check_piston_entities(host, guest, out):
             assert objs, f'{kind} not found before the push'
             got[kind] = objs[0]['position'][0]
         return got
-    before = xs()
-    host('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
-    host.wait(30)
-    after = xs()
+    try:
+        before = xs()
+        host('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
+        host.wait(30)
+        after = xs()
+    finally:
+        # Out of later checks' counts of what stands near the host (projectiles).
+        host('command', command=clear)
     results = {}
     for kind in kinds:
         results[kind] = after[kind] - before[kind]
@@ -3725,6 +3753,7 @@ def check_piston_push(host, guest, out):
     assert seen is not None, 'guest did not receive the pushed arrow'
     results['guest_arrow'] = seen['position'][0] - before
     assert results['guest_arrow'] > 0.3, f'guest did not see arrow move: {before} -> {seen["position"][0]}'
+    host('command', command=f'kill @e[type=!minecraft:player,x={x-4},y={y-1},z={z-4},dx=11,dy=6,dz=8]')
     results.update(piston_push_at_border(host, guest))
     return results
 
@@ -5185,7 +5214,7 @@ def check_flow_push(host, guest, out):
     """A current pushes a tagged pig farther than a pool of source blocks."""
     hx, _, hz = pos_of(host)
     x, y, z = (int(hx // 16) * 16 + 8, 100, int(hz // 16) * 16 + 8)
-    tags = ('horizon_flow_test', 'horizon_still_test')
+    tags = ('sunrise_flow_test', 'sunrise_still_test')
     host('command', command='gamemode survival')
     try:
         clear_fluid_arena(host, x, y, z, tags)
@@ -5213,7 +5242,7 @@ def check_bubble_column(host, guest, out):
     """A bubble column lifts a tagged pig farther than an ordinary water source."""
     hx, _, hz = pos_of(host)
     x, y, z = (int(hx // 16) * 16 + 8, 100, int(hz // 16) * 16 + 8)
-    tags = ('horizon_bubble_test', 'horizon_plain_test')
+    tags = ('sunrise_bubble_test', 'sunrise_plain_test')
     host('command', command='gamemode survival')
     try:
         clear_fluid_arena(host, x, y, z, tags)
@@ -5345,11 +5374,13 @@ def check_blast_projectiles(host, guest, out):
     host('command', command='gamemode creative')
     x, y, z = (int(v // 1) for v in pos_of(host))
     gx, gz = x + 6, z
-    floor = f'fill {gx - 6} {y - 1} {gz - 4} {gx + 6} {y - 1} {gz + 4} minecraft:bedrock'
+    # Open to the north, where the blast sends the snowball: a block in its way (the trees by the
+    # world spawn) removes it before it is read.
+    floor = f'fill {gx - 6} {y - 1} {gz - 16} {gx + 6} {y - 1} {gz + 4} minecraft:bedrock'
     detail = {}
     try:
         host('command', command=floor)
-        host('command', command=f'fill {gx - 6} {y} {gz - 4} {gx + 6} {y + 3} {gz + 4} minecraft:air')
+        host('command', command=f'fill {gx - 6} {y} {gz - 16} {gx + 6} {y + 3} {gz + 4} minecraft:air')
         host('command', command='kill @e[type=minecraft:arrow]')
         host('command', command='kill @e[type=minecraft:snowball]')
         # A snowball hanging north of the blast (the host stands west of it), and an arrow that settles into the floor.
@@ -6367,14 +6398,23 @@ def check_frames(host, guest, out):
             assert player('inventory')['counts'].get('minecraft:name_tag') == 2, 'named tag was not consumed once'
             server_reply(player, f'data get entity {selector} CustomName', name)
             server_reply(other, f'data get entity {selector} CustomName', name)
-            # NameTagItem shrinks its stack in creative too.
+            # NameTagItem shrinks the copy Player.interactOn hands it with infinite materials: in
+            # creative the tag is kept.
+            # A new name, so a click that does nothing can't pass.
+            creative_name = f'{label} Ann'
             player('command', command='gamemode creative')
             player('command', command='item replace entity @s weapon.mainhand with '
-                   f'minecraft:name_tag[minecraft:custom_name="{name}"] 3')
+                   f'minecraft:name_tag[minecraft:custom_name="{creative_name}"] 3')
             player.wait(5)
             player.raw('mouse', 'right', 'click')
             player.wait(10)
-            assert player('inventory')['counts'].get('minecraft:name_tag') == 2, 'creative tag was not consumed once'
+            server_reply(player, f'data get entity {selector} CustomName', creative_name)
+            # Each game's own copy of the stand has the new name: shown, it is the tag each draws.
+            player('command', command=f'data merge entity {selector} {{CustomNameVisible:1b}}')
+            for side in (player, other):
+                side.until(lambda: side('status').get('name_tags') or [], lambda tags: creative_name in tags,
+                           ticks=40)
+            assert player('inventory')['counts'].get('minecraft:name_tag') == 3, 'creative tag was consumed'
             player('command', command='gamemode survival')
             result[label] = {'frame': 'diamond, turned', 'stand': 'helmet on and off; named tag consumed'}
         finally:
@@ -7134,7 +7174,7 @@ def refused_host_start(host):
 
 
 def check_server_profile(host, guest, out):
-    """A guest asks the host's server for a capture over horizon:perf: at operator level 4 it gets one in the host's
+    """A guest asks the host's server for a capture over sunrise:perf: at operator level 4 it gets one in the host's
     reports/, at level 3 it is refused and no file is written, a second request while one runs is refused, and the
     host's log names the guest at the start and at the end."""
     import gzip
@@ -7367,12 +7407,40 @@ def check_raid_captain_fields(host, guest, out):
             game('command', command='gamemode survival')
 
 
+ARENA_RADIUS = 8
+
+
+def restore_arena(host):
+    """Loads and refills the run's open stone floor, then checks it; raises Failed before anyone is teleported into a dirty one."""
+    x, y, z = (int(v // 1) for v in host.joined_at)
+    r = ARENA_RADIUS
+    floor = (x - r, y - 1, z - r, x + r, y - 1, z + r)
+    clear = (x - r, y, z - r, x + r, y + 6, z + r)
+    corners = [(x + dx, y, z + dz) for dx in (-r, r) for dz in (-r, r)]
+    box = lambda b: ' '.join(map(str, b))
+    # A no-op forceload (already forced) and a no-op fill (already right) both report failure: only the checks below decide.
+    host('command', command=f'execute in {OVERWORLD} run forceload add {x - r} {z - r} {x + r} {z + r}')
+    try:
+        host.until(lambda: [host('command', command=f'execute in {OVERWORLD} if loaded {c[0]} {c[1]} {c[2]}')['success']
+                            for c in corners], all, ticks=100)
+    except AssertionError as e:
+        raise Failed(f'the arena around {(x, y, z)} did not load, so it was not restored: {e}')
+    host('command', command=f'execute in {OVERWORLD} run fill {box(floor)} minecraft:stone')
+    host('command', command=f'execute in {OVERWORLD} run fill {box(clear)} minecraft:air')
+    want = {'floor': {'minecraft:stone': (2 * r + 1) ** 2}, 'clearance': {}}
+    try:
+        host.until(lambda: {'floor': host.raw('blocks', *floor)['counts'], 'clearance': host.raw('blocks', *clear)['counts']},
+                   lambda seen: seen == want, ticks=40)
+    except AssertionError as e:
+        raise Failed(f'the arena around {(x, y, z)} is not the open stone floor after its fills: {e}')
+
+
 def run(ctl, out, resources, checks):
     host, guest = Game('host', ctl, resources), Game('guest', ctl, resources)
-    # A headless run (HORIZON_E2E_HEADLESS, or a Linux without vscreen) has no focused window to draw
+    # A headless run (SUNRISE_E2E_HEADLESS, or a Linux without vscreen) has no focused window to draw
     # in: the games render offscreen and never pause on the focus loss, or the world would stand still
     # (a host paused before its world loads waits at "Connecting to the server..." for ever).
-    headless = bool(os.environ.get('HORIZON_E2E_HEADLESS')) or (
+    headless = bool(os.environ.get('SUNRISE_E2E_HEADLESS')) or (
         sys.platform.startswith('linux') and not shutil.which('vscreen'))
     launch = ['launch']
     if headless or sys.platform == 'darwin':
@@ -7381,8 +7449,8 @@ def run(ctl, out, resources, checks):
         launch.append('--no-pause')
     results = {}
     try:
-        if 'recipes-hmod' in checks:
-            prepare_recipes_hmod(host, guest)
+        if 'recipes-smod' in checks:
+            prepare_recipes_smod(host, guest)
         host.pid = host.raw(*launch)['pid']
         # Guests' commands need the world's Allow Commands as well as the LAN's (#372): a creative
         # world has them; everyone plays in survival.
@@ -7410,6 +7478,7 @@ def run(ctl, out, resources, checks):
             try:
                 # Cases assert their own deaths, menus and held actions before returning.
                 # Do not let those states turn later independent cases into false failures.
+                resets = []
                 for game in (host, guest):
                     game.raw('release')
                     back_to_game(game)
@@ -7417,9 +7486,35 @@ def run(ctl, out, resources, checks):
                     assert state.get('player') is not None, f'{game.name} lost its session before {name}: {state}'
                     if state.get('screen') == 'dead' or state['player']['health'] <= 0:
                         game.raw('respawn')
-                        game.until(lambda: game('state'),
-                                   lambda s: s.get('screen') == 'playing' and s['player']['health'] > 0,
-                                   ticks=40)
+                        # Where the respawn put it decides whether the reset below changes dimension.
+                        state = game.until(lambda: game('state'),
+                                           lambda s: s.get('screen') == 'playing' and s['player']['health'] > 0,
+                                           ticks=40)
+                    # Where the players stood once joined (the guest 3 blocks east of the host), as a run
+                    # of the check alone starts: cases move them, to platforms in the sky and arenas, and
+                    # a later case's floor, reach or spawned mobs must not depend on where one ended.
+                    x, y, z = host.joined_at
+                    x += 3 if game is guest else 0
+                    game('command', command=f'execute in {OVERWORLD} run tp @s {x:.2f} {y:.2f} {z:.2f}')
+                    if state.get('dimension') != OVERWORLD:
+                        state = wait_dimension(game, OVERWORLD, 400)
+                        assert state.get('dimension') == OVERWORLD and state.get('player'), \
+                            f'{game.name} did not return to the Overworld before {name}: {state}'
+                    resets.append((game, (x, y, z)))
+                # With the host back in the Overworld its arena is loaded and restored, then both are placed again.
+                restore_arena(host)
+                for game, (x, y, z) in resets:
+                    game('command', command=f'execute in {OVERWORLD} run tp @s {x:.2f} {y:.2f} {z:.2f}')
+                # Both games have their teleport before one is placed by the other's position: a game
+                # already in the Overworld passes the dimension wait before it arrives.
+                for game, at in resets:
+                    near = lambda p: all(abs(p[i] - at[i]) < (1.0 if i == 1 else 0.5) for i in range(3))
+                    game.until(lambda: game('state'),
+                               lambda s: s.get('dimension') == OVERWORLD and s.get('player')
+                               and near(s['player']['position']),
+                               ticks=100)
+                # And facing each other, as after joining.
+                face_each_other(host, guest)
                 detail = CHECK_FNS[name](host, guest, out)
                 skipped = isinstance(detail, str) and detail.startswith('skipped')
                 results[name] = {'pass': not skipped, 'skipped': skipped, 'detail': detail}
@@ -7439,7 +7534,7 @@ def run(ctl, out, resources, checks):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--bin-dir', help='prebuilt horizon-client and horizon-ctl (default: build with the fast profile)')
+    parser.add_argument('--bin-dir', help='prebuilt sunrise-client and sunrise-ctl (default: build with the fast profile)')
     parser.add_argument('--check', action='append', choices=CHECKS, help='run only these checks (repeatable)')
     parser.add_argument('--out', default=str(ROOT / '.local/lan-e2e'), help='screenshots and game logs go here')
     # The host's world always runs on its server thread; the flag stays for existing callers.
@@ -7448,14 +7543,14 @@ def main():
     if args.bin_dir:
         bins = Path(args.bin_dir).resolve()
     else:
-        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-game', '-p', 'horizon-client-lib',
-                        '--bin', 'horizon-client', '--bin', 'horizon-ctl'],
+        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'sunrise-game', '-p', 'sunrise-client-lib',
+                        '--bin', 'sunrise-client', '--bin', 'sunrise-ctl'],
                        cwd=ROOT, check=True)
         meta = json.loads(subprocess.run(['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=ROOT,
                                          capture_output=True, text=True, check=True).stdout)
         bins = Path(meta['target_directory']) / 'fast'
     resources = lab.RESOURCES.resolve()
-    if not (resources / 'horizon-resources.json').exists():
+    if not (resources / 'sunrise-resources.json').exists():
         sys.exit(f'no prepared resources in {resources}')
     try:
         require_server_reports(resources)
@@ -7464,8 +7559,8 @@ def main():
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     # Recipes is an opt-in native mod; this check requires a game built with it.
-    checks = args.check or [name for name in CHECKS if name != 'recipes-hmod']
-    results = run(bins / 'horizon-ctl', out, resources, checks)
+    checks = args.check or [name for name in CHECKS if name != 'recipes-smod']
+    results = run(bins / 'sunrise-ctl', out, resources, checks)
     (out / 'results.json').write_text(json.dumps({'checks': results}, indent=2) + '\n')
     print(json.dumps(results, indent=1))
     sys.exit(0 if results and all(r['pass'] for r in results.values()) else 1)
@@ -7888,7 +7983,7 @@ def check_held_use(host, guest, out):
             host('command', command='kill @e[type=minecraft:trident]')
             game('command', command='item replace entity @s weapon.mainhand with minecraft:trident')
             game.wait(5)
-            # /kill finds no thrown trident (Horizon's selectors miss them): count what's new.
+            # /kill finds no thrown trident (Sunrise's selectors miss them): count what's new.
             before = flying(game, 'trident')
             game.raw('use-item', '--hold', 1.2)
             game.wait(10)
@@ -8241,7 +8336,7 @@ def check_fishing_item(host, guest, out):
     """Reeling an item sends its velocity to both clients immediately; they move it smoothly."""
     spots = apart(host, guest)
     x, y, z = spots['host']
-    item_x, item_z = x + 4.5, z + 0.5
+    item_x, item_y, item_z = x + 4.5, y + 1.5, z + 0.5
     item_id = None
 
     def item_position(game):
@@ -8255,7 +8350,7 @@ def check_fishing_item(host, guest, out):
         host('command', command='gamemode survival')
         host('command', command='clear @s')
         host('command', command='item replace entity @s weapon.mainhand with minecraft:fishing_rod')
-        host.raw('look-at', f'{item_x:.2f}', f'{y + 1.5:.2f}', f'{item_z:.2f}')
+        host.raw('look-at', f'{item_x:.2f}', f'{item_y:.2f}', f'{item_z:.2f}')
         host.raw('use-item')
         for _ in range(10):
             status = host('status')
@@ -9463,7 +9558,7 @@ def check_explorer_map(host, guest, out):
     at most one), so the next map from the same place points at another structure. Three cartographers' offers
     are made, one after the other: each adds as many new starts as the first did, none is pointed at twice."""
     x, y, z = (int(v // 1) for v in pos_of(host))
-    file = host.work / 'saves' / 'Lan' / 'data' / 'horizon_structure_references_minecraft_overworld.json'
+    file = host.work / 'saves' / 'Lan' / 'data' / 'sunrise_structure_references_minecraft_overworld.json'
     host('command', command=f'fill {x - 4} {y - 1} {z - 2} {x + 4} {y - 1} {z + 2} minecraft:stone')
     host('command', command=f'fill {x - 4} {y} {z - 2} {x + 4} {y + 3} {z + 2} minecraft:air')
     guest('command', command=f'tp @s {x - 3.5} {y} {z + 0.5}')
@@ -9602,7 +9697,7 @@ def check_cure_discount(host, guest, out):
             # ZombieVillager.mobInteract: the apple starts the cure; then it is cut short.
             game.raw('interact-entity', zombie)
             game.wait(10)
-            # Horizon counts the cure down in the AI step, so NoAI goes for the last tick.
+            # Sunrise counts the cure down in the AI step, so NoAI goes for the last tick.
             host('command', command=f'data merge entity @e[tag={tag},limit=1] {{ConversionTime:1,NoAI:0b}}')
             villager = None
             for _ in range(30):
@@ -10682,7 +10777,7 @@ def check_falling(host, guest, out):
                             f'{{Tags:["{tag}"],Item:{{id:"minecraft:diamond",count:1}},PickupDelay:32767}}')
     host('command', command=f'summon minecraft:falling_block {x + 2.5} {top} {z - 0.5} '
                             f'{{Tags:["{tag}"],BlockState:{{Name:"minecraft:sand"}},DropItem:0b}}')
-    # Horizon's selectors don't see primed TNT yet: its fuse ends it in the air, 19 blocks down.
+    # Sunrise's selectors don't see primed TNT yet: its fuse ends it in the air, 19 blocks down.
     host('command', command=f'summon minecraft:tnt {x + 4.5} {top} {z + 0.5} {{fuse:34s}}')
     heights = {'item': [], 'falling block': [], 'primed tnt': []}
     fuses = []
@@ -11213,11 +11308,15 @@ def check_projectile_land(host, guest, out):
     seen = {}
     try:
         for label, (item, mode, how) in cases.items():
+            # Wandering mobs step, flap and get hurt next to the sensor and power it themselves.
+            # Entity.kill raises ENTITY_DIE, so killing them (or the last case's trident) powers it
+            # too: kill first, then let that vibration arrive (up to 8 ticks of travel) and the
+            # sensor settle before the throw.
+            host('command', command='kill @e[type=!minecraft:player,distance=..40]')
+            host.wait(20)
             assert wait_state(host, sensor, 'sculk_sensor_phase', 'inactive', 200) == 'inactive', seen
             host('command', command=f'gamemode {mode}')
             host('command', command='clear @s')
-            # Wandering mobs step, flap and get hurt next to the sensor and power it themselves.
-            host('command', command='kill @e[type=!minecraft:player,distance=..40]')
             host('command', command=f'item replace entity @s weapon.mainhand with {item}')
             host('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} -90 0')
             host.wait(10)
@@ -11923,7 +12022,7 @@ def check_dig_sounds(host, guest, out):
 
     Vanilla plays the block's hit sound from the server's destroy progress
     level events (2019 and 2020), so the digger and the players around hear
-    the same hits. Horizon's digger heard every hit twice: once from its own
+    the same hits. Sunrise's digger heard every hit twice: once from its own
     client and once from the server, which is what the report called a sound
     played too often.
     """
@@ -13547,26 +13646,26 @@ CHECKS += ['pig-saddle-shears']
 CHECK_FNS['pig-saddle-shears'] = check_pig_saddle_shears
 
 
-def prepare_recipes_hmod(*games):
+def prepare_recipes_smod(*games):
     """Install the same original content package in both scratch game folders."""
-    fixture = ROOT / 'tools/fixtures/recipes_hmod'
+    fixture = ROOT / 'tools/fixtures/recipes_smod'
     package = io.BytesIO()
     with zipfile.ZipFile(package, 'w', zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(fixture.rglob('*')):
             if path.is_file():
                 archive.write(path, path.relative_to(fixture).as_posix())
     for game in games:
-        mods = game.work / 'horizon-mods'
+        mods = game.work / 'sunrise-mods'
         mods.mkdir()
-        (mods / 'recipe_pilot.hmod').write_bytes(package.getvalue())
-        (game.work / 'horizon-mods.txt').write_text('mod.recipe_pilot:true\nmod.recipes:true\n')
+        (mods / 'recipe_pilot.smod').write_bytes(package.getvalue())
+        (game.work / 'sunrise-mods.txt').write_text('mod.recipe_pilot:true\nmod.recipes:true\n')
         (game.work / 'options.txt').write_text('lang:en_us\n')
-        settings = mods / '.horizon-mod-data/recipes'
+        settings = mods / '.sunrise-mod-data/recipes'
         settings.mkdir(parents=True)
         (settings / 'give').write_text('false')
 
 
-def exercise_recipes_hmod(game, out, mode, supplied):
+def exercise_recipes_smod(game, out, mode, supplied):
     """Use the real Recipes panel and the authoritative crafting table."""
     item = 'minecraft:echo_shard'
 
@@ -13579,8 +13678,8 @@ def exercise_recipes_hmod(game, out, mode, supplied):
         ui = game.raw('ui')
         fields = [w for w in ui['widgets'] if w['kind'] == 'field']
         if not fields:
-            game.shot(out, 'recipes-hmod-no-search')
-            (out / f'{game.name}-recipes-hmod-ui.json').write_text(json.dumps(ui, indent=2))
+            game.shot(out, 'recipes-smod-no-search')
+            (out / f'{game.name}-recipes-smod-ui.json').write_text(json.dumps(ui, indent=2))
         assert fields, f'{game.name}: no Recipes search field (mod absent or empty-search recovery failed)'
         # The native panel is to the right of the vanilla recipe book's search field.
         field = max(fields, key=lambda w: w['bounds'][0])
@@ -13672,11 +13771,11 @@ def exercise_recipes_hmod(game, out, mode, supplied):
             'grid': grid, 'result': result, 'crafted': crafted}
 
 
-def check_recipes_hmod(host, guest, out):
+def check_recipes_smod(host, guest, out):
     """Exercise Survival and Creative through the real host/guest server."""
     seen = {
-        host.name: exercise_recipes_hmod(host, out, 'survival', 4),
-        guest.name: exercise_recipes_hmod(guest, out, 'creative', 5),
+        host.name: exercise_recipes_smod(host, out, 'survival', 4),
+        guest.name: exercise_recipes_smod(guest, out, 'creative', 5),
     }
     save_and_reopen(host, guest)
     for game in (host, guest):
@@ -13684,12 +13783,12 @@ def check_recipes_hmod(host, guest, out):
         assert persisted == seen[game.name]['crafted'], f'{game.name}: after rejoin {persisted}'
         seen[game.name]['rejoined'] = persisted
         game.shot(out, f"{seen[game.name]['mode']}-rejoined")
-    (out / 'recipes-hmod.json').write_text(json.dumps(seen, indent=2) + '\n')
+    (out / 'recipes-smod.json').write_text(json.dumps(seen, indent=2) + '\n')
     return seen
 
 
-CHECKS += ['recipes-hmod']
-CHECK_FNS['recipes-hmod'] = check_recipes_hmod
+CHECKS += ['recipes-smod']
+CHECK_FNS['recipes-smod'] = check_recipes_smod
 
 
 def check_levelup_sounds(host, guest, out):
@@ -14136,41 +14235,16 @@ def check_death_credit(host, guest, out):
 
 CHECKS += ['death-credit']
 CHECK_FNS['death-credit'] = check_death_credit
-def set_legacy_rules(game, on):
-    """The PvP page's "1.8 combat in worlds you host" switch, as a player flips it."""
-    game('options', page='pvp')
-    # The switch sits at the end of the page: wheel down over the list until it stops moving, so the row is
-    # whole inside the list (a click on a row half under the list's edge lands outside it, as in vanilla).
-    switch = None
-    for _ in range(60):
-        ui = game.raw('ui')
-        found = next((w for w in ui['widgets']
-                      if w.get('label', '').startswith('1.8 combat in worlds you host')), None)
-        if found and switch and found['bounds'] == switch['bounds']:
-            break
-        switch = found
-        width, height = ui['gui_size']
-        game.raw('scroll-at', f'{width / 2:.1f}', f'{height / 2:.1f}', -3)
-    assert switch, 'the PvP page has no "1.8 combat in worlds you host" switch'
-    if switch['label'].endswith('On') != on:
-        game('click', id=switch['id'])
-        now = next(w for w in game.raw('ui')['widgets'] if w.get('id') == switch['id'])
-        assert now['label'].endswith('On') == on, f'the click did not flip the switch: {now}'
-    game('close')
-    game.wait(5)
 
 
-def check_legacy_pvp(host, guest, out):
-    """The host's legacy combat rules (crates/horizon-client/src/legacy_combat.rs) on a guest's diamond axe hits:
+def check_attack_charge(host, guest, out):
+    """26.3's attack charge on a guest's diamond axe hits, resolved by the host:
     one at full charge, and one right after a hotbar swap and back, which empties the charge on the server
     (Player.tick resets attackStrengthTicker when the main hand's item changes). The stick is held a few ticks:
     the client sends a slot change from its next tick (MultiPlayerGameMode.tick), so a swap and back within one
     tick sends nothing, as vanilla's.
 
-    1.8.9, EntityPlayer.attackTargetEntityWithCurrentItem: the hit deals the attack damage attribute, which is
-    EntityPlayer.applyEntityAttributes' base 1 plus the axe's weapon modifier (ItemAxe's 3.0F +
-    Item.ToolMaterial.EMERALD.getDamageVsEntity() 3.0F): 7, and 7 again after the swap, as nothing charges.
-    26.3, Player.attack: 9 at full charge, and the swapped hit is scaled by getAttackStrengthScale down to
+    Player.attack: 9 at full charge, and the swapped hit is scaled by getAttackStrengthScale down to
     9 * (0.2 + scale^2 * 0.8)."""
     if dead(guest):
         guest.raw('respawn')
@@ -14203,24 +14277,19 @@ def check_legacy_pvp(host, guest, out):
         guest.wait(10)
         return before - health()
 
-    hits = {}
     try:
-        for name, rules in (('modern', False), ('legacy', True)):
-            set_legacy_rules(host, rules)
-            hits[name] = (dealt(False), dealt(True))
-            guest.shot(out, f'legacy-pvp-{name}')
+        full, swapped = dealt(False), dealt(True)
+        guest.shot(out, 'attack-charge')
     finally:
-        set_legacy_rules(host, False)
         host('command', command='attribute @s minecraft:knockback_resistance base set 0')
         host('command', command='gamerule natural_health_regeneration true')
-    assert hits['legacy'] == (7.0, 7.0), f'1.8.9 rules: 7, charged or not: {hits}'
-    full, swapped = hits['modern']
-    assert full == 9.0 and swapped < 9.0, f'26.3 rules: 9 charged, less right after a swap: {hits}'
-    return hits
+    # 9 * (0.2 + scale^2 * 0.8) is at least 1.8: a hit that never landed deals 0 and fails here.
+    assert full == 9.0 and 1.8 <= swapped < 9.0, f'9 charged, 1.8 to 9 right after a swap: {full}, {swapped}'
+    return full, swapped
 
 
-CHECKS += ['legacy-pvp']
-CHECK_FNS['legacy-pvp'] = check_legacy_pvp
+CHECKS += ['attack-charge']
+CHECK_FNS['attack-charge'] = check_attack_charge
 
 def check_ride_seats(host, guest, out):
     """RideCommand.mount forces the ride (startRiding(vehicle, true, true)), so an item display, an

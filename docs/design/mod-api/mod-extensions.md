@@ -1,34 +1,40 @@
 # Design: mods extending the mod API
 
+> Historical: this design predates the removal of WebAssembly mods.
+> See [dependencies between mods](../../modding/src/concepts/dependencies.md) for the current native API.
+> The mixed-target extension proposal is historical. Native library mods use ordinary Rust calls; the [Wire derive](../../modding/src/concepts/wire-types.md) is still current for typed values that use Wire.
+
 This is a proposed contract for [#2339](https://github.com/arismoko/horizon/issues/2339). The explicit `Wire` derive and recursive layout identity are implemented; the mod extension facilities below remain proposed. It covers how a library mod (a chemicals system, an energy network, a machine framework) defines things that other mods use, listen to or extend: **mod hooks**, **mod Part kinds**, **mod services** and **mod registries**, plus the `#[derive(Wire)]` they rest on (section 0, the first to build) and how addons patch another mod's code. Each section gives the contract, its behaviour on wasm, its NeoForge counterpart and what it costs when nobody uses it. A staged PR plan and the open questions come at the end.
 
 ## What exists, and the one fact the design rests on
 
 These already work, read from the code at `54bee0f608`:
 
-- **Plain calls.** A dependent names the library under `[dependencies]` and gets its crate as a Cargo dependency. On native, every code mod is linked into one game binary (`launcher/src/native_mods/api.rs`). On wasm, a library and everything that depends on it form one **dependency group**: one shared memory, one shared table and one copy of each member (`horizon-mod-wasm/src/link.rs`). Two mods that share a library share its group (`groups()` in `horizon-mod-wasm/src/lib.rs`). Calls, statics, generics, trait objects and `Drop` inside a group are ordinary Rust (`tests/real_library.rs`).
+- **Plain calls.** A dependent names the library under `[dependencies]` and gets its crate as a Cargo dependency. On native, every code mod is linked into one game binary (the launcher's native mod build). On wasm, a library and everything that depends on it form one **dependency group**: one shared memory, one shared table and one copy of each member (`sunrise-mod-wasm/src/link.rs`). Two mods that share a library share its group (`groups()` in `sunrise-mod-wasm/src/lib.rs`). Calls, statics, generics, trait objects and `Drop` inside a group are ordinary Rust (`tests/real_library.rs`).
 - **Mod capability keys.** `CapabilityKey::<dyn ResourceHandler<Chemical>>::new("chemlib:chemical")`, providers through `Registrar`, lookups through `level.capability`. A provider whose handler type belongs to a mod is stored erased (`OwnProvider`, `parts/capabilities.rs`). On wasm, an erased `Arc<dyn Any + Send + Sync>` crosses as a group-scoped resource id. The group that made it gets it back, and any other group gets `wire::Unsupported::CROSS_GROUP` (`wire_resources.rs`, generator `wire/mod.rs` `ERASED`).
-- **Hook machinery.** `horizon_mod_runtime::subscribers::Subscribers` builds per-hook lists once at install. Order is priority descending, then dependency order. It also tracks `receive_cancelled` and keeps a bitset for the "anyone listening?" test. `set_mod_enabled` and `mark_mod` handle the player's switch and crash attribution.
-- **Typed slot keys.** `BlockKey(u32)` and the other slot keys are backed by `horizon_mod_runtime::registry_keys::Names`: requested at load, then resolved to slots.
-- **Attachments.** `AttachmentType<T>` on entity, player, block entity, chunk and level holders, with an optional codec, sync and copy-on-death (`horizon-mod-runtime/src/attachments.rs`). The Part instance state design ([#2328](https://github.com/arismoko/horizon/pull/2328)) makes this the only store for per-instance data.
+- **Hook machinery.** `sunrise_mod_runtime::subscribers::Subscribers` builds per-hook lists once at install. Order is priority descending, then dependency order. It also tracks `receive_cancelled` and keeps a bitset for the "anyone listening?" test. `set_mod_enabled` and `mark_mod` handle the player's switch and crash attribution.
+- **Typed slot keys.** `BlockKey(u32)` and the other slot keys are backed by `sunrise_mod_runtime::registry_keys::Names`: requested at load, then resolved to slots.
+- **Attachments.** `AttachmentType<T>` on entity, player, block entity, chunk and level holders, with an optional codec, sync and copy-on-death (`sunrise-mod-runtime/src/attachments.rs`). The Part instance state design ([#2328](https://github.com/arismoko/horizon/pull/2328)) makes this the only store for per-instance data.
 
 **The fact:** a mod can name a library's types only if it depends on the library. On native it then sits in the same binary as the library; on wasm it sits in the same group. So within one target, a library-defined value never has to cross the Wire to reach the mods that can use it. The game's job is the part a library cannot do alone: names, ownership, refusals, ordering, the player's on/off switch, crash attribution, lifetimes tied to the server and its levels, and the Mods page. The payload stays in the caller's address space as an erased handle.
 
 What breaks that fact is **mixed targets**: a native library with wasm addons, or the reverse. Those mods are in different address spaces, so anything shared has to go through the game. That case has its own section, and it is the only one that needs mod types to have Wire forms.
 
-### Can a mod give its own types a Wire form today?
+### Before the Wire derive shipped
 
-No, not in a supported way. `mod_api::wire::Wire` is a public trait, but it is `#[doc(hidden)]` and documented as "not a mod's API" (`exports/wire.rs`). Its impls for `mod_api` types are generated by `horizon-mod-api-gen`, and there is no derive a mod can use. More to the point, nothing on the boundary would carry such a value. Every crossing is a generated call whose signature comes from a `mod_api` trait (the `IMPORTS`/`EXPORTS` lists in `horizon-mod-api-gen/src/wire/mod.rs`), and the layout hash that refuses mismatched builds (`WIRE_LAYOUT`) covers only `mod_api`. A hand-written `impl Wire for Chemical` would compile and never be used.
+At the audit revision there was no supported derive for mod types. `mod_api::wire::Wire` was a public trait, but it was `#[doc(hidden)]` and documented as "not a mod's API" (`exports/wire.rs`). Its impls for `mod_api` types are generated by `sunrise-mod-api-gen`, and there is no derive a mod can use. More to the point, nothing on the boundary would carry such a value. Every crossing is a generated call whose signature comes from a `mod_api` trait (the role files in `crates/sunrise-mod-vocab/src/wire/traits/`), and the layout hash that refuses mismatched builds (`WIRE_LAYOUT`) covers only `mod_api`. A hand-written `impl Wire for Chemical` would compile and never be used.
 
 Within one target this doesn't matter, as shown above. Across targets it does. The owner has decided that one `#[derive(Wire)]` serves `mod_api` and mods alike; section 0 is its spec.
 
 ## 0. `#[derive(Wire)]` for every type that crosses
 
-Owner decision (2026-11-08): one derive in `horizon-mod-api-macros`, used by `mod_api`'s own types and by mods alike. `horizon-mod-api-gen` stops writing per-type `Wire` code and builds only the host call tables. There is no second mechanism. This section is the spec for that build. It comes before everything else in this note because mod hooks, registries and the mixed-target cases all depend on it.
+Owner decision (2026-11-08): one derive in `sunrise-mod-api-macros`, used by `mod_api`'s own types and by mods alike. `sunrise-mod-api-gen` stops writing per-type `Wire` code and builds only the host call tables. There is no second mechanism. This section is the spec for that build. It comes before everything else in this note because mod hooks, registries and the mixed-target cases all depend on it.
 
 ### What the derive emits: the same bytes as today
 
-The derive implements the existing trait (`crates/horizon-mod-vocab/src/wire/wire.rs:558`: `MIN`, `put`, `put_owned`, `take`). It copies the generator's rules from `wire/emit.rs` exactly, so no encoding changes:
+This section records the original derive design. The current [Wire codec](../../modding/src/concepts/wire-types.md) borrows values when encoding them.
+
+The derive implements the existing trait (`crates/sunrise-mod-vocab/src/wire/wire.rs:558`: `MIN`, `put`, `put_owned`, `take`). It copies the generator's rules from `wire/emit.rs` exactly, so no encoding changes:
 
 | Shape | Bytes | `MIN` | `take` |
 |---|---|---|---|
@@ -67,7 +73,7 @@ The first derive PR commits these as a golden test, plus one case per shape and 
 - **The machinery behind them.** The `manual` scan that skipped hand-written impls; `Kind::Json`; the `kind()` / `reachable()` rules (`wire/ty.rs:635` onward) that read crate-visible fields from outside the type; and the use of `public_path` to name types. A derive sits on the type, in its module, with normal access to its fields. So the rule "a type with private fields needs a hand-written impl or is opaque" goes away.
 
 **Keeps** (this is call-table plumbing, not a type's encoding):
-- The `Arc<dyn Trait>` / `Box<dyn Trait>` resource impls for the exported traits and capability handlers (`emit.rs:109`, 70 traits × 2 plus `Any`). These come from the `EXPORTS` list, not from types.
+- The `Arc<dyn Trait>` / `Box<dyn Trait>` resource impls for the exported traits and capability handlers (`emit.rs:109`, 70 traits × 2 plus `Any`). These come from the `.export` and `.held` role files, not from types.
 - The constructors for borrowed records (`__wire_record_N`, 463 of them), and the `Put` impls with checked write-back for records that take appends, projections or views (3). These describe how a call's borrowed arguments cross and come back. That is a call-table concern.
 - The guest and host call glue, the wasm coverage page, and `index.rs`. The index stays only to read trait signatures for the call tables. It stops resolving type definitions for owned value encodings only. It still reads the field definitions of the borrowed records whose constructors and `Put` impls it keeps.
 
@@ -101,12 +107,12 @@ The kept constructors and `Put` impls are generated at the API root, so after th
 
   Every container hashes its kind, then its contents' `layout(visiting)`: element, key and value; all fields for tuples; element and `N` for `[T; N]`. That keeps the container's shape even when its element is recursive, so a change deep inside a `Vec<Option<T>>` still changes every hash above it. Leaf hand-written impls (numbers, `bool`, `char`, `()`, `Duration`, tokens) state a constant through a default method. Golden tests pin **bytes only**, never layout values, which are free to change when a type is renamed.
 - **`WIRE_LAYOUT`.** It becomes the hash of the call tables' signatures (as now) plus the `layout` of every type in them, computed once at first use (`LazyLock`) in place of today's generated const. This replaces hashing the generator's `Def` debug strings. Any field change in any crossing type still changes it, and a mod built against another layout is still refused with `Refusal::Layout`.
-- **A layout per type.** `cargo horizon-mod build` records the `layout` of each publicly reachable concrete type carrying a derive or hand-written `Wire` implementation in `layouts.json` at the package root. Its shape is `{"mod_id": {"crate::Type": "0123456789abcdef"}}`, including the mod dependencies it compiled against. A cached host probe computes these runtime identities for both build targets. Private types with no public path and uninstantiated generic declarations are not listed. A dependent on the other target that was built against another layout is refused at load, naming the mod and the first type whose layout differs.
+- **A layout per type.** `cargo sunrise-mod build` records the `layout` of each publicly reachable concrete type carrying a derive or hand-written `Wire` implementation in `layouts.json` at the package root. Its shape is `{"mod_id": {"crate::Type": "0123456789abcdef"}}`, including the mod dependencies it compiled against. A cached host probe computes these runtime identities for both build targets. Private types with no public path and uninstantiated generic declarations are not listed. A dependent on the other target that was built against another layout is refused at load, naming the mod and the first type whose layout differs.
 - **No versioning inside the encoding.** There are no optional fields, defaults or version tags. A change means a rebuild, and the hash refuses a stale build at load. This is the clean-break rule applied to bytes.
 
 ### Always written, never added by the build
 
-Owner decision (2026-11-09): the derive is always written on the type by hand. No build step adds it, whether `cargo horizon-mod build`, the staging pass or the generator.
+Owner decision (2026-11-09): the derive is always written on the type by hand. No build step adds it, whether `cargo sunrise-mod build`, the staging pass or the generator.
 - **`mod_api`.** Every public type carries `#[derive(Wire)]` or a hand-written impl, or else a `// no wire: <why>` line above it, in the style of `// exhaustive:`. A test in `tests/test_mod_api_boundary.py`, next to `test_every_public_type_is_non_exhaustive_or_says_why`, fails CI on a public type with neither. The derive PR makes every existing public type pass. Types that never cross, or that cross only through a call table's plumbing, get the reason line.
 - **Mods.** A mod derives only the types it chooses to let cross. A type without the derive stays usable within its own target: same-target hooks and registries don't need it.
 
@@ -115,14 +121,12 @@ Owner decision (2026-11-09): the derive is always written on the type by hand. N
 Every place where a type has to cross, and that is known at compile time, is a trait bound. So a missing derive is a **compile error** that names the type:
 - a field of a derived type, through the `out.put(&self.f)` bound;
 - a parameter or return in a call table (the generator emits a bound check per signature type);
-- a point record field (#2242's records are built from `mod_api` types);
 - a mod hook's event and a mod registry's value: `ModHook` and `ModRegistry` require `E: Wire` / `T: Wire`. The bound costs nothing when nothing crosses, and it means a library's hooks and registries never have to refuse a cross-target addon.
 
 `Wire` gets `#[diagnostic::on_unimplemented(message = "`{Self}` has no Wire form", label = "add #[derive(mod_api::Wire)] to it")]`.
 
-A **refusal at load or registration** is left only where the type is decided at run time:
-- a point on an engine function whose parameter has no API type, which is #2242's existing refusal naming the parameter (an engine type, not a derive question);
-- a cross-target dependency whose recorded layout differs, refused naming the type.
+A **refusal at load or registration** is left only where the type is decided at run time: a cross-target
+dependency whose recorded layout differs is refused naming the type.
 
 ### The trait stays unsealed
 
@@ -168,8 +172,8 @@ The first PR classifies every impl in a table in its description, with the golde
 
 | PR | What | Size (estimate) | Depends on |
 |---|---|---|---|
-| D1 | **One PR, in order:** (1) the golden byte test, passing against today's generated and hand-written impls; (2) the derive in `horizon-mod-api-macros` (shapes, `MIN`, `put_owned`, `non_exhaustive`, generic bounds, `via`, `layout`), the `layout` method on the trait with std layouts composed by encoding, `on_unimplemented`; (3) `mod_api` switched: `#[derive(Wire)]` on the 528 types, the hand-impl migration above, the generator stripped to call tables, `WIRE_LAYOUT` from `layout`, the golden test passing unchanged. `layout` has no default for compound types, so the derive can't land without every impl providing it: one PR, not two. Ordered before the restructure, as api-scaffold confirmed: the mover carries `#[derive(mod_api::Wire)]` with each item, and `::mod_api::wire::Wire` still resolves after `wire.rs` becomes `wire/mod.rs`. | ~2,200 changed, mostly one-line attributes; generator −1,000 | #2242 merged |
-| D2 | Mods: documented `wire` API, per-mod layout in `cargo horizon-mod build` metadata, load refusal naming the type, a book page. | ~400 | D1 |
+| D1 | **One PR, in order:** (1) the golden byte test, passing against today's generated and hand-written impls; (2) the derive in `sunrise-mod-api-macros` (shapes, `MIN`, `put_owned`, `non_exhaustive`, generic bounds, `via`, `layout`), the `layout` method on the trait with std layouts composed by encoding, `on_unimplemented`; (3) `mod_api` switched: `#[derive(Wire)]` on the 528 types, the hand-impl migration above, the generator stripped to call tables, `WIRE_LAYOUT` from `layout`, the golden test passing unchanged. `layout` has no default for compound types, so the derive can't land without every impl providing it: one PR, not two. Ordered before the restructure, as api-scaffold confirmed: the mover carries `#[derive(mod_api::Wire)]` with each item, and `::mod_api::wire::Wire` still resolves after `wire.rs` becomes `wire/mod.rs`. | ~2,200 changed, mostly one-line attributes; generator −1,000 | #2242 merged |
+| D2 | Mods: documented `wire` API, per-mod layout in `cargo sunrise-mod build` metadata, load refusal naming the type, a book page. | ~400 | D1 |
 
 The restructure can be stacked on D1, or D1's attribute edits can be done inside the restructure's moves; api-scaffold and fork-lead decide which. Stages 2–6 of the plan below assume D1 has landed.
 
@@ -177,7 +181,7 @@ The restructure can be stacked on D1, or D1's attribute edits can be done inside
 
 ### Contract
 
-A mod hook is a hook in the same sense as a catalog hook or a point under [#2242](https://github.com/arismoko/horizon/pull/2242). It has a listener of the form `fn(&mut <Side>Host, &mut Event)`, a contract, priority and dispatch order. Its name is owned by a mod and not taken from the catalog or from an engine function.
+A mod hook follows the same model as a catalog hook. It has a listener of the form `fn(&mut <Side>Host, &mut Event)`, a contract, priority and dispatch order. Its name is owned by a mod and not taken from the catalog or from an engine function.
 
 ```rust
 // chemlib's crate
@@ -205,7 +209,7 @@ The names in the example are only illustrations and still need API review.
 | Name | `<declaring mod id>:<path>`. `declare_hook` refuses a namespace other than the declaring mod's id, and refuses a second declaration of the same name, naming both mods. |
 | Side | `Server`, `Client` or `Both`, as the catalog's `side`. It fixes the host the listener gets (`&mut dyn ServerHost`, `&mut dyn ClientHost`, or `HostSide`), so a listener on the wrong side doesn't compile. |
 | Contract | The catalog's four: `listen`, `cancel` (a `cancelled` field), `collect` (a `Vec` field listeners push to) and `replace` (an `Option` field, where the last writer in dispatch order wins, as the catalog's `out`). Using one set keeps a library's hooks reading like the game's. |
-| Registration | `TANK_FILLED.listen(r, …)` during `register`. `Registrar` stays object-safe: the typed generic methods (`listen`, `declare_hook`, and in later sections `attach`, `provide`, `register`) live on the key types and call one erased, object-safe core on `Registrar` (name, owner, erased handle, options). The `r.listen(&KEY, …)` spelling in the examples is shorthand. A mod may listen to one hook more than once, and its listeners keep their registration order, as points tie on inject id. `Subscribers` lists a mod once per hook today, so mod hooks need a list that keeps one entry per listener; it extends `Subscribers` and is not a second table. Listening to a name that no loaded mod declares is refused at load, naming both. A listener whose event type differs from the declaration's is refused, naming both types. This is the same check the capability key plan adds for keys. |
+| Registration | `TANK_FILLED.listen(r, …)` during `register`. `Registrar` stays object-safe: the typed generic methods (`listen`, `declare_hook`, and in later sections `attach`, `provide`, `register`) live on the key types and call one erased, object-safe core on `Registrar` (name, owner, erased handle, options). The `r.listen(&KEY, …)` spelling in the examples is shorthand. A mod may listen to one hook more than once, and its listeners keep their registration order. `Subscribers` lists a mod once per hook today, so mod hooks need a list that keeps one entry per listener; it extends `Subscribers` and is not a second table. Listening to a name that no loaded mod declares is refused at load, naming both. A listener whose event type differs from the declaration's is refused, naming both types. This is the same check the capability key plan adds for keys. |
 | Order | Priority descending, then dependency order, then registration order within the mod. This is `Subscribers`' rule. |
 | Cancellation | When a listener cancels, the listeners that follow are skipped unless they registered `receive_cancelled`. Those still run, see `cancelled`, and may clear it. `post` returns the outcome, and the poster decides what cancelling means. |
 | Host and transactions | Listeners get the host the poster passed, so their writes run inside the poster's transaction (*every hook gets a `Host`*). |
@@ -213,7 +217,7 @@ The names in the example are only illustrations and still need API review.
 | Lifetime | Declarations and listeners are fixed when registration seals, and the order is resolved once. A mod the player switches off is skipped, through `mod_index_on`, as for catalog hooks. |
 | Errors | A native listener's panic is handled exactly as a catalog hook listener's: the `mark_mod` guard only *attributes* it (mod and hook name) while it unwinds, and nothing catches it. This design adds no containment; whether native listener panics should be contained is a separate contract for all hooks. A wasm trap stops the group, which is also the library's group. Posting depth is bounded across all mod hooks together, not per hook, so a chain A → B → A is caught too: a post 32 levels deep is refused with a log line naming the chain's last hook, not a stack overflow. |
 
-**Points.** Under #2242 a point is a hook named by an engine function path, with a generated record. A mod hook is a hook named by a mod identifier, with a record the mod writes. Both use the same listener shape, contracts, order, switch and refusal style. The one difference is registration. Points are declared in `[[inject]]`, because the game fills compiled slots at load without source. Mod hooks are registered in code, because the library's type is a Cargo dependency anyway. `[[inject]]` applies only to engine API points, never to a mod's own hooks or functions, so `[[inject]] at = "chemlib:tank_filled"` is not a supported way to listen (question 2).
+Mod hooks are registered in code because the library's type is a Cargo dependency.
 
 ### On wasm
 
@@ -221,7 +225,7 @@ Nothing crosses at post time. `r.listen` goes through the `Registrar` import, so
 
 ### NeoForge
 
-A NeoForge library defines `class TankFilledEvent extends Event implements ICancellableEvent` and posts it with `IEventBus#post`, on `NeoForge.EVENT_BUS` or its own bus. Listeners set `priority` and `receiveCanceled` on `@SubscribeEvent` or pass them to `IEventBus#addListener(priority, receiveCanceled, eventType, consumer)`. Sources: public docs and javadoc only, namely the [events guide](https://docs.neoforged.net/docs/concepts/events/) (labelled 26.1) and the event bus javadoc (`IEventBus`, bus 8.0.5). 26.3 equivalence is **unverified**. Differences: NeoForge has five `EventPriority` steps where Horizon uses `i32`, as catalog hooks already do. NeoForge dispatches by event class where Horizon uses a declared name, because a name can be refused, shown and checked for type agreement. A Java listener for an event nobody posts is silently never called, while Horizon refuses it.
+A NeoForge library defines `class TankFilledEvent extends Event implements ICancellableEvent` and posts it with `IEventBus#post`, on `NeoForge.EVENT_BUS` or its own bus. Listeners set `priority` and `receiveCanceled` on `@SubscribeEvent` or pass them to `IEventBus#addListener(priority, receiveCanceled, eventType, consumer)`. Sources: public docs and javadoc only, namely the [events guide](https://docs.neoforged.net/docs/concepts/events/) (labelled 26.1) and the event bus javadoc (`IEventBus`, bus 8.0.5). 26.3 equivalence is **unverified**. Differences: NeoForge has five `EventPriority` steps where Sunrise uses `i32`, as catalog hooks already do. NeoForge dispatches by event class where Sunrise uses a declared name, because a name can be refused, shown and checked for type agreement. A Java listener for an event nobody posts is silently never called, while Sunrise refuses it.
 
 ### Cost when unused
 
@@ -261,7 +265,7 @@ This works like `OwnProvider` today. The part is an erased resource in the attac
 
 ### NeoForge
 
-There is no first-class counterpart, and #41's Parts are already a fork addition. On NeoForge, a library that wants addons to attach behaviour to its blocks (say, filters and upgrades that fit into a pipe) defines its own interface and its own lookup table for it. Capabilities (`BlockCapability.createSided` plus `RegisterCapabilitiesEvent`, in the public [capabilities guide](https://docs.neoforged.net/docs/inventories/capabilities/), labelled 26.1) are the platform's nearest mechanism, and they map to `CapabilityKey`. Horizon gives every library the same table, the same refusals and tag resolution in place of hand-rolled maps.
+There is no first-class counterpart, and #41's Parts are already a fork addition. On NeoForge, a library that wants addons to attach behaviour to its blocks (say, filters and upgrades that fit into a pipe) defines its own interface and its own lookup table for it. Capabilities (`BlockCapability.createSided` plus `RegisterCapabilitiesEvent`, in the public [capabilities guide](https://docs.neoforged.net/docs/inventories/capabilities/), labelled 26.1) are the platform's nearest mechanism, and they map to `CapabilityKey`. Sunrise gives every library the same table, the same refusals and tag resolution in place of hand-rolled maps.
 
 ### Cost when unused
 
@@ -324,7 +328,7 @@ CHEMICALS.get(PLASMA) / CHEMICALS.by_name("addon:plasma") / CHEMICALS.iter()
 |---|---|
 | Registry name | Namespaced by the declaring mod, declared once (refused otherwise, naming both). It shares one key space with the game's registries and with #2332's data-pack registries, and a collision with either is refused. |
 | Entries | Named in the registering mod's own namespace, which is refused otherwise, as #2332 proposes. A duplicate entry name is refused, naming both mods. `register` returns a typed `RegistryEntry<T>` slot key, the same kind of key as `BlockKey`. |
-| Order | Dependency order already makes the library's `declare_registry` run before any dependent's `register`, so one registration phase is enough. NeoForge registers a new registry in `NewRegistryEvent` and its entries afterwards through `DeferredRegister` or `RegisterEvent`; Horizon's declared dependency order makes that second phase unnecessary. |
+| Order | Dependency order already makes the library's `declare_registry` run before any dependent's `register`, so one registration phase is enough. NeoForge registers a new registry in `NewRegistryEvent` and its entries afterwards through `DeferredRegister` or `RegisterEvent`; Sunrise's declared dependency order makes that second phase unnecessary. |
 | Freezing | The registry is frozen when registration seals. After sealing, the library builds its derived tables in a listener of the first lifecycle hook after registration. Which hook that is, and whether it needs a dedicated "registries frozen" hook with no NeoForge name, is question 6. |
 | Slots | Fixed when registration seals and local to the session. Saves store names, never slots, as #2332 requires. A save naming an entry that is no longer registered follows #2336's quarantine rule. |
 | Clients | With `RegistrySync::Names`, the server sends name→slot during configuration and the client remaps, as NeoForge's `sync(true)` does. Values aren't sent: both sides ran the same code. A client missing the declaring mod is refused at join with the registry named. `RegistrySync::None` registries are server-only. |
@@ -354,7 +358,7 @@ Native and wasm mods can't call each other's functions: they live in different a
 | Plain calls, statics, generics | **Refused at load** with "chemlib is a native mod; wasm mod X calls its code". On wasm this is an unresolved library symbol, which `link.rs` already refuses, with a better message. On native it is a link error at build time. |
 | Mod hooks | **Work**: the event type always has a Wire form, since `ModHook` requires `E: Wire` (section 0). The game forwards the encoded event between the poster's target and the listeners on the other one, and the listeners' changes come back. Order and cancellation follow one merged list. |
 | Mod registries | **Work for names and slots**, which the game owns. `ModRegistry` requires `T: Wire`, so a cross-target mod can read a value: it is encoded once when registration seals and decoded into the reader's own copy. |
-| Capabilities, Part kinds, service interfaces | **Refused at load** in the first stages. A handler is a trait object, and calling it across targets needs the trait's methods to be generated as boundary calls, as the generator does for `mod_api`'s `EXPORTS`. That would come later, as an opt-in `#[mod_api::extension]` on the library's trait, which requires every argument to have a Wire form. Until then, the refusal names the trait. |
+| Capabilities, Part kinds, service interfaces | **Refused at load** in the first stages. A handler is a trait object, and calling it across targets needs the trait's methods to be generated as boundary calls, as the generator does for the `mod_api` traits with an `.export` role file. That would come later, as an opt-in `#[mod_api::extension]` on the library's trait, which requires every argument to have a Wire form. Until then, the refusal names the trait. |
 | Scoped state | Never shared across targets. Each target holding its own copy would give two diverging states, so it is refused, naming the key. |
 
 **Wire forms for mod types** come from the derive in section 0. Each mod with crossing types has its own layout hash, so a stale cross-target build is refused at load naming the type. The game never decodes a mod's type; it forwards bytes and compares hashes.
@@ -378,21 +382,21 @@ Sizes are estimates.
 | 0 | This note. | docs | — |
 | D1–D2 | `#[derive(Wire)]`, as section 0's plan. **First.** | see section 0 | #2242; D1 before or with the restructure |
 | 1 | (after D1) An erased table shared by owner, kind and name: the declare-once and namespace refusals, type-agreement checks, and the load-phase "resolved table" call into wasm groups. Ported onto it: `OwnProvider`, with the capability key plan's name/type refusals. | ~600 | the restructure (lands into `runtime`) |
-| 2 | Mod hooks: `ModHook`, `declare_hook`, `listen`, the four contracts, `Subscribers` reused, the switch, crash attribution, the depth limit. Tests: a real wasm library and addon (`real_library` style) and the same source natively, covering order, cancel, `receive_cancelled`, a switched-off mod, an undeclared hook, type mismatch, and no listeners meaning no work. Sample: chem-api plus an addon listener in horizon-machine-sample. | ~900 | 1, and #2242 merged (shares listener shape and order code) |
+| 2 | Mod hooks: `ModHook`, `declare_hook`, `listen`, the four contracts, `Subscribers` reused, the switch, crash attribution, the depth limit. Tests: a real wasm library and addon (`real_library` style) and the same source natively, covering order, cancel, `receive_cancelled`, a switched-off mod, an undeclared hook, type mismatch, and no listeners meaning no work. Sample: chem-api plus an addon listener in sunrise-machine-sample. | ~900 | 1 |
 | 3 | Mod registries: `ModRegistry`, slots through `Names`, sync during configuration, tags, saves by name. | ~900 | 1; coordinate the key space with #2332 |
 | 4 | Part kinds on the shared table, including registry scope. | ~600 | 1, 3 (for registry scope) |
 | 5 | Scoped state and `ServiceKey`; `AttachmentHolder::Server` if question 4 says yes. | ~600 | 1 |
 | 6 | Mixed targets: the cross-target refusals with clear messages (they can land early and small), then cross-target hook forwarding and registry value reads over the derive's per-mod layouts. | ~300 + ~800 | D2, 2, 3; question 1 |
 | 7 | Optional: `#[mod_api::extension]` cross-target trait calls. | large | 6; an owner decision |
 
-Each stage updates this book page into a how-to and adds rustdoc. None of them touches point machinery before #2242 merges.
+Each stage updates this book page into a how-to and adds rustdoc.
 
 ## Open questions for root
 
 1. **Mixed targets.** Should a native library with wasm addons (or the reverse) be supported through the game, as proposed above? That needs a stateless "types crate" in the package model. The alternative is refusing mixed targets outright with a clear message. Recommendation: land the clear refusals first (stage 6a) and decide the types crate when a real library needs it.
-2. **Mod hooks use code registration.** A library mod publishes its own hooks and functions; `[[inject]]` applies only to engine API points, never to mod functions.
+2. **Mod hooks use code registration.** A library mod publishes its own hooks and functions in code.
 3. **Capability keys and Part kinds.** Should `CapabilityKey` be merged into `PartKind` (a part kind with a context and first-answer lookup)? Recommendation: keep NeoForge's name and API for capabilities and share only the storage.
 4. **Server-wide saved data.** Should `AttachmentHolder::Server` be added for state that belongs to a server and not a level? NeoForge's public saved data guide attaches such data to `MinecraftServer#getDataStorage`.
 5. **Replacing a service provider.** May a mod override another mod's service provider? Recommendation: no, refuse two providers, until a concrete case exists.
-6. **The "registries frozen" moment.** Which existing hook is the first after registration seals? If none fits, a Horizon-only hook is needed.
+6. **The "registries frozen" moment.** Which existing hook is the first after registration seals? If none fits, a Sunrise-only hook is needed.
 8. **`#[wire(via = T)]`.** Is one conversion attribute on the derive acceptable? The alternative is keeping about 25 more impls hand-written.

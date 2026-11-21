@@ -20,9 +20,26 @@ def lines(text):
     return text.count("\n") + (1 if text and not text.endswith("\n") else 0)
 
 
+def text_at(rev, path, root=ROOT):
+    """`path`'s text at `rev`, or None when `rev` has no such file. A file that is there but can't be read (a partial
+    clone's blob whose download failed) stops the check after a second try: an unread baseline is never taken for a
+    missing one, which would skip the comparison."""
+    listed = subprocess.run(["git", "ls-tree", "--name-only", rev, "--", path], cwd=root, capture_output=True,
+                            encoding="utf-8")
+    if listed.returncode != 0:
+        raise SystemExit(f"can't list {path} at {rev}: {listed.stderr.strip()}")
+    if path not in listed.stdout.splitlines():
+        return None
+    for _ in range(2):
+        shown = subprocess.run(["git", "show", f"{rev}:{path}"], cwd=root, capture_output=True, encoding="utf-8")
+        if shown.returncode == 0:
+            return shown.stdout
+    raise SystemExit(f"{path} is at {rev} but can't be read: {shown.stderr.strip()}")
+
+
 def fetch_upstream_main():
     """Fetch upstream main afresh into refs/sync/upstream-main; the errors, empty when it is there."""
-    upstream_url = os.environ.get("HORIZON_UPSTREAM_URL", "https://github.com/horizon-rust/horizon.git")
+    upstream_url = os.environ.get("SUNRISE_UPSTREAM_URL", "https://github.com/horizon-rust/horizon.git")
     try:
         fetched = subprocess.run(
             ["git", "fetch", "--no-tags", "--filter=blob:none", upstream_url,

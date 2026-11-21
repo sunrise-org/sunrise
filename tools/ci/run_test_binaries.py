@@ -32,7 +32,7 @@ tests and the summed test seconds. (libtest's own `--ensure-time` was the altern
 the binary with libtest's words, not the instruction, and needs a threshold variable per kind of test target.)
 
 `--no-data-skips` (verify) fails the run when a test that ran prints the `skipped: no vanilla data; test=NAME` line of
-the shared helper (`crates/horizon-client/src/test_fixtures.rs`, `report_missing`): such a test returns early and is
+the shared helper (`crates/sunrise-client/src/test_fixtures.rs`, `report_missing`): such a test returns early and is
 counted as passed, though verify has no prepared resources. Every one is listed with its package and the fix. The
 daily run has the data, so those tests print nothing there and do not pass the flag.
 """
@@ -58,7 +58,7 @@ def package_identity(package_id: str) -> tuple[str, str]:
         return found[1], found[2]
     fragment = package_id.rsplit("#", 1)[-1]
     name, _, version = fragment.rpartition("@")
-    if not name:  # `path+file:///x/horizon-world#0.1.0`: the name is the last path segment.
+    if not name:  # `path+file:///x/sunrise-world#0.1.0`: the name is the last path segment.
         name = package_id.split("#", 1)[0].rstrip("/").rsplit("/", 1)[-1]
     return name, version
 

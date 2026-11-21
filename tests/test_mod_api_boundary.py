@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-API = ROOT / "crates/horizon-mod-vocab/src"
+API = ROOT / "crates/sunrise-mod-vocab/src"
 def api_files():
     return [p for p in sorted(API.rglob("*.rs")) if p != API / "__private.rs" and not p.name.endswith("_tests.rs")]
 
@@ -135,11 +135,6 @@ class ModApiBoundaryTests(unittest.TestCase):
             exports.write_text("pub use block::types::*;\nmod __private {\n    pub use other::Name;\n}\n")
             self.assertEqual(domain_export_collisions(src), [])
 
-    def test_every_public_type_has_an_explicit_wire_policy(self):
-        from tools.check_mod_api_wire import repository_violations
-        self.assertEqual(repository_violations(), [],
-                         "derive Wire or attach // no wire: <reason> explaining a manual codec or refusal")
-
     def test_every_public_type_is_non_exhaustive_or_says_why(self):
         missing = []
         for path in api_files():
@@ -157,7 +152,7 @@ class ModApiBoundaryTests(unittest.TestCase):
         fragments = sorted((API / "exports").glob("*.rs"))
         private += "\n" + "\n".join(fragment_scope(path, scope) for path in fragments
                                     for scope in [("__private",), ("__private", "game"),
-                                                  ("__private", "reload"), ("__private", "wasm_host")])
+                                                  ("__private", "reload")])
         api = (API / "lib.rs").read_text() + "\n" + "\n".join(api_source(p) for p in fragments)
         self.assertEqual(game_side_api_names(api, private, API), set(), "a game-side item is re-exported as API")
 
@@ -180,7 +175,7 @@ class ModApiBoundaryTests(unittest.TestCase):
                 if line.strip() != "#[doc(hidden)]" or i + 1 >= len(lines):
                     continue
                 item = lines[i + 1].strip()
-                if item.startswith(("pub(crate)", "pub use horizon_mod_api_macros::")):
+                if item.startswith(("pub(crate)", "pub use sunrise_mod_api_macros::")):
                     continue
                 if not any(a.startswith("// hidden: ") for a in preceding(lines, i)):
                     unexplained.append(f"{path.relative_to(ROOT)}:{i + 1}: {item}")
@@ -190,14 +185,14 @@ class ModApiBoundaryTests(unittest.TestCase):
         source = (API / "parts/fluids.rs").read_text()
         registrar = source.split("pub trait FluidsRegistrar {", 1)[1].split("\n}", 1)[0]
         # The generator consumes the trait signature as the mod-facing contract.
-        self.assertNotIn("horizon_mod_package::", registrar)
+        self.assertNotIn("sunrise_mod_package::", registrar)
         self.assertRegex(api_text(), r"pub struct WorldFluid\b")
 
     def test_fluid_model_collection_uses_api_owned_values(self):
-        source = (ROOT / "crates/horizon-client/src/game/native_hooks/register_fluid_models.rs").read_text()
+        source = (ROOT / "crates/sunrise-client/src/game/native_hooks/register_fluid_models.rs").read_text()
         signature = source.split("fn native_register_fluid_models(", 1)[1].split(") {", 1)[0]
         # Collected hook fields are generated directly from this signature.
-        self.assertNotIn("horizon_mod_package::", signature)
+        self.assertNotIn("sunrise_mod_package::", signature)
         self.assertRegex(api_text(), r"pub struct FluidModel\b")
 
     def test_surfaces_stay_in_area_fragments(self):
@@ -209,7 +204,7 @@ class ModApiBoundaryTests(unittest.TestCase):
 
     def test_unhandled_arms_name_a_non_exhaustive_enum(self):
         text = api_text()
-        for path in ROOT.glob("crates/horizon-client*/src/**/*.rs"):
+        for path in ROOT.glob("crates/sunrise-client*/src/**/*.rs"):
             for name in re.findall(r'unreachable!\("(\w+): unhandled variant"\)', path.read_text()):
                 self.assertRegex(
                     text,

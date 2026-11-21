@@ -6,4 +6,4 @@ reaches them is held to the same pixels. `[material]` lights terrain with vanill
 moon by night) through the `[shadow]` map, on the LabPBR normal map's normals and ambient occlusion;
 `[displacement]` turns the normal maps' heights into geometry near the camera. The heights come from a resource
 pack the harness writes (`relief_pack`). Check it with
-`horizon-shader check tools/fixtures/shaderpacks/frame_identity_terrain`.
+`sunrise-shader check tools/fixtures/shaderpacks/frame_identity_terrain`.

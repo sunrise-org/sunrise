@@ -3,7 +3,7 @@
 Use `AttachmentQueries` to find loaded holders of an `AttachmentType<T>` without
 checking every entity, chunk or block entity. Declare your key as described in
 [server attachments](../attachments.md). Import `AttachmentQueriesMut` for server
-writes. Both traits expose the same API on native and wasm builds.
+writes.
 
 ## Read a snapshot
 
@@ -122,8 +122,12 @@ type with the same attachment key.
 
 ## Store errors
 
-A first store on a resident mob, painting or dragon part registers its attachment
-lifetime. Each dragon part has independent contents. Removing, replacing or
+A first store on a resident entity whose saved map binds an owning lifetime
+registers that lifetime and publishes the holder to the dimension's index: mobs,
+dropped items, experience orbs, projectiles, armor stands, item frames,
+paintings, boats, minecarts, dragon parts and general entity rows. Every other
+family stays unindexed until its saved binding lands: the store is saved, but no
+query visits it. Each dragon part has independent contents. Removing, replacing or
 unloading the dragon retires its parts even when snapshots retain their values;
 parking a level preserves its resident parts. Stores in construction listeners
 are indexed even when inspection triggered construction. Inspection and removal
@@ -137,4 +141,4 @@ do not themselves register a holder.
 | `AttachmentRowError::StaleHolder` | The row's holder is missing or its captured residency is invalid. |
 
 The `UnsupportedHolder` family text is limited to 256 UTF-8 bytes at the wire
-boundary; longer names are rejected on native and wasm guest paths.
+boundary; longer names are rejected.

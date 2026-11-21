@@ -1,0 +1,20 @@
+//! The `experience_orb_can_merge` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
+// catalog-order: 0129
+
+pub trait Hooks {
+    /// Whether the experience orb `into` takes the orb `from` in (vanilla's
+    /// `ExperienceOrb.canMerge`): the same value, and ids a multiple of 40 apart. Asked
+    /// for each pair whose boxes meet, when an orb spawns (`tryMergeToExisting`: `from` is
+    /// 0, the new orb isn't an entity yet, and only `from_value` is known) and every 20
+    /// ticks as an orb scans for neighbours (`scanForMerges`). `can_merge` holds vanilla's
+    /// answer; change it either way. A merged orb counts as `count` orbs of `into`'s
+    /// value, so forcing orbs of different values together drops points unless the mod
+    /// raises `into`'s value with `native_set_experience_orb` in `experience_orb_merge`.
+    /// Server-side.
+    #[hook(
+        side = "server",
+        contract = "listen",
+        neoforge = "none (vanilla ExperienceOrb.canMerge; NeoForge adds no event or extension for it)"
+    )]
+    fn experience_orb_can_merge();
+}

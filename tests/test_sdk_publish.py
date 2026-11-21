@@ -26,10 +26,10 @@ class SdkPublishTests(unittest.TestCase):
                 self.assertEqual(job["permissions"]["contents"], "write")
                 self.assertEqual(set(job["with"]), {"commit", "publish"})
 
-    def test_a_snapshot_publishes_its_sdk_only_when_it_is_no_dry_run(self):
-        job = load("release.yml")["jobs"]["snapshot-sdk-publish"]
-        self.assertEqual(job["with"]["publish"], "${{ needs.decide.outputs.dry_run != 'true' }}")
-        self.assertIn("needs.snapshot-sdk.outputs.needed == 'true'", job["if"])
+    def test_a_dev_build_publishes_its_sdk_only_when_it_is_no_dry_run(self):
+        job = load("release.yml")["jobs"]["dev-sdk-publish"]
+        self.assertEqual(job["with"]["publish"], "${{ needs.decide.outputs.publish == 'true' }}")
+        self.assertIn("needs.dev-sdk.outputs.needed == 'true'", job["if"])
 
 
 if __name__ == "__main__":

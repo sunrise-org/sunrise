@@ -128,7 +128,6 @@
   "crate::world::types::SpawnPlacementType",
   "crate::world::types::SpawnReason",
   "crate::world::custom_spawners::SpawnerKind",
-  "crate::item::item_stack::StackError",
   "crate::item::types::StatType",
   "crate::world::structure_template::StructureMirror",
   "crate::world::structure_template::StructureRotation",

@@ -64,13 +64,14 @@ class ArtifactTests(unittest.TestCase):
         client, server = b"client", b"server"
         lock = {"minecraft": {"version": "26.3", "manifest_sha1": "0" * 40, "java_major": 25,
                               "client_sha1": hashlib.sha1(client).hexdigest(),
-                              "server_sha1": hashlib.sha1(server).hexdigest()}}
+                              "server_sha1": hashlib.sha1(server).hexdigest(),
+                              "libraries_sha256": lab.libraries_digest({})}}
         manifest = {"id": "26.3", "javaVersion": {"majorVersion": 25},
                     "downloads": {"client": {"sha1": lock["minecraft"]["client_sha1"]},
                                   "server": {"sha1": lock["minecraft"]["server_sha1"]}}}
         with tempfile.TemporaryDirectory() as temp, mock.patch("urllib.request.urlopen") as request, \
                 mock.patch.dict("os.environ", {}, clear=False) as environment:
-            environment.pop("HORIZON_SERVER_JAR", None)
+            environment.pop("SUNRISE_SERVER_JAR", None)
             launcher, cache = Path(temp) / "minecraft", Path(temp) / "cache"
             version = launcher / "versions" / "26.3"
             version.mkdir(parents=True)
@@ -97,28 +98,36 @@ class ArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "pinned 26.3 release"):
                 lab.import_manifest(lock, Path(temp) / "cache", Path(temp))
 
-    def test_republished_launcher_manifests_are_accepted_and_unknown_ones_rejected(self):
-        manifest = {"id": "26.3", "javaVersion": {"majorVersion": 25}, "assetIndex": {"sha1": "a"},
-                    "downloads": {"client": {"sha1": "1" * 40}, "server": {"sha1": "2" * 40}}}
-        older = json.dumps({**manifest, "assetIndex": {"sha1": "b"}})
-        lock = {"minecraft": {"version": "26.3", "java_major": 25, "client_sha1": "1" * 40, "server_sha1": "2" * 40,
+    def test_a_reissued_manifest_with_the_pinned_content_is_used_and_a_changed_library_refused(self):
+        # A version no code names: the lock entry alone says what is pinned.
+        library = {"downloads": {"artifact": {"path": "a/b.jar", "sha1": "3" * 40},
+                                 "classifiers": {"natives": {"path": "a/c.jar", "sha1": "5" * 40}}}}
+        manifest = {"id": "9.9", "javaVersion": {"majorVersion": 25}, "assetIndex": {"sha1": "a"},
+                    "downloads": {"client": {"sha1": "1" * 40}, "server": {"sha1": "2" * 40}}, "libraries": [library]}
+        lock = {"minecraft": {"version": "9.9", "java_major": 25, "client_sha1": "1" * 40, "server_sha1": "2" * 40,
                               "manifest_sha1": hashlib.sha1(json.dumps(manifest).encode()).hexdigest(),
-                              "accepted_manifest_sha1": [hashlib.sha1(older.encode()).hexdigest()]}}
+                              "libraries_sha256": lab.libraries_digest(manifest)}}
+        changed = {"downloads": {"artifact": {"path": "a/b.jar", "sha1": "4" * 40}}}
+        self.assertEqual(lab.libraries_digest({"libraries": [library, changed]}),
+                         lab.libraries_digest({"libraries": [changed, library]}))
         with tempfile.TemporaryDirectory() as temp:
             launcher, cache = Path(temp) / "minecraft", Path(temp) / "cache"
-            source = launcher / "versions" / "26.3" / "26.3.json"
+            source = launcher / "versions" / "9.9" / "9.9.json"
             source.parent.mkdir(parents=True)
-            source.write_text(older)
-            self.assertEqual(lab.import_manifest(lock, cache, launcher)["assetIndex"], {"sha1": "b"})
-            # The launcher's newer copy replaces the cached one, keeping it in step with its asset index.
+            # Mojang re-issued it for the asset index alone: used, whatever its own sha1.
+            source.write_text(json.dumps({**manifest, "assetIndex": {"sha1": "re-issued"}}))
+            self.assertEqual(lab.import_manifest(lock, cache, launcher)["assetIndex"], {"sha1": "re-issued"})
+            # The launcher's newer copy replaces the imported one, keeping it in step with its asset index.
             source.write_text(json.dumps(manifest))
             self.assertEqual(lab.import_manifest(lock, cache, launcher)["assetIndex"], {"sha1": "a"})
+            # Offline, with no launcher file: the imported copy stands.
             source.unlink()
             self.assertEqual(lab.import_manifest(lock, cache, launcher)["assetIndex"], {"sha1": "a"})
-            source.write_text(json.dumps({**manifest, "assetIndex": {"sha1": "c"}}))
-            with self.assertRaisesRegex(ValueError, "does not know yet"):
-                lab.import_manifest(lock, cache, launcher)
-
+            for different in ({**manifest, "libraries": [changed]}, {**manifest, "libraries": []},
+                              {**manifest, "javaVersion": {"majorVersion": 26}}):
+                source.write_text(json.dumps(different))
+                with self.assertRaisesRegex(ValueError, "libraries or Java version differ"):
+                    lab.import_manifest(lock, cache, launcher)
 
     def test_sourcefile_metadata_covers_inner_classes(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -176,13 +185,13 @@ class ArtifactTests(unittest.TestCase):
 class PublicationTests(unittest.TestCase):
     def test_private_paths_rejected(self):
         for path in [".local/minecraft/source.java", "decompiled/Foo.txt", "game.JAR", "capture.jfr", "source/Foo.java",
-                     "fixtures/26.3/horizon-data.bin"]:
+                     "fixtures/26.3/sunrise-data.bin"]:
             self.assertTrue(check_public_tree.prohibited(path), path)
-        for path in ["tools/lab.py", "crates/horizon-core/src/lib.rs", "Cargo.lock", "docs/analysis.md",
-                     "mods/horizon/src/main/java/dev/horizonlab/HorizonLab.java",
-                     "mods/horizon-lab/src/main/java/dev/horizonlab/HorizonLab.java"]:
+        for path in ["tools/lab.py", "crates/sunrise-core/src/lib.rs", "Cargo.lock", "docs/analysis.md",
+                     "mods/sunrise/src/main/java/dev/sunriselab/SunriseLab.java",
+                     "mods/sunrise-lab/src/main/java/dev/sunriselab/SunriseLab.java"]:
             self.assertFalse(check_public_tree.prohibited(path), path)
-        self.assertTrue(check_public_tree.prohibited("mods/horizon/src/main/java/net/minecraft/Client.java"))
+        self.assertTrue(check_public_tree.prohibited("mods/sunrise/src/main/java/net/minecraft/Client.java"))
         for path in ["tools/JfrSummary.java", "tests/java/JfrFixture.java"]:
             self.assertFalse(check_public_tree.prohibited(path), path)
         for path in ["tools/Minecraft.java", "tests/java/Client.java", ".local/tools/JfrSummary.java"]:
@@ -211,7 +220,7 @@ class PublicationTests(unittest.TestCase):
             self.assertEqual(check().returncode, 0, check().stderr)
             for path, text in [("crates/a/src/items.rs", flattening), ("data/states.txt", states),
                                ("data/states.json", json.dumps(states.splitlines())),
-                               ("crates/horizon-world/src/datafix/block_state_data.txt", "retired\n")]:
+                               ("crates/sunrise-world/src/datafix/block_state_data.txt", "retired\n")]:
                 with self.subTest(path=path):
                     commit(path, text)
                     result = check()
@@ -380,7 +389,7 @@ class GameEnvScreenTests(unittest.TestCase):
                 os.environ.pop("DISPLAY", None)
                 env = agent_control_e2e.game_env("e2e", home=home)
                 run.assert_not_called()
-                self.assertEqual(env["HORIZON_HOME"], home)
+                self.assertEqual(env["SUNRISE_HOME"], home)
                 self.assertNotIn("VSCREEN", env)
 
 

@@ -85,10 +85,10 @@ def run(kind, case, parent, binary, timeout):
     (game / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
     (game / 'eula.txt').write_text('eula=true\n')
     java = shutil.which('java')
-    command = ([java, '-Xms256M', '-Xmx2G', '-jar', str(ROOT / '.local/minecraft/26.3/jars/server.jar'), '--nogui']
+    command = ([java, '-Xms256M', '-Xmx2G', '-jar', str(lab.GAME / 'jars/server.jar'), '--nogui']
                if kind == 'java' else
-               [str(binary), '--resources', str(ROOT / '.local/horizon-client/26.3'), '--dedicated', '--nogui'])
-    env = lab.game_env(HORIZON_HOME=out / 'homes/horizon', HORIZON_LAUNCHER_HOME=out / 'homes/launcher',
+               [str(binary), '--resources', str(lab.RESOURCES), '--dedicated', '--nogui'])
+    env = lab.game_env(SUNRISE_HOME=out / 'homes/sunrise', SUNRISE_LAUNCHER_HOME=out / 'homes/launcher',
                        XDG_DATA_HOME=out / 'homes/xdg-data', XDG_CONFIG_HOME=out / 'homes/xdg-config')
     start = time.monotonic()
     facts = dict(start_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(), kind=kind, case=case,

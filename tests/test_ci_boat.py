@@ -125,7 +125,7 @@ class BoatHealthTests(unittest.TestCase):
             self.assertTrue(run.call_args_list[1].args[0][4].endswith("/cancel"))
 
     def test_controller_limits_to_first_fork_attempt(self):
-        run = dict(workflow_id=123, event="pull_request", run_attempt=1, status="queued", head_repository=dict(full_name="other/horizon"))
+        run = dict(workflow_id=123, event="pull_request", run_attempt=1, status="queued", head_repository=dict(full_name="other/sunrise"))
         self.assertTrue(controller.eligible(run, "arismoko/horizon", 123))
         for key, value in [("run_attempt", 2), ("event", "push"), ("workflow_id", 999), ("head_repository", dict(full_name="arismoko/horizon"))]:
             self.assertFalse(controller.eligible(dict(run, **{key: value}), "arismoko/horizon", 123))
@@ -204,7 +204,7 @@ class BoatHealthTests(unittest.TestCase):
         self.assertIn("status=failure", urls[3])
 
     def test_real_fork_shape_uses_validated_recorded_base(self):
-        # Observed API shape: run 42566379987 (KBroneZ/horizon), no PR association.
+        # Observed API shape: run 42566379987 (KBroneZ/sunrise), no PR association.
         run = dict(id=42566379987, head_sha="72d5f90f5aacc33db72a0592ffd7c58ace36dbf0", pull_requests=[])
         metadata = dict(run_id=str(run["id"]), attempt="1", head=run["head_sha"], base="b" * 40)
         for field, value in [(None, None), ("run_id", "123"), ("head", "c" * 40), ("base", "not-a-sha"), ("attempt", "2")]:
@@ -337,8 +337,8 @@ class BoatRoutingTests(unittest.TestCase):
 
     def test_untrusted_runs_are_never_read(self):
         for run in (routing_run(path=".github/workflows/dyna-ci.yml"), routing_run(head_branch="feature"),
-                    routing_run(event="pull_request"), routing_run(head_repository=dict(full_name="fork/horizon")),
-                    routing_run(repository=dict(full_name="fork/horizon"))):
+                    routing_run(event="pull_request"), routing_run(head_repository=dict(full_name="fork/sunrise")),
+                    routing_run(repository=dict(full_name="fork/sunrise"))):
             (result, reason), download = self.read(runs=[run])
             self.assertIsNone(result)
             self.assertIn("no recent", reason)

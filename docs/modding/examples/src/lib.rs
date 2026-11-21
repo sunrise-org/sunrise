@@ -20,7 +20,7 @@ static COUNTER: AttachmentType<i32> = AttachmentType {
 // ANCHOR_END: counter
 
 // ANCHOR: tick_hook
-#[mod_api::horizon_mod]
+#[mod_api::sunrise_mod]
 impl Hooks for Mod {
     fn server_tick(&self, host: &mut dyn ServerHost, _: &mut ServerTickEvent<'_>) {
         let _ = count(host);
@@ -47,27 +47,6 @@ pub fn quick_move(host: &mut dyn mod_api::ClientHost, slot: usize) -> bool {
     menu.click(host, &[mod_api::MenuClick::QuickMove { slot }])
 }
 // ANCHOR_END: menu_quick_move
-
-/// The same counter as a crate-root `with = "tick"` function at `Game::tick`.
-pub mod at_a_point {
-    use super::count;
-    use mod_api::{Hooks, HostSide};
-    use mod_points::TickArgs;
-
-    #[derive(Default)]
-    struct Mod;
-
-    // ANCHOR: points
-    pub fn tick(host: HostSide<'_>, _: &mut TickArgs) {
-        if let HostSide::Server(host) = host {
-            let _ = count(host);
-        }
-    }
-
-    #[mod_api::horizon_mod]
-    impl Hooks for Mod {}
-    // ANCHOR_END: points
-}
 
 // Every standalone snippet module under src is compiled.
 include!(concat!(env!("OUT_DIR"), "/example_modules.rs"));

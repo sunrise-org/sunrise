@@ -57,5 +57,62 @@ class HistoryScopeTests(unittest.TestCase):
             self.assertEqual(check(directory, "--history").returncode, 1)
 
 
+
+
+class CommercialDenylistTests(unittest.TestCase):
+    def repo(self, directory, files):
+        git(directory, "init", "-q", "-b", "main")
+        for path, body in files:
+            dest = Path(directory) / path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(body)
+        git(directory, "add", "-A")
+        git(directory, "commit", "-qm", "tree")
+
+    def test_a_removed_crate_or_launcher_page_in_the_tree_fails(self):
+        cases = [
+            "crates/sunrise-cosmetics/Cargo.toml",
+            "crates/sunrise-client/src/game/cosmetics.rs",
+            "crates/sunrise-client/src/game/interface/cosmetics/emotes.rs",
+            "crates/sunrise-official-servers/src/lib.rs",
+            "launcher/src/partner.rs",
+            "launcher/src/shop/mod.rs",
+            "launcher/src/wardrobe.rs",
+            "launcher/src/wardrobe_page.rs",
+            "launcher/assets/sculk-banner.webp",
+            "launcher/src/main.rs",
+        ]
+        for path in cases:
+            with self.subTest(path=path), TemporaryDirectory() as directory:
+                self.repo(directory, [(path, "x\n"), ("readme.md", "ok\n")])
+                result = check(directory)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(path, result.stderr)
+                self.assertIn("Removed commercial features must not come back", result.stderr)
+
+    def test_kept_paths_and_nearby_names_are_allowed(self):
+        allowed = [
+            "crates/sunrise-official/Cargo.toml",
+            "docs/cosmetics.md",
+            "crates/sunrise-client/src/game/interface/names.rs",
+        ]
+        with TemporaryDirectory() as directory:
+            self.repo(directory, [(path, "ok\n") for path in allowed])
+            result = check(directory)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_removed_path_only_in_history_does_not_fail(self):
+        with TemporaryDirectory() as directory:
+            self.repo(directory, [
+                ("crates/sunrise-cosmetics/Cargo.toml", "old\n"),
+                ("readme.md", "ok\n"),
+            ])
+            git(directory, "rm", "-q", "crates/sunrise-cosmetics/Cargo.toml")
+            git(directory, "commit", "-qm", "removed")
+            self.assertEqual(check(directory).returncode, 0)
+            history = check(directory, "--history")
+            self.assertEqual(history.returncode, 0, history.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

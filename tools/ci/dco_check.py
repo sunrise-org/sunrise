@@ -14,8 +14,10 @@ def commits(base: str, head: str) -> list[str]:
 
 
 def field(sha: str, fmt: str) -> str:
+    # `git log`, not `git show -s`: the workflow's clone has commits without their trees, and `git show` fetches the
+    # commit's tree from GitHub before it prints anything.
     return subprocess.run(
-        ["git", "show", "-s", f"--format={fmt}", sha], check=True, capture_output=True, text=True
+        ["git", "log", "-1", f"--format={fmt}", sha], check=True, capture_output=True, text=True
     ).stdout
 
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Pins the SHA-256 of every release published before signing began (docs/security.md, "Signed updates").
 
-    python3 tools/ci/legacy_releases.py           # rewrite crates/horizon-release-sign/legacy-releases.txt
+    python3 tools/ci/legacy_releases.py           # rewrite crates/sunrise-release-sign/legacy-releases.txt
     python3 tools/ci/legacy_releases.py --check   # exit 1 if the file is out of date
 
-Releases from before signing carry no SHA256SUMS.sig, so the launcher and `horizon-server update` can't check them
-against Horizon's key. Their archives' SHA-256s, as GitHub computed them at upload, are built into the binaries
+Releases from before signing carry no SHA256SUMS.sig, so the launcher and `sunrise-server update` can't check them
+against Sunrise's key. Their archives' SHA-256s, as GitHub computed them at upload, are built into the binaries
 instead, so a rollback to one stays possible and nobody can swap its files later. Every release with a
 SHA256SUMS.sig is left out: its signature is what counts. Run it once, just before the launcher starts refusing
 unsigned releases, when every release since the first signed one is signed; after that the file never changes.
@@ -19,11 +19,11 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-OUT = ROOT / "crates" / "horizon-release-sign" / "legacy-releases.txt"
+OUT = ROOT / "crates" / "sunrise-release-sign" / "legacy-releases.txt"
 REPO = "horizon-rust/horizon"
 HEADER = """\
 # Releases published before signing began, with their archives' SHA-256 as GitHub computed them at upload:
-# `<tag> <asset> <sha256>` per line, written by tools/ci/legacy_releases.py. The launcher and horizon-server
+# `<tag> <asset> <sha256>` per line, written by tools/ci/legacy_releases.py. The launcher and sunrise-server
 # install these releases only with exactly these files (docs/security.md, "Signed updates"); every later release
 # is checked against its signed SHA256SUMS instead. Changing this file needs Ludovic's review (.github/CODEOWNERS).
 """
@@ -57,9 +57,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--check", action="store_true", help="exit 1 if the file is out of date, change nothing")
     args = parser.parse_args()
-    out = subprocess.run(["gh", "api", f"repos/{REPO}/releases?per_page=100", "--paginate", "--slurp"],
+    # One release per line: the runners' gh (2.45) has no --slurp to join the pages.
+    out = subprocess.run(["gh", "api", f"repos/{REPO}/releases?per_page=100", "--paginate", "--jq", ".[]"],
                          capture_output=True, text=True, check=True).stdout
-    text = render([release for page in json.loads(out) for release in page])
+    text = render([json.loads(line) for line in out.splitlines() if line])
     if args.check:
         current = OUT.read_text() if OUT.exists() else ""
         if current != text:

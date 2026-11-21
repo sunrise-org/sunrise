@@ -15,7 +15,6 @@ never a rounded `Double`. Fractional/exponent tokens use the JSON parser's `f64`
 value (including an integral value written as `1.0`). A JSON `null` anywhere in a
 value also refuses the entire read as `Undecodable`; it is not an empty string.
 Empty and heterogeneous arrays preserve their elements as in-memory `List` values.
-These rules are identical for native and wasm readers.
 
 ```rust,ignore
 use mod_api::{DataMap, DataMapTypesEvent, ItemKey, ServerHost, Tag};
@@ -47,7 +46,8 @@ Its values are `data/mymod/data_maps/item/emc.json` in any data pack, and files 
 through `data_pack_files` under `data_maps/mymod:item/emc`. The folder is the registry's path for
 a `minecraft` registry (`entity_type`, `worldgen/biome`) and `<namespace>/<path>` for another.
 An id the registry doesn't hold is skipped, with one warning per file. A value may carry its own
-load conditions (`WithConditions`): it counts only when they hold.
+load conditions (`WithConditions`): it counts only when they hold. A top-level
+`neoforge:conditions` key on the data-map file is ignored.
 
 ```json
 { "values": {
@@ -81,7 +81,6 @@ read sees the last load whole, never part of one, and a value a reload drops is 
 values. Reads also work in world hooks. A lookup reads the loaded map: it parses nothing and
 touches no file.
 
-Wasm mods read data maps the same way, with the same answers.
 
 ## NeoForge's built-in mob and item maps
 
@@ -145,7 +144,7 @@ files on every server data load, merged as your own maps are, and each load repl
 The axe reads the inverse maps before its own transform table: the oxidation inverse scrapes one
 stage back, the waxing inverse takes the wax off. They are derived from the forward maps on every
 load, never declared. Where several blocks share a next stage or a waxed twin, the one with the
-lowest block registry id is the one given back. That is a Horizon choice: NeoForge keeps whichever
+lowest block registry id is the one given back. That is a Sunrise choice: NeoForge keeps whichever
 its map iteration met last.
 
 Random-tick oxidation, honeycomb, dispenser waxing and the axe each move exactly one step, so a
@@ -157,7 +156,7 @@ back to a block it already passed. Lightning's waxed check, the carved pumpkin a
 keep vanilla's own lists. A block the maps don't name keeps vanilla's behaviour.
 
 `generate_block_transform`, `neoforge:transformables` and `block_transform_appenders` are not read
-yet ([#3359](https://github.com/arismoko/horizon/issues/3359)).
+yet.
 
 `host.biome_key("minecraft:plains")` resolves a `BiomeKey` in the installed
 server world registry. Its `id(host)` returns `Ok(canonical_id)`, and
@@ -170,7 +169,6 @@ reload: tokens from earlier generations or another world return
 `data`. An unavailable host returns `BiomeKeyError::Unavailable` from `id`.
 Validation uses the receiving host’s installed snapshot, so a mod retaining a
 key across reload receives an error without panicking the server.
-Native and wasm use the same generated route and installed snapshot.
 
 Game events use `GameEventKey`, resolved with `host.game_event_key("minecraft:step")`
 after startup registry completion. The key is load-owned and survives world data

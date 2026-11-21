@@ -1,5 +1,9 @@
 # Design: per-type batched block entity ticks
 
+> The native contract below still applies. WebAssembly mods were removed; the parts about guests are history.
+> This applies to the individual `BlockEntityTickReply`, not the unbuilt batching proposal.
+> See [block-entity tick write-back](../../modding/src/how-to/world/machine-menu-data.md#skip-unchanged-tick-write-back) for the current native API.
+
 **Provisional; implementation waits for a maintainer decision.** This answers
 [#2759](https://github.com/arismoko/horizon/issues/2759).
 The recommendation is contiguous same-type runs in the existing ticker order,
@@ -7,7 +11,7 @@ with each entity committed before the next one starts. This reduces outer calls
 where runs exist; it does not promise one call per type across a whole level.
 
 **Implemented separately in #3669:** the existing individual tick now has
-`BlockEntityTickReply::{Changed, Unchanged}` on native and wasm. Set
+`BlockEntityTickReply::{Changed, Unchanged}`. Set
 `*event.reply = BlockEntityTickReply::Unchanged` to omit that Part's reply snapshot
 entirely. Each Part starts with `Changed` and sees only preceding accepted edits;
 an `Unchanged` Part cannot leak its attempted edits or erase an earlier `Changed`.
@@ -18,34 +22,35 @@ keep their effects; aborted Host transactions stay aborted. Not choosing this fo
 retains full checked `Changed` write-back. Input snapshots are still sent; runs,
 deltas, `NeedFull` and validity caches remain unimplemented.
 
-Audit inputs for this implemented subset (not evidence of batching performance):
+Audit inputs at the time of the individual-tick change, including since-removed
+guest files (not evidence of batching performance):
 
 | Owner | Audited behavior / executable input |
 | --- | --- |
-| `crates/horizon-mod-vocab/src/block/types.rs`, `hooks/block_entity_tick.rs` | One reply model and the existing execution hook; default `Changed`. |
-| `crates/horizon-mod-api-gen/src/dispatch.rs`, `ModBlockEntityView` | Per-Part reply reset and acceptance; native payload rollback is captured lazily on the first actual mutation, not on an untouched Unchanged call. |
-| `crates/horizon-mod-api-gen/src/wire/calls.rs`, `wire/host.rs` | Reply discriminator precedes optional snapshot bytes; Unchanged omits both snapshot encode and decode/apply, with no legacy wire fallback. |
-| `crates/horizon-client/src/game/native_hooks/block_entity_tick.rs` | Original placeholder identity checked before unchanged restoration; no dirty/effect owner called. |
-| `crates/horizon-client/src/game/modding/block_entity_tick_reply.rs`, `block_entity_tick_items.rs` | Changed reuses checked write-back; independent dropped-item Host proposals retain their existing acceptance checks even on Unchanged. |
-| `crates/horizon-client/src/game/modding/block_entity_tick_reply_tests.rs` and `crates/horizon-mod-wasm/tests/fixture/src/tick_reply.rs` | Shared native/compiled-wasm Parts: repeated clean constant-revision ticks, Unchanged→Changed and Changed→Unchanged transitions, default reply reset, aborted item transactions with unnormalized original slots, accepted Host writes, replacement, and container/comparator callback counts. `wasm-mods.yml` owns its compiled-fixture prerequisites; ordinary prepared-data shards exclude it. |
+| `crates/sunrise-mod-vocab/src/block/types.rs`, `hooks/block_entity_tick.rs` | One reply model and the existing execution hook; default `Changed`. |
+| `crates/sunrise-mod-api-gen/src/dispatch.rs`, `ModBlockEntityView` | Per-Part reply reset and acceptance; native payload rollback is captured lazily on the first actual mutation, not on an untouched Unchanged call. |
+| `crates/sunrise-mod-api-gen/src/wire/calls.rs`, `wire/host.rs` | Reply discriminator precedes optional snapshot bytes; Unchanged omits both snapshot encode and decode/apply, with no legacy wire fallback. |
+| `crates/sunrise-client/src/game/native_hooks/block_entity_tick.rs` | Original placeholder identity checked before unchanged restoration; no dirty/effect owner called. |
+| `crates/sunrise-client/src/game/modding/block_entity_tick_reply.rs`, `block_entity_tick_items.rs` | Changed reuses checked write-back; independent dropped-item Host proposals retain their existing acceptance checks even on Unchanged. |
+| `crates/sunrise-client/src/game/modding/block_entity_tick_reply_tests.rs` and `crates/sunrise-mod-wasm/tests/fixture/src/tick_reply.rs` | Shared native/compiled-wasm Parts: repeated clean constant-revision ticks, Unchanged→Changed and Changed→Unchanged transitions, default reply reset, aborted item transactions with unnormalized original slots, accepted Host writes, replacement, and container/comparator callback counts. `wasm-mods.yml` owns its compiled-fixture prerequisites; ordinary prepared-data shards exclude it. |
 
 ## Existing moments and verified owners
 
 The existing plural `block_entity_ticks` is **not a batched execution hook**.
-`crates/horizon-mod-vocab/src/hooks/block_entity_ticks.rs:4` declares a server,
+`crates/sunrise-mod-vocab/src/hooks/block_entity_ticks.rs:4` declares a server,
 read-Host eligibility query, keyed by block, asked for block states at world open.
 `BlockEntityTicksEvent.ticks` selects whether a ticker exists; it contains no list
 of entities. The Part example at
-`crates/horizon-mod-vocab/src/parts/block_entities.rs:334` sets it to true, then
+`crates/sunrise-mod-vocab/src/parts/block_entities.rs:334` sets it to true, then
 implements the separate mutable individual tick. The adapter is
-`crates/horizon-client/src/game/native_hooks/base.rs:1083`, called by
-`crates/horizon-client/src/game/native_hooks/shared.rs:3112` (`native_ticks`).
+`crates/sunrise-client/src/game/native_hooks/base.rs:1083`, called by
+`crates/sunrise-client/src/game/native_hooks/shared.rs:3112` (`native_ticks`).
 Reuse this eligibility decision and its frozen state tables. Do not turn it into
 a second execution callback, or introduce a parallel batch moment.
 
 Extend the existing singular execution moment instead:
-`crates/horizon-mod-vocab/src/hooks/block_entity_tick.rs:4` and
-`crates/horizon-client/src/game/native_hooks/block_entity_tick.rs`.
+`crates/sunrise-mod-vocab/src/hooks/block_entity_tick.rs:4` and
+`crates/sunrise-client/src/game/native_hooks/block_entity_tick.rs`.
 Replace its individual event/dispatch shape with the approved run cursor shape
 in one clean break, updating all callers, generated catalog/coverage, examples
 and the machine sample together. No legacy individual callback or compatibility
@@ -54,18 +59,18 @@ It remains a `BlockEntityPart` listener with `&mut dyn ServerHost` on both targe
 
 | Route / owner on inspected main | Integration requirement |
 | --- | --- |
-| `crates/horizon-client/src/game.rs:8564` | Server world pass calls the common ticker loop; integrated and dedicated execution use this route. Remote clients do not run authoritative saved-data ticks. |
-| `crates/horizon-client-render/src/world.rs:502` | Supplies the ordered ticker snapshot. Do not regroup the level by type. |
-| `crates/horizon-client-render/src/block_entities.rs:750,787` | Pending additions enter the list at snapshot acquisition; validate each live slot immediately before use. Ticker slots are not durable holder identities. |
-| `crates/horizon-client/src/game/blocks/block_entity_ticks.rs:45,60,91` | Preserve chunk ticking, sleep, liveness and border checks; replace only the mod-entity dispatch branch. Built-in ticks remain at their existing positions. |
-| `crates/horizon-client/src/game/native_hooks/block_entity_tick.rs`, `native_hooks/shared.rs::put_back_mod_block_entity` | Individual take/placeholder/restore owner: Unchanged already avoids dirty/effect owners and checks original placeholder identity. Changed retains the existing restore/effect owner. Batched holder-safe per-entry processing remains future work. |
-| `crates/horizon-client/src/game/modding/block_entity_tick_reply.rs`, `modding/api_values.rs` | API conversion and checked write-back owners; reuse validation rather than adding an unchecked delta route. |
-| `crates/horizon-mod-api-gen/src/dispatch.rs:280,447` | Existing Part dispatch and generated Wire event machinery own the new shape for both targets. |
-| `crates/horizon-mod-api-gen/dispatch-tests/src/fixtures/stateful_block_entity.rs:1` | Existing factory/eligibility fixture is a model for dispatch ownership, not evidence of batched execution. Extend generated fixtures for the new execution shape. |
-| `crates/horizon-client/src/game/blocks/spill.rs:1303` | Direct tick invocation is in a regression test. Update it to execute a singleton run through the same owner. |
+| `crates/sunrise-client/src/game.rs:8564` | Server world pass calls the common ticker loop; integrated and dedicated execution use this route. Remote clients do not run authoritative saved-data ticks. |
+| `crates/sunrise-client-render/src/world.rs:502` | Supplies the ordered ticker snapshot. Do not regroup the level by type. |
+| `crates/sunrise-client-render/src/block_entities.rs:750,787` | Pending additions enter the list at snapshot acquisition; validate each live slot immediately before use. Ticker slots are not durable holder identities. |
+| `crates/sunrise-client/src/game/blocks/block_entity_ticks.rs:45,60,91` | Preserve chunk ticking, sleep, liveness and border checks; replace only the mod-entity dispatch branch. Built-in ticks remain at their existing positions. |
+| `crates/sunrise-client/src/game/native_hooks/block_entity_tick.rs`, `native_hooks/shared.rs::put_back_mod_block_entity` | Individual take/placeholder/restore owner: Unchanged already avoids dirty/effect owners and checks original placeholder identity. Changed retains the existing restore/effect owner. Batched holder-safe per-entry processing remains future work. |
+| `crates/sunrise-client/src/game/modding/block_entity_tick_reply.rs`, `modding/api_values.rs` | API conversion and checked write-back owners; reuse validation rather than adding an unchecked delta route. |
+| `crates/sunrise-mod-api-gen/src/dispatch.rs:280,447` | Existing Part dispatch and generated Wire event machinery own the new shape for both targets. |
+| `crates/sunrise-mod-api-gen/dispatch-tests/src/fixtures/stateful_block_entity.rs:1` | Existing factory/eligibility fixture is a model for dispatch ownership, not evidence of batched execution. Extend generated fixtures for the new execution shape. |
+| `crates/sunrise-client/src/game/blocks/spill.rs:1303` | Direct tick invocation is in a regression test. Update it to execute a singleton run through the same owner. |
 
 The loop also invokes built-in hoppers, furnaces and other vanilla tickers.
-Separate sculk passes (`crates/horizon-client/src/game.rs:8565`) and client
+Separate sculk passes (`crates/sunrise-client/src/game.rs:8565`) and client
 animation work are outside this mod saved-data listener; do not move them into
 it. Implementation must audit all generated callers and any newly added routes.
 These anchors identify present owners, not already implemented guarantees.
@@ -103,6 +108,9 @@ not a 26.3 batching contract. The 26.3
 Javadoc were consulted; no NeoForge source or patches were read.
 
 ## Proposed execution contract
+
+The remaining batching design, guest paths and acceptance matrix are proposal
+history, not requirements for the implemented individual tick reply.
 
 Choose **A: contiguous runs**, not B: one call per type across the level.
 For `[A1,A2,B1,A3]`, dispatch `[A1,A2]`, tick B1, then dispatch `[A3]`.
@@ -147,7 +155,7 @@ callback there. A replacement invalidates the old reply and cache match. New
 pending tickers wait until the next pass; wrapper rebinding must preserve the
 vanilla distinction between updating a ticker and appending a new one.
 
-Reuse `crates/horizon-client/src/game/runtime/transactions.rs:193,212,293`
+Reuse `crates/sunrise-client/src/game/runtime/transactions.rs:193,212,293`
 for action savepoints and block-entity journaling, and the
 [Part instance state contract](part-instance-state.md) for holder identity and
 state. During lifted outer actions, per-entry commit merges into the parent:
@@ -192,7 +200,7 @@ savepoint and invalidate that cache entry. Keep already root-committed A1.
 Use the runtime's existing fault policy to disable/stop the failing listener;
 do not retry it later in this run. Other listeners and built-in entries follow
 the existing dispatch policy. Process-aborting native panics are unrecoverable.
-Wasm stop/disable owners include `crates/horizon-mod-wasm/src/runtime.rs:426,631`;
+Wasm stop/disable owners include `crates/sunrise-mod-wasm/src/runtime.rs:426,631`;
 precise native recovery and later-listener continuation need an explicit audit
 before implementation claims parity. A lifted root abort can still undo A1.
 
@@ -224,11 +232,11 @@ in/out changed 371/287 to 21/24 per entity; in-game host calls 46 to 33, offline
 cost about 260k and delta comparison added about 127k. Post-collection live heap
 rose 1.1 to 6.2 MB. **All results still used one call per entity; batching was
 not measured.** They motivate cache experiments and GC accounting, not a claimed
-Horizon batching speedup.
+Sunrise batching speedup.
 
 Existing measurements are
-`crates/horizon-mod-wasm/tests/bench.rs:84` (1000 fake in-memory dispatches) and
-`crates/horizon-client/src/game/modding/native_live_holder_tests.rs:46` (real
+`crates/sunrise-mod-wasm/tests/bench.rs:84` (1000 fake in-memory dispatches) and
+`crates/sunrise-client/src/game/modding/native_live_holder_tests.rs:46` (real
 Game holder path). Neither establishes this proposed batching's performance.
 Measure no-listener, singleton, long-run and alternating-type scenes on both
 targets, including collection, memory, payload bytes, host calls and multi-listener

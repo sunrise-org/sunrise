@@ -22,12 +22,12 @@ class DataLegTimingTests(unittest.TestCase):
         self.assertLess(start, run)
         self.assertLess(run, end)
         self.assertEqual(steps[end]["if"], "always()")
-        self.assertEqual(steps[run]["env"]["HORIZON_DATA_LEG_TIMING"], "1")
+        self.assertEqual(steps[run]["env"]["SUNRISE_DATA_LEG_TIMING"], "1")
         # The workflow may invoke only the existing filtered runner, not raw cargo
         # or a tee/cat pipeline forwarding its captured output.
         lines = steps[run]["run"].strip().splitlines()
         self.assertEqual(len(lines), 2)
-        self.assertTrue(lines[0].startswith("export HORIZON_TEST_RESOURCES="))
+        self.assertTrue(lines[0].startswith("export SUNRISE_TEST_RESOURCES="))
         self.assertEqual(shlex.split(lines[1]), ["python3", "tools/ci/with_xvfb.py", "python3", "tools/ci/ignored_tests.py", "--report", "$RUNNER_TEMP/daily-report.json", "$SHARD"])
         with tempfile.TemporaryDirectory() as directory:
             fake = Path(directory) / "sccache"
@@ -70,7 +70,7 @@ else:
     print('test result: ok. ' + str(len(selected)) + ' passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.1s')
 """)
             cargo.chmod(0o755)
-            result = subprocess.run([sys.executable, str(ROOT / "tools/ci/ignored_tests.py"), "example#1of2"], env={**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"], "CARGO_CALLS": str(calls), "HORIZON_DATA_LEG_TIMING": "1"}, text=True, capture_output=True, check=True)
+            result = subprocess.run([sys.executable, str(ROOT / "tools/ci/ignored_tests.py"), "example#1of2"], env={**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"], "CARGO_CALLS": str(calls), "SUNRISE_DATA_LEG_TIMING": "1"}, text=True, capture_output=True, check=True)
             self.assertNotIn("PRIVATE LISTING PAYLOAD", result.stdout + result.stderr)
             self.assertNotIn("PRIVATE TEST PAYLOAD", result.stdout + result.stderr)
             lines = result.stdout.splitlines()
@@ -87,7 +87,7 @@ else:
             self.assertIn("--include-ignored", commands[1])
             self.assertIn("--exact", commands[1])
             self.assertIn("--test-threads=4", commands[1])
-            malformed = subprocess.run([sys.executable, str(ROOT / "tools/ci/ignored_tests.py"), "example"], env={**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"], "CARGO_CALLS": str(calls), "RAW_ONLY": "1", "HORIZON_DATA_LEG_TIMING": "1"}, text=True, capture_output=True)
+            malformed = subprocess.run([sys.executable, str(ROOT / "tools/ci/ignored_tests.py"), "example"], env={**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"], "CARGO_CALLS": str(calls), "RAW_ONLY": "1", "SUNRISE_DATA_LEG_TIMING": "1"}, text=True, capture_output=True)
             self.assertNotEqual(malformed.returncode, 0)
             self.assertNotIn("PRIVATE TEST PAYLOAD", malformed.stdout + malformed.stderr)
             self.assertIn("raw output withheld", malformed.stdout)

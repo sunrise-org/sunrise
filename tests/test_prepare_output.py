@@ -17,18 +17,18 @@ class PrepareOutputTests(unittest.TestCase):
     def test_what_varies_between_runs_does_not_count(self):
         manifest = {'schema': 7, 'data_version': 5023, 'render_files_sha256': {'a.json': 'x'}}
         a = {
-            'horizon-resources.json': json.dumps(manifest).encode(),
+            'sunrise-resources.json': json.dumps(manifest).encode(),
             'render-definitions.json': b'{"a": 1, "b": [1, 2]}',
-            'creative-inventory.json': b'{"tags": [["b", "a"]]}',
+            'creative-inventory.json': b'{"tabs":[{"search_metadata":[{"stack":"stone","tags":["b","a"]}]}]}',
             'block-behaviours.json': b'{"c": "Foo$$Lambda/0x0000012a"}',
             'export.log': b'run 1',
             'assets/minecraft/sounds/a.ogg': b'one',
         }
         manifest['render_files_sha256'] = {'a.json': 'y'}
         b = {
-            'horizon-resources.json': json.dumps(manifest).encode(),
+            'sunrise-resources.json': json.dumps(manifest).encode(),
             'render-definitions.json': b'{"b": [1, 2], "a": 1}',
-            'creative-inventory.json': b'{"tags": [["a", "b"]]}',
+            'creative-inventory.json': b'{"tabs":[{"search_metadata":[{"stack":"stone","tags":["a","b"]}]}]}',
             'block-behaviours.json': b'{"c": "Foo$$Lambda/0x00000ff0"}',
             'export.log': b'run 2',
             'assets/minecraft/sounds/a.ogg': b'two',
@@ -37,11 +37,11 @@ class PrepareOutputTests(unittest.TestCase):
             'assets/minecraft/lang/fr_fr.json': b'{"a": "b"}',
             'asset-index.json': b'{"objects": {}}',
             # The game's run-time caches, there once a harness ran the game on this preparation.
-            'horizon-sprites.cache': b'sprites',
-            'horizon-data.bin': b'data',
-            'horizon-data.bin.123.tmp': b'half',
-            'horizon-prepare.json': b'{"output_version": 1}',
-            '.horizon-prepare.lock': b'',
+            'sunrise-sprites.cache': b'sprites',
+            'sunrise-data.bin': b'data',
+            'sunrise-data.bin.123.tmp': b'half',
+            'sunrise-prepare.json': b'{"output_version": 1}',
+            '.sunrise-prepare.lock': b'',
         }
         with tempfile.TemporaryDirectory() as tmp:
             first = prepare_output.digest(self.preparation(Path(tmp) / 'a', a))
@@ -51,9 +51,9 @@ class PrepareOutputTests(unittest.TestCase):
             (Path(tmp) / 'b/render-definitions.json').write_bytes(b'{"b": [2, 1], "a": 1}')
             self.assertNotEqual(first, prepare_output.digest(Path(tmp) / 'b'))
             (Path(tmp) / 'b/render-definitions.json').write_bytes(b'{"b": [1, 2], "a": 1}')
-            (Path(tmp) / 'b/horizon-resources.json').write_text(json.dumps({**manifest, 'schema': 8}))
+            (Path(tmp) / 'b/sunrise-resources.json').write_text(json.dumps({**manifest, 'schema': 8}))
             self.assertNotEqual(first, prepare_output.digest(Path(tmp) / 'b'))
-            (Path(tmp) / 'b/horizon-resources.json').write_text(json.dumps(manifest))
+            (Path(tmp) / 'b/sunrise-resources.json').write_text(json.dumps(manifest))
             (Path(tmp) / 'b/new.nbt').write_bytes(b'')
             self.assertNotEqual(first, prepare_output.digest(Path(tmp) / 'b'))
             # en_us and deprecated are the JAR's, made by the preparer: they count.

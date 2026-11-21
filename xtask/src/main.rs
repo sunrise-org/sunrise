@@ -1,21 +1,21 @@
 //! Repository tasks, run with `cargo run -p xtask -- TASK`.
 //!
-//! `package BINARY OUTDIR`: a playable Horizon folder with the game binary, horizon-ctl,
-//! horizon-prepare and horizon-server (built beside it: cargo build --release -p horizon-game -p horizon-client-lib
-//! --bins -p horizon-prepare -p horizon-server), the exporters horizon-prepare compiles, its sources (the launcher compares
+//! `package BINARY OUTDIR`: a playable Sunrise folder with the game binary, sunrise-ctl, sunrise-perf,
+//! sunrise-prepare, sunrise-server and sunrise-port-pack (built beside it: cargo build --release -p sunrise-game -p sunrise-client-lib
+//! --bins -p sunrise-perf --bin sunrise-perf -p sunrise-prepare -p sunrise-server -p sunrise-port-pack), the exporters sunrise-prepare compiles, its sources (the launcher compares
 //! them to its own), and PLAY.txt. It holds none of Minecraft's files: players prepare those
 //! from their own copy. .github/workflows/release.yml makes the release folders with it.
 //!
 //! `package-server ENGINE OUTDIR`: a server folder (docs/server.md): the server build of the game
-//! (`cargo build --release -p horizon-game --no-default-features`, without sound or controllers)
-//! as horizon-engine, with horizon-prepare and horizon-server from beside it and the same sources.
+//! (`cargo build --release -p sunrise-game --no-default-features`, without sound or controllers)
+//! as sunrise-engine, with sunrise-prepare and sunrise-server from beside it and the same sources.
 //!
-//! `tokens`: writes `crates/horizon-theme/tokens.css`, the design tokens of `crates/horizon-theme` as CSS
-//! custom properties (a horizon-theme test fails when the file is out of date).
+//! `tokens`: writes `crates/sunrise-theme/tokens.css`, the design tokens of `crates/sunrise-theme` as CSS
+//! custom properties (a sunrise-theme test fails when the file is out of date).
 //!
 //! `icons`: renders the icon masters in `docs/media/brand` (with `rsvg-convert`, from librsvg)
-//! into every size the platforms and the website use, and packs `packaging/icons/horizon.ico`
-//! and `horizon.icns`. `docs/media/brand/README.md` lists what goes where.
+//! into every size the platforms and the website use, and packs `packaging/icons/sunrise.ico`
+//! and `sunrise.icns`. `docs/media/brand/README.md` lists what goes where.
 //!
 //! `mixins-tool release | patch SOURCE | identity TARGET`: what
 //! `.github/workflows/prebuilt-mixins-tool.yml` needs to build the horizon-mixins tool the launcher
@@ -26,10 +26,10 @@
 //! `sdk-index DIST COMMIT DATE [--nightly NAME] [--previous BUILD DIFF]`: writes `DIST/sdk.json`,
 //! the mod SDK's index, over the release assets in DIST (`tools/prebuilt_game.py index` calls it),
 //! then reads it back and checks every asset against it. `--previous` names the SDK published
-//! before this one and DIFF the `horizon-stage surface-diff --json` of its surface against this
+//! before this one and DIFF the `sunrise-stage surface-diff --json` of its surface against this
 //! one's, which fill the index's surface comparison.
-//! `perf-wasm`: builds `crates/horizon-perf` for `wasm32-unknown-unknown` with the `wasm` feature
-//! and writes `target/perf-wasm/{horizon_perf.wasm,horizon_perf.js}`, which horizon-rust/horizon-site imports into
+//! `perf-wasm`: builds `crates/sunrise-perf` for `wasm32-unknown-unknown` with the `wasm` feature
+//! and writes `target/perf-wasm/{sunrise_perf.wasm,sunrise_perf.js}`, which horizon-rust/horizon-site imports into
 //! its static assets (docs/perf-platform.md §7.1).
 
 mod mod_api;
@@ -38,23 +38,20 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: cargo run -p xtask -- package BINARY OUTDIR | package-server ENGINE OUTDIR | mod-api [notes|coverage] | tokens | icons | perf-wasm | mixins-tool release | mixins-tool patch SOURCE | mixins-tool identity TARGET | sdk-index DIST COMMIT DATE [--nightly NAME] [--previous BUILD DIFF]";
+const USAGE: &str = "usage: cargo run -p xtask -- package BINARY OUTDIR | package-server ENGINE OUTDIR | mod-api [notes|counterparts] | tokens | icons | perf-wasm | mixins-tool release | mixins-tool patch SOURCE | mixins-tool identity TARGET | sdk-index DIST COMMIT DATE [--nightly NAME] [--previous BUILD DIFF]";
 
 /// What the release folder takes from the repository at HEAD, as `git archive` writes it.
 const ARCHIVED: [&str; 6] = [
     "tools",
-    "mods/horizon/src/test/java",
-    "crates/horizon-prepare",
+    "mods/sunrise/src/test/java",
+    "crates/sunrise-prepare",
     "research-lock.json",
     "LICENSE",
     "LICENSES/MIT-Horizon.txt",
 ];
 
-// The programs that sit beside the client (horizon-ctl, the command line and MCP server that play
-// the game; horizon-prepare, which prepares the resources from the player's own Minecraft;
-// horizon-server, which hosts a server with the client as its engine, docs/server.md) and the
-// wasm runtime are listed, with the checkout's exporters, in the SDK's required inputs
-// (`horizon_mod_package::sdk::inputs`): routes `package` and `package-server`.
+// The release's companion programs and exporters come from the SDK's required inputs
+// (`sunrise_mod_package::sdk::inputs`): routes `package` and `package-server`.
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -65,25 +62,27 @@ fn main() -> ExitCode {
         }
         [task] if task == "mod-api" => mod_api::run(),
         [task, notes] if task == "mod-api" && notes == "notes" => mod_api::notes(),
-        [task, coverage] if task == "mod-api" && coverage == "coverage" => mod_api::coverage(),
+        [task, counterparts] if task == "mod-api" && counterparts == "counterparts" => {
+            mod_api::counterparts()
+        }
         [task, dist, commit, date, options @ ..] if task == "sdk-index" => {
             sdk_index(Path::new(dist), commit, date, options)
         }
         [task] if task == "tokens" => tokens(),
         [task] if task == "icons" => icons(),
         [task, what] if task == "mixins-tool" && what == "release" => {
-            use horizon_mod_package::mixins_tool::{REV, release_tag};
+            use sunrise_mod_package::mixins_tool::{REV, release_tag};
             println!("tag={}\nrev={REV}", release_tag());
-            println!("source={}/{REV}", horizon_addresses::HORIZON_MIXINS_SOURCE);
+            println!("source={}/{REV}", sunrise_addresses::HORIZON_MIXINS_SOURCE);
             Ok(())
         }
         [task, what, source] if task == "mixins-tool" && what == "patch" => {
-            use horizon_mod_package::mixins_tool::{PATCH, PATCH_NAME, apply};
+            use sunrise_mod_package::mixins_tool::{PATCH, PATCH_NAME, apply};
             apply(Path::new(source), PATCH)
                 .map_err(|why| format!("{PATCH_NAME} does not apply to {source}: {why}"))
         }
         [task, what, target] if task == "mixins-tool" && what == "identity" => {
-            print!("{}", horizon_mod_package::mixins_tool::identity(target));
+            print!("{}", sunrise_mod_package::mixins_tool::identity(target));
             Ok(())
         }
         [task] if task == "perf-wasm" => perf_wasm(),
@@ -104,7 +103,7 @@ fn main() -> ExitCode {
 fn repo_root() -> Result<PathBuf, String> {
     let here = std::env::current_dir().map_err(|e| format!("current directory: {e}"))?;
     checkout_above(&here)
-        .ok_or_else(|| format!("{}: not inside a Horizon checkout", here.display()))
+        .ok_or_else(|| format!("{}: not inside a Sunrise checkout", here.display()))
 }
 
 fn checkout_above(start: &Path) -> Option<PathBuf> {
@@ -139,19 +138,27 @@ fn perf_wasm() -> Result<(), String> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let status = Command::new(&cargo)
         .current_dir(repo)
+        // The cdylib is asked for here, not in sunrise-perf's manifest: a cdylib's file name carries no hash, so every
+        // native build of the crate would write the same file and rebuild it, and all above it, whenever two builds
+        // in one target folder resolve it differently. LTO stays off, as it was while the manifest also asked for an
+        // rlib (Cargo skips LTO for such a crate): the page's wasm keeps its size.
         .args([
-            "build",
+            "rustc",
             "--release",
+            "--config",
+            "profile.release.lto=false",
             "--lib",
             "-p",
-            "horizon-perf",
+            "sunrise-perf",
             "--features",
             "wasm",
             "--target",
             "wasm32-unknown-unknown",
+            "--crate-type",
+            "cdylib",
         ])
         .status()
-        .map_err(|e| format!("{cargo} build: {e}"))?;
+        .map_err(|e| format!("{cargo} rustc: {e}"))?;
     if !status.success() {
         return Err(
             "the wasm build failed; `rustup target add wasm32-unknown-unknown` installs the target"
@@ -160,29 +167,29 @@ fn perf_wasm() -> Result<(), String> {
     }
     let target =
         std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| repo.join("target"), PathBuf::from);
-    let wasm = target.join("wasm32-unknown-unknown/release/horizon_perf.wasm");
-    let script = repo.join("crates/horizon-perf/web/horizon_perf.js");
+    let wasm = target.join("wasm32-unknown-unknown/release/sunrise_perf.wasm");
+    let script = repo.join("crates/sunrise-perf/web/sunrise_perf.js");
     let out = target.join("perf-wasm");
     fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-    fs::copy(&wasm, out.join("horizon_perf.wasm"))
+    fs::copy(&wasm, out.join("sunrise_perf.wasm"))
         .map_err(|e| format!("{}: {e}", wasm.display()))?;
-    fs::copy(&script, out.join("horizon_perf.js"))
+    fs::copy(&script, out.join("sunrise_perf.js"))
         .map_err(|e| format!("{}: {e}", script.display()))?;
-    let size = fs::metadata(out.join("horizon_perf.wasm"))
+    let size = fs::metadata(out.join("sunrise_perf.wasm"))
         .map(|m| m.len())
         .unwrap_or(0);
     println!(
-        "wrote {} ({} KiB) and horizon_perf.js",
-        out.join("horizon_perf.wasm").display(),
+        "wrote {} ({} KiB) and sunrise_perf.js",
+        out.join("sunrise_perf.wasm").display(),
         size / 1024
     );
     Ok(())
 }
 
 fn tokens() -> Result<(), String> {
-    let path = repo_root()?.join("crates/horizon-theme/tokens.css");
-    fs::write(&path, horizon_theme::css()).map_err(|e| format!("{}: {e}", path.display()))?;
-    println!("wrote crates/horizon-theme/tokens.css");
+    let path = repo_root()?.join("crates/sunrise-theme/tokens.css");
+    fs::write(&path, sunrise_theme::css()).map_err(|e| format!("{}: {e}", path.display()))?;
+    println!("wrote crates/sunrise-theme/tokens.css");
     Ok(())
 }
 
@@ -272,31 +279,31 @@ fn icons() -> Result<(), String> {
     for size in HICOLOR {
         let png = render(&square, (size, size))?;
         write(
-            &packaging.join(format!("hicolor/{size}x{size}/apps/horizon.png")),
+            &packaging.join(format!("hicolor/{size}x{size}/apps/sunrise.png")),
             &png,
         )?;
     }
     write(
-        &packaging.join("hicolor/scalable/apps/horizon.svg"),
+        &packaging.join("hicolor/scalable/apps/sunrise.svg"),
         &fs::read(&square).map_err(|e| format!("{}: {e}", square.display()))?,
     )?;
     let images = ICO
         .iter()
         .map(|&s| render(&square, (s, s)).map(|png| (s, png)))
         .collect::<Result<Vec<_>, _>>()?;
-    write(&packaging.join("horizon.ico"), &ico(&images))?;
+    write(&packaging.join("sunrise.ico"), &ico(&images))?;
     let macos = brand.join("icon-macos.svg");
     let entries = ICNS
         .iter()
         .map(|&(kind, s)| render(&macos, (s, s)).map(|png| (kind, png)))
         .collect::<Result<Vec<_>, _>>()?;
-    write(&packaging.join("horizon.icns"), &icns(&entries))?;
+    write(&packaging.join("sunrise.icns"), &icns(&entries))?;
     // The window icon the game and the launcher set at run time (X11 and Windows title bars).
     write(
-        &repo.join("crates/horizon-theme/icons/horizon-64.png"),
+        &repo.join("crates/sunrise-theme/icons/sunrise-64.png"),
         &render(&square, (64, 64))?,
     )?;
-    // Avatars, and the website's icons (horizon-site copies docs/media/brand/web/ into its public/).
+    // Avatars, and the website's icons (sunrise-site copies docs/media/brand/web/ into its public/).
     let avatar = brand.join("avatar.svg");
     for (svg, size, out) in [
         (
@@ -320,7 +327,7 @@ fn icons() -> Result<(), String> {
 }
 
 fn sdk_index(dist: &Path, commit: &str, date: &str, options: &[String]) -> Result<(), String> {
-    use horizon_mod_package::sdk::{Build, GAME, INDEX, Index};
+    use sunrise_mod_package::sdk::{Build, GAME, INDEX, Index};
     let (mut nightly, mut previous) = (None, None);
     let mut rest = options;
     loop {
@@ -379,14 +386,14 @@ fn package_server(engine: &Path, out: &Path) -> Result<(), String> {
     preflight("package-server", engine)?;
     let repo = new_folder(out)?;
     copy_exporters(&repo.join("exporters"), &out.join("exporters"))?;
-    copy(engine, &out.join(program_name(engine, "horizon-engine")))?;
+    copy(engine, &out.join(program_name(engine, "sunrise-engine")))?;
     copy_runtime("package-server", engine, out)
 }
 
 /// Every required input of `route` (the SDK's one list) is there before anything is emptied,
 /// built or copied; the refusal names all the missing ones.
 fn preflight(route: &str, program: &Path) -> Result<(), String> {
-    horizon_mod_package::sdk::inputs()
+    sunrise_mod_package::sdk::inputs()
         .check(route, program, &repo_root()?)
         .map_err(|refusal| refusal.to_string())
 }
@@ -432,10 +439,9 @@ fn program_name(program: &Path, name: &str) -> String {
     }
 }
 
-/// Copies the files `route` needs beside `program` (its companion programs and the wasm
-/// runtime) into `out`.
+/// Copies the files `route` needs beside `program` (its companion programs) into `out`.
 fn copy_runtime(route: &str, program: &Path, out: &Path) -> Result<(), String> {
-    let inputs = horizon_mod_package::sdk::inputs();
+    let inputs = sunrise_mod_package::sdk::inputs();
     let route = inputs.route(route).map_err(|e| e.to_string())?;
     for path in route.program_files(program) {
         copy_into(&path, out)?;
@@ -621,11 +627,11 @@ mod tests {
         for checkout in [&one, &two] {
             fs::create_dir_all(checkout.join("xtask")).unwrap();
             fs::write(checkout.join("xtask/Cargo.toml"), "").unwrap();
-            fs::create_dir_all(checkout.join("crates/horizon-client/src")).unwrap();
+            fs::create_dir_all(checkout.join("crates/sunrise-client/src")).unwrap();
         }
         assert_eq!(checkout_above(&one), Some(one.clone()));
         assert_eq!(
-            checkout_above(&two.join("crates/horizon-client/src")),
+            checkout_above(&two.join("crates/sunrise-client/src")),
             Some(two.clone())
         );
         assert_eq!(checkout_above(&base), None);
@@ -677,19 +683,20 @@ mod tests {
         let bin = base.join("bin");
         fs::create_dir_all(&bin).unwrap();
         for name in [
-            "horizon-client",
-            "horizon-ctl",
-            "horizon-prepare",
-            "horizon-server",
+            "sunrise-client",
+            "sunrise-ctl",
+            "sunrise-perf",
+            "sunrise-server",
+            "sunrise-port-pack",
         ] {
             fs::write(bin.join(name), b"").unwrap();
         }
         let out = base.join("out");
         fs::create_dir_all(&out).unwrap();
         fs::write(out.join("kept"), b"").unwrap();
-        let error = package(&bin.join("horizon-client"), &out).unwrap_err();
-        assert!(error.contains("horizon-wasm-std.wasm"), "{error}");
-        assert!(!error.contains("horizon-ctl,"), "{error}");
+        let error = package(&bin.join("sunrise-client"), &out).unwrap_err();
+        assert!(error.contains("sunrise-prepare"), "{error}");
+        assert!(!error.contains("sunrise-ctl,"), "{error}");
         assert!(
             out.join("kept").is_file(),
             "the packager ran before the check"

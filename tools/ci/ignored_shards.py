@@ -11,9 +11,8 @@ The ignored-tests check is a matrix with one package per shard; this file is the
 place that names them. A shard is selected when a changed crate is its package or a
 transitive dependency of it. Workspace-wide files, and any path no crate owns, select
 every shard; pushes to main always run everything (the `changes` job passes --all).
-crates/horizon-client holds horizon-client-lib's sources too (its [lib] path reaches
-into that tree), so that directory counts for both packages; the launcher is its own
-workspace (launcher/Cargo.lock) and selects nothing.
+crates/sunrise-client holds sunrise-client-lib's sources too (its [lib] path reaches
+into that tree), so that directory counts for both packages.
 """
 
 import json
@@ -30,39 +29,34 @@ from tools.ci import rust_changes  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 
 # One package per shard, balanced on the measured test times of the single-job run this
-# plan replaced (dyna-ci run #952, e8752e146f: horizon-client 380s, horizon-client-render
-# 279s, horizon-client-lib 189s, 16m53s wall); horizon-world and horizon-items joined when every library
+# plan replaced (dyna-ci run #952, e8752e146f: sunrise-client 380s, sunrise-client-render
+# 279s, sunrise-client-lib 189s, 16m53s wall); sunrise-world and sunrise-items joined when every library
 # test started running with the data, not only the #[ignore]d ones. Rebalance by editing this tuple only.
-SHARDS = ("horizon-client", "horizon-client-lib", "horizon-client-render", "horizon-world", "horizon-items")
+SHARDS = ("sunrise-client", "sunrise-client-lib", "sunrise-client-render", "sunrise-world", "sunrise-items")
 # The leg that runs the daily rows (tools/ci/ignored-tests/daily-*.txt) that no package shard above runs: the moved
 # tests of every other package, and of the shard packages' targets their shard does not build (tools/ci/ignored_tests.py
 # daily_rows_groups). Coverage, not speed: without it those tests would run nowhere. Main's full matrix only.
 DAILY_ROWS = "daily-rows"
-# The leg that runs each workspace's daily rows. The launcher's get a leg of their own, on the same runner size: its
-# workspace builds GPUI and the launcher from nothing (25 minutes on 8 cores, measured cold), which does not fit beside
-# the other packages' groups in one 60-minute leg. Coverage, not spreading a slow job.
-DAILY_ROWS_LEGS = {".": DAILY_ROWS, "launcher": "daily-rows-launcher"}
+# The leg that runs each workspace's daily rows.
+DAILY_ROWS_LEGS = {".": DAILY_ROWS}
 # What a package's tests need built that `cargo test` does not build itself, by package: the one command, run
-# before its tests by `verify` (dyna-ci.yml), the launcher job and the daily run (tools/ci/ignored_tests.py), so they
-# cannot drift. horizon-mod-package's holder tests start the `holder_actor` example from beside their test executable
+# before its tests by `verify` (dyna-ci.yml) and the daily run (tools/ci/ignored_tests.py), so they
+# cannot drift. sunrise-mod-package's holder tests start the `holder_actor` example from beside their test executable
 # (target/debug/examples, the test profile's folder).
 PREPARE = {
-    "horizon-mod-package": ["cargo", "build", "--locked", "--profile", "test", "-p", "horizon-mod-package",
+    "sunrise-mod-package": ["cargo", "build", "--locked", "--profile", "test", "-p", "sunrise-mod-package",
                             "--features", "runtime-process", "--example", "holder_actor"],
 }
 # A package too big for one test process's memory runs as several legs, `PACKAGE#NofM` (tools/ci/ignored_tests.py
-# gives each test to exactly one leg). horizon-client's single process was killed (signal 9) on three main runs.
-LEGS = {"horizon-client": 2}
+# gives each test to exactly one leg). sunrise-client's single process was killed (signal 9) on three main runs.
+LEGS = {"sunrise-client": 2}
 
 # Files at the repository root that every package's build reads.
 ROOT_WIDE_FILES = {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rustfmt.toml", "clippy.toml"}
 # The crates directory whose sources build more than one of the shard packages.
-SHARED_SOURCES = {"horizon-client": ("horizon-client", "horizon-client-lib")}
-# Workspaces of their own: nothing under them builds the shard packages.
-SEPARATE_WORKSPACES = ("launcher/",)
-# Every Cargo workspace whose tests the daily rows may name, by folder: the game's, and the launcher's own (its own
-# Cargo.lock; the daily-rows leg runs a launcher row from launcher/).
-WORKSPACES = (".", "launcher")
+SHARED_SOURCES = {"sunrise-client": ("sunrise-client", "sunrise-client-lib")}
+# Every Cargo workspace whose tests the daily rows may name, by folder: the game's.
+WORKSPACES = (".",)
 
 
 def expand(packages):
@@ -152,8 +146,6 @@ def select(paths, dependencies):
     owners = set()
     for path in paths:
         if not (path.startswith("docs/") or path.endswith(".md")):
-            if any(path.startswith(prefix) for prefix in SEPARATE_WORKSPACES):
-                continue
             if ("/" not in path and path in ROOT_WIDE_FILES) or path.startswith(".cargo/"):
                 return list(SHARDS)
             if path.startswith("crates/") and path.count("/") >= 2:

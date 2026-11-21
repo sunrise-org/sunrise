@@ -1,0 +1,95 @@
+//! The `register_entity_renderers` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
+
+pub trait Hooks {
+    /// The code-defined renderers of entity types (NeoForge's
+    /// `EntityRenderersEvent.RegisterRenderers`, `registerEntityRenderer`): `register(type,
+    /// renderer)`, and every entity of the type `type` (`mymod:bolt`) in view is drawn by
+    /// `EntityRenderer::submit` in place of the type's own drawing. A later registration for a
+    /// type replaces the earlier one; a type the game does not know is logged with its id and
+    /// draws nothing new. Asked once at start on the client, before resources load; the game
+    /// resolves each type's renderer on every resource load. This build draws the registered
+    /// renderers of content mods' thrown types, of the living types drawn as mobs (in place of
+    /// the model and its vanilla layers), of primed TNT (in place of the flashing cube), of
+    /// experience orbs (in place of the billboarded orb quad) and of paintings (in place of the
+    /// painting's quads) and of item frames and glow item frames (in place of the frame model and
+    /// the item or map on its face);
+    /// general entity types draw only through their renderer, if registered. Other entity
+    /// families keep their own drawing, including the dragon and end crystals. General, living,
+    /// primed TNT and experience orb renderers submit at each entity's slot in level join order.
+    #[notes = r#"## Entity renderers
+
+An entity renderer (NeoForge's `EntityRenderersEvent.RegisterRenderers` and `EntityRenderer`) gives an
+entity type code that draws it. `Hooks::register_entity_renderers` registers one renderer per entity type
+once at start, before resources load, and the game resolves each type's renderer on every resource load
+(the first one and every reload after it), so a frame hands an entity to the renderer of its type: no
+lookup by name, no scan over the mods. In the ordered body pass, general, living, primed TNT and
+experience orb renderers submit at each entity's slot in level join order.
+
+```rust,ignore
+struct Bolt;
+impl EntityRenderer for Bolt {
+    fn submit(
+        &self,
+        entity: &EntityRenderState,
+        draw: &mut dyn BlockEntityDrawContext,
+    ) -> Result<(), String> {
+        // The pose starts at the entity, not turned: face the way it flies.
+        draw.rotate_about([0.0, 1.0, 0.0], -entity.yaw, [0.0; 3]);
+        draw.rotate_about([1.0, 0.0, 0.0], entity.pitch, [0.0; 3]);
+        let face = Some(CubeFace::new("example:entity/bolt"));
+        draw.cube([-1.0, -1.0, -4.0], [1.0, 1.0, 4.0], [face; 6], 0xFFFFFF);
+        Ok(())
+    }
+}
+
+fn register_entity_renderers(
+    &self,
+    _context: &RegistrationContext,
+    event: &mut RegisterEntityRenderersEvent<'_>,
+) {
+    event.renderers.register("example:bolt".into(), Arc::new(Bolt));
+}
+```
+
+The renderer draws with the helpers a block entity or mob submit hook draws with (`quad`, `cube`, `block`,
+`item`, `model_part`), under a pose stack that starts at the entity's interpolated position, in blocks,
+not turned; `EntityRenderState` has the frame's partial tick, the entity's age and its interpolated yaw
+and pitch, and `draw.light()` the entity's light. A living entity's state also has `living`, its
+`LivingRenderState`: body and head turns, walk cycle, death time, scale, pose, bed and flags, by the
+reference's names. What it draws replaces the type's own drawing (a thrown type's flying item; a living
+type's model and its vanilla layers, held items and worn blocks included); the glowing outline still
+draws around it. Entities of a type share the one
+renderer, whose `submit` has no `Host` and no level: a renderer that needs the world reads it in a
+hook. A general entity type (`declare_general_entity`) draws only through its renderer. Its
+`EntityRenderState::attachments` holds the synced fields captured in the immutable state before submission.
+
+A later registration for a type replaces the earlier one, whichever mod made it, as in NeoForge. When
+resources load, a registration for a type the game does not know is logged with the type's id and left
+out; one for a known type whose family does not draw through registered renderers yet is kept silently,
+and the type keeps its own drawing until its family does. Today these routes draw through registered
+renderers: the content mods' thrown types (a `data/<id>/sunrise/entity_type/<name>.json` with the
+`minecraft:snowball` template), the living types drawn as mobs, vanilla's and the content mods'
+(not the player, whose model goes by its skin, and not the armour stand or the ender dragon, which draw
+through routes of their own), primed TNT (`minecraft:tnt`, in place of the flashing cube, reading
+`tnt_fuse`), experience orbs (`minecraft:experience_orb`, in place of the billboarded orb quad, reading
+`orb_value`), paintings (`minecraft:painting`, in place of the painting's quads,
+reading `painting`), and item frames and glow item frames (`minecraft:item_frame` and
+`minecraft:glow_item_frame`, in place of the frame model and the item or map on its face, reading
+`item_frame`). Primed TNT's `age` is its unsaved `tickCount` plus the partial tick; its yaw and pitch
+are its current rotation, not interpolated (it has no previous rotation). A painting's `age` is its unsaved `tickCount` plus the partial tick; its yaw is
+`Direction.get2DDataValue * 90` and its pitch is 0 (it does not interpolate rotation). An item frame's `age` is its unsaved `tickCount` plus the partial tick; its yaw and
+pitch follow `ItemFrame.setDirection` and are not interpolated (it has no previous rotation). Around a living type's renderer everything else stays: `render_living_pre`
+(whose cancel skips it), the mods' layers (with no posed parts) and `render_living_post`, in the order
+the type's own model has, so it changes with #3915 and not before. Boats, displays and the other
+projectiles come in follow-ups of #860. A renderer that returns an `Err` or panics is logged once with
+the error and asked no more until the next resource load resolves it again. What it drew that frame is
+dropped, and until then its type draws as it would without one."#]
+    #[hook(
+        side = "client",
+        version = 3,
+        contract = "listen",
+        context = "registration",
+        neoforge = "EntityRenderersEvent.RegisterRenderers"
+    )]
+    fn register_entity_renderers();
+}

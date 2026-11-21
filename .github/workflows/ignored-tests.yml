@@ -14,12 +14,17 @@ permissions:
   contents: read
 env:
   # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
-  HORIZON_TELEMETRY_URL: "off"
+  SUNRISE_TELEMETRY_URL: "off"
   # sccache (shared per Dyna host) cannot cache incremental compiles, so every Rust job builds non-incremental.
   CARGO_INCREMENTAL: 0
 jobs:
   plan:
-    runs-on: ubuntu-latest
+    # Every shard waits for this job: on Dyna's small runner while the repository's switch is on, as dyna-checks'
+    # `changes`, so the shards never queue behind GitHub's runners first (23 minutes on 2026-11-16).
+    runs-on: ${{ vars.DYNA_CI_SELF_HOSTED == 'true' && 'dyna-small' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      actions: read  # the attempt's creation or start time (tools/ci/dyna_ci_route.sh)
     timeout-minutes: 5
     outputs:
       self_hosted: ${{ steps.runner.outputs.self_hosted }}
@@ -29,14 +34,21 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ inputs.commit }}
+      # Dyna's runner image has no GitHub CLI; GitHub's runners do.
+      - name: GitHub CLI
+        run: bash tools/ci/ensure_gh.sh
+      # The pool's switch and lease (tools/ci/dyna_ci_route.sh): a snapshot is judged at the attempt's creation (a re-run's start), so a
+      # run that waited in a concurrency group or GitHub's queue is not sent off the pool by a lease that lapsed
+      # meanwhile.
       - id: runner
         env:
-          ENABLED: ${{ vars.DYNA_CI_SELF_HOSTED }}
-          LEASE: ${{ vars.DYNA_CI_POOL_UNTIL }}
+          GH_TOKEN: ${{ github.token }}
+          VARS_ENABLED: ${{ vars.DYNA_CI_SELF_HOSTED }}
+          VARS_LEASE: ${{ vars.DYNA_CI_POOL_UNTIL }}
           # Only dispatches (the daily run's included) run this workflow, from this repository.
           SAME_REPO: true
           EVENT: ${{ github.event_name }}
-        run: bash tools/ci/dyna_ci_runner.sh >> "$GITHUB_OUTPUT"
+        run: bash tools/ci/dyna_ci_route.sh >> "$GITHUB_OUTPUT"
       - name: The ignored-tests shard matrix
         id: matrix
         run: python3 tools/ci/ignored_shards.py --matrix --all >> "$GITHUB_OUTPUT"
@@ -50,11 +62,11 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     # Owner-approved stopgap: #2944 removes this when the legs run under 15 minutes.
-    runs-on: ${{ (matrix.shard == 'horizon-client#1of2' || matrix.shard == 'horizon-client#2of2') && 'dyna-xlarge' || 'dyna-large' }}
+    runs-on: ${{ (matrix.shard == 'sunrise-client#1of2' || matrix.shard == 'sunrise-client#2of2') && 'dyna-xlarge' || 'dyna-large' }}
     # Temporary: #2944 brings client data legs under 15 minutes and restores the 60-minute cap.
     # Interim: 180 so the client legs finish and report at all (the 2026-11-13 dry run's #1of2 was killed at 90 with
     # 61 tests past 60 s). Cutting the slow client tests (#4022's next change) brings it back down.
-    timeout-minutes: ${{ (matrix.shard == 'horizon-client#1of2' || matrix.shard == 'horizon-client#2of2') && 180 || 60 }}
+    timeout-minutes: ${{ (matrix.shard == 'sunrise-client#1of2' || matrix.shard == 'sunrise-client#2of2') && 180 || 60 }}
     permissions:
       contents: read
     steps:
@@ -93,14 +105,14 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
         run: |
-          for dir in minecraft datagen horizon-client tools; do
-            if [ ! -d "/cache/horizon-local/$dir" ]; then
+          for dir in minecraft datagen sunrise-client tools; do
+            if [ ! -d "/cache/sunrise-local/$dir" ]; then
               echo "prepared data unavailable on this runner"
               echo "Prepared data unavailable: $dir ($EVENT)" >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
           done
-          HORIZON_DYNA_CACHE=true HORIZON_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" HORIZON_SHARED_SOURCE=/cache/horizon-local bash tools/ci/vanilla-data.sh
+          SUNRISE_DYNA_CACHE=true SUNRISE_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" SUNRISE_SHARED_SOURCE=/cache/sunrise-local bash tools/ci/vanilla-data.sh
       - name: Retain typed preparation diagnostics only
         if: failure() && steps.data.outcome == 'failure'
         uses: actions/upload-artifact@v4
@@ -113,7 +125,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
       - name: Generate the fishing test's vanilla reference inputs
-        if: steps.data.outputs.present != 'false' && (matrix.shard == 'horizon-client' || startsWith(matrix.shard, 'horizon-client#'))
+        if: steps.data.outputs.present != 'false' && (matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#'))
         run: |
           reference=$(mktemp -d "$RUNNER_TEMP/fishing-reference.XXXXXX")
           python3 tools/test_fishing_rng_parity.py --prepare-reference "$reference" --env-file "$GITHUB_ENV"
@@ -121,9 +133,11 @@ jobs:
         if: steps.data.outputs.present != 'false'
         env:
           SHARD: ${{ matrix.shard }}
-          HORIZON_DATA_LEG_TIMING: '1'
+          SUNRISE_DATA_LEG_TIMING: '1'
+          # The mesher and section-visibility tests read the prepared data from their own variable.
+          SUNRISE_MESH_TEST_RESOURCES: ${{ github.workspace }}/.local/sunrise-client/26.3
         run: |
-          export HORIZON_TEST_RESOURCES="$PWD/.local/horizon-client/26.3"
+          export SUNRISE_TEST_RESOURCES="$PWD/.local/sunrise-client/26.3"
           python3 tools/ci/with_xvfb.py python3 tools/ci/ignored_tests.py --report "$RUNNER_TEMP/daily-report.json" "$SHARD"
       # The leg's verdict for the daily summary: test names, panic locations and policy only (ignored_tests.py --report).
       - name: Upload the leg report

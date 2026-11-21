@@ -4,7 +4,7 @@
     python3 tools/ci/format_scan.py
 
 `cargo fmt --all` reaches only the modules a `mod` line names, so it misses the gameplay modules the build derives
-(`.game-area`), the API and vocabulary files a build script includes, and the generator's and wire loopback's
+(`.game-area`), the API and vocabulary files a build script includes, and the generator's
 fixtures. Each of those is checked by path as well. Every check runs, so one run names every unformatted file; the
 exit status is 1 if any of them failed. The launcher is a separate workspace with its own check.
 """
@@ -15,11 +15,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 # Every `.rs` file under these folders, checked one file at a time (no child modules followed).
-TREES = ("crates/horizon-mod-api/src", "crates/horizon-mod-vocab/src", "crates/horizon-client/src/game")
+TREES = ("crates/sunrise-mod-api/src", "crates/sunrise-mod-vocab/src", "crates/sunrise-client/src/game")
 # Files no `mod` line reaches.
-DISCOVERED = ("crates/horizon-mod-api-gen/dispatch-tests/src/fixtures/*.rs",
-              "crates/horizon-mod-api-gen/dispatch-tests/src/fixtures/*/*.rs",
-              "crates/horizon-mod-wasm/wire-loopback/tests/wire_loopback/*.rs")
+DISCOVERED = ("crates/sunrise-mod-api-gen/dispatch-tests/src/fixtures/*.rs",
+              "crates/sunrise-mod-api-gen/dispatch-tests/src/fixtures/*/*.rs")
 RUSTFMT = ["rustfmt", "--edition", "2024", "--check", "--config", "skip_children=true"]
 # Windows limits a command line to 32,767 characters; a chunk of paths stays well under it.
 CHUNK = 200

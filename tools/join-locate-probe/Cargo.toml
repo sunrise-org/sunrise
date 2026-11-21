@@ -7,16 +7,16 @@ publish = false
 [workspace]
 
 [dependencies]
-# What the production sources this probe imports reach directly: join_seq.rs (horizon-core's
-# hashing, the mod API's dimension vocabulary, horizon-mod-runtime's attachment lifetimes) and
+# What the production sources this probe imports reach directly: join_seq.rs (sunrise-core's
+# hashing, the mod API's dimension vocabulary, sunrise-mod-runtime's attachment lifetimes) and
 # the residency table's own `log::error!`.
-horizon-core = { path = "../../crates/horizon-core" }
-horizon-mod-runtime = { path = "../../crates/horizon-mod-runtime" }
-mod_api = { package = "horizon-mod-vocab", path = "../../crates/horizon-mod-vocab" }
+sunrise-core = { path = "../../crates/sunrise-core" }
+sunrise-mod-runtime = { path = "../../crates/sunrise-mod-runtime" }
+mod_api = { package = "sunrise-mod-vocab", path = "../../crates/sunrise-mod-vocab" }
 log = "0.4"
 
 [features]
-# The residency journal observation horizon-client-lib turns on for these same sources. The
+# The residency journal observation sunrise-client-lib turns on for these same sources. The
 # probe's tests reach it through `cfg(test)`; the name is declared so the plain build's
 # `unexpected_cfgs` check accepts it.
 test-residency-observer = []

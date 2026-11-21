@@ -1,0 +1,2 @@
+sunrise-client game::block_entity_part_state_tests::part_state_counts_ticks_across_chunk_reload lib daily child-process
+sunrise-client game::block_entity_tick_reply_tests::native_tick_reply_matrix lib daily child-process

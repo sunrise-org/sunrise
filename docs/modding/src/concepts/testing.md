@@ -1,6 +1,6 @@
 # Testing a mod
 
-Enable the `testing` feature on your `horizon-mod-api` test dependency. Then
+Enable the `testing` feature on your `sunrise-mod-api` test dependency. Then
 `testing::with_mods` takes an owned `Mods` list and runs a closure with it installed on the current thread.
 It restores the previous list even if the closure panics. The test allocation is retained because dispatch exposes
 a static slice. Call `dispatch_<hook>(&mut host, args…)` inside the closure to build the event as the game does.
@@ -18,7 +18,7 @@ the fakes. This example moves three items between two containers:
 ```rust,ignore
 use mod_api::testing::FakeHost;
 use mod_api::prelude::ItemsHost;
-use mod_api::{HostTransaction, ITEMS, ItemResource, ItemStack, ServerHost, move_resources};
+use mod_api::{HostTransaction, ITEMS, ItemResource, ItemStack, ServerHost, resource_util::move_resources};
 
 let mut host = FakeHost::new();
 let level = host.level.level();
@@ -33,7 +33,7 @@ let server: &mut dyn ServerHost = &mut host;
 let from = level.capability(server, &ITEMS, [0, 64, 0], None).unwrap();
 let into = level.capability(server, &ITEMS, [1, 64, 0], None).unwrap();
 let moved = server.transaction(|host, tx| {
-    move_resources(host, &from, &into, |_: &ItemResource| true, 3, tx)
+    move_resources(host, &from, &into, |_: &ItemResource| true, 3, Some(tx))
 });
 assert_eq!(moved.ok(), Some(3));
 let into = host.level.block_entity_at([1, 64, 0]).unwrap().items.as_ref().unwrap();

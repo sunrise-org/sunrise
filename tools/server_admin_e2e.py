@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-"""horizon-server's admin API on a real server, end to end (docs/api/server.md).
+"""sunrise-server's admin API on a real server, end to end (docs/api/server.md).
 
     python3 tools/server_admin_e2e.py --bin-dir target/fast
 
-`horizon-server run` supervises Horizon's dedicated server (offline mode, a flat world); two horizon-bots
-players join. Through the control API, with the token from .horizon/api.json, the run lists the players, then
+`sunrise-server run` supervises Sunrise's dedicated server (offline mode, a flat world); two sunrise-bots
+players join. Through the control API, with the token from .sunrise/api.json, the run lists the players, then
 ops and deops, whitelists, bans and pardons by name and by address, kicks, and turns the whitelist on and off,
 checking each reply (`changed`, the console's lines), vanilla's files, the server's log and `GET players`.
 It also checks the Prometheus text, and that a call without the token is refused and a name with a space is
 not run; then reads the settings and changes the difficulty live, and backs up, downloads and deletes a backup,
-and runs the same moderation from the `horizon-server` CLI.
+and runs the same moderation from the `sunrise-server` CLI.
 The API listens on the address and with the token server.toml's [api] fixes, as a moderation bot's would.
 An event stream (server-sent events) opened before the bots join must see them join, Kim0's chat (sent as a raw
-chat packet) and the chat filter's refusal of the next one (`chat_filtered`, no `chat`), then the console mutes,
-lists and unmutes them by hand (`mute`, `tempmute`, `mutelist`, `unmute`), Lou0's death, the kick and the leaves, typed, with the same events polled as JSON. Last,
-`horizon-server mcp` bans and pardons, reads events and refuses an unconfirmed stop, and `horizon-server
+chat packet), Lou0's death, the kick and the leaves, typed, with the same events polled as JSON. Last,
+`sunrise-server mcp` bans and pardons, reads events and refuses an unconfirmed stop, and `sunrise-server
 console` attaches through a pipe, runs two commands and shows what they log.
 
-Everything runs in a fresh temporary folder with fresh HORIZON_HOME and XDG folders and no audio. Logs go
+Everything runs in a fresh temporary folder with fresh SUNRISE_HOME and XDG folders and no audio. Logs go
 to --out. Build first:
-    cargo build --profile fast -p horizon-game -p horizon-client-lib --bins -p horizon-bots -p horizon-server
+    cargo build --profile fast -p sunrise-game -p sunrise-client-lib --bins -p sunrise-bots -p sunrise-server
 """
 import argparse
 import http.client
@@ -54,7 +53,7 @@ def check(condition, what):
 
 class Api:
     def __init__(self, folder):
-        endpoint = json.loads((folder / '.horizon' / 'api.json').read_text())
+        endpoint = json.loads((folder / '.sunrise' / 'api.json').read_text())
         self.host, port = endpoint['address'].rsplit(':', 1)
         self.port = int(port)
         self.token = endpoint['token']
@@ -77,8 +76,6 @@ class Api:
 
 
 CHAT = 'hello from Kim0'
-# A slur in leetspeak, for the chat filter to refuse (docs/chat-filter.md).
-FILTERED = 'n1gg3r'
 
 
 def chat_packet(message):
@@ -89,7 +86,7 @@ def chat_packet(message):
 
 
 def bot(bins, port, name, *extra):
-    return subprocess.Popen([bins / f'horizon-bots{EXE}', '--server', f'127.0.0.1:{port}', '--bots', '1',
+    return subprocess.Popen([bins / f'sunrise-bots{EXE}', '--server', f'127.0.0.1:{port}', '--bots', '1',
                              '--behaviour', 'stand', '--seconds', '600', '--name', name, *extra],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -143,8 +140,8 @@ def scenario(bins, folder, server, port):
     api = Api(folder)
     wait_until('the supervisor says running', lambda: api('GET', '/api/v1/status')['phase'] == 'running')
     check(api.call('GET', '/api/v1/players', token='nope')[0] == 401, 'a call without the token is refused')
-    stream = Stream(api, 'join,leave,kick,chat,chat_filtered,death')
-    raw = f'60:9:{chat_packet(CHAT)},80:9:{chat_packet(FILTERED)}'
+    stream = Stream(api, 'join,leave,kick,chat,death')
+    raw = f'60:9:{chat_packet(CHAT)}'
     bots = [bot(bins, port, 'Kim', '--raw', raw), bot(bins, port, 'Lou')]
     try:
         wait_until('Kim0 and Lou0 online', lambda: online(api) == ['Kim0', 'Lou0'])
@@ -152,32 +149,6 @@ def scenario(bins, folder, server, port):
         check(stream.seen('join', 'Kim0')[0]['address'] == '127.0.0.1', 'the join event has the address')
         wait_until("Kim0's chat streamed", lambda: stream.seen('chat', 'Kim0'), 30)
         check(stream.seen('chat', 'Kim0')[0]['message'] == CHAT, f'the chat event has the message ({stream.events})')
-        wait_until("Kim0's slur refused", lambda: stream.seen('chat_filtered', 'Kim0'), 30)
-        refused = stream.seen('chat_filtered', 'Kim0')[0]
-        check((refused['place'], refused['hit'], refused['action']) == ('chat', 1, 'refused')
-              and 'message' not in refused, f'the chat_filtered event, without the text ({refused})')
-        check(all(e['message'] != FILTERED for e in stream.seen('chat', 'Kim0')), 'the refused message is no chat event')
-        log = folder / 'logs' / 'chat-filter.log'
-        check(log.exists() and 'Kim0' in log.read_text() and FILTERED in log.read_text(),
-              'logs/chat-filter.log keeps the refused text')
-        server.wait_for(r"\[chat-filter\] Refused Kim0's chat \(hit 1: refused\)", 30)
-
-        # An operator's mutes, from the console, kept with the filter's in chat-filter-mutes.json.
-        def command(line, expect):
-            out = api('POST', '/api/v1/command', {'line': line})['output']
-            check(any(expect in o for o in out), f'{line}: "{expect}" ({out})')
-        command('mute Lou0 spamming', 'Muted Lou0 until unmuted: spamming')
-        command('tempmute Kim0 2h', 'Muted Kim0 for 2 hours')
-        command('tempmute Kim0 soon', "soon isn't a duration: 10m, 2h, 1d")
-        command('mutelist', 'There are 2 mute(s):')
-        command('mutelist', 'Lou0 was muted by Server until unmuted: spamming')
-        command('mutelist', 'Kim0 was muted by Server for 2 more hours')
-        mutes = json.loads((folder / 'chat-filter-mutes.json').read_text())['mutes']
-        check([(m['name'], m['by'], m['until'] is None) for m in mutes] == [('Kim0', 'Server', False), ('Lou0', 'Server', True)],
-              f'chat-filter-mutes.json has both mutes ({mutes})')
-        command('unmute Lou0', 'Unmuted Lou0')
-        command('unmute Kim0', 'Unmuted Kim0')
-        command('mutelist', 'There are no mutes')
         players = api('GET', '/api/v1/players')
         check(players['max_players'] == 20 and players['ops'] == [] and players['bans'] == [],
               f'players: 20 slots, no operators, no bans ({players})')
@@ -187,9 +158,9 @@ def scenario(bins, folder, server, port):
                   and all(isinstance(c, (int, float)) for c in p['position']) for p in players['online']),
               f"online players have a dimension and an x, y, z position ({[(p['name'], p['dimension'], p['position']) for p in players['online']]})")
         wait_until('the sampler sees 2 players',
-                   lambda: 'horizon_players_online 2\n' in api.call('GET', '/api/v1/metrics/prometheus')[1])
+                   lambda: 'sunrise_players_online 2\n' in api.call('GET', '/api/v1/metrics/prometheus')[1])
         text = api.call('GET', '/api/v1/metrics/prometheus')[1]
-        check('horizon_up 1\n' in text and 'horizon_tps ' in text and 'horizon_mspt{stat="p95"}' in text,
+        check('sunrise_up 1\n' in text and 'sunrise_tps ' in text and 'sunrise_mspt{stat="p95"}' in text,
               'Prometheus text: up, TPS and MSPT')
 
         def act(path, body, changed, line):
@@ -257,22 +228,22 @@ def scenario(bins, folder, server, port):
         api('DELETE', f'/api/v1/backups?name={name}')
         check(not (folder / 'backups' / name).exists(), 'the backup is deleted')
 
-        cli = [bins / f'horizon-server{EXE}', '--dir', folder]
+        cli = [bins / f'sunrise-server{EXE}', '--dir', folder]
 
         def run(*words):
             return subprocess.run([str(w) for w in cli + list(words)], capture_output=True, text=True,
                                   env=lab.game_env(), timeout=120)
         out = run('ban', 'Kim0', 'griefing', 'again')
         check(out.returncode == 0 and 'Banned Kim0: griefing again' in out.stdout,
-              f'horizon-server ban ({out.stdout!r} {out.stderr!r})')
+              f'sunrise-server ban ({out.stdout!r} {out.stderr!r})')
         out = run('players')
-        check('Banned: Kim0 (griefing again)' in out.stdout, f'horizon-server players ({out.stdout!r})')
+        check('Banned: Kim0 (griefing again)' in out.stdout, f'sunrise-server players ({out.stdout!r})')
         out = run('pardon', 'Kim0')
-        check(out.returncode == 0 and 'Unbanned Kim0' in out.stdout, f'horizon-server pardon ({out.stdout!r})')
+        check(out.returncode == 0 and 'Unbanned Kim0' in out.stdout, f'sunrise-server pardon ({out.stdout!r})')
         out = run('players', '--json')
-        check(out.returncode == 0 and json.loads(out.stdout)['bans'] == [], 'horizon-server players --json')
+        check(out.returncode == 0 and json.loads(out.stdout)['bans'] == [], 'sunrise-server players --json')
 
-        mcp = subprocess.Popen([str(bins / f'horizon-server{EXE}'), '--dir', str(folder), 'mcp'],
+        mcp = subprocess.Popen([str(bins / f'sunrise-server{EXE}'), '--dir', str(folder), 'mcp'],
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=lab.game_env())
 
         def rpc(i, method, params):
@@ -301,7 +272,7 @@ def scenario(bins, folder, server, port):
         mcp.stdin.close()
         mcp.wait(timeout=30)
 
-        console = subprocess.Popen([str(bins / f'horizon-server{EXE}'), '--dir', str(folder), 'console'],
+        console = subprocess.Popen([str(bins / f'sunrise-server{EXE}'), '--dir', str(folder), 'console'],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    text=True, env=lab.game_env())
         console.stdin.write('say hello from the console\nlist\n')
@@ -353,7 +324,7 @@ generate-structures = false
 spawn-protection = 0
 
 [engine]
-path = {json.dumps(str(bins / f'horizon-client{EXE}'))}
+path = {json.dumps(str(bins / f'sunrise-client{EXE}'))}
 resources = {json.dumps(str(lab.RESOURCES.resolve()))}
 restart_on_crash = false
 
@@ -367,10 +338,10 @@ bind = ""
 bind = "127.0.0.1:{api_port}"
 token = "{TOKEN}"
 ''')
-    server = Server([bins / f'horizon-server{EXE}', '--dir', folder, 'run'], folder, out / 'server.log')
+    server = Server([bins / f'sunrise-server{EXE}', '--dir', folder, 'run'], folder, out / 'server.log')
     try:
         server.wait_for(DONE, 300)
-        endpoint = json.loads((folder / '.horizon' / 'api.json').read_text())
+        endpoint = json.loads((folder / '.sunrise' / 'api.json').read_text())
         if (endpoint['address'], endpoint['token']) != (f'127.0.0.1:{api_port}', TOKEN):
             raise Failed(f'the API is not where [api] says: {endpoint}')
         scenario(bins, folder, server, port)

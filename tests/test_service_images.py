@@ -3,11 +3,11 @@
 Each service is its own workspace with its own Cargo.lock. When one of its crates gains a path dependency on
 another crate of the repository, the image must copy that crate too, and Railway must rebuild when it changes:
 otherwise the next deploy fails (`no matching package named ...`) while the old deployment keeps running, and nobody
-sees it (2026-11-09: both services failed after horizon-addresses and horizon-release-sign joined them).
+sees it (2026-11-09: both services failed after sunrise-addresses and sunrise-release-sign joined them).
 
-A build script can read more than its own crate. horizon-mod-vocab's runs the mod API generator
-(horizon-mod-api-gen), which reads the game's hook sources and the crate each hook target names, so an image whose
-lockfile has horizon-mod-vocab copies every crate (`COPY crates crates`) and rebuilds when any of them changes (#3474).
+A build script can read more than its own crate. sunrise-mod-vocab's runs the mod API generator
+(sunrise-mod-api-gen), which reads the game's hook sources and the crate each hook target names, so an image whose
+lockfile has sunrise-mod-vocab copies every crate (`COPY crates crates`) and rebuilds when any of them changes (#3474).
 """
 
 import json
@@ -17,10 +17,10 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVICES = ["horizon-telemetry-server", "horizon-mod-registry"]
+SERVICES = ["sunrise-telemetry-server", "sunrise-mod-registry"]
 # The crate whose build script runs the mod API generator, and the generator's sources.
-VOCAB = "horizon-mod-vocab"
-GENERATOR = ROOT / "crates" / "horizon-mod-api-gen" / "src"
+VOCAB = "sunrise-mod-vocab"
+GENERATOR = ROOT / "crates" / "sunrise-mod-api-gen" / "src"
 
 
 def all_crates() -> set[str]:
@@ -109,7 +109,7 @@ class ServiceImageTests(unittest.TestCase):
         # The generator also reads the crate each hook target names, known only when it runs: no list of crates is
         # complete, so the image copies them all and Railway watches them all.
         named, dynamic = generator_reads()
-        self.assertIn("horizon-client", named)
+        self.assertIn("sunrise-client", named)
         self.assertTrue(dynamic, "the generator no longer reads crates named at run time: a list of crates may do")
         for service in SERVICES:
             crate = ROOT / "crates" / service
@@ -123,7 +123,7 @@ class ServiceImageTests(unittest.TestCase):
     def test_an_image_that_runs_the_generator_copies_and_watches_its_data_files(self):
         # The build script fails when a file the generator reads outside crates/ is missing from the image.
         self.assertIn("tools/layering/mod_vocab_state.json", generator_files())
-        self.assertIn("tools/mixins/narrow-reference-rule.patch", included_files({"horizon-mod-package"}))
+        self.assertIn("tools/mixins/narrow-reference-rule.patch", included_files({"sunrise-mod-package"}))
         for service in SERVICES:
             crate = ROOT / "crates" / service
             lock = path_packages(crate / "Cargo.lock")
@@ -146,14 +146,14 @@ class ServiceImageTests(unittest.TestCase):
     def test_the_checks_read_real_dockerfile_lines(self):
         # A COPY of a crate is recognised, a COPY of anything else is not, and a lockfile's registry packages
         # are not path packages.
-        sample = ROOT / "crates" / "horizon-mod-registry" / "Dockerfile"
-        self.assertIn("horizon-mod-registry", copied_crates(sample))
+        sample = ROOT / "crates" / "sunrise-mod-registry" / "Dockerfile"
+        self.assertIn("sunrise-mod-registry", copied_crates(sample))
         self.assertNotIn("Cargo.toml", copied_crates(sample))
-        self.assertNotIn("serde", path_packages(ROOT / "crates" / "horizon-mod-registry" / "Cargo.lock"))
+        self.assertNotIn("serde", path_packages(ROOT / "crates" / "sunrise-mod-registry" / "Cargo.lock"))
         # A Dockerfile that names its crates one by one copies only those.
-        telemetry = ROOT / "crates" / "horizon-telemetry-server" / "Dockerfile"
+        telemetry = ROOT / "crates" / "sunrise-telemetry-server" / "Dockerfile"
         self.assertFalse(copies_every_crate(telemetry))
-        self.assertNotIn("horizon-client", copied_crates(telemetry))
+        self.assertNotIn("sunrise-client", copied_crates(telemetry))
 
 
 if __name__ == "__main__":

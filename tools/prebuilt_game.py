@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""The prebuilt game (#589): horizon-client as a Rust dylib plus every crate's metadata, so the launcher builds
+"""The prebuilt game (#589): sunrise-client as a Rust dylib plus every crate's metadata, so the launcher builds
 native trait mods against it with rustc alone, in seconds, without the game's source or a game build.
 
-    python3 tools/prebuilt_game.py build OUT [--server]   # build and collect the folder, write horizon-prebuilt.json
+    python3 tools/prebuilt_game.py build OUT [--server]   # build and collect the folder, write sunrise-prebuilt.json
     python3 tools/prebuilt_game.py smoke OUT              # build the starter mod and the game executable against OUT only
     python3 tools/prebuilt_game.py start OUT              # start smoke's executable, as installed, as far as no game data allows
     python3 tools/prebuilt_game.py exports OUT            # each DLL's exported names, toward Windows' limit
     python3 tools/prebuilt_game.py pack OUT DIST          # the SDK's assets from OUT: runtime-, api- and
                                                           # engine-<target>[-server].tar.xz, build-data.tar.xz
-                                                          # and surface.json, in DIST
+                                                          # and surface.json, in DIST; for the client side also
+                                                          # tool-<target>.tar.xz (cargo-sunrise-mod); --stage-tool the
+                                                          # sunrise-stage `build` compiled, instead of compiling it
+    python3 tools/prebuilt_game.py tool DIST              # just this computer's tool-<target>.tar.xz, as `pack` makes it
+                                                          # (the rolling mod-tool release, tools/ci/mod_tool.py)
     python3 tools/prebuilt_game.py gather LEGS DIST       # the release folder from every packing leg's DIST, once
                                                           # their build data and surface are checked equal
     python3 tools/prebuilt_game.py index DIST [--nightly NAME] [--previous BUILD DIFF]  # DIST/sdk.json
@@ -19,18 +23,21 @@ The folder holds compiler outputs and game-owned registry patch crates, never va
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor
+import faulthandler
 import hashlib
 import json
 import lzma
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
 import tomllib
 import time
+import urllib.request
 from pathlib import Path
 
 
@@ -38,19 +45,24 @@ ROOT = Path(__file__).resolve().parent.parent
 PROFILE = "release"
 # What rustc writes for a dylib or proc macro on each OS, plus metadata and the MinGW import libraries.
 SUFFIXES = (".rmeta", ".so", ".dll", ".dll.a", ".dylib")
-IDENTITY = "horizon-prebuilt.json"
+IDENTITY = "sunrise-prebuilt.json"
 # The crate the game's library is built from; its build resolves what mods compile against.
-GAME = "horizon-mod-host"
+GAME = "sunrise-mod-host"
+OFFICIAL = "sunrise-official"
 LOCK = "Cargo.lock"
+# `git archive` of the whole commit takes seconds on every runner; past this it is stuck, not slow.
+ARCHIVE_SECONDS = 600
+# While the commit is copied out, every thread's stack is printed this often: a stall there names its line.
+COPY_WATCH_SECONDS = 120
 # Where `smoke` installs the executable it builds, as the launcher does, for `start`: beside OUT, never inside it,
 # since the archive is OUT alone.
 SMOKE = "prebuilt-smoke"
 # Where `smoke` installs the same executable without selected mods, for `start`.
 SMOKE_API = "prebuilt-smoke-api"
-EXECUTABLE = "horizon-client.exe" if sys.platform == "win32" else "horizon-client"
+EXECUTABLE = "sunrise-client.exe" if sys.platform == "win32" else "sunrise-client"
 # The furthest a game started without its prepared files gets (game.rs `missing_resources`): past loading the
 # game's libraries and the mods' runtime environment (`entry::main_with`), where a split allocator aborts (#3877).
-NO_RESOURCES = "Horizon's prepared game files are missing"
+NO_RESOURCES = "Sunrise's prepared game files are missing"
 # The MinGW runtime the game's GNU DLLs import on Windows, installed beside the executable.
 MINGW_RUNTIME = ("libgcc_s_seh-1.dll", "libwinpthread-1.dll")
 # Windows' STATUS_DLL_NOT_FOUND, the exit status of a process whose imports could not all be loaded.
@@ -58,49 +70,72 @@ DLL_NOT_FOUND = 0xC0000135
 # The launcher's generated `main.rs` comes from the game it links against.
 TEMPLATE = "native_main.rs.template"
 NATIVE_MODS_TEMPLATE = "native_mod_entry.rs.template"
-API_MAIN = ROOT / "crates/horizon-client/src/native_main.rs.template"
+API_MAIN = ROOT / "crates/sunrise-client/src/native_main.rs.template"
 # The fixed executable folder in the runtime slice.
 RUNTIME = "bin"
-# The required inputs (`horizon_mod_package::sdk::Inputs`): `members` lists what each slice must hold.
-INPUTS = ROOT / "crates/horizon-mod-package/src/sdk/inputs.json"
-# The crates an API-only mod may name; their closure is the `api` archive.
-API_ROOTS = ("horizon-mod-api", "horizon-mod-points")
+# The required inputs (`sunrise_mod_package::sdk::Inputs`): `members` lists what each slice must hold.
+INPUTS = ROOT / "crates/sunrise-mod-package/src/sdk/inputs.json"
 # The game libraries outside the API closure, in the runtime archive.
-GAME_LIBRARIES = ("horizon_mod_host", "horizon_mod_wasm")
+GAME_LIBRARIES = ("sunrise_mod_host", "sunrise_official")
+# The lowest of the libraries the prebuilt game is split into: every other one links it.
+SDK_BASE = "sunrise-core"
 # Source files the folder carries besides compiler outputs.
-CARRIED = {"Cargo.toml": None, IDENTITY: None, LOCK: ROOT / LOCK, TEMPLATE: ROOT / "crates/horizon-client/src" / TEMPLATE,
-           NATIVE_MODS_TEMPLATE: ROOT / "crates/horizon-client/src" / NATIVE_MODS_TEMPLATE}
-# What the game's build script asks the `horizon-client` executable's link for (Windows' 8 MB main stack).
-LINK_ARG = "cargo:horizon-executable-link-arg="
+CARRIED = {"Cargo.toml": None, IDENTITY: None, LOCK: ROOT / LOCK, TEMPLATE: ROOT / "crates/sunrise-client/src" / TEMPLATE,
+           NATIVE_MODS_TEMPLATE: ROOT / "crates/sunrise-client/src" / NATIVE_MODS_TEMPLATE}
+# What the game's build script asks the `sunrise-client` executable's link for (Windows' 8 MB main stack).
+LINK_ARG = "cargo:sunrise-executable-link-arg="
 # Native libraries the build scripts point the final link at (the `windows` crates' MinGW import libraries):
 # cargo passes their folders to rustc, a plain rustc gets them from here (`-L native=OUT/native`).
 NATIVE = "native"
 NATIVE_SUFFIXES = (".a", ".lib")
-# The game's injection points, listed by the staging pass: the launcher routes mods' point injections by it.
-POINTS = "points.json"
 # The staged internals signatures, checked against a mod's declared access list.
 INTERNALS = "internals.json"
-# The published loops (`#[horizon_loop]`), which a mod's `[[native.loop]]` rows name.
+# The published loops (`#[sunrise_loop]`), which a mod's `[[native.loop]]` rows name.
 LOOPS = "loops.json"
 # The function index: where each function a mixin may target is, and whether it takes a replacement; the
 # launcher's patch step reads it instead of walking the game's source. Only the engine route patches functions, so it
 # is in the `engine` slice, not with the rest of the build data in `api`.
 FUNCTIONS = "functions.json"
-# The SDK's build data (`point_shape::build_data`): each file opens with `schema` and `build.commit`.
-BUILD_DATA = (FUNCTIONS, INTERNALS, LOOPS, POINTS)
+# The SDK's build data: each file opens with `schema` and `build.commit`.
+BUILD_DATA = (FUNCTIONS, INTERNALS, LOOPS)
 # The build data the API route reads, in the `api` slice.
-API_BUILD_DATA = (INTERNALS, LOOPS, POINTS)
+API_BUILD_DATA = (INTERNALS, LOOPS)
 BUILD_DATA_SCHEMA = 1
 BUILD_DATA_ARCHIVE = "build-data.tar.xz"
-# The surface export (`horizon-stage surface`), an SDK asset of its own.
+# The surface export (`sunrise-stage surface`), an SDK asset of its own.
 SURFACE = "surface.json"
 # xz's default preset: the dictionary covers the large metadata files; the publish legs' time is measured by PR 5.
 XZ_PRESET = 6
+# The SDK's `tool` asset: `cargo sunrise-mod native-build` compiles native mods as the launcher does.
+TOOL = "cargo-sunrise-mod"
+TOOL_PROGRAM = TOOL + (".exe" if sys.platform == "win32" else "")
+
+
+LAUNCHER_FILES = ("src/game_app.rs", "assets/icons/sunrise.icns")  # game_app.rs include_bytes!es the icon
+
+
+def launcher_pin() -> str:
+    pin = (ROOT / "tools/ci/launcher-pin").read_text().strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", pin):
+        sys.exit("tools/ci/launcher-pin must be a full 40-character lowercase commit SHA")
+    return pin
+
+
+def fetch_launcher_files(destination: Path, pin: str, fetch=lambda url: urllib.request.urlopen(url, timeout=60).read()) -> Path:
+    """The files of the bundle preparation at the sunrise-launcher commit `pin`, in their own layout under `destination`
+    (game_app.rs reads the icon by the relative path ../assets/icons/)."""
+    for name in LAUNCHER_FILES:
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(fetch(f"https://raw.githubusercontent.com/sunrise-org/sunrise-launcher/{pin}/{name}"))
+    return destination
 
 
 def run(command: list[str], **kwargs) -> str:
     print("+", " ".join(command), flush=True)
-    return subprocess.run(command, check=True, text=True, stdout=subprocess.PIPE, **kwargs).stdout
+    # No tool here reads standard input; a child left holding the runner's would wait on it with no output.
+    return subprocess.run(command, check=True, text=True, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          **kwargs).stdout
 
 
 def sha256(path: Path) -> str:
@@ -118,67 +153,217 @@ def rustc_host() -> str:
 
 def package_format(root: Path) -> int:
     """The package layout's one number, from its one place (`sdk::PACKAGE_FORMAT` includes the same file)."""
-    text = (root / "crates/horizon-mod-package/src/sdk/package-format").read_text().rstrip()
+    text = (root / "crates/sunrise-mod-package/src/sdk/package-format").read_text().rstrip()
     if not re.fullmatch(r"[0-9]+", text):
         raise ValueError(f"sdk/package-format must hold one number, not {text!r}")
     return int(text)
 
 
-def tracked_blobs(root: Path, commit: str, paths: tuple[str, ...] = ()):
-    """Each regular file `commit` tracks under `paths` (everywhere when empty), with its bytes as the commit holds them:
-    the bytes GitHub's archive of the commit serves, which the launcher downloads and checks against the function
-    index, whatever line endings the working tree was checked out with (Git for Windows' core.autocrlf) and whatever
-    it has that is not committed. Links are left out, as the launcher's download leaves them out."""
+def tracked_files(root: Path, commit: str, paths: tuple[str, ...] = ()):
+    """Yield the name, committed bytes and archive mode of each tracked regular file under `paths` (all if empty),
+    as GitHub's archive of the commit serves them, whatever line endings the working tree was checked out with (Git
+    for Windows' core.autocrlf) and whatever it has that is not committed. Links are left out, as the launcher's
+    download leaves them out."""
     # `git archive` converts line endings as a checkout would (core.autocrlf, core.eol); both are turned off so the
-    # bytes are the commit's on every runner.
-    process = subprocess.Popen(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar",
-                                commit, *(["--", *paths] if paths else [])],
-                               cwd=root, stdout=subprocess.PIPE)
-    with tarfile.open(fileobj=process.stdout, mode="r|") as archive:
-        for member in archive:
-            if member.isfile():
-                yield member.name, archive.extractfile(member).read()
-    if process.wait() != 0:
-        sys.exit(f"git archive {commit} failed in {root}")
+    # bytes are the commit's on every runner, and tar.umask keeps Git's executable bit. Git writes a file, read once
+    # it has exited, with no pipe between the two processes: Windows SDK legs streaming it through a pipe sat silent
+    # here until their timeout. A git that never ends fails the step with a traceback after ARCHIVE_SECONDS.
+    with tempfile.TemporaryDirectory(prefix="archive-") as folder:
+        tar = Path(folder) / "commit.tar"
+        run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-c", "tar.umask=002", "archive",
+             "--format=tar", "-o", str(tar), commit, *(["--", *paths] if paths else [])],
+            cwd=root, timeout=ARCHIVE_SECONDS)
+        with tarfile.open(tar, mode="r:") as archive:
+            for member in archive:
+                if member.isfile():
+                    yield member.name, archive.extractfile(member).read(), member.mode
+
+
+def tracked_blobs(root: Path, commit: str, paths: tuple[str, ...] = ()):
+    """The bytes GitHub's archive serves, which the launcher downloads and checks against the function index."""
+    for name, data, _ in tracked_files(root, commit, paths):
+        yield name, data
 
 
 def head() -> str:
     return run(["git", "rev-parse", "HEAD"], cwd=ROOT).strip()
 
 
-def stage(target_dir: Path, stage_tool: Path | None = None) -> Path:
-    """A copy of HEAD's tracked source with the staging pass run over it (#589): every point method gets its
-    `#[point]`, internals become public, and the build data is written with HEAD's commit in its header.
-    The copy is the commit's own bytes ([`tracked_blobs`]), never the working tree's, which is never rewritten."""
+def sync_stage(source: Path, destination: Path) -> None:
+    """Mirror directories, file bytes and POSIX execute bits, leaving symlinks out.
+    Don't rewrite identical bytes: Cargo uses mtimes for path crate freshness."""
+    if destination.is_symlink():
+        destination.unlink()
+    destination.mkdir(exist_ok=True)
+    entries = {path.name: path for path in source.iterdir() if not path.is_symlink()}
+    for path in destination.iterdir():
+        incoming = entries.get(path.name)
+        if path.is_symlink():
+            path.unlink()
+        elif incoming is None or path.is_dir() != incoming.is_dir():
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+    for path in entries.values():
+        dest = destination / path.name
+        if path.is_dir():
+            sync_stage(path, dest)
+        else:
+            data = path.read_bytes()
+            if not dest.exists() or dest.read_bytes() != data:
+                dest.write_bytes(data)
+            if os.name == "posix":
+                mode = stat.S_IMODE(dest.stat().st_mode)
+                expected = (mode & ~0o111) | (path.stat().st_mode & 0o111)
+                if mode != expected:
+                    dest.chmod(expected)
+
+
+def stage(target_dir: Path, stage_tool: Path | None = None, *, sdk_dylibs: bool = False) -> Path:
+    """Stage HEAD's tracked files on an exclusively owned target. Run the staging pass (#589) on a fresh copy so
+    it can edit the source and emit build data, then sync the result. SDK builds also stage dylib manifests."""
     setup_started = time.monotonic()
+    faulthandler.dump_traceback_later(COPY_WATCH_SECONDS, repeat=True)
+    target_dir.mkdir(parents=True, exist_ok=True)
     staged = target_dir / "stage"
-    if staged.exists():
-        shutil.rmtree(staged)
     commit = head()
-    for name, data in tracked_blobs(ROOT, commit):
-        (staged / name).parent.mkdir(parents=True, exist_ok=True)
-        (staged / name).write_bytes(data)
-    arguments = [str(staged), str(staged / POINTS), str(staged / INTERNALS), commit]
-    command = ([str(stage_tool.resolve())] if stage_tool is not None else
-               ["cargo", "run", "--locked", "--release", "-q", "-p", "horizon-mod-api-gen", "--bin", "horizon-stage", "--"])
-    print(f"stage_phase=copy_setup seconds={time.monotonic() - setup_started:.3f}", flush=True)
-    started = time.monotonic()
-    print(run(command + arguments, cwd=staged,
-              env=None if stage_tool is not None else
-              {**os.environ, "CARGO_TARGET_DIR": str(target_dir / "tools")}), end="")
-    label = "Stage binary execution" if stage_tool is not None else "Stage release build and execution"
-    print(f"{label}: {time.monotonic() - started:.3f}s (source copy/setup excluded)", flush=True)
-    # Only the prebuilt game splits the wasm runtime out: normal source builds stay static. With
-    # prefer-dynamic, rustc picks this dylib for the game rather than folding its runtime stack into it.
+    with tempfile.TemporaryDirectory(prefix="next-", dir=target_dir) as scratch:
+        scratch = Path(scratch)
+        for name, data, mode in tracked_files(ROOT, commit):
+            path = scratch / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            if os.name == "posix" and mode & 0o111:
+                path.chmod(stat.S_IMODE(path.stat().st_mode) | (mode & 0o111))
+        arguments = [str(scratch), str(scratch / INTERNALS), commit]
+        if stage_tool is None:
+            # Build the tool from a stable copy of the unmodified commit, not the disposable rewrite tree.
+            source = target_dir / "stage-in"
+            sync_stage(scratch, source)
+            command = ["cargo", "run", "--locked", "--release", "-q", "-p", "sunrise-mod-api-gen",
+                       "--bin", "sunrise-stage", "--"]
+            env = {**os.environ, "CARGO_TARGET_DIR": str(target_dir / "tools")}
+            label = "Stage release build and execution"
+        else:
+            source = scratch
+            command = [str(stage_tool.resolve())]
+            env = None
+            label = "Stage binary execution"
+        faulthandler.cancel_dump_traceback_later()
+        print(f"stage_phase=copy_setup seconds={time.monotonic() - setup_started:.3f}", flush=True)
+        started = time.monotonic()
+        print(run(command + arguments, cwd=source, env=env), end="")
+        print(f"{label}: {time.monotonic() - started:.3f}s (source copy/setup excluded)", flush=True)
+
+        if sdk_dylibs:
+            prepare_sdk_manifests(scratch)
+        sync_stage(scratch, staged)
     return staged
+
+
+def prepare_sdk_manifests(staged: Path) -> None:
+    """Build the host and official layer as dylibs in one Cargo graph, and split out the API libraries. With prefer-dynamic, the official layer uses the host's engine state."""
+    metadata = json.loads(run(["cargo", "metadata", "--format-version", "1", "--filter-platform", rustc_host()],
+                              cwd=staged))
+    split = sdk_dylibs(metadata)
+    # A warning, not a refusal: this reads declared dependencies of every feature, and rustc links fewer.
+    if clash := shared_twice(metadata, split | {GAME, OFFICIAL}):
+        print(f"warning: {clash}", file=sys.stderr, flush=True)
+    for package in metadata["packages"]:
+        name = package["name"]
+        root_dylib = name in (GAME, OFFICIAL)
+        if not root_dylib and name not in split:
+            continue
+        if not any(target["kind"] == ["lib"] for target in package["targets"]):
+            continue
+        manifest = Path(package["manifest_path"])
+        if not manifest.is_relative_to(staged):
+            continue  # Registry dependencies are owned by Cargo, not rewritten.
+        text = manifest.read_text()
+        crate_types = '["dylib"]' if root_dylib else '["rlib", "dylib"]'
+        if "[lib]" in text:
+            text = text.replace("[lib]", f"[lib]\ncrate-type = {crate_types}", 1)
+        else:
+            text += f"\n[lib]\ncrate-type = {crate_types}\n"
+        manifest.write_text(text)
+
+
+def normal_dependencies(metadata: dict) -> dict[str, list[str]]:
+    """Each package's normal dependencies that link into it, by package ID: never a proc macro, which runs in the
+    compiler and keeps its own dependencies inside its library."""
+    macros = {package["id"] for package in metadata["packages"]
+              if any("proc-macro" in target["kind"] for target in package["targets"])}
+    return {package["id"]: [] for package in metadata["packages"]} | {
+        node["id"]: [dependency["pkg"] for dependency in node["deps"] if dependency["pkg"] not in macros
+                     and any(kind["kind"] is None for kind in dependency["dep_kinds"])]
+        for node in metadata["resolve"]["nodes"]}
+
+
+def sdk_dylibs(metadata: dict) -> set[str]:
+    """The names of the API closure's crates split out of the game as libraries of their own: those that stand on
+    `SDK_BASE`. A library holds every crate below it that no library it links
+    holds, so another crate beside the base would hold a second copy of whatever both
+    use, and rustc refuses to link two. Such a crate stays inside the first library above it."""
+    dependencies = normal_dependencies(metadata)
+    closure = api_closure(metadata)
+    base = {package["id"] for package in metadata["packages"] if package["name"] == SDK_BASE}
+
+    def stands_on_base(package_id: str) -> bool:
+        pending, seen = [package_id], set()
+        while pending:
+            current = pending.pop()
+            if current in base:
+                return True
+            if current not in seen:
+                seen.add(current)
+                pending.extend(dependencies[current])
+        return False
+
+    return {package["name"] for package in metadata["packages"]
+            if package["id"] in closure and stands_on_base(package["id"])}
+
+
+def shared_twice(metadata: dict, libraries: set[str]) -> str | None:
+    """What is wrong when two of `libraries` (package names) would each hold a copy of one crate, else None.
+    A library holds every crate it reaches without passing through another library, except what the libraries
+    it links hold."""
+    dependencies = normal_dependencies(metadata)
+    names = {package["id"]: package["name"] for package in metadata["packages"]}
+    ids = sorted(package_id for package_id, name in names.items() if name in libraries)
+
+    def reach(library: str) -> tuple[set[str], set[str]]:
+        """What `library` reaches without passing through another library, and every library it links."""
+        inside, linked, pending = set(), set(), list(dependencies[library])
+        while pending:
+            current = pending.pop()
+            if current in ids:
+                if current not in linked:
+                    linked |= {current} | reach(current)[1]
+            elif current not in inside:
+                inside.add(current)
+                pending.extend(dependencies[current])
+        return inside, linked
+
+    reached = {library: reach(library) for library in ids}
+    holds = {library: inside - set().union(*(reached[other][0] for other in linked))
+             for library, (inside, linked) in reached.items()}
+    for first in ids:
+        for second in ids:
+            if first < second and (both := holds[first] & holds[second]):
+                return (f"{names[first]} and {names[second]} are separate libraries of the prebuilt game and may "
+                        f"each hold a copy of {', '.join(sorted(names[crate] for crate in both))}: rustc refuses to "
+                        "link two copies into one program. If the build fails on these crates, one library must "
+                        "depend on the other, or stay out of `sdk_dylibs`.")
+    return None
 
 
 def cargo_features(server: bool, platform: str) -> list[str]:
     """The game crate's features for this archive. The archive's std is a shared library with its own
-    default-allocator `__rust_alloc`, and the wasm runtime's library, below the game, binds to it. Only ELF's
+    default-allocator `__rust_alloc`. Only ELF's
     dynamic linker (Linux) resolves every library's `__rust_alloc` to the first definition, the game's mimalloc.
     Windows (#2394) and macOS (#3877) bind each import to the library it was linked against, so a game allocator
-    there leaves the wasm runtime, the mods' executable and std's own code on std's heap beside it, and a block
+    there can leave other libraries and std's own code on std's heap beside it, and a block
     freed on the other heap aborts. So everywhere but Linux the game keeps no allocator of its own and every
     library shares std's (the system heap)."""
     features = ["--no-default-features"] if server else []
@@ -221,12 +406,12 @@ def copy_artifacts(messages: list[dict], deps: Path, host: Path, target_dir: Pat
     return copied
 
 
-def api_closure(metadata: dict, roots=API_ROOTS) -> set[str]:
-    """The package IDs an API-only mod's build reads: `roots` and their normal dependencies. A proc macro is a leaf,
-    since its own dependencies are inside its library."""
+def api_closure(metadata: dict) -> set[str]:
+    """The package IDs an API-only mod's build reads: sunrise-mod-api and its normal dependencies.
+    A proc macro is a leaf, since its own dependencies are inside its library."""
     packages = {package["id"]: package for package in metadata["packages"]}
     nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
-    pending = [package["id"] for package in metadata["packages"] if package["name"] in roots]
+    pending = [package["id"] for package in metadata["packages"] if package["name"] == "sunrise-mod-api"]
     closure = set()
     while pending:
         package_id = pending.pop()
@@ -260,6 +445,12 @@ def slices(metadata: dict, copied: dict[str, list[str]], api_route: list[str]) -
     return {"runtime": sorted(set(runtime)), "api": sorted(set(api))}
 
 
+def official_externs(deps: Path) -> list[str]:
+    """Enable the generated entry point's official feature when its layer is in the build."""
+    library = dylib(deps, "sunrise_official")
+    return ["--cfg", 'feature="official"', "--extern", f"sunrise_official={library}"] if library else []
+
+
 def api_route(out: Path, link_args: list[str]) -> list[str]:
     """Build the fixed executable shared by both native routes, once for this SDK."""
     deps = out / "deps"
@@ -268,11 +459,11 @@ def api_route(out: Path, link_args: list[str]) -> list[str]:
     common = ["--edition", "2024", "-C", "prefer-dynamic", "-C", "opt-level=3", "-L", f"dependency={deps}",
               "-L", f"dependency={out / 'host'}", "-L", f"native={out / NATIVE}"]
     origin = {"linux": ["-Wl,-rpath,$ORIGIN"], "darwin": ["-Wl,-rpath,@executable_path"]}.get(sys.platform, [])
-    run(["rustc", *common, "--crate-type", "bin", "--crate-name", "horizon_native_game",
+    run(["rustc", *common, "--crate-type", "bin", "--crate-name", "sunrise_native_game",
          *(flag for arg in origin + link_args for flag in ("-C", f"link-arg={arg}")),
-         *extern_args(deps, "horizon_client"), *extern_args(deps, "mod_api"), *extern_args(deps, "horizon_mod_package"),
-         "--extern", f"{GAME_LIBRARIES[0]}={dylib(deps, GAME_LIBRARIES[0])}",
- "-o", str(folder / EXECUTABLE), str(API_MAIN)])
+         *extern_args(deps, "sunrise_client"), *extern_args(deps, "mod_api"), *extern_args(deps, "sunrise_mod_package"),
+         *extern_args(deps, "sunrise_mod_host"), *official_externs(deps),
+         "-o", str(folder / EXECUTABLE), str(API_MAIN)])
     built = sorted(path.relative_to(out).as_posix() for path in folder.iterdir())
     if not {path.name for path in folder.iterdir()} <= api_route_files():
         sys.exit(f"the API route's build left {built}, not only {sorted(api_route_files())}")
@@ -287,7 +478,7 @@ def api_route_files() -> set[str]:
 def holder_mark() -> bytes:
     """The bytes the launcher looks for in an executable before it runs it under the holder (`holder::capable`),
     read from their one definition, `holder.rs`'s `CAPABILITY`."""
-    source = ROOT / "crates/horizon-mod-package/src/holder.rs"
+    source = ROOT / "crates/sunrise-mod-package/src/holder.rs"
     found = re.search(rb'CAPABILITY: \[u8; \d+\] = \*b"([^"]+)"', source.read_bytes())
     if not found:
         sys.exit(f"{source.relative_to(ROOT)} no longer defines CAPABILITY as `[u8; N] = *b\"...\"`: "
@@ -363,32 +554,43 @@ def facade_crates(deps: Path, runtime: set[str]) -> list[str]:
 
 def assert_externs(out: Path, eligible: list[str]) -> None:
     """Runs in the SDK build on every OS, including macOS, before publication."""
-    for crate in set(eligible) | {"mod_api", "horizon_mod_package"}:
+    for crate in set(eligible) | {"mod_api", "sunrise_mod_package"}:
         extern_args(out / "deps", crate)
 
 
 def build(out: Path, server: bool) -> None:
+    # Resolve before entering the staged copy. Keep its source and Cargo outputs exclusively owned until collection
+    # and validation are done. Closing the file releases the lock; leave its name in place for future builds.
+    configured_target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).resolve() / "prebuilt"
+    target_dir = configured_target.resolve()
+    # Collection empties the output. It must neither remove a path to the build's lock and stage
+    # nor overlap the actual work directory when `prebuilt` is a symlink or junction.
+    output = out.resolve()
+    for target in (configured_target, target_dir):
+        if target.is_relative_to(output) or output.is_relative_to(target):
+            sys.exit(f"E_SDK_OUT_OVERLAPS_TARGET: The SDK output {out} overlaps the build's target folder {target}: "
+                     "choose another output.")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    with (target_dir / ".sdk-build.lock").open("a+b") as lock:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            sys.exit(f"Cannot acquire the SDK build lock in {target_dir}: {error}. Use a separate CARGO_TARGET_DIR.")
+        _build_locked(output, server, target_dir)
+
+
+def _build_locked(out: Path, server: bool, target_dir: Path) -> None:
     layout = package_format(ROOT)
-    # Resolved here: the staging and build steps run from the staged copy.
-    target_dir = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).resolve() / "prebuilt"
-    staged = stage(target_dir)
+    staged = stage(target_dir, sdk_dylibs=True)
     host = rustc_host()
-    metadata = json.loads(run(["cargo", "metadata", "--format-version", "1"], cwd=staged))
-    closure = api_closure(metadata)
-    for package in metadata["packages"]:
-        if package["id"] not in closure and package["name"] != "horizon-mod-wasm":
-            continue
-        if not any(target["kind"] == ["lib"] for target in package["targets"]):
-            continue
-        manifest = Path(package["manifest_path"])
-        if not manifest.is_relative_to(staged):
-            continue  # Registry dependencies are owned by Cargo, not rewritten.
-        text = manifest.read_text()
-        if "[lib]" in text:
-            text = text.replace("[lib]", '[lib]\ncrate-type = ["rlib", "dylib"]', 1)
-        else:
-            text += '\n[lib]\ncrate-type = ["rlib", "dylib"]\n'
-        manifest.write_text(text)
 
     # One std for the game, every mod and the executable: the game links std dynamically, as mods will.
     rustflags = "-C prefer-dynamic --emit=metadata"
@@ -396,16 +598,24 @@ def build(out: Path, server: bool) -> None:
     if sys.platform == "darwin":
         rustflags += " -C rpath"
     features = cargo_features(server, sys.platform)
-    # Linux's executable RUNPATH doesn't cover transitive dependencies: the game itself must find
-    # the wasm runtime beside it. macOS's @rpath install names use the executable's rpath.
-    link = ["--", "-C", "link-arg=-Wl,-rpath,$ORIGIN"] if sys.platform == "linux" else []
+    # Linux's executable RUNPATH doesn't cover transitive dependencies, so the dylibs must find
+    # their dependencies beside themselves. macOS's @rpath install names use the executable's rpath.
+    if sys.platform == "linux":
+        rustflags += " -C link-arg=-Wl,-rpath,$ORIGIN"
+    # No official layer in a dedicated server.
+    official = not server
+    packages = ["-p", GAME, "-p", OFFICIAL] if official else ["-p", GAME]
     # Encoded flags take precedence over RUSTFLAGS in Cargo.
     environment = {key: value for key, value in os.environ.items() if key != "CARGO_ENCODED_RUSTFLAGS"}
+    # The SDK game builds with 16 codegen units, not the release profile's 1: on Linux its final step took 270 s
+    # instead of 422 s with no measurable change in the dedicated server's tick (1.670 against 1.677 ms). The
+    # player release keeps the profile's single unit and ThinLTO.
+    environment["CARGO_PROFILE_RELEASE_CODEGEN_UNITS"] = "16"
     messages = run(
-        ["cargo", "rustc", "--locked", "-p", GAME, "--lib", "--crate-type", "dylib",
-         "--target", host, "--profile", PROFILE, "--message-format", "json-render-diagnostics", *features, *link],
+        ["cargo", "build", "--locked", *packages, "--lib",
+         "--target", host, "--profile", PROFILE, "--message-format", "json-render-diagnostics", *features],
         cwd=staged,
-        env={**environment, "HORIZON_GAME_BUILD_ID": head(), "RUSTFLAGS": rustflags + " -D warnings", "CARGO_TARGET_DIR": str(target_dir)},
+        env={**environment, "SUNRISE_GAME_BUILD_ID": head(), "RUSTFLAGS": rustflags + " -D warnings", "CARGO_TARGET_DIR": str(target_dir)},
     )
     artifacts = list(map(json.loads, messages.splitlines()))
     scripts = [
@@ -447,11 +657,13 @@ def build(out: Path, server: bool) -> None:
     for name, path in carried.items():
         (out / name).write_bytes(blobs[path])
     patches = carry_patches(staged, out)
-    game = next(script for script in scripts if script["package_id"].split("#")[0].endswith("/horizon-client"))
+    game = next(script for script in scripts if script["package_id"].split("#")[0].endswith("/sunrise-client"))
     for manifest in BUILD_DATA:
         shutil.copy2(staged / manifest, out / manifest)
     output = Path(game["out_dir"]).parent / "output"
     link_args = executable_link_args(output)
+    if official and dylib(deps, "sunrise_official") is None:
+        sys.exit("prebuilt client is missing the sunrise-official dylib")
     sliced = slices(metadata, copied, api_route(out, link_args))
     files = {str(path.relative_to(out).as_posix()): sha256(path) for path in sorted(out.rglob("*")) if path.is_file()}
     identity = {
@@ -469,13 +681,14 @@ def build(out: Path, server: bool) -> None:
         "game_features": sorted(next(
             message["features"] for message in artifacts
             if message["reason"] == "compiler-artifact"
-            and message["package_id"].split("#")[0].endswith("/horizon-client")
+            and message["package_id"].split("#")[0].endswith("/sunrise-client")
             and "lib" in message["target"]["kind"]
         )),
         "registry_patches": patches,
         "patch_files": {name: digest for name, digest in files.items() if name.startswith("patches/")},
         "registry_lock": (staged / "Cargo.lock").read_text(),
         "native_links": native_links(metadata, GAME),
+        "native_log": True,
         # The API route: the mods library's crate name and metadata, and which files the `runtime` and `api` archives
         # hold (every other file is the `engine` archive's).
         "slices": sliced,
@@ -555,9 +768,8 @@ def check(out: Path) -> None:
     ]
     if stray:
         sys.exit(f"prebuilt folder holds files that aren't compiler outputs: {stray}")
-    for crate in ("horizon_mod_wasm", "horizon_mod_host"):
-        if dylib(out / "deps", crate) is None:
-            sys.exit(f"prebuilt folder has no {crate.replace('_', '-')} dylib")
+    if dylib(out / "deps", "sunrise_mod_host") is None:
+        sys.exit("prebuilt folder has no sunrise-mod-host dylib")
 
     commit = identity.get("commit")
     for name in BUILD_DATA:
@@ -596,11 +808,11 @@ def smoke(out: Path) -> None:
     if installed.exists():
         shutil.rmtree(installed)
     installed.mkdir()
-    # The game's libraries load from beside the executable (launcher/src/native_mods/prebuilt.rs `compile`).
+    # The game's libraries load from beside the executable (sunrise-launcher's src/native_mods/prebuilt.rs `compile`).
     origin = {"linux": ["-Wl,-rpath,$ORIGIN"], "darwin": ["-Wl,-rpath,@executable_path"]}.get(sys.platform, [])
     identity = json.loads((out / IDENTITY).read_text())
     release = next(line.removeprefix("release: ") for line in identity["rustc"].splitlines() if line.startswith("release: "))
-    starter = (ROOT / "crates/cargo-horizon-mod/template/native/lib.rs").read_text()
+    starter = (ROOT / "crates/cargo-sunrise-mod/template/native/lib.rs").read_text()
     template = (out / NATIVE_MODS_TEMPLATE).read_text()
     smoke_library = installed / f"{dylib_prefix()}smoke{dylib_suffix()}"
     # `smoke_user` calls `smoke` through its library, as a mod calls a declared dependency: rustc links it against
@@ -616,7 +828,7 @@ def smoke(out: Path) -> None:
             build = f"{identity['commit']} {mod} 0.1.0 {release}"
             rows = {"NATIVE_BUILD": build, "MOD_ENTRIES": f'"{mod}" => crate::hooks,',
                     "BUILT_MODS": f'mod_api::__private::native::BuiltMod {{ id: "{mod}", version: "0.1.0", side: mod_api::Side::Both }},',
-                    "MOD_SLOTS": "", "MOD_REDIRECTS": ""}
+                    "MOD_REDIRECTS": ""}
             entry = template
             for marker, value in rows.items():
                 entry = entry.replace(f"/* {marker} */", value)
@@ -625,12 +837,12 @@ def smoke(out: Path) -> None:
             (scratch / f"{mod}.rs").write_text(source + f'\n#[path = "{mod}_entry.rs"] mod entry;\n')
             library = installed / f"{dylib_prefix()}{mod}{dylib_suffix()}"
             run(["rustc", *common, "-L", f"dependency={installed}", "--crate-type", "dylib", "--crate-name", mod,
-                 *extern("mod_api"), "--extern", f"horizon_mod_host={dylib(deps, 'horizon_mod_host')}", *externs,
+                 *extern("mod_api"), "--extern", f"sunrise_mod_host={dylib(deps, 'sunrise_mod_host')}", *externs,
                  *(flag for arg in origin for flag in ("-C", f"link-arg={arg}")),
                  "-o", str(library), str(scratch / f"{mod}.rs")])
             records.append({"file": library.name, "sha256": sha256(library), "kind": "mod", "mod": mod,
-                            "identity": build})
-            install_package(installed / "horizon-native-mods" / mod, mod, source, dependencies)
+                            "identity": f"{build} unwind"})
+            install_package(installed / "sunrise-native-mods" / mod, mod, source, dependencies)
     shutil.copy2(out / RUNTIME / EXECUTABLE, installed / EXECUTABLE)
     (installed / "native-mods.json").write_text(json.dumps({"libraries": records}))
     if holder_mark() not in (installed / EXECUTABLE).read_bytes():
@@ -650,40 +862,40 @@ def smoke(out: Path) -> None:
 
 # What `smoke` adds to the starter for `smoke_user` to call; never inlined, so the call crosses the libraries.
 SMOKE_LIBRARY_ITEM = """
-/// Called from `smoke_user`'s library.
+/// Called from `smoke_user`'s library. Named apart from the starter's own items (its private `greeting`).
 #[inline(never)]
-pub fn greeting() -> &'static str {
+pub fn library_name() -> &'static str {
     "smoke"
 }
 """
 SMOKE_USER_ITEM = """
 /// A call into `smoke`'s library.
-pub fn greeting_length() -> usize {
-    smoke::greeting().len()
+pub fn library_name_length() -> usize {
+    smoke::library_name().len()
 }
 """
 
 
 def install_package(folder: Path, mod: str, source: str, dependencies: str) -> None:
     """Mod MOD's package as the launcher leaves it beside the executable, which reads it back at start
-    (horizon-mod-package `runtime::Runtime::load`): the starter manifest with its DEPENDENCIES table and its
+    (sunrise-mod-package `runtime::Runtime::load`): the starter manifest with its DEPENDENCIES table and its
     [native] pins, and its source."""
-    manifest = (ROOT / "crates/cargo-horizon-mod/template/native/horizon-mod.toml").read_text()
+    manifest = (ROOT / "crates/cargo-sunrise-mod/template/native/sunrise-mod.toml").read_text()
     manifest = manifest.replace("{id}", mod).replace("{name}", mod) + dependencies
     mixins = re.search(r'pub const REV: &str = "([0-9a-f]{40})";',
-                       (ROOT / "crates/horizon-mod-package/src/mixins_tool.rs").read_text())[1]
+                       (ROOT / "crates/sunrise-mod-package/src/mixins_tool.rs").read_text())[1]
     game = re.search(r'pub const VERSION_ID: &str = "([^"]+)";',
-                     (ROOT / "crates/horizon-core/src/version.rs").read_text())[1]
-    horizon = run(["git", "rev-parse", "HEAD"], cwd=ROOT).strip()
-    manifest += f'\n[native]\ngame = "{game}"\nhorizon = "{horizon}"\nmixins = "{mixins}"\n'
+                     (ROOT / "crates/sunrise-core/src/version.rs").read_text())[1]
+    sunrise = run(["git", "rev-parse", "HEAD"], cwd=ROOT).strip()
+    manifest += f'\n[native]\ngame = "{game}"\nsunrise = "{sunrise}"\nmixins = "{mixins}"\n'
     (folder / "src").mkdir(parents=True)
-    (folder / "horizon-mod.toml").write_text(manifest)
+    (folder / "sunrise-mod.toml").write_text(manifest)
     (folder / "Cargo.toml").write_text(f'[package]\nname = "{mod}"\nversion = "0.1.0"\nedition = "2024"\n')
     (folder / "src/lib.rs").write_text(source)
 
 
 def runtime_libraries(out: Path) -> list[Path]:
-    """What the launcher installs beside the executable (launcher/src/native_mods/prebuilt.rs `runtime_libraries`),
+    """What the launcher installs beside the executable (sunrise-launcher's src/native_mods/prebuilt.rs `runtime_libraries`),
     by the same rule: every shared library the identity's `runtime` slice records under `deps/`, std, and on Windows
     the MinGW runtime the GNU DLLs import. So `start` fails when the record misses a library the game loads."""
     runtime = json.loads((out / IDENTITY).read_text())["slices"]["runtime"]
@@ -702,19 +914,21 @@ def runtime_libraries(out: Path) -> list[Path]:
 
 def start(out: Path) -> None:
     """Start two installations of the fixed executable (with smoke's two libraries and without mods),
-    each as a dedicated server with no game data: it loads the game's libraries
-    and sets up the mods' runtime, then stops at the missing prepared files. Fails on a crash, a hang or any other
-    stop, so an archive whose libraries disagree (two allocators, #3877) cannot ship. On Windows it runs without
-    MinGW on PATH, as on a player's computer, so a runtime DLL the launcher would not install fails here (#3521)."""
+    each in dedicated mode with no game data: it loads the game's libraries and sets up the mods' runtime, then
+    stops at the missing prepared files. Only a client SDK registers the launcher download hook. Fails on a crash,
+    a hang or any other stop, so an archive whose libraries disagree (two allocators, #3877) cannot ship. On Windows
+    it runs without MinGW on PATH, as on a player's computer, so a runtime DLL the launcher would not install fails
+    here (#3521)."""
     # Run as a script, so lab sits on the path beside it; tests import this module without running `start`.
     import lab
 
+    client = json.loads((out / IDENTITY).read_text())["side"] == "client"
     for installed in (out.parent / SMOKE, out.parent / SMOKE_API):
         with tempfile.TemporaryDirectory(dir=out.parent) as scratch:
             scratch = Path(scratch)
             # Never a real player's folders, even ones this process inherited: every home is a folder of the scratch.
             homes = {key: scratch / key.lower() for key in
-                     ("HORIZON_HOME", "HORIZON_LAUNCHER_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME")}
+                     ("SUNRISE_HOME", "SUNRISE_LAUNCHER_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME")}
             for home in homes.values():
                 home.mkdir()
             environment = lab.game_env(RUST_BACKTRACE="1")
@@ -731,9 +945,12 @@ def start(out: Path) -> None:
             (game / "eula.txt").write_text("eula=true\n")
             executable = installed / EXECUTABLE
             if sys.platform == "darwin":
-                # Use the launcher's actual bundle preparation, not a second list of libraries.
+                # Use the launcher's actual bundle preparation, not a second list of libraries: its source from the
+                # sunrise-launcher commit pinned in tools/ci/launcher-pin.
                 bundle_source = scratch / "bundle.rs"
-                module = json.dumps(str(ROOT / "launcher/src/game_app.rs"))
+                pin = launcher_pin()
+                game_app = fetch_launcher_files(scratch / "launcher", pin) / "src/game_app.rs"
+                module = json.dumps(str(game_app))
                 bundle_source.write_text(
                     'mod i18n { pub fn tr(s: &str) -> &str { s } }\n'
                     'mod shortcut { pub fn xml(s: &str) -> String { s.to_owned() } }\n'
@@ -742,7 +959,7 @@ def start(out: Path) -> None:
                 bundle_tool = scratch / "bundle"
                 run(["rustc", "--edition=2021", str(bundle_source), "-o", str(bundle_tool)])
                 run([str(bundle_tool), str(installed)])
-                bundled = installed / "Horizon.app/Contents/MacOS/horizon-client"
+                bundled = installed / "Sunrise.app/Contents/MacOS/sunrise-client"
                 executable = bundled
                 probe = subprocess.run([str(bundled), "--launch-api"], cwd=game, env=environment,
                                        capture_output=True, text=True, timeout=60)
@@ -761,6 +978,10 @@ def start(out: Path) -> None:
         # The prepared-files check exits with status 1; any other status is a different stop.
         if result.returncode != 1 or NO_RESOURCES not in result.stdout or "panicked" in result.stdout:
             sys.exit(f"start: {installed.name} stopped before the prepared-files check (exit {result.returncode})")
+        shows_launcher = bool(re.search(r"launcher: download it at https?://\S+ \(Download\)", result.stdout))
+        if shows_launcher != client:
+            problem = "client omitted" if client else "server showed"
+            sys.exit(f"start: {installed.name}: {problem} the launcher download URL")
         print(f"start: {installed.name} loaded the game's libraries and the mods' runtime and stopped at: "
               f"{NO_RESOURCES}")
 
@@ -795,30 +1016,62 @@ def archives(out: Path, sliced: dict[str, list[str]]) -> dict[str, list[str]]:
                                 if parent != Path("."))} | set(names)) for kind, names in chosen.items()}
 
 
-def pack(out: Path, dist: Path, stage_tool: Path | None = None) -> None:
+def pack(out: Path, dist: Path, stage_tool: Path | None = None, with_tool: bool = False) -> None:
     """The SDK release's assets from a checked folder OUT, into DIST: the package as its `runtime`, `api` and `engine`
-    archives for its target and side ([`archives`]), the build data, and the surface export of this source."""
+    archives for its target and side ([`archives`]), the build data, the surface export of this source and, for the
+    client side, the target's `tool` ([`tool`]): one per target, as it serves both sides. `with_tool` packs it on a server
+    leg too, for a server-only SDK that no client leg completes (the fn-replace fixtures): the launcher needs the tool
+    even to export a server."""
     check(out)
     identity = json.loads((out / IDENTITY).read_text())
     if identity.get("package_format") != package_format(ROOT) or identity.get("commit") != head():
         sys.exit(f"{out} is not this source's package (format {package_format(ROOT)}, commit {head()})")
     dist.mkdir(parents=True, exist_ok=True)
     suffix = "-server" if identity["side"] == "server" else ""
-    jobs = {dist / f"{kind}-{identity['target']}{suffix}.tar.xz": names
+    jobs = {dist / f"{kind}-{identity['target']}{suffix}.tar.xz": (out, names)
             for kind, names in archives(out, identity["slices"]).items()}
-    jobs[dist / BUILD_DATA_ARCHIVE] = [".", *BUILD_DATA]
+    jobs[dist / BUILD_DATA_ARCHIVE] = (out, [".", *BUILD_DATA])
+    if identity["side"] == "client" or with_tool:
+        jobs[dist / f"tool-{identity['target']}.tar.xz"] = (tool(identity["target"]), [".", TOOL_PROGRAM])
     # Each archive keeps its single xz stream; only independent archives run concurrently.
     with ProcessPoolExecutor(max_workers=len(jobs)) as pool:
-        pending = {archive: pool.submit(tar_xz, out, names, archive) for archive, names in jobs.items()}
+        pending = {archive: pool.submit(tar_xz, folder, names, archive) for archive, (folder, names) in jobs.items()}
         failures = [f"{archive.name}: {error}" for archive, future in pending.items()
                     if (error := future.exception()) is not None]
     if failures:
         sys.exit("SDK archive compression failed: " + "; ".join(failures))
     command = ([str(stage_tool.resolve())] if stage_tool is not None else
-               ["cargo", "run", "--locked", "--release", "-q", "-p", "horizon-mod-api-gen", "--bin", "horizon-stage", "--"])
+               ["cargo", "run", "--locked", "--release", "-q", "-p", "sunrise-mod-api-gen", "--bin", "sunrise-stage", "--"])
     run(command + ["surface", str(ROOT), str(dist / SURFACE)], cwd=ROOT)
     for asset in sorted(dist.iterdir()):
         print(f"{asset.name}: {asset.stat().st_size} bytes")
+
+
+def tool(target: str) -> Path:
+    """The folder holding `cargo-sunrise-mod` built from this source for `target`, which must be this computer."""
+    if rustc_host() != target:
+        sys.exit(f"the tool for {target} is built on that computer, not on {rustc_host()}")
+    # `--version` names the commit; a build that names none says `dev`.
+    environment = {**os.environ, "SUNRISE_TOOL_COMMIT": os.environ.get("SUNRISE_TOOL_COMMIT") or head()}
+    run(["cargo", "build", "--locked", "--release", "-p", TOOL, "--bin", TOOL], cwd=ROOT, env=environment)
+    folder = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).resolve() / "release"
+    if not (folder / TOOL_PROGRAM).is_file():
+        sys.exit(f"cargo built no {folder / TOOL_PROGRAM}")
+    # Only a debug-assertions build reads SUNRISE_SDK_TRUSTED_KEY (sunrise-release-sign's sdk_keys_for), and the
+    # variable's name is in the binary exactly when it does: a tool that ships never trusts a key from the
+    # environment, whatever a profile, a per-package override or the environment turned on.
+    if b"SUNRISE_SDK_TRUSTED_KEY" in (folder / TOOL_PROGRAM).read_bytes():
+        sys.exit(f"{folder / TOOL_PROGRAM} was built with debug assertions: it would trust an SDK key from "
+                 "SUNRISE_SDK_TRUSTED_KEY")
+    return folder
+
+
+def pack_tool(dist: Path) -> None:
+    """DIST/tool-<target>.tar.xz for this computer, the archive `pack` puts in an SDK: built and packed the same way."""
+    target = rustc_host()
+    dist.mkdir(parents=True, exist_ok=True)
+    tar_xz(tool(target), [".", TOOL_PROGRAM], dist / f"tool-{target}.tar.xz")
+    print(f"tool-{target}.tar.xz: {(dist / f'tool-{target}.tar.xz').stat().st_size} bytes")
 
 
 def members(archive: Path, names: tuple[str, ...]) -> dict[str, str]:
@@ -874,8 +1127,8 @@ def gather(legs: Path, dist: Path) -> None:
 
 
 def index(dist: Path, nightly: str | None, previous: tuple[str, Path] | None = None) -> None:
-    """DIST/sdk.json over every asset in DIST, written and checked by the one implementation (`horizon_mod_package::sdk`).
-    `previous` is the SDK published before this one and the `horizon-stage surface-diff --json` of its surface
+    """DIST/sdk.json over every asset in DIST, written and checked by the one implementation (`sunrise_mod_package::sdk`).
+    `previous` is the SDK published before this one and the `sunrise-stage surface-diff --json` of its surface
     against DIST's, which fill the index's surface comparison."""
     commit = head()
     date = run(["git", "log", "-1", "--format=%cd", "--date=format-local:%Y-%m-%d"], cwd=ROOT,
@@ -911,7 +1164,7 @@ def export_count(library: Path) -> int:
 
 
 def exports(out: Path) -> None:
-    """Report every DLL's Windows export count (#589), the separate wasm runtime included; warn on one past 80% of
+    """Report every DLL's Windows export count (#589); warn on one past 80% of
     the limit and fail, after reporting them all, on any past 90%."""
     over = []
     for library in sorted((out / "deps").glob("*.dll")):
@@ -919,7 +1172,7 @@ def exports(out: Path) -> None:
         print(f"{library.name}: {names} exported names (Windows' limit is {EXPORT_LIMIT:,})")
         if names > EXPORT_WARNING:
             warning = (f"{library.name} exports {names:,} names, {EXPORT_LIMIT - names:,} short of Windows' "
-                       f"{EXPORT_LIMIT:,}: cut exported names before adding points or internals (#589)")
+                       f"{EXPORT_LIMIT:,}: cut exported names before exposing more internals (#589)")
             print(f"::warning::{warning}")
             if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
                 with open(summary, "a", encoding="utf-8") as file:
@@ -945,6 +1198,13 @@ def main() -> None:
     pack_parser = commands.add_parser("pack")
     pack_parser.add_argument("out", type=Path)
     pack_parser.add_argument("dist", type=Path)
+    # `build` compiles sunrise-stage from the commit's own source before staging it (target/prebuilt/tools); the
+    # surface export reuses that binary instead of compiling it again in another target folder.
+    pack_parser.add_argument("--stage-tool", type=Path, help="the sunrise-stage binary to export the surface with")
+    pack_parser.add_argument("--with-tool", action="store_true",
+                             help="also pack the target's tool on a server leg (a server-only SDK no client leg completes)")
+    tool_parser = commands.add_parser("tool")
+    tool_parser.add_argument("dist", type=Path)
     gather_parser = commands.add_parser("gather")
     gather_parser.add_argument("legs", type=Path)
     gather_parser.add_argument("dist", type=Path)
@@ -961,7 +1221,9 @@ def main() -> None:
     elif args.command == "start":
         start(args.out.resolve())
     elif args.command == "pack":
-        pack(args.out.resolve(), args.dist.resolve())
+        pack(args.out.resolve(), args.dist.resolve(), args.stage_tool, args.with_tool)
+    elif args.command == "tool":
+        pack_tool(args.dist.resolve())
     elif args.command == "gather":
         gather(args.legs.resolve(), args.dist.resolve())
     elif args.command == "index":

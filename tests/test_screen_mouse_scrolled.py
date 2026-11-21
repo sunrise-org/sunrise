@@ -22,9 +22,9 @@ def block(source, start_text):
 class ScreenMouseScrolledTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
     def test_pre_cancellation_and_post_scheduling(self):
-        source = (ROOT / "crates/horizon-client/src/game.rs").read_text(encoding="utf-8")
+        source = (ROOT / "crates/sunrise-client/src/game.rs").read_text(encoding="utf-8")
         dispatch = block(source, "if !self.pad_synthetic_input()\n                        && let Some(screen)")
-        hooks = (ROOT / "crates/horizon-client/src/game/native_hooks/base.rs").read_text(encoding="utf-8")
+        hooks = (ROOT / "crates/sunrise-client/src/game/native_hooks/base.rs").read_text(encoding="utf-8")
         pre = block(hooks, "    pub(in crate::game) fn native_screen_mouse_scrolled_pre(")
         pre = pre.replace("pub(in crate::game) ", "")
         fixture = r"""
@@ -39,6 +39,8 @@ struct Game { modifiers: u32, synthetic: bool, open: bool, cancel: bool,
     calls: RefCell<Vec<&'static str>>, scrolled: usize }
 impl Game {
     fn pad_synthetic_input(&self) -> bool { self.synthetic }
+    // No container hook registered: it takes no wheel.
+    fn container_wheel(&mut self, _: f32) -> bool { false }
     fn screen_view_now(&self) -> Option<ScreenView<'_>> {
         self.open.then_some(ScreenView { id: "inventory", mouse: [7.0, 9.0] })
     }

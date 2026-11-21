@@ -2,8 +2,7 @@
 
 A mod or resource pack can ship a NeoForge-format entity animation. Resolve it through the
 client's `RenderAssets::animation`, bake its bone names against your `ModelPart` tree once,
-and keep the result for playback. Native and wasm mods use the same types and sampler;
-vanilla mobs use that sampler too.
+and keep the result for playback. Vanilla mobs use that sampler too.
 
 ## Write the resource
 
@@ -135,5 +134,5 @@ file, but plays only where an `AnimationTypes` provides it: the registering mod'
 mod depending on it supplies. `bake_with` refuses an `AnimationTypes` that lacks one of the
 animation's types, once, and the error names the animation, that type and the mod that
 registered it.
-See the [`register_json_animation_types` documentation](https://github.com/arismoko/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/register_json_animation_types.rs)
+See the [`register_json_animation_types` documentation](https://github.com/sunrise-org/sunrise/blob/main/crates/sunrise-mod-vocab/src/hooks/register_json_animation_types.rs)
 for the registration contract.

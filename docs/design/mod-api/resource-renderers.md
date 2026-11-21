@@ -1,5 +1,9 @@
 # Design: resource-backed special item renderers
 
+> The native contract below still applies. WebAssembly mods were removed; the parts about guests are history.
+> The native contract is in “Settled on the build”; the original proposal below it is historical.
+> See [special item renderers](../../modding/src/how-to/client/special-item-renderers.md) for the current native API.
+
 Provisional answer to [#876](https://github.com/arismoko/horizon/issues/876):
 what resource-backed baked geometry and typed stack-derived state may a special
 renderer submit? Geometry belongs in resources; callbacks select and pose baked
@@ -9,7 +13,7 @@ parts only where ordinary item-model properties cannot express the behavior.
 
 The owner's answer to the [build plan](https://github.com/arismoko/horizon/issues/876#issuecomment-6864610602)
 settles these points against the reference. Where a later section of this page
-says otherwise, this section wins; "ours" marks what Horizon adds.
+says otherwise, this section wins; "ours" marks what Sunrise adds.
 
 - **Registration.** `register_special_model_renderer` (singular, after the
   reference's event) is asked once per process at start, before the first
@@ -35,7 +39,7 @@ says otherwise, this section wins; "ours" marks what Horizon adds.
 - **Threads.** The node's `config` decodes, and models bake, on the reload's
   worker threads; extraction and drawing run on the client's main thread.
 - **Failures.** The reference doesn't catch a throw. Ours is stricter in the safe
-  direction: a renderer that errors, panics or traps is refused with one log line
+  direction: a renderer that errors or panics is refused with one log line
   naming the id, and the item draws the missing model; a decode or bake failure
   loses only that item. The callback gets a `ClientHost` (every hook gets a host).
 - **Out of scope.** The block side is a separate reference registration that runs
@@ -49,19 +53,27 @@ says otherwise, this section wins; "ours" marks what Horizon adds.
   GPU models, so an item render state's own reference to its baked models is the
   only lease, and there is no retirement step: an old state draws its models after
   a reload, and they are released once, when the last state holding them drops.
+- **Cost.** With no renderer registered, or none for a drawn model's type, a built-in
+  scene costs nothing more, down to its allocation count (row 13). An unchanged stack
+  costs a hash, one lookup and an `Arc` clone per draw; the measurements are in
+  [special item renderers](../../performance/special-item-renderers.md).
 - **Colour.** A part's tint is packed vanilla-space ARGB, as an item model's
   `tints` are, decoded once by the frame. A value above 1 has no input until a
   typed HDR tint exists (the limit `WorldQuad::color` has); it is not part of #876.
 
 ## Reference and boundary
 
+The sections below record the original proposal, including the guest route and its
+acceptance matrix. Where they differ from “Settled on the build” above, they do
+not describe the current contract.
+
 Vanilla 26.3 `SpecialModelRenderers.bootstrap` registers type identifiers and
 unbaked codecs. `SpecialModelWrapper.update` extracts an argument from the stack,
 creates a layer, records extents, transform and foil, and installs the special
 renderer plus argument. Verified using `tools/rea_vanilla.py method` for both
-methods from `/workspace/horizon`. The `callers` query for the wrapper's `update`
+methods from `/workspace/sunrise`. The `callers` query for the wrapper's `update`
 returned zero direct references; interface dispatch means that is not a complete
-context census. Horizon routes are listed below instead.
+context census. Sunrise routes are listed below instead.
 
 The named NeoForge counterpart is `RegisterSpecialModelRendererEvent`. Its
 [26.3 public Javadoc](https://aldak.netlify.app/javadoc/26.3.x/net/neoforged/neoforge/client/event/RegisterSpecialModelRendererEvent.html)
@@ -69,7 +81,7 @@ was inaccessible during this investigation. Public [client-item documentation](h
 describes stack state preparation and submission, but currently labels itself
 26.1. Exact 26.3 registration timing, cancellation, codec shape and capability
 limits remain **unverified**. Require public 26.3 documentation before adopting
-those details; the contract below is proposed Horizon policy, not asserted parity.
+those details; the contract below is proposed Sunrise policy, not asserted parity.
 No foreign renderer source was read.
 
 `level-extracted-state.md` is absent from `arismoko/main` at this worktree's base
@@ -150,16 +162,16 @@ integration owners, not claims that the proposed callback already exists.
 
 | Route | File:line | Required behavior |
 | --- | --- | --- |
-| Decode / foreign workaround | `horizon-assets/src/item_model/special.rs:82`, `:90`, `:103` | Resolve registered types; report unknown special types |
-| Resource parts and baked extents | `horizon-client/src/item_render/special.rs:51`, `:307`; `horizon-client/src/item_render.rs:748`, `:841` | Bake resource recipe and conservative bounds |
-| Shared stack preparation, hands | `horizon-client/src/game/interface/item_draw.rs:376`, `:398` | Freeze declared inputs and prepare once per resolution |
-| Inventory, cursor and other GUI icons | `horizon-client/src/game/interface/inventory_slots.rs:6`; `horizon-client/src/game/interface/item_draw.rs:455`; `horizon-client/src/item_render/gui.rs:180` | Same prepared parts, GUI clipping and lighting |
-| Dropped/ground items | `horizon-client/src/game/interface/item_draw.rs:705`, `:789`, `:793` | Copy poses reuse state on GPU and CPU paths |
-| Frames and armor-stand equipment | `horizon-client/src/game/entities/frames.rs:749`; `horizon-client/src/game/entities/armor_stands.rs:1786`, `:1847` | Fixed/head/hand contexts use same preparation |
-| Other world item consumers | `horizon-client/src/game/blocks/campfire.rs:172`; `blocks/vault.rs:250`, `blocks/shelf.rs:230`, `blocks/brush.rs:347` under the same `game/` directory | Preserve context and engine lighting |
-| Entity/effect and mod-submitted items | `horizon-client/src/game/items/potions.rs:2219`, `items/totem.rs:224`, `items/item_particles.rs:18`; `horizon-client/src/game/modding/native_block_entity_draw.rs:1237` | Share resolver, no recursive callback escape |
-| CPU special submission / GPU submission | `horizon-client/src/item_render.rs:267`, `:299`; `horizon-client/src/item_render/special.rs:466`; `horizon-client/src/game/interface/item_draw.rs:556` | Consume identical frozen draw list |
-| Reload and GPU resource ownership | `horizon-client/src/game.rs:14259`; `horizon-client-render/src/gfx/prepared_model.rs:256` | Rebuild affected item states and retain leased resources |
+| Decode / foreign workaround | `sunrise-assets/src/item_model/special.rs:82`, `:90`, `:103` | Resolve registered types; report unknown special types |
+| Resource parts and baked extents | `sunrise-client/src/item_render/special.rs:51`, `:307`; `sunrise-client/src/item_render.rs:748`, `:841` | Bake resource recipe and conservative bounds |
+| Shared stack preparation, hands | `sunrise-client/src/game/interface/item_draw.rs:376`, `:398` | Freeze declared inputs and prepare once per resolution |
+| Inventory, cursor and other GUI icons | `sunrise-client/src/game/interface/inventory_slots.rs:6`; `sunrise-client/src/game/interface/item_draw.rs:455`; `sunrise-client/src/item_render/gui.rs:180` | Same prepared parts, GUI clipping and lighting |
+| Dropped/ground items | `sunrise-client/src/game/interface/item_draw.rs:705`, `:789`, `:793` | Copy poses reuse state on GPU and CPU paths |
+| Frames and armor-stand equipment | `sunrise-client/src/game/entities/frames.rs:749`; `sunrise-client/src/game/entities/armor_stands.rs:1786`, `:1847` | Fixed/head/hand contexts use same preparation |
+| Other world item consumers | `sunrise-client/src/game/blocks/campfire.rs:172`; `blocks/vault.rs:250`, `blocks/shelf.rs:230`, `blocks/brush.rs:347` under the same `game/` directory | Preserve context and engine lighting |
+| Entity/effect and mod-submitted items | `sunrise-client/src/game/items/potions.rs:2219`, `items/totem.rs:224`, `items/item_particles.rs:18`; `sunrise-client/src/game/modding/native_block_entity_draw.rs:1237` | Share resolver, no recursive callback escape |
+| CPU special submission / GPU submission | `sunrise-client/src/item_render.rs:267`, `:299`; `sunrise-client/src/item_render/special.rs:466`; `sunrise-client/src/game/interface/item_draw.rs:556` | Consume identical frozen draw list |
+| Reload and GPU resource ownership | `sunrise-client/src/game.rs:14259`; `sunrise-client-render/src/gfx/prepared_model.rs:256` | Rebuild affected item states and retain leased resources |
 
 Native and wasm need generated catalog registration, dispatch and callback exports
 in the eventual implementation; neither adapter exists for this feature today.

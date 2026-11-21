@@ -7,7 +7,7 @@ today; the [project board](https://github.com/users/arismoko/projects/1) and the
 
 ## One clean break
 
-A mod is written against one API, `mod_api` (the crate `horizon-mod-api`), and the API keeps one hook per
+A mod is written against one API, `mod_api` (the crate `sunrise-mod-api`), and the API keeps one hook per
 moment. A hook whose NeoForge 26.3 counterpart exists takes its name, side and full contract. Two hooks at the
 same vanilla call site, `_v1` and `_v2` pairs included, are one hook, and the old one is deleted, not kept
 beside it. A veto before an action and a notice after it stay separate when vanilla runs code between them. A
@@ -18,7 +18,7 @@ branches. An old mod rebuilds, and the compiler says what moved. Removing a path
 catalog, these docs, the tests and the sample mod in the same change. A hook with no NeoForge counterpart is
 judged on its merits like any other.
 
-Every hook is declared once, in the catalog (`crates/horizon-mod-vocab/src/hooks/`): its name, side, contract,
+Every hook is declared once, in the catalog (`crates/sunrise-mod-vocab/src/hooks/`): its name, side, contract,
 scope and `doc`. The generator writes everything repeated from it: the `Hooks` trait, the part traits, the
 `Host` traits, the dispatch and the [reference](../../modding/src/reference/api.md). A hook is added by declaring it, not by
 editing match arms.
@@ -102,7 +102,7 @@ and [Parts](../../modding/src/concepts/parts.md).
 | Mod configs | `register_configs` | Config phase on the owning side, once at startup for Client/Common and per world for Server | After the file is read and the mod receives its config loading callback. |
 
 [Content mods](../../modding/src/how-to/content-mods.md) declare identities and data such as blocks, items, entity types
-and menus in `data/<id>/horizon/`. These declarations supply the game's registry entries, models or
+and menus in `data/<id>/sunrise/`. These declarations supply the game's registry entries, models or
 templates and other data. The startup `blocks` and `items` hooks can submit the same declaration types
 from code and go through the same content checks. Attaching a Part or providing a callback adds behaviour
 to an identity. For example, a menu declaration describes its slots, while a `MenuPart` supplies code for
@@ -187,41 +187,20 @@ Systems that run over many things at once can be added beside the part methods l
 because the game owns the data, the data saves and syncs through the attachment codecs, holders have stable
 identities, and a per-hook part method stays when a system joins it.
 
-## One dependency model, native or wasm
+## One dependency model
 
-A mod can be built two ways, from the same source: native, compiled into the game, or to `mod.wasm`, which the
-game's one sandboxed runtime runs with no rebuild. The only difference between them is the build target.
+`[dependencies]` in `sunrise-mod.toml` declares required and optional mods using semver against their
+manifest versions. One resolver orders dispatch, keeps bundle-order ties, and refuses cycles. A native library
+mod publishes functions and statics its dependents call through Cargo, with one copy shared by its dependents.
 
-- `[dependencies]` in `horizon-mod.toml` means the same for both: required and optional dependencies, semver
-  against the manifest's versions, dispatch in dependency order, and a mod publishing functions and statics its
-  dependents call. Native links through Cargo; wasm links through the runtime's linker, with one copy of each
-  library shared by its dependents. Both targets use one resolver, keep bundle-order ties, and refuse cycles.
-- There is no wasm-only packaging unit and no native-only dependency rule. A change to the model lands for both
-  targets together.
-- The wasm interface is generated from the same catalog as the `Host`, at build time, and never committed: a
-  committed generated file would make every two catalog changes conflict. CI reports the added, changed and
-  removed imports of a change in its job summary, and a coverage test fails on an entry with no binding.
-- There is no second API. Every `mod_api` type is plain data or a resource, both generated, and nothing in the
-  API is written twice for wasm. An API shape that cannot cross is fixed in the API.
+Native code builds against the exact game build pinned by `[native]`. A typed API hook takes an API-owned
+value, never an engine type. See [Dependencies between mods](../../modding/src/concepts/dependencies.md).
 
-[Building a mod to `mod.wasm`](../../modding/src/how-to/wasm-mods.md) is the how-to. The two targets differ in how a mod is
-checked against the game, because they differ in what they link to:
+## The API comes first
 
-| | Native | Wasm |
-| --- | --- | --- |
-| Pinned to | the exact game build, in `[native]` | the interface: the hooks it imports |
-| Refused when | the build differs | an import it needs is missing or changed |
-
-A wasm mod keeps running on a newer game while the hooks it imports are unchanged. `horizon-mod-api` therefore
-always builds for `wasm32-unknown-unknown`: a hook that needs an engine type takes a plain-data type of the
-API's own, converted on the game side.
-
-## Injections stay, and the API comes first
-
-`[[inject]]` is the shared native/wasm escape hatch for what the API does not yet reach. The rule is
-API first: a mod needing something the API lacks asks for the hook that replaces the injection, and the
-injection is the stopgap until it exists. The [injections chapter](../../modding/src/concepts/injections.md) holds the current forms,
-the decision ladder and the hook-request format.
+Use a typed hook or Part where possible. When a mod needs a hook the API doesn't expose, ask for it.
+The [native route](../../modding/src/concepts/native-route.md) serves mods that need game internals or
+source edits.
 
 ## The order of the build route
 
@@ -230,15 +209,11 @@ rests on the one before:
 
 1. **The prebuilt game.** The game as a dylib with its metadata, built daily and published as prerelease
    builds, so a native mod compiles against it instead of rebuilding the game.
-2. **Slots.** `[[inject]]` listeners fill compiled points without compiling game code.
-   A missing slot is refused, including on native.
-3. **The internals tier.** A per-mod declared list of game internals the prebuilt game exposes. It is native
-   only and logged, and each internal a mod needs is a request for an API.
-4. **Wasm points.** API `[[inject]]` listeners use the same records on native and wasm.
-   Engine internals and listed call sites are native only.
-
-A native mod that needs a supported source edit uses [mixins](../../modding/src/concepts/native-route/2-mixins.md),
-which compile game code. An inject never falls back to one.
+2. **The internals tier.** A per-mod declared list of game internals the prebuilt game exposes. Each
+   internal a mod needs is a request for an API.
+3. **Function replacement.** A native mod that needs a source edit uses
+   [mixins](../../modding/src/concepts/native-route/2-mixins.md), which compile patched functions
+   against the prebuilt game.
 
 ## No telemetry
 

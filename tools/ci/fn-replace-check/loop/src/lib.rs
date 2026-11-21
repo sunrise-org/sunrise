@@ -7,7 +7,7 @@ struct Mod;
 /// The counter's block and its block entity type.
 const COUNTER: &str = "fnr_loop:counter";
 
-#[mod_api::horizon_mod]
+#[mod_api::sunrise_mod]
 impl mod_api::Hooks for Mod {
     fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
         let kind = r.block_entity_type("counter").blocks(&[COUNTER]).build();
@@ -15,16 +15,16 @@ impl mod_api::Hooks for Mod {
     }
     fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
         event
-            .blocks
-            .push(mod_api::Block::new(COUNTER, "minecraft:stone"));
+            .register(mod_api::Block::new(COUNTER, "minecraft:stone"))
+            .unwrap();
     }
 }
 
 /// Makes the counter's block entity tick.
 struct Counter;
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for Counter {}
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockEntityPart for Counter {
     fn block_entity_ticks(
         &self,
@@ -40,16 +40,4 @@ impl mod_api::BlockEntityPart for Counter {
 /// Called by the helpers: a helper may use its mod's crate.
 pub fn note(what: &str) {
     eprintln!("fnr: loop {what}");
-}
-
-static ENTRY_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// The API listener at the loop's entry, `[[inject]] listen`.
-pub fn entry_listener(_host: mod_api::HostSide<'_>, _args: &mut mod_points::TickBlockEntitiesArgs) {
-    let calls = ENTRY_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-    if calls % 200 == 1 {
-        note(&format!(
-            "api head listener at tick_block_entities, call {calls}"
-        ));
-    }
 }

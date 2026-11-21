@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "tools/ci"))
 import run_test_binaries as runner
 
 
-def artifact(executable, test=True, name="horizon-world", kind="lib"):
+def artifact(executable, test=True, name="sunrise-world", kind="lib"):
     return json.dumps({
         "reason": "compiler-artifact", "package_id": f"path+file:///repo/crates/{name}#0.1.0",
         "manifest_path": f"/repo/crates/{name}/Cargo.toml", "profile": {"test": test},
@@ -27,12 +27,12 @@ def artifact(executable, test=True, name="horizon-world", kind="lib"):
 
 class RunTestBinariesTests(unittest.TestCase):
     def test_package_identity_reads_both_id_forms(self):
-        self.assertEqual(runner.package_identity("horizon-world 0.1.0 (path+file:///repo/crates/horizon-world)"),
-                         ("horizon-world", "0.1.0"))
-        self.assertEqual(runner.package_identity("path+file:///repo/crates/horizon-world#0.1.0"),
-                         ("horizon-world", "0.1.0"))
-        self.assertEqual(runner.package_identity("path+file:///repo/docs/modding/examples#horizon-modding-examples@0.0.0"),
-                         ("horizon-modding-examples", "0.0.0"))
+        self.assertEqual(runner.package_identity("sunrise-world 0.1.0 (path+file:///repo/crates/sunrise-world)"),
+                         ("sunrise-world", "0.1.0"))
+        self.assertEqual(runner.package_identity("path+file:///repo/crates/sunrise-world#0.1.0"),
+                         ("sunrise-world", "0.1.0"))
+        self.assertEqual(runner.package_identity("path+file:///repo/docs/modding/examples#sunrise-modding-examples@0.0.0"),
+                         ("sunrise-modding-examples", "0.0.0"))
 
     def test_only_test_executables_each_once_with_their_package_environment(self):
         messages = "\n".join([
@@ -41,9 +41,9 @@ class RunTestBinariesTests(unittest.TestCase):
         ])
         binaries = runner.test_binaries(messages)
         self.assertEqual([b["executable"] for b in binaries], ["/t/a"])
-        self.assertEqual(binaries[0]["cwd"], "/repo/crates/horizon-world")
-        self.assertEqual(binaries[0]["env"]["CARGO_PKG_NAME"], "horizon-world")
-        self.assertEqual(binaries[0]["env"]["CARGO_CRATE_NAME"], "horizon_world")
+        self.assertEqual(binaries[0]["cwd"], "/repo/crates/sunrise-world")
+        self.assertEqual(binaries[0]["env"]["CARGO_PKG_NAME"], "sunrise-world")
+        self.assertEqual(binaries[0]["env"]["CARGO_CRATE_NAME"], "sunrise_world")
 
     def fake_toolchain(self, root: Path, binaries: list[Path]) -> Path:
         """A cargo that lists `binaries` (and records its arguments) and a rustc beside it."""
@@ -65,7 +65,7 @@ class RunTestBinariesTests(unittest.TestCase):
     def test_every_binary_runs_and_each_failure_is_listed_at_the_end(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            package = root / "crates/horizon-world"
+            package = root / "crates/sunrise-world"
             package.mkdir(parents=True)
             passing, failing, unstartable = root / "passing", root / "failing", root / "unstartable"
             passing.write_text('#!/bin/sh\necho "cwd=$PWD pkg=$CARGO_PKG_NAME args=$*"\n')
@@ -79,15 +79,15 @@ class RunTestBinariesTests(unittest.TestCase):
             # Arguments after cargo's own -- go to every binary, not to the listing.
             self.assertEqual((root / "cargo-args").read_text().split(),
                              ["test", "--workspace", "--no-run", "--message-format=json-render-diagnostics"])
-            self.assertIn(f"cwd={package} pkg=horizon-world args=--ignored", output)
+            self.assertIn(f"cwd={package} pkg=sunrise-world args=--ignored", output)
             self.assertIn("ran 3 test binaries", output)
             # std's directory beside the toolchain: a proc-macro crate's test binary links it dynamically.
             self.assertIn(f"{root}/sysroot/lib/rustlib/x86_64-unknown-linux-gnu/lib", output)
             summary = output[output.index("FAILED TESTS"):].splitlines()
-            self.assertIn("::error::horizon-world lib.rs (failing): exit 101", summary)
+            self.assertIn("::error::sunrise-world lib.rs (failing): exit 101", summary)
             self.assertIn("    a::c", summary)
             self.assertNotIn("    a::b", summary)
-            self.assertTrue(any(line.startswith("::error::horizon-world lib.rs (unstartable): could not start")
+            self.assertTrue(any(line.startswith("::error::sunrise-world lib.rs (unstartable): could not start")
                                 for line in summary), summary)
             self.assertFalse(any("(passing)" in line for line in summary))
 
@@ -174,7 +174,7 @@ printf 'ok a::slow <7.500s>\\nok a::fast <0.001s>\\n' > "$log"
     def test_time_limits_time_every_test_from_the_log_and_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "crates/horizon-world").mkdir(parents=True)
+            (root / "crates/sunrise-world").mkdir(parents=True)
             binary = root / "timed"
             binary.write_text(self.FAKE_LIBTEST)
             binary.chmod(0o755)
@@ -183,13 +183,13 @@ printf 'ok a::slow <7.500s>\\nok a::fast <0.001s>\\n' > "$log"
             self.assertEqual(code, 1)
             self.assertIn("args=-Z unstable-options --report-time --logfile ", output)
             self.assertIn("bootstrap=1", output)
-            self.assertIn("::error::horizon-world lib.rs (timed): a::slow took 7.50s", output)
+            self.assertIn("::error::sunrise-world lib.rs (timed): a::slow took 7.50s", output)
             self.assertIn("3 tests timed, 7.5 test-seconds in total; slowest: a::slow 7.50s", output)
             self.assertNotIn("no timed record", output)
             with unittest.mock.patch.dict(os.environ, {"LOSE": "1"}):
                 code, output = self.run_main("--jobs", "1", "--time-limits", "2,9", "--", str(cargo), "test")
             self.assertEqual(code, 1)
-            self.assertIn("::error::horizon-world lib.rs (timed): 1 listed tests have no timed record in libtest's "
+            self.assertIn("::error::sunrise-world lib.rs (timed): 1 listed tests have no timed record in libtest's "
                           "log, so the guard cannot judge them: a::lost", output)
             # Without the option nothing is added and the times are not judged.
             code, output = self.run_main("--jobs", "1", "--", str(cargo), "test")
@@ -200,7 +200,7 @@ printf 'ok a::slow <7.500s>\\nok a::fast <0.001s>\\n' > "$log"
     def test_only_an_isolated_passing_measurement_can_clear_a_hard_limit(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "crates/horizon-world").mkdir(parents=True)
+            (root / "crates/sunrise-world").mkdir(parents=True)
             binary = root / "timed"
             binary.write_text(self.FAKE_LIBTEST)
             binary.chmod(0o755)
@@ -219,7 +219,7 @@ printf 'ok a::slow <7.500s>\\nok a::fast <0.001s>\\n' > "$log"
                     self.assertIn(f"first 7.50s, isolated {measured}", output)
 
     def test_a_guarded_run_confirms_a_slow_test_under_the_guard(self):
-        binary = {"label": "horizon-world lib.rs"}
+        binary = {"label": "sunrise-world lib.rs"}
         seen = []
 
         def guarded(invocation, env, timed, shim, run_one):
@@ -239,7 +239,7 @@ printf 'ok a::slow <7.500s>\\nok a::fast <0.001s>\\n' > "$log"
         self.assertIn("network guard: socket", errors[0])
 
     def test_a_rerun_that_skips_for_missing_data_reaches_the_verdict(self):
-        binary = {"label": "horizon-world lib.rs"}
+        binary = {"label": "sunrise-world lib.rs"}
 
         def rerun(invocation, env, args, timed=False):
             return {"binary": invocation, "seconds": 0.1, "max_rss_kib": 0, "status": "ok",
@@ -257,7 +257,7 @@ printf 'ok a::slow <7.500s>\\nok a::fast <0.001s>\\n' > "$log"
     def test_a_test_that_skips_for_missing_data_fails_only_with_the_flag(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "crates/horizon-world").mkdir(parents=True)
+            (root / "crates/sunrise-world").mkdir(parents=True)
             skipping, clean = root / "skipping", root / "clean"
             # The second line is libtest's own half-written result line with the skip line inside it.
             skipping.write_text("#!/bin/sh\necho 'skipped: no vanilla data; test=a::one; skipped tests=1'\n"
@@ -274,8 +274,8 @@ printf 'ok a::slow <7.500s>\\nok a::fast <0.001s>\\n' > "$log"
             self.assertEqual(code, 1)
             errors = [line for line in output.splitlines() if "returns early without vanilla data" in line]
             self.assertEqual(len(errors), 2, errors)
-            self.assertTrue(errors[0].startswith("::error::horizon-world lib.rs (skipping): a::one "), errors)
-            self.assertTrue(errors[1].startswith("::error::horizon-world lib.rs (skipping): a::two "), errors)
+            self.assertTrue(errors[0].startswith("::error::sunrise-world lib.rs (skipping): a::one "), errors)
+            self.assertTrue(errors[1].startswith("::error::sunrise-world lib.rs (skipping): a::two "), errors)
             self.assertIn('#[ignore = "daily"] with a `resources` row', errors[0])
             self.assertIn("or give it a fixture", errors[0])
             self.assertIn("::error::2 tests skipped for missing vanilla data", output)

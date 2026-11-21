@@ -13,4 +13,4 @@ how they reach the pack is held to the same pixels. Each part changes the pictur
 - `[[post]]` tints solid terrain by what `set_surface` stored (`surface_at`), and grades the whole picture, the
   End's sky included, which no other stage reaches.
 
-Check it with `horizon-shader check tools/fixtures/shaderpacks/frame_identity_world`.
+Check it with `sunrise-shader check tools/fixtures/shaderpacks/frame_identity_world`.

@@ -152,10 +152,13 @@ vanilla:
 | Source | Calculator |
 | --- | --- |
 | A primed TNT that went through a portal | Nether portal blocks resist nothing and never break; every other cell as usual |
-| A wind charge (a player's or a breeze's) | The blocks of `#blocks_wind_charge_explosions` (barrier, bedrock) resist 3,600,000; every other cell, fluids included, nothing |
+| A player's wind charge | The blocks of `#blocks_wind_charge_explosions` (barrier, bedrock) resist 3,600,000; every other cell, fluids included, nothing. No entity is damaged; knockback multiplier 1.22, a flying player 0 |
+| A breeze's wind charge | The same blocks; no entity is damaged; knockback multiplier 1, a flying player 0 |
 | Anything else, or `None` | The default calculator |
 
-With a calculator given, the source's is not used, as in vanilla.
+With a calculator given, none of the source's rules are used, its damage and
+knockback included, as in vanilla. A wind charge's entities are still checked
+for exposure: only a calculator that neither damages nor pushes skips it.
 
 A particle is a vanilla particle type that takes no options (`minecraft:flame`,
 `minecraft:end_rod`; not `minecraft:block` or `minecraft:item`). The packet
@@ -183,7 +186,7 @@ mod that casts its own rays and breaks blocks over several ticks needs.
 `host.block_states().explosion_resistance(state)` is the value the block of
 `state` declares (`Block.getExplosionResistance`): stone 6, obsidian 1200,
 bedrock 3,600,000, water 100, a content block's `explosion_resistance`. It is a
-Horizon addition, readable on both sides: vanilla only reads it at a position.
+Sunrise addition, readable on both sides: vanilla only reads it at a position.
 Parts and fluids don't change it. `None` for an unknown state.
 
 `level.explosion_resistance(host, pos, source, center, radius, fire,
@@ -228,7 +231,7 @@ cell, unless every part on the block that answers `explosion_resistance`
 declares its answer pure:
 
 ```rust
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl BlockPart for Reinforced {
     fn explosion_resistance(&self, _: &dyn LevelHost, _: &mut ExplosionResistanceEvent<'_>) -> Option<f32> {
         Some(5000.0)
@@ -254,7 +257,7 @@ them, without casting its rays, hurting or pushing entities, or sending a
 packet or a sound. A mod that casts its own rays (with
 `explosion_resistances`) breaks what they found with it, spread over several
 ticks if it likes, and does the entity damage, the push and the effects with
-the entity calls and `explode`. It is a Horizon addition: vanilla has no single
+the entity calls and `explode`. It is a Sunrise addition: vanilla has no single
 call that does this.
 
 Each call is one explosion to the hooks. `explosion_start` hears it first and

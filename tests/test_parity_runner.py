@@ -1,4 +1,5 @@
 from pathlib import Path
+import argparse
 import json
 import os
 import subprocess
@@ -10,6 +11,7 @@ import unittest
 from unittest import mock
 
 from tools import parity, parity_shard
+from tools.ci import parity_shards
 
 
 class ParityRunnerTests(unittest.TestCase):
@@ -28,60 +30,60 @@ class ParityRunnerTests(unittest.TestCase):
 
     def test_artifacts_keep_the_package_and_feature_selection(self):
         self.assertEqual(parity.artifacts_of(["cargo", "build", "--locked", "--profile=fast", "-j", "4", "--package",
-                                              "horizon-client", "--bins", "-F", "x"]),
-                         [["bins", "", "fast", ["-p", "horizon-client", "--features", "x"], False]])
-        self.assertEqual(parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--bin=horizon-world"]),
-                         [["bin", "horizon-world", "release", ["-p", "horizon-world"], False]])
+                                              "sunrise-client", "--bins", "-F", "x"]),
+                         [["bins", "", "fast", ["-p", "sunrise-client", "--features", "x"], False]])
+        self.assertEqual(parity.artifacts_of(["cargo", "build", "--release", "-p", "sunrise-world", "--bin=sunrise-world"]),
+                         [["bin", "sunrise-world", "release", ["-p", "sunrise-world"], False]])
 
     def test_prebuild_follows_a_moved_target_without_losing_features(self):
-        selection = ["-p", "horizon-client", "--no-default-features", "--features", "horizon-client/rng-trace"]
+        selection = ["-p", "sunrise-client", "--no-default-features", "--features", "sunrise-client/rng-trace"]
         artifacts = [["example", "client_probe", "fast", selection, True],
-                     ["bin", "horizon-ctl", "fast", selection, False]]
-        packages = {("example", "client_probe"): "horizon-client-lib", ("bin", "horizon-ctl"): "horizon-client-lib"}
+                     ["bin", "sunrise-ctl", "fast", selection, False]]
+        packages = {("example", "client_probe"): "sunrise-client-lib", ("bin", "sunrise-ctl"): "sunrise-client-lib"}
         commands = parity.prebuild_commands(artifacts, packages)
         self.assertEqual(len(commands), 2)
         for command in commands:
             self.assertEqual(command[:5], ["cargo", "build", "--locked", "--profile", "fast"])
             self.assertEqual(command[5:5 + len(selection)], selection)
-            self.assertEqual(command[5 + len(selection):7 + len(selection)], ["-p", "horizon-client-lib"])
+            self.assertEqual(command[5 + len(selection):7 + len(selection)], ["-p", "sunrise-client-lib"])
         self.assertEqual(artifacts[0][3], selection)
 
     def test_old_broad_client_selections_include_the_moved_targets(self):
-        packages = {("bin", "horizon-client"): "horizon-client", ("bin", "horizon-ctl"): "horizon-client-lib",
-                    ("example", "client_probe"): "horizon-client-lib"}
+        packages = {("bin", "sunrise-client"): "sunrise-client", ("bin", "sunrise-ctl"): "sunrise-client-lib",
+                    ("example", "client_probe"): "sunrise-client-lib"}
         for flag in ["--bins", "--examples"]:
-            command = ["cargo", "build", "-p", "horizon-client", "--no-default-features", flag]
+            command = ["cargo", "build", "-p", "sunrise-client", "--no-default-features", flag]
             artifacts = parity.artifacts_of(command)
             before = [list(artifact[3]) for artifact in artifacts]
             self.assertEqual(parity.prebuild_commands(artifacts, packages),
-                             [["cargo", "build", "--locked", "--profile", "dev", "-p", "horizon-client",
-                               "--no-default-features", "-p", "horizon-client-lib", flag]])
+                             [["cargo", "build", "--locked", "--profile", "dev", "-p", "sunrise-client",
+                               "--no-default-features", "-p", "sunrise-client-lib", flag]])
             self.assertEqual([artifact[3] for artifact in artifacts], before)
 
     def test_prebuild_repeats_each_harness_selection(self):
         artifacts = [
-            *parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--example", "a"]),
-            *parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--example", "b"]),
-            *parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--bin", "horizon-world"]),
-            *parity.artifacts_of(["cargo", "build", "--release", "--bin", "horizon-world"]),
-            *parity.artifacts_of(["cargo", "run", "--profile", "fast", "-p", "horizon-client", "--example", "c"]),
-            *parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--example", "renamed"]),
+            *parity.artifacts_of(["cargo", "build", "--release", "-p", "sunrise-world", "--example", "a"]),
+            *parity.artifacts_of(["cargo", "build", "--release", "-p", "sunrise-world", "--example", "b"]),
+            *parity.artifacts_of(["cargo", "build", "--release", "-p", "sunrise-world", "--bin", "sunrise-world"]),
+            *parity.artifacts_of(["cargo", "build", "--release", "--bin", "sunrise-world"]),
+            *parity.artifacts_of(["cargo", "run", "--profile", "fast", "-p", "sunrise-client", "--example", "c"]),
+            *parity.artifacts_of(["cargo", "build", "--release", "-p", "sunrise-world", "--example", "renamed"]),
             ["example", "old", "release"],  # recorded before selections were kept: its own crate's -p
             ["example", "unknown", "release"],  # no longer in the workspace: left to its harness
         ]
-        packages = {("example", "a"): "horizon-world", ("example", "b"): "horizon-world", ("example", "c"): "horizon-client",
-                    ("bin", "horizon-world"): "horizon-world", ("example", "old"): "horizon-world"}
+        packages = {("example", "a"): "sunrise-world", ("example", "b"): "sunrise-world", ("example", "c"): "sunrise-client",
+                    ("bin", "sunrise-world"): "sunrise-world", ("example", "old"): "sunrise-world"}
         self.assertEqual(parity.prebuild_commands(artifacts, packages), [
-            ["cargo", "build", "--locked", "--profile", "fast", "-p", "horizon-client", "--example", "c"],
-            ["cargo", "build", "--locked", "--profile", "release", "--bin", "horizon-world"],
-            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--bin", "horizon-world"],
-            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--example", "a", "--example", "b",
+            ["cargo", "build", "--locked", "--profile", "fast", "-p", "sunrise-client", "--example", "c"],
+            ["cargo", "build", "--locked", "--profile", "release", "--bin", "sunrise-world"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "sunrise-world", "--bin", "sunrise-world"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "sunrise-world", "--example", "a", "--example", "b",
              "--example", "old"],
         ])
 
     def test_a_probe_binary_depends_only_on_the_probes_it_ran(self):
         commands = [["/t/release/examples/world_probe", "a_fixture", "/dir"],
-                    ["cargo", "run", "-p", "horizon-client", "--example", "client_probe", "--", "b_fixture"]]
+                    ["cargo", "run", "-p", "sunrise-client", "--example", "client_probe", "--", "b_fixture"]]
         self.assertEqual(parity.probes_run(commands), {"a_fixture", "b_fixture"})
         with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp)):
             probe = Path(temp, "crates/w/examples/probe")
@@ -110,24 +112,24 @@ class ParityRunnerTests(unittest.TestCase):
         ]), {"a_fixture", "b_fixture"})
 
     def test_records_of_the_shared_probe_name_build_their_crates_probe(self):
-        record = {"dependencies": ["crates/horizon-world/examples/probe/a_fixture.rs", "crates/horizon-world/src/lib.rs"],
-                  "artifacts": [["example", "probe", "release", ["-p", "horizon-client"], True],
+        record = {"dependencies": ["crates/sunrise-world/examples/probe/a_fixture.rs", "crates/sunrise-world/src/lib.rs"],
+                  "artifacts": [["example", "probe", "release", ["-p", "sunrise-client"], True],
                                 ["example", "probe", "release"],  # no selection: the crate of its probe sources
-                                ["example", "probe", "release", ["-p", "horizon-core", "-p", "horizon-world"], True],
-                                ["bin", "horizon-world", "release", ["-p", "horizon-world"], False]]}
+                                ["example", "probe", "release", ["-p", "sunrise-core", "-p", "sunrise-world"], True],
+                                ["bin", "sunrise-world", "release", ["-p", "sunrise-world"], False]]}
         artifacts = parity.recorded_artifacts(record)
-        self.assertEqual(artifacts, [["example", "client_probe", "release", ["-p", "horizon-client"], True],
+        self.assertEqual(artifacts, [["example", "client_probe", "release", ["-p", "sunrise-client"], True],
                                      ["example", "world_probe", "release"],
-                                     ["example", "world_probe", "release", ["-p", "horizon-core", "-p", "horizon-world"], True],
-                                     ["bin", "horizon-world", "release", ["-p", "horizon-world"], False]])
-        packages = {("example", "client_probe"): "horizon-client", ("example", "world_probe"): "horizon-world",
-                    ("bin", "horizon-world"): "horizon-world"}
+                                     ["example", "world_probe", "release", ["-p", "sunrise-core", "-p", "sunrise-world"], True],
+                                     ["bin", "sunrise-world", "release", ["-p", "sunrise-world"], False]])
+        packages = {("example", "client_probe"): "sunrise-client", ("example", "world_probe"): "sunrise-world",
+                    ("bin", "sunrise-world"): "sunrise-world"}
         self.assertEqual(parity.prebuild_commands(artifacts, packages), [
-            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-client", "--example", "client_probe"],
-            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-core", "-p", "horizon-world",
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "sunrise-client", "--example", "client_probe"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "sunrise-core", "-p", "sunrise-world",
              "--example", "world_probe"],
-            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--bin", "horizon-world"],
-            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--example", "world_probe"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "sunrise-world", "--bin", "sunrise-world"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "sunrise-world", "--example", "world_probe"],
         ])
         self.assertEqual(parity.recorded_artifacts({"artifacts": [["example", "probe", "release"]]}),
                          [["example", "probe", "release"]])  # no crate to tell: left to its harness
@@ -210,9 +212,9 @@ class ParityRunnerTests(unittest.TestCase):
         executor._log.assert_called_once()
 
     def test_a_hosts_excludes_are_skipped_when_it_runs_parity_itself(self):
-        config = {"hosts": {"playhorizon": {"exclude": {"remote_fireworks": "starved"}}, "macmini": {"exclude": {}}}}
+        config = {"hosts": {"playsunrise": {"exclude": {"remote_fireworks": "starved"}}, "macmini": {"exclude": {}}}}
         with mock.patch.object(parity.sys, "platform", "linux"):
-            self.assertEqual(parity.platform_skips(config, "playhorizon"), {"remote_fireworks": "starved"})
+            self.assertEqual(parity.platform_skips(config, "playsunrise"), {"remote_fireworks": "starved"})
             self.assertEqual(parity.platform_skips(config, "macmini"), {})
             self.assertEqual(parity.platform_skips(config, "elsewhere"), {})
 
@@ -220,6 +222,94 @@ class ParityRunnerTests(unittest.TestCase):
         self.assertEqual(parity.named_only({"named_only": {"lan_integration": "slow"}}), {"lan_integration": "slow"})
         self.assertEqual(parity.named_only({}), {})
         self.assertIn("lan_integration", parity.named_only(parity.host_config()))
+
+    def test_the_daily_set_is_every_harness_except_named_only_and_their_shards(self):
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(parity, "load_state", return_value={"hashes": {}, "harnesses": {}}), \
+                mock.patch.object(parity, "save_state"), mock.patch.object(parity, "exit_on_termination"), \
+                mock.patch.object(parity, "environment_key", return_value="test"), \
+                mock.patch.object(parity, "platform_skips", return_value={}), mock.patch("builtins.print"):
+            manifest = Path(temp, "selection.json")
+            found = parity.harnesses()
+            names = parity.named_only(parity.host_config())
+            self.assertLessEqual({"frame_identity", "command_exec"}, names.keys())
+            # Every row holds back a harness an automatic run would select: not a PARITY_MANUAL proof, which no run
+            # selects, nor a name that no longer exists.
+            self.assertLessEqual(names.keys(), {parity.base_name(name) for name in found})
+            expected = {name for name in found if parity.base_name(name) not in names}
+            for args, selected in ((["--all", "--skip-named-only"], expected), (["--all"], set(found)),
+                                   (["frame_identity"], {"frame_identity"})):
+                with self.subTest(args=args), mock.patch.object(
+                        sys, "argv", ["parity.py", *args, "--list", "--selection-file", str(manifest)]):
+                    self.assertEqual(parity.main(), 0)
+                    self.assertEqual(set(json.loads(manifest.read_text())), selected)
+
+    def test_the_planner_splits_sorted_labels_round_robin(self):
+        with tempfile.TemporaryDirectory() as temp:
+            selection = Path(temp, "input.json")
+            selection.write_text(json.dumps(["wolf", "chest#2", "boat", "chest#1", "zombie"]))
+            out = Path(temp, "plan")
+            self.assertEqual(parity_shards.write_selection(selection, out, count=2), 2)
+            self.assertEqual(json.loads((out / "selection.json").read_text()),
+                             ["boat", "chest#1", "chest#2", "wolf", "zombie"])
+            self.assertEqual(json.loads((out / "bucket-0.json").read_text()), ["boat", "chest#2", "zombie"])
+            self.assertEqual(json.loads((out / "bucket-1.json").read_text()), ["chest#1", "wolf"])
+
+    def test_a_planned_share_runs_exactly_the_harnesses_it_names(self):
+        planned = ["boat", "chest#2", "wolf"]
+        found = dict.fromkeys([*planned, "chest#1", "zombie"])
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(parity, "harnesses", return_value=found), \
+                mock.patch.object(parity, "load_state", return_value={"hashes": {}, "harnesses": {}}), \
+                mock.patch.object(parity, "save_state"), mock.patch.object(parity, "exit_on_termination"), \
+                mock.patch.object(parity, "environment_key", return_value="test"), \
+                mock.patch.object(parity, "platform_skips", return_value={"chest": "worker exclusion"}), \
+                mock.patch.object(parity, "named_only", return_value={"wolf": "worker named-only"}), \
+                mock.patch.object(parity, "changed_harnesses", return_value={"zombie"}), mock.patch("builtins.print"):
+            manifest = Path(temp, "selection.json")
+            share = Path(temp, "bucket-0.json")
+            share.write_text(json.dumps(planned))
+            with mock.patch.object(sys, "argv", [
+                    "parity.py", "--all", "--skip-named-only", "--exclude", "boat", "--flake-check", "main",
+                    "--harness-file", str(share), "--list", "--selection-file", str(manifest)]):
+                self.assertEqual(parity.main(), 0)
+            self.assertEqual(json.loads(manifest.read_text()), planned)
+
+    def test_a_share_naming_a_harness_this_tree_lacks_is_refused(self):
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(parity, "load_state", return_value={"hashes": {}, "harnesses": {}}), \
+                mock.patch.object(parity, "save_state"), mock.patch.object(parity, "exit_on_termination"), \
+                mock.patch.object(parity, "environment_key", return_value="test"), \
+                mock.patch.object(parity, "platform_skips", return_value={}), mock.patch("builtins.print"):
+            share = Path(temp, "bucket-0.json")
+            share.write_text(json.dumps(["food", "no_such_harness_in_this_tree"]))
+            with mock.patch.object(sys, "argv", ["parity.py", "--all", "--harness-file", str(share), "--list"]), \
+                    mock.patch("sys.stderr"):
+                with self.assertRaises(SystemExit):
+                    parity.main()
+
+    def test_only_a_whole_run_marks_the_run_finished(self):
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(parity, "load_state", return_value={"hashes": {}, "harnesses": {}}), \
+                mock.patch.object(parity, "save_state"), mock.patch.object(parity, "exit_on_termination"), \
+                mock.patch.object(parity, "environment_key", return_value="test"), \
+                mock.patch.object(parity, "stale", return_value=False), \
+                mock.patch.object(parity, "platform_skips", return_value={}), mock.patch("builtins.print"):
+            marker = Path(temp, "last-run.json")
+            empty = Path(temp, "bucket-0.json")
+            empty.write_text("[]")
+            # Nothing to do: a whole run still records one for tools/gate.py.
+            with mock.patch.object(parity, "STATE_DIR", Path(temp)):
+                with mock.patch.dict(os.environ, PARITY_RUN_ID="whole"), \
+                        mock.patch.object(sys, "argv", ["parity.py"]):
+                    self.assertEqual(parity.main(), 0)
+                previous = marker.read_bytes()
+                self.assertEqual(json.loads(previous), {"run": "whole", "failed": []})
+                # A share must not overwrite the marker with its own run ID.
+                with mock.patch.dict(os.environ, PARITY_RUN_ID="share"), \
+                        mock.patch.object(sys, "argv", ["parity.py", "--harness-file", str(empty)]):
+                    self.assertEqual(parity.main(), 0)
+                self.assertEqual(marker.read_bytes(), previous)
 
     def test_a_pass_from_another_worktree_counts_only_for_the_same_content(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -297,7 +387,7 @@ class DependencyPathTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp)):
             found = {"probe": Path(temp, "tools/test_probe_parity.py")}
             for path in ("crates/w/examples/probe.rs", "crates/w/src/bin/probe.rs",
-                         "mods/horizon/src/test/java/Oracle.java"):
+                         "mods/sunrise/src/test/java/Oracle.java"):
                 with self.subTest(path=path), mock.patch.object(parity, "changed_files", return_value={path}):
                     records = {"probe": {"dependencies": [path.replace("/", "\\")]}}
                     self.assertEqual(parity.changed_harnesses(found, records, "main"), {"probe"})
@@ -311,12 +401,12 @@ class DependencyPathTests(unittest.TestCase):
                 mock.patch.object(parity, "STATE_DIR", Path(temp, "state")):
             root = Path(temp)
             files = {
-                "crates/horizon-world/Cargo.toml": '[package]\nname = "horizon-world"\n'
+                "crates/sunrise-world/Cargo.toml": '[package]\nname = "sunrise-world"\n'
                                                    '\n[[example]]\nname = "world_probe"\npath = "examples/probe.rs"\n',
-                "crates/horizon-world/src/lib.rs": "pub mod used;\npub mod unused;\n",
-                "crates/horizon-world/src/used.rs": "pub fn f() {}\n",
-                "crates/horizon-world/src/unused.rs": "pub fn f() {}\n",
-                "crates/horizon-world/examples/probe.rs": "fn main() { horizon_world::used::f(); }\n",
+                "crates/sunrise-world/src/lib.rs": "pub mod used;\npub mod unused;\n",
+                "crates/sunrise-world/src/used.rs": "pub fn f() {}\n",
+                "crates/sunrise-world/src/unused.rs": "pub fn f() {}\n",
+                "crates/sunrise-world/examples/probe.rs": "fn main() { sunrise_world::used::f(); }\n",
             }
             for path, text in files.items():
                 target = root / path
@@ -326,8 +416,8 @@ class DependencyPathTests(unittest.TestCase):
             dependencies[1] += "#keep:used"
             record = {"dependencies": dependencies, "artifacts": [["example", "probe", "release"]]}
             found = {"probe": root / "tools/test_probe_parity.py"}
-            for path, expected in (("crates/horizon-world/src/used.rs", {"probe"}),
-                                   ("crates/horizon-world/src/unused.rs", set())):
+            for path, expected in (("crates/sunrise-world/src/used.rs", {"probe"}),
+                                   ("crates/sunrise-world/src/unused.rs", set())):
                 with self.subTest(path=path):
                     self.assertEqual(parity.affected_harnesses(found, {"probe": record}, {path}), expected)
             self.assertEqual(record["dependencies"], dependencies)
@@ -441,13 +531,18 @@ class OracleReuseTests(unittest.TestCase):
         root = Path(self.temp.name)
         self.bin, self.shim = root / "bin", root / "shim"
         self.bin.mkdir(); self.shim.mkdir()
-        # A fake oracle: copies its input to its output and counts its runs.
+        # A fake oracle: copies its input (or the JDK release marker) to its output and counts its runs.
         fake = self.bin / "java"
         fake.write_text(f"#!{sys.executable}\nimport sys, pathlib\n"
                         "runs = pathlib.Path(sys.argv[1]).parent / 'runs'\n"
                         "runs.write_text(str(int(runs.read_text() or 0) + 1) if runs.exists() else '1')\n"
-                        "pathlib.Path(sys.argv[2]).write_text(pathlib.Path(sys.argv[1]).read_text())\nprint('done')\n")
+                        "source = pathlib.Path(sys.argv[1])\n"
+                        "if '--emit-release' in sys.argv[3:]:\n"
+                        "    source = pathlib.Path(__file__).resolve().parent.parent / 'release'\n"
+                        "pathlib.Path(sys.argv[2]).write_bytes(source.read_bytes())\nprint('done')\n")
         fake.chmod(0o755)
+        # bin's parent is the fake launcher's JDK home (JAVA_HOME below); an update in place changes its release file.
+        (root / "release").write_text('JAVA_VERSION="25.0.1"\n')
         (self.shim / "java").symlink_to(Path(parity.__file__).with_name("parity_shim.py"))
         self.input, self.output = root / "work" / "in.txt", root / "work" / "out.txt"
         self.input.parent.mkdir()
@@ -459,15 +554,15 @@ class OracleReuseTests(unittest.TestCase):
         (python / "python3").symlink_to(sys.executable)
         self.python = sys.executable
         self.env = dict(os.environ, PATH=f"{self.shim}:{self.bin}:{python}", PARITY_SHIM_REAL_PATH=str(self.bin),
-                        PARITY_SHIM_CACHE=str(root / "cache"))
+                        PARITY_SHIM_CACHE=str(root / "cache"), JAVA_HOME=str(root))
         self.subprocess = subprocess
 
     def tearDown(self):
         self.temp.cleanup()
 
-    def oracle(self):
-        result = self.subprocess.run(["java", str(self.input), str(self.output)], env=self.env, capture_output=True, text=True,
-                                     stdin=self.subprocess.DEVNULL, check=True)
+    def oracle(self, *options):
+        result = self.subprocess.run(["java", str(self.input), str(self.output), *options], env=self.env,
+                                     capture_output=True, text=True, stdin=self.subprocess.DEVNULL, check=True)
         self.assertEqual(result.stdout, "done\n")
         return int((self.input.parent / "runs").read_text())
 
@@ -483,10 +578,101 @@ class OracleReuseTests(unittest.TestCase):
         self.assertEqual(self.oracle(), 3)
         self.assertEqual(self.output.read_text(), "b")
 
+    def test_a_new_checkout_replays_a_run_from_the_keep(self):
+        import shutil
+        keep = self.bin.parent / "keep"
+        self.env["PARITY_ORACLE_KEEP"] = str(keep)
+        self.assertEqual(self.oracle(), 1)
+        # A new checkout: no record of its own, no outputs.
+        shutil.rmtree(self.env["PARITY_SHIM_CACHE"])
+        self.output.unlink()
+        self.input.write_text("a")
+        self.assertEqual(self.oracle(), 1)  # replayed from the keep, stdout included
+        self.assertEqual(self.output.read_text(), "a")
+        self.assertEqual(self.oracle(), 1)  # and then from its own record
+        shutil.rmtree(self.env["PARITY_SHIM_CACHE"])
+        self.output.unlink()
+        self.input.write_text("b")
+        self.assertEqual(self.oracle(), 2)
+        self.assertEqual(self.output.read_text(), "b")
+        self.assertEqual(len([entry for entry in keep.glob("??/*") if not entry.name.startswith(".")]), 2)
+
+    def new_checkout(self):
+        import shutil
+        shutil.rmtree(self.env["PARITY_SHIM_CACHE"], ignore_errors=True)
+        self.output.unlink()
+
+    def test_a_kept_run_is_not_replayed_for_another_jdk_or_jvm_options(self):
+        keep = self.bin.parent / "keep"
+        self.env["PARITY_ORACLE_KEEP"] = str(keep)
+        # The fake launcher's JDK home is bin's parent; an update in place changes its release file.
+        release = self.bin.parent / "release"
+        release.write_text('JAVA_VERSION="25.0.1"\n')
+        self.assertEqual(self.oracle(), 1)
+        self.new_checkout()
+        release.write_text('JAVA_VERSION="25.0.2"\n')
+        self.assertEqual(self.oracle(), 2)
+        self.new_checkout()
+        self.env["JAVA_TOOL_OPTIONS"] = "-Dsunrise.seed=2"
+        self.assertEqual(self.oracle(), 3)
+        self.new_checkout()
+        self.assertEqual(self.oracle(), 3)  # the same JDK and options as the last run: replayed
+
+    def test_with_a_keep_an_update_of_the_jdk_in_place_replays_nothing_from_the_checkout_either(self):
+        self.env["PARITY_ORACLE_KEEP"] = str(self.bin.parent / "keep")
+        self.assertEqual(self.oracle("--emit-release"), 1)
+        self.assertEqual(self.oracle("--emit-release"), 1)
+        self.assertEqual(self.output.read_bytes(), b'JAVA_VERSION="25.0.1"\n')
+        updated = b'JAVA_VERSION="25.0.10"\n'
+        (self.bin.parent / "release").write_bytes(updated)
+        self.assertEqual(self.oracle("--emit-release"), 2)  # warm: the checkout's own record was of the old JDK
+        self.assertEqual(self.output.read_bytes(), updated)
+
+    def test_with_a_keep_a_launcher_linked_out_of_the_jdk_is_never_reused(self):
+        import os
+        from tools import parity_shim
+        home = self.bin.parent / "jdk"
+        (home / "bin").mkdir(parents=True)
+        (home / "bin" / "java").symlink_to(self.bin / "java")  # resolves outside $JAVA_HOME/bin
+        with mock.patch.dict(os.environ, JAVA_HOME=str(home)):
+            self.assertFalse(parity_shim.direct_jdk(str(home / "bin" / "java"), "java"))
+        with mock.patch.dict(os.environ, JAVA_HOME=str(self.bin.parent)):
+            self.assertTrue(parity_shim.direct_jdk(str(self.bin / "java"), "java"))
+
+    def test_a_file_named_through_an_oracle_variable_is_an_input(self):
+        keep = self.bin.parent / "keep"
+        self.env["PARITY_ORACLE_KEEP"] = str(keep)
+        order = self.bin.parent / "order.txt"
+        order.write_text("first")
+        self.env["SUNRISE_ORDER"] = str(order)
+        self.assertEqual(self.oracle(), 1)
+        self.assertEqual(self.oracle(), 1)
+        # The same argv, other bytes behind the variable: neither tier replays.
+        order.write_text("second")
+        self.assertEqual(self.oracle(), 2)
+        self.new_checkout()
+        order.write_text("first")
+        self.assertEqual(self.oracle(), 2)  # the first run's bytes again: replayed from the keep
+        self.new_checkout()
+        order.write_text("third")
+        self.assertEqual(self.oracle(), 3)
+
+    def test_a_damaged_kept_run_runs_the_oracle_and_writes_nothing_of_it(self):
+        keep = self.bin.parent / "keep"
+        self.env["PARITY_ORACLE_KEEP"] = str(keep)
+        self.assertEqual(self.oracle(), 1)
+        entry = next(entry for entry in keep.glob("??/*") if not entry.name.startswith("."))
+        (entry / "stdout").unlink()
+        (entry / "files" / "0").write_text("kept output")
+        self.new_checkout()
+        self.assertEqual(self.oracle(), 2)
+        self.assertEqual(self.output.read_text(), "a")
+        self.assertEqual([path.name for path in self.output.parent.iterdir() if "restore" in path.name], [])
+
     def wrapper(self, folder, put_the_shim_back=False):
         """A `java` that runs the first other `java` on PATH, as JDK selectors and build wrappers do. It stops
         itself after a few rounds, so a shim that loops fails this test instead of filling the machine."""
-        folder.mkdir()
+        folder.mkdir(parents=True)
         path = f"os.environ['PATH'] = {str(self.shim)!r} + os.pathsep + os.environ['PATH']\n" if put_the_shim_back else ""
         (folder / "java").write_text(
             f"#!{self.python}\nimport os, sys, shutil\nfrom pathlib import Path\n"
@@ -507,6 +693,26 @@ class OracleReuseTests(unittest.TestCase):
         self.assertEqual(self.oracle(), 1)
         self.assertEqual(self.oracle(), 1)
 
+    def test_with_a_keep_a_run_through_a_wrapper_is_never_reused(self):
+        # A JDK selector in front of $JAVA_HOME's JDK: the JDK behind it changes while the wrapper's file stays the same.
+        keep = self.bin.parent / "keep"
+        wrapper = self.bin.parent / "selector" / "bin"
+        self.wrapper(wrapper)
+        (wrapper.parent / "release").write_text('JAVA_VERSION="selector"\n')
+        self.env["PATH"] = f"{self.shim}:{wrapper}:{self.bin}:{self.bin.parent / 'python'}"
+        self.env["PARITY_SHIM_REAL_PATH"] = f"{wrapper}:{self.bin}"
+        self.env.pop("PARITY_ORACLE_KEEP", None)
+        self.assertEqual(self.oracle(), 1)
+        self.assertEqual(self.oracle(), 1)  # the selector populated the checkout's cache without the keep
+        self.env["PARITY_ORACLE_KEEP"] = str(keep)
+        (self.bin.parent / "release").write_text('JAVA_VERSION="25.0.2"\n')
+        self.assertEqual(self.oracle(), 2)  # warm: the checkout's own record replays nothing either
+        self.new_checkout()
+        (self.bin.parent / "release").write_text('JAVA_VERSION="25.0.3"\n')
+        self.assertEqual(self.oracle(), 3)  # cold: nothing of the earlier JDKs replayed from the keep
+        self.assertEqual(self.output.read_text(), "a")
+        self.assertEqual(list(keep.glob("??/*")), [])
+
     def test_a_wrapper_that_puts_the_shim_back_stops_with_a_reason(self):
         wrapper = self.bin.parent / "wrapper"
         self.wrapper(wrapper, put_the_shim_back=True)
@@ -521,6 +727,143 @@ class OracleReuseTests(unittest.TestCase):
         from tools import parity_shim
         with mock.patch.dict(os.environ, PARITY_SHIM_REAL_PATH=f"{self.shim}:{self.bin}"):
             self.assertEqual(Path(parity_shim.real("java")), self.bin / "java")
+
+
+class OracleKeepTests(unittest.TestCase):
+    def test_pruning_drops_old_runs_then_the_least_recently_used(self):
+        import os, time
+        with tempfile.TemporaryDirectory() as tmp:
+            keep, now = Path(tmp), time.time()
+            def entry(name, age, size):
+                (keep / "ab" / name).mkdir(parents=True)
+                (keep / "ab" / name / "stdout").write_bytes(b"x" * size)
+                os.utime(keep / "ab" / name, (now - age, now - age))
+            entry("old", 15 * 86400, 1)
+            entry(".killed-writer.tmp", 2 * 86400, 1)
+            entry(".being-written.tmp", 60, 1)
+            entry("used-long-ago", 3600, 8)
+            entry("used-lately", 60, 8)
+            # Within the budget, only age decides.
+            with mock.patch.object(parity, "ORACLE_KEEP_BUDGET", 100):
+                parity.prune_oracle_keep(keep)
+            self.assertEqual(sorted(path.name for path in (keep / "ab").iterdir()),
+                             [".being-written.tmp", "used-lately", "used-long-ago"])
+            # Over it, the least recently used go first.
+            with mock.patch.object(parity, "ORACLE_KEEP_BUDGET", 10):
+                parity.prune_oracle_keep(keep)
+            self.assertEqual(sorted(path.name for path in (keep / "ab").iterdir()), [".being-written.tmp", "used-lately"])
+
+    def test_only_a_fresh_pass_after_a_reuse_failure_is_remembered_and_only_for_a_while(self):
+        import json, time
+        with tempfile.TemporaryDirectory() as tmp:
+            keep = Path(tmp)
+            long_ago = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 40 * 86400))
+            lately = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 5 * 86400))
+            (keep / "fresh-only.json").write_text(json.dumps({"expired": long_ago, "inherited": lately}))
+            parity.remember_fresh_only(keep, {
+                "loot": {"status": "pass", "retried": "reused oracle results", "oracle_reuse": False},
+                "inherited": {"status": "pass", "oracle_reuse": False},
+                "failed": {"status": "fail", "retried": "reused oracle results", "oracle_reuse": True},
+                "light": {"status": "pass", "oracle_reuse": True}})
+            self.assertEqual(parity.fresh_only(keep), {"loot": time.strftime("%Y-%m-%d", time.gmtime()),
+                                                       "inherited": lately})
+            # Two shares of one daily on one host, each adding its own: the second keeps the first's.
+            parity.remember_fresh_only(keep, {"sculk": {"status": "pass", "retried": "reused oracle results"}})
+            self.assertEqual(set(parity.fresh_only(keep)), {"loot", "inherited", "sculk"})
+            # A share with nothing to add doesn't write: a peer's list written meanwhile stays as it is.
+            (keep / "fresh-only.json").write_text(json.dumps({"peer": lately}))
+            parity.remember_fresh_only(keep, {"light": {"status": "pass", "oracle_reuse": True}})
+            self.assertEqual(parity.fresh_only(keep), {"peer": lately})
+            (keep / "fresh-only.json").write_text("[1, 2]")
+            self.assertEqual(parity.fresh_only(keep), {})
+            (keep / "fresh-only.json").write_text(json.dumps({"loot": 3, "light": lately}))
+            self.assertEqual(parity.fresh_only(keep), {"light": lately})
+
+    def kept_run(self, root, outputs):
+        import json
+        entry = root / "keep" / "ab" / "abcd"
+        (entry / "files").mkdir(parents=True)
+        for index in range(len(outputs)):
+            (entry / "files" / str(index)).write_text(f"kept {index}")
+        (entry / "stdout").write_bytes(b"done")
+        (entry / "stderr").write_bytes(b"")
+        (entry / "run.json").write_text(json.dumps({"outputs": [str(path) for path in outputs]}))
+        return entry
+
+    def test_a_replay_that_cannot_publish_every_output_publishes_none(self):
+        from tools import parity_shim
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, blocked = root / "out" / "a.txt", root / "out" / "b"
+            entry = self.kept_run(root, [first, blocked])
+            (blocked / "in-the-way").mkdir(parents=True)  # a folder where a file must go
+            self.assertIsNone(parity_shim.restore(entry))
+            self.assertEqual(sorted(path.name for path in (root / "out").iterdir()), ["b"])
+            # A file already in place is never replaced, even when a later output is the one in the way.
+            first.write_text("the checkout's own")
+            self.assertIsNone(parity_shim.restore(entry))
+            self.assertEqual(first.read_text(), "the checkout's own")
+            self.assertEqual(sorted(path.name for path in (root / "out").iterdir()), ["a.txt", "b"])
+
+    def test_a_kept_run_naming_an_unusable_path_is_a_miss(self):
+        from tools import parity_shim
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = self.kept_run(root, [root / "out" / "a.txt"])
+            for name in ("b\\u0000c", "b\\ud800c"):  # an embedded NUL; a lone surrogate no file system can name
+                with self.subTest(name=name):
+                    (entry / "run.json").write_text('{"outputs": ["' + str(root / "out") + "/" + name + '"]}')
+                    self.assertIsNone(parity_shim.restore(entry))
+                    self.assertFalse((root / "out").exists())
+
+    def test_a_destination_that_appears_while_publishing_keeps_its_bytes_and_the_replay_takes_back_its_own(self):
+        import os
+        from tools import parity_shim
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, second = root / "out" / "a.txt", root / "out" / "b.txt"
+            entry = self.kept_run(root, [first, second])
+            link = os.link
+            def racing_link(source, destination):
+                if destination == str(second):
+                    second.write_text("written meanwhile")
+                link(source, destination)
+            with mock.patch.object(parity_shim.os, "link", racing_link):
+                self.assertIsNone(parity_shim.restore(entry))
+            self.assertEqual(second.read_text(), "written meanwhile")
+            self.assertEqual(sorted(path.name for path in first.parent.iterdir()), ["b.txt"])
+
+    def test_a_replay_never_writes_over_a_file_at_its_staging_name(self):
+        import os
+        from tools import parity_shim
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, second = root / "out" / "a.txt", root / "out" / "b.txt"
+            entry = self.kept_run(root, [first, second])
+            first.parent.mkdir()
+            staging = Path(f"{second}.{os.getpid()}.restore")
+            staging.write_text("someone else's")
+            self.assertIsNone(parity_shim.restore(entry))
+            self.assertEqual(staging.read_text(), "someone else's")
+            self.assertEqual(sorted(path.name for path in first.parent.iterdir()), [staging.name])
+
+    def test_a_run_whose_streams_are_too_large_or_whose_keep_is_unwritable_is_not_kept(self):
+        from tools import parity_shim
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "out.txt"
+            output.write_text("small")
+            entry = root / "keep" / "ab" / "abcd"
+            entry.parent.mkdir(parents=True)
+            with mock.patch.object(parity_shim, "KEPT_FILE", 16):
+                parity_shim.keep(entry, {str(output): None}, {"stdout": b"x" * 17, "stderr": b""})
+            self.assertFalse(entry.exists())
+            # A keep that can't be written to: nothing raises, nothing is kept.
+            blocked = root / "file" / "ab" / "abcd"
+            (root / "file").write_text("not a folder")
+            parity_shim.keep(blocked, {str(output): None}, {"stdout": b"", "stderr": b""})
+            parity_shim.keep(entry, {str(output): None}, {"stdout": b"done", "stderr": b""})
+            self.assertEqual((entry / "files" / "0").read_text(), "small")
 
 
 
@@ -634,7 +977,7 @@ class KnownFlakyTests(unittest.TestCase):
 
 
 class SoloTests(unittest.TestCase):
-    """Harnesses driving game windows run alone on a small machine (playhorizon's 4-CPU runner)."""
+    """Harnesses driving game windows run alone on a small machine (playsunrise's 4-CPU runner)."""
 
     def executor(self, running):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(parity, "STATE_DIR", Path(tmp)):
@@ -666,16 +1009,16 @@ class SoloTests(unittest.TestCase):
 
 class ClashTests(unittest.TestCase):
     """On Windows, harnesses that build one program with different selections don't run at once."""
-    PACKAGES = {("bin", "horizon-client"): "horizon-client", ("bin", "horizon-ctl"): "horizon-client-lib",
-                ("example", "client_probe"): "horizon-client-lib"}
-    SERVER = ["bin", "horizon-client", "fast", ["-p", "horizon-client"], False]
-    BOTH = ["bins", "", "fast", ["-p", "horizon-client", "-p", "horizon-client-lib"], False]
-    PROBE = ["example", "client_probe", "dev", ["-p", "horizon-client-lib"], True]
+    PACKAGES = {("bin", "sunrise-client"): "sunrise-client", ("bin", "sunrise-ctl"): "sunrise-client-lib",
+                ("example", "client_probe"): "sunrise-client-lib"}
+    SERVER = ["bin", "sunrise-client", "fast", ["-p", "sunrise-client"], False]
+    BOTH = ["bins", "", "fast", ["-p", "sunrise-client", "-p", "sunrise-client-lib"], False]
+    PROBE = ["example", "client_probe", "dev", ["-p", "sunrise-client-lib"], True]
 
     def test_a_run_naming_every_bin_builds_those_of_its_packages(self):
         self.assertEqual(parity.executables([self.BOTH], self.PACKAGES), {
-            ("bin", "horizon-client", "fast"): (("-p", "horizon-client", "-p", "horizon-client-lib"), False),
-            ("bin", "horizon-ctl", "fast"): (("-p", "horizon-client", "-p", "horizon-client-lib"), False)})
+            ("bin", "sunrise-client", "fast"): (("-p", "sunrise-client", "-p", "sunrise-client-lib"), False),
+            ("bin", "sunrise-ctl", "fast"): (("-p", "sunrise-client", "-p", "sunrise-client-lib"), False)})
 
     def test_another_selection_of_a_running_harness_program_waits(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(parity, "STATE_DIR", Path(tmp)):
@@ -684,7 +1027,7 @@ class ClashTests(unittest.TestCase):
             "server": [self.SERVER], "same": [self.SERVER, self.PROBE], "both": [self.BOTH], "probe": [self.PROBE],
             "python_only": []}.items()}
         local.running = {"server": {}}
-        self.assertFalse(local.accepts("both"))  # it would relink horizon-client.exe while "server" runs it
+        self.assertFalse(local.accepts("both"))  # it would relink sunrise-client.exe while "server" runs it
         self.assertTrue(local.accepts("same"))  # Cargo finds it fresh
         self.assertTrue(local.accepts("probe"))
         self.assertTrue(local.accepts("python_only"))
@@ -701,8 +1044,8 @@ if __name__ == "__main__":
 
 class WorkspaceManifestTests(unittest.TestCase):
     """A crate split's Cargo.toml and Cargo.lock changes don't select every harness; a dependency change still does."""
-    CLIENT = '[package]\nname = "horizon-client"\n\n[dependencies]\nserde = "1"\nwgpu = { version = "27", features = ["x"] }\n'
-    LOCK = ('version = 4\n\n[[package]]\nname = "horizon-client"\nversion = "0.1.0"\ndependencies = [\n "serde",\n]\n\n'
+    CLIENT = '[package]\nname = "sunrise-client"\n\n[dependencies]\nserde = "1"\nwgpu = { version = "27", features = ["x"] }\n'
+    LOCK = ('version = 4\n\n[[package]]\nname = "sunrise-client"\nversion = "0.1.0"\ndependencies = [\n "serde",\n]\n\n'
             '[[package]]\nname = "serde"\nversion = "1.0.1"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n')
 
     def verdict(self, base, head):
@@ -717,45 +1060,45 @@ class WorkspaceManifestTests(unittest.TestCase):
             return parity.workspace_only_manifests(set(head) | set(base), "base")
 
     def test_a_crate_split_is_left_out(self):
-        command = '[package]\nname = "horizon-command"\n\n[dependencies]\nserde = "1"\nhorizon-core = { path = "../horizon-core" }\n'
-        client = self.CLIENT + 'horizon-command = { path = "../horizon-command" }\n'
-        lock = self.LOCK.replace('[[package]]\nname = "serde"', '[[package]]\nname = "horizon-command"\nversion = "0.1.0"\n\n'
+        command = '[package]\nname = "sunrise-command"\n\n[dependencies]\nserde = "1"\nsunrise-core = { path = "../sunrise-core" }\n'
+        client = self.CLIENT + 'sunrise-command = { path = "../sunrise-command" }\n'
+        lock = self.LOCK.replace('[[package]]\nname = "serde"', '[[package]]\nname = "sunrise-command"\nversion = "0.1.0"\n\n'
                                  '[[package]]\nname = "serde"')
-        base = {"Cargo.toml": '[workspace]\nmembers = ["crates/horizon-client"]\nresolver = "2"\n',
-                "crates/horizon-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK}
-        head = {"Cargo.toml": '[workspace]\nmembers = ["crates/horizon-client", "crates/horizon-command"]\nresolver = "2"\n',
-                "crates/horizon-client/Cargo.toml": client, "crates/horizon-command/Cargo.toml": command, "Cargo.lock": lock}
+        base = {"Cargo.toml": '[workspace]\nmembers = ["crates/sunrise-client"]\nresolver = "2"\n',
+                "crates/sunrise-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK}
+        head = {"Cargo.toml": '[workspace]\nmembers = ["crates/sunrise-client", "crates/sunrise-command"]\nresolver = "2"\n',
+                "crates/sunrise-client/Cargo.toml": client, "crates/sunrise-command/Cargo.toml": command, "Cargo.lock": lock}
         self.assertEqual(self.verdict(base, head), set(head))
 
     def test_a_dependency_change_still_counts(self):
-        base = {"crates/horizon-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK}
-        bumped = {"crates/horizon-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK.replace("1.0.1", "1.0.2")}
+        base = {"crates/sunrise-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK}
+        bumped = {"crates/sunrise-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK.replace("1.0.1", "1.0.2")}
         self.assertEqual(self.verdict(base, bumped), set())
-        feature = {"crates/horizon-client/Cargo.toml": self.CLIENT.replace('["x"]', '["x", "y"]')}
-        self.assertEqual(self.verdict({"crates/horizon-client/Cargo.toml": self.CLIENT}, feature), set())
+        feature = {"crates/sunrise-client/Cargo.toml": self.CLIENT.replace('["x"]', '["x", "y"]')}
+        self.assertEqual(self.verdict({"crates/sunrise-client/Cargo.toml": self.CLIENT}, feature), set())
         resolver = {"Cargo.toml": '[workspace]\nmembers = ["a"]\nresolver = "3"\n'}
         self.assertEqual(self.verdict({"Cargo.toml": '[workspace]\nmembers = ["a"]\nresolver = "2"\n'}, resolver), set())
 
     def test_a_feature_of_a_workspace_crate_counts_through_its_sources(self):
-        items = '[package]\nname = "horizon-items"\n\n[features]\ntest-support = []\n'
-        client = self.CLIENT + '\n[dev-dependencies]\nhorizon-items = { path = "../horizon-items", features = ["test-support"] }\n'
-        head = {"crates/horizon-items/Cargo.toml": items, "crates/horizon-client/Cargo.toml": client,
-                "crates/horizon-items/src/lib.rs": '#[cfg(feature = "test-support")]\npub fn for_tests() {}\n'}
-        base = {"crates/horizon-client/Cargo.toml": self.CLIENT}
+        items = '[package]\nname = "sunrise-items"\n\n[features]\ntest-support = []\n'
+        client = self.CLIENT + '\n[dev-dependencies]\nsunrise-items = { path = "../sunrise-items", features = ["test-support"] }\n'
+        head = {"crates/sunrise-items/Cargo.toml": items, "crates/sunrise-client/Cargo.toml": client,
+                "crates/sunrise-items/src/lib.rs": '#[cfg(feature = "test-support")]\npub fn for_tests() {}\n'}
+        base = {"crates/sunrise-client/Cargo.toml": self.CLIENT}
         # The new crate's files are all changed, the code the feature gates with them.
-        self.assertEqual(self.verdict(base, head), {"crates/horizon-items/Cargo.toml", "crates/horizon-client/Cargo.toml"})
+        self.assertEqual(self.verdict(base, head), {"crates/sunrise-items/Cargo.toml", "crates/sunrise-client/Cargo.toml"})
         # Turning on a feature of a crate whose gated code didn't change selects as before.
-        world = '[package]\nname = "horizon-world"\n\n[features]\nextra = ["more"]\nmore = []\n'
+        world = '[package]\nname = "sunrise-world"\n\n[features]\nextra = ["more"]\nmore = []\n'
         with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp)):
-            Path(temp, "crates/horizon-world/src").mkdir(parents=True)
-            Path(temp, "crates/horizon-world/Cargo.toml").write_text(world)
-            Path(temp, "crates/horizon-world/src/lib.rs").write_text('#[cfg(feature = "more")]\nfn x() {}\n')
-            self.assertFalse(parity.feature_sources_changed("horizon-world", "extra", {"crates/horizon-client/Cargo.toml"}))
-            self.assertTrue(parity.feature_sources_changed("horizon-world", "extra", {"crates/horizon-world/src/lib.rs"}))
-            self.assertFalse(parity.feature_sources_changed("horizon-nothing", "extra", set()))
+            Path(temp, "crates/sunrise-world/src").mkdir(parents=True)
+            Path(temp, "crates/sunrise-world/Cargo.toml").write_text(world)
+            Path(temp, "crates/sunrise-world/src/lib.rs").write_text('#[cfg(feature = "more")]\nfn x() {}\n')
+            self.assertFalse(parity.feature_sources_changed("sunrise-world", "extra", {"crates/sunrise-client/Cargo.toml"}))
+            self.assertTrue(parity.feature_sources_changed("sunrise-world", "extra", {"crates/sunrise-world/src/lib.rs"}))
+            self.assertFalse(parity.feature_sources_changed("sunrise-nothing", "extra", set()))
         # A feature that reaches an external package counts.
-        optional = {"crates/horizon-client/Cargo.toml": self.CLIENT + '\n[features]\nfast = ["wgpu/x"]\n'}
-        self.assertEqual(self.verdict({"crates/horizon-client/Cargo.toml": self.CLIENT}, optional), set())
+        optional = {"crates/sunrise-client/Cargo.toml": self.CLIENT + '\n[features]\nfast = ["wgpu/x"]\n'}
+        self.assertEqual(self.verdict({"crates/sunrise-client/Cargo.toml": self.CLIENT}, optional), set())
 
     def test_external_feature_sources_are_not_discarded(self):
         with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp)):

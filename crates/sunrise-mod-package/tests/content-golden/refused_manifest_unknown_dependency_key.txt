@@ -1,0 +1,5 @@
+manifest:
+refused: sunrise-mod.toml: data did not match any variant of untagged enum Dependency (line 5)
+
+icon:
+unavailable

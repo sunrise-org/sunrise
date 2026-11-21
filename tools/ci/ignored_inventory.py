@@ -1,4 +1,4 @@
-"""Source-only ignored-test inventory, using horizon-game-discovery's canonical module traversal.
+"""Source-only ignored-test inventory, using sunrise-game-discovery's canonical module traversal.
 
 The small Rust tool parses source with syn and calls the same game-area discovery as the build script.
 It never builds the game or loads prepared data. One invocation covers every workspace and test target.
@@ -64,7 +64,7 @@ class Test(NamedTuple):
 
 
 def target_roots(root=ROOT):
-    """Cargo target roots, including explicit paths and the launcher's separate workspace."""
+    """Cargo target roots, including explicit paths."""
     roots = set()
     for workspace in ignored_shards.WORKSPACES:
         table = tomllib.loads((root / workspace / "Cargo.toml").read_text())
@@ -102,9 +102,9 @@ def target_roots(root=ROOT):
 def tests(root=ROOT):
     """Canonical full identities and original ignore reasons, in one batched source-only invocation."""
     root = Path(root).resolve()
-    binary = os.environ.get("HORIZON_GAME_DISCOVERY")
-    command = [binary] if binary else ["cargo", "run", "--quiet", "--locked", "-p", "horizon-game-discovery",
-                                      "--bin", "horizon-game-discovery", "--"]
+    binary = os.environ.get("SUNRISE_GAME_DISCOVERY")
+    command = [binary] if binary else ["cargo", "run", "--quiet", "--locked", "-p", "sunrise-game-discovery",
+                                      "--bin", "sunrise-game-discovery", "--"]
     inputs = "".join("\t".join(row) + "\n" for row in target_roots(root))
     result = subprocess.run([*command, str(root)], input=inputs, capture_output=True, text=True, cwd=ROOT)
     if result.returncode:

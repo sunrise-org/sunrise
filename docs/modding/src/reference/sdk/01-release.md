@@ -1,7 +1,7 @@
 # The release
 
 Every SDK is the release `sdk-<build id>` of this repository, at
-`https://github.com/arismoko/horizon/releases/download/sdk-<build id>/<file>`. Its files:
+`https://github.com/sunrise-org/sunrise/releases/download/sdk-<build id>/<file>`. Its files:
 
 {{#sdk-assets}}
 
@@ -34,9 +34,9 @@ number, removing or redefining one changes it.
 | `build.game` | The vanilla version the build implements (`26.3`). |
 | `build.date` | The commit's date, `YYYY-MM-DD`, UTC. |
 | `build.nightly` | The Nightly name that ships this build, when one does. |
-| `package_format` | The prebuilt package's layout number. A reader takes only the number it was made for. |
+| `package_format` | The prebuilt package's layout number. Readers of compiled packages require a match. The [offline registry fit check](../registry-index.md#fit-on-stable-and-nightly) does not open compiled packages and does not need a match. |
 | `toolchain.rust` | The Rust release everything in the SDK was compiled with. |
-| `content_api` | The content manifest's version: the `api` key of `horizon-mod.toml`. |
+| `content_api` | The content manifest's version: the `api` key of `sunrise-mod.toml`. |
 | `surface.hash` | `surface.json`'s own hash: equal hashes, equal surface. |
 | `surface.previous` | The build id of the SDK published before this one, which it is compared with. Absent on the first. |
 | `surface.source` | That comparison in one word, its worst change: `identical`, `additive`, `conditional` or `breaking` ([classes](02-surface.md#what-a-change-is)). |
@@ -51,7 +51,7 @@ number, removing or redefining one changes it.
 The mod tool and the launcher check an SDK the same way, whatever the [base](03-in-a-project.md#mirrors-and-offline-use)
 it came from, and refuse it by name at the first step that fails:
 
-1. `SHA256SUMS` carries Horizon's signature for the tag `sdk-<build id>`. That signature never passes for a game
+1. `SHA256SUMS` carries Sunrise's signature for the tag `sdk-<build id>`. That signature never passes for a game
    release, and a game release's never passes for an SDK.
 2. `sdk.json` is the file those sums list, names this build, has a schema and package format the reader knows, and
    lists only assets of known kinds and codecs under plain file names.

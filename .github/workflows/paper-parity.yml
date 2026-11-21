@@ -14,7 +14,7 @@ jobs:
     # Upstream's Mac runner holds the Paper server and Mojang files it compares with; this fork has no
     # runner with that label, so its scheduled run only sat queued until GitHub cancelled it.
     if: github.repository == 'horizon-rust/horizon'
-    runs-on: [self-hosted, horizon-game, macOS]
+    runs-on: [self-hosted, sunrise-game, macOS]
     timeout-minutes: 240
     defaults:
       run:
@@ -38,15 +38,15 @@ jobs:
       - name: Tools from the runner (Python and the pinned JDK)
         run: bash tools/ci/runner-env.sh
       - name: Vanilla data, and resources prepared by this preparer
-        # Imports the runner's own pinned Mojang copy; runs horizon-prepare on cache misses.
+        # Imports the runner's own pinned Mojang copy; runs sunrise-prepare on cache misses.
         run: bash tools/ci/vanilla-data.sh
       - name: Stage the native trace engine
         run: python3 tools/prepare_paper_trace_engine.py
       - name: Build the staged engine
         run: cargo build --release --manifest-path .local/paper-parity/engine-project/Cargo.toml
       - name: Build the bots
-        run: cargo build --release --locked -p horizon-bots
-      - name: Compare Paper events and Horizon hooks
+        run: cargo build --release --locked -p sunrise-bots
+      - name: Compare Paper events and Sunrise hooks
         id: compare
         run: |
           python3 - <<'PY'
@@ -60,7 +60,7 @@ jobs:
           # Defaults work both before and after #2355 (no --scenario on main yet).
           python3 tools/paper_parity.py run \
             --engine "$CARGO_TARGET_DIR/release/paper-trace-engine" \
-            --bots "$CARGO_TARGET_DIR/release/horizon-bots" \
+            --bots "$CARGO_TARGET_DIR/release/sunrise-bots" \
             2>&1 | tee "$RUNNER_TEMP/paper-report.log"
           result=${PIPESTATUS[0]}
           echo "exit=$result" >> "$GITHUB_OUTPUT"
@@ -105,7 +105,7 @@ jobs:
                   if manifest.get('error') or not manifest.get('complete'):
                       raise ValueError(manifest.get('error') or 'incomplete run')
                   mapping = harness.hook_map()
-                  for side in ('paper', 'horizon'):
+                  for side in ('paper', 'sunrise'):
                       rows = [json.loads(line) for line in (directory / f'{side}.jsonl').read_text().splitlines()]
                       joins = [i for i, r in enumerate(rows) if r['name'] == '_join']
                       quits = [i for i, r in enumerate(rows) if r['name'] == '_quit']

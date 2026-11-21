@@ -1,6 +1,6 @@
 # Microsoft account sign-in and online-mode play
 
-Horizon signs players in with their Microsoft account in the launcher and joins online-mode
+Sunrise signs players in with their Microsoft account in the launcher and joins online-mode
 (authenticated) servers like vanilla 26.3 does. The launcher plays only with an account that owns
 Minecraft: Java Edition ([the owner gate](#the-owner-gate)), as that account, on LAN and
 offline-mode servers too. There are no offline names. This note is the design, the status of each
@@ -14,13 +14,13 @@ no Microsoft sign-in"); release builds have it.
 
 1. **Azure app registration** (https://portal.azure.com → Microsoft Entra ID → App registrations →
    New registration):
-   - Name: `Horizon` (shown to players on the Microsoft consent page).
+   - Name: `Sunrise` (shown to players on the Microsoft consent page).
    - Supported account types: **Personal Microsoft accounts only** (Minecraft accounts are
      consumer accounts; the launcher uses the `consumers` tenant).
    - Redirect URI: none needed for the device-code flow. If the form insists, add a
      "Mobile and desktop applications" redirect `https://login.microsoftonline.com/common/oauth2/nativeclient`.
    - After creating it: Authentication → Advanced settings → **Allow public client flows: Yes**
-     (this enables the device-code flow; there is no client secret, Horizon is a public client).
+     (this enables the device-code flow; there is no client secret, Sunrise is a public client).
    - API permissions: none to add. The launcher requests the scopes `XboxLive.signin offline_access`
      at sign-in time; `offline_access` gives the refresh token.
    - Copy the **Application (client) ID** (a GUID).
@@ -34,12 +34,12 @@ no Microsoft sign-in"); release builds have it.
    until then.
 3. **Where the ID goes**:
    - Release builds: the GitHub repository variable (not a secret: client IDs are public)
-     `HORIZON_MSA_CLIENT_ID`; the launcher's build reads it with `option_env!` at compile time.
-   - Any build, at run time: the environment variable `HORIZON_MSA_CLIENT_ID` overrides the built-in
+     `SUNRISE_MSA_CLIENT_ID`; the launcher's build reads it with `option_env!` at compile time.
+   - Any build, at run time: the environment variable `SUNRISE_MSA_CLIENT_ID` overrides the built-in
      value (empty or unset = not configured).
 
 Never use another application's client ID (the official launcher's or another launcher's). The same
-holds the other way: forks and derived launchers may not use Horizon's (docs/forking.md#microsoft-sign-in-in-a-fork).
+holds the other way: forks and derived launchers may not use Sunrise's (docs/forking.md#microsoft-sign-in-in-a-fork).
 
 ## Flow (launcher)
 
@@ -51,10 +51,12 @@ All requests use HTTPS and JSON except the two OAuth calls (form-encoded):
    The device code page takes whatever Microsoft account the browser is signed in to, and the flow has
    no option for an account picker (no `prompt`, no `login_hint`). To add a different account without any
    change to the Azure app (#3786), the sign-in panel offers **Open in private window**: the default
-   browser's private window (`launcher/src/private_window.rs`: the `https` ProgId on Windows, LaunchServices
+   browser's private window (`https://github.com/sunrise-org/sunrise-launcher/blob/main/src/private_window.rs`: the `https` ProgId on Windows, LaunchServices
    on macOS, `xdg-settings` on Linux; `--incognito`, `--inprivate`, `--private`, `--private-window`) has no
    Microsoft session. Safari and unknown browsers get **Copy link** and a hint instead. **Use a different
-   Microsoft account** opens `login.live.com/logout.srf` and then the code page.
+   Microsoft account** opens the end-session page `…/consumers/oauth2/v2.0/logout` and then the code page.
+   It signs the browser out of login.live.com and ends on Microsoft's signed-out page;
+   `login.live.com/logout.srf` opened on its own continues to msn.com (#2034).
 2. **Poll** `POST …/consumers/oauth2/v2.0/token` (`grant_type=urn:ietf:params:oauth:grant-type:device_code`)
    every `interval` seconds; `authorization_pending` waits, `slow_down` adds 5 s, `authorization_declined`,
    `expired_token` and `bad_verification_code` end the sign-in with a message. Result: the Microsoft
@@ -76,20 +78,20 @@ All requests use HTTPS and JSON except the two OAuth calls (form-encoded):
 
 ## The owner gate
 
-Decided 2026-10-27 (Ludovic, after a modder's suggestion): like other launchers, Horizon's
+Decided 2026-10-27 (Ludovic, after a modder's suggestion): like other launchers, Sunrise's
 launcher starts the game only while an account in it owns Java Edition. Offline play stays
 possible; the launcher just doesn't offer it on its own.
 
-- **Play needs an owner.** Every Play (Home, instances and packs, `horizon-launcher play`,
+- **Play needs an owner.** Every Play (Home, instances and packs, `sunrise-launcher play`,
   `modpack play`, the MCP's `play`) asks `account::launch` first. It asks the Minecraft services
   again for each account, the selected one first, until one owns the game: the token renewal
   (below) if due, then entitlements and profile. Without an owner the game doesn't start and Play
   says "Sign in with a Microsoft account that owns Minecraft: Java Edition to play", with Sign in.
 - **The window says it once.** A player without an owner (one who played offline until now) sees
-  the gate's screen once when the launcher opens: why Horizon needs the account ("like other
+  the gate's screen once when the launcher opens: why Sunrise needs the account ("like other
   launchers"), and Sign in, which shows
   the device code on the same screen. It comes back whenever Play is refused; Not now closes it,
-  and Home keeps a Sign in row (`launcher/src/owner_page.rs`).
+  and Home keeps a Sign in row (`https://github.com/sunrise-org/sunrise-launcher/blob/main/src/owner_page.rs`).
 - **The answer lives with the tokens.** Each account's keychain item keeps the last answer
   (`owns`), so accounts.json can't say yes. Where there is no keychain the answer sits in the
   secrets file with the tokens; a player can edit that file, as they can write keychain items with
@@ -98,22 +100,22 @@ possible; the launcher just doesn't offer it on its own.
   without a session, offline. An answer of "doesn't own" (or no profile) blocks at once.
 - **The account that plays owns the game.** The game plays as the selected account (else the
   first), which must own the game itself: another account's ownership doesn't let it play
-  (`account::launch_for_game`). The project decided on 2026-11-09 that Horizon plays only with a
+  (`account::launch_for_game`). The project decided on 2026-11-09 that Sunrise plays only with a
   Microsoft account that owns Minecraft: Java Edition: the offline names, their skins and capes,
   and 0.2.58's hidden developer option are gone. Files from older launchers still load; the next
   save drops them (`offline`, `offline_selected`, `looks` and `skins/` in accounts.json's folder,
   `dev_offline` in settings.json).
-- **Who isn't affected:** the game binary itself (`horizon-client`, `horizon-ctl launch`, the
-  harnesses, CI), the dedicated server and `horizon-server`, the website. There is no bypass flag:
-  the launcher's tests use accounts in a memory store (`MemoryStore`, and `HORIZON_NO_KEYCHAIN`
+- **Who isn't affected:** the game binary itself (`sunrise-client`, `sunrise-ctl launch`, the
+  harnesses, CI), the dedicated server and `sunrise-server`, the website. There is no bypass flag:
+  the launcher's tests use accounts in a memory store (`MemoryStore`, and `SUNRISE_NO_KEYCHAIN`
   for the CLI and MCP tests, which then have no owner).
 
 ## Downloading the game for an owner
 
-Decided 2026-10-27. This is the only exception to "Horizon never downloads the game", and it
+Decided 2026-10-27. This is the only exception to "Sunrise never downloads the game", and it
 applies only on the player's machine, for an account the owner gate just asked about. The
-launcher's "Download and prepare" (`horizon-launcher prepare --download`) fetches the pinned
-version straight from Mojang (`launcher/src/mojang.rs`): the version file, the client jar,
+launcher's "Download and prepare" (`sunrise-launcher prepare --download`) fetches the pinned
+version straight from Mojang (`https://github.com/sunrise-org/sunrise-launcher/blob/main/src/mojang.rs`): the version file, the client jar,
 libraries, the asset index and the assets, each checked against the size and sha1 Mojang lists.
 They go to `minecraft/` in the launcher's data folder, and the preparation runs as usual. The
 download can be cancelled and goes on where it stopped. CI, agents, harnesses and the repo never
@@ -178,10 +180,10 @@ one is selected. "Sign out" deletes the account's secrets from the keychain.
   (Internet servers) administers the player's whole tailnet, so without a keychain it stays in
   memory for the run (`account::keychain`). MCP's `account_list` says `secrets_file: true` while
   the file holds a sign-in (sign-out marks alone, or a file that can't be read, don't count).
-- No keychain on macOS or Windows, or `HORIZON_NO_KEYCHAIN` (the launcher's own tests): secrets
+- No keychain on macOS or Windows, or `SUNRISE_NO_KEYCHAIN` (the launcher's own tests): secrets
   stay in memory for the run, and the launcher says "No keychain available: you are signed in until
   the launcher closes".
-- Tokens never appear in logs, errors, `horizon-launcher` CLI output, MCP results or crash reports.
+- Tokens never appear in logs, errors, `sunrise-launcher` CLI output, MCP results or crash reports.
   Requests are logged by endpoint name only.
 
 ## Account status and renewal
@@ -200,7 +202,7 @@ claiming it requires a full login. Unreadable keychain data is never overwritten
 If Microsoft rotates its refresh credential before Xbox/Minecraft fails, the rotated credential
 is still saved so another attempt can recover.
 
-`horizon-launcher account refresh NAME_OR_UUID` exposes the same operation (MCP:
+`sunrise-launcher account refresh NAME_OR_UUID` exposes the same operation (MCP:
 `account_refresh`). `account list --json` includes public authentication status and token
 expiry, never tokens. `account refresh --json` returns a status object, including when renewal
 needs attention; callers inspect `state` rather than treating transport success as an online
@@ -209,7 +211,7 @@ operations are serialized in-process and between launchers using the same launch
 
 The reusable `account::session` API has no GPUI dependency. Keychain reads and browser sign-in
 remain owned by the launcher. A running game asks it for a renewed session through the CLI:
-the launcher passes its own path to the game as `HORIZON_LAUNCHER_EXE`, and
+the launcher passes its own path to the game as `SUNRISE_LAUNCHER_EXE`, and
 `account session NAME_OR_UUID --json` renews that account and returns a new read-once session
 file (`{"session_file"}`), or the public status (`{"authentication"}`) when the account needs a
 browser sign-in or a retry. `account sign-in --for NAME_OR_UUID` is the targeted sign-in below,
@@ -240,7 +242,7 @@ currently selected for Play. Adding a new account remains a separate action.
 ## Handing the session to the game
 
 Vanilla's launcher passes `--accessToken <token>` on the command line, where every user of the
-machine can read it in the process list. Horizon keeps it out of argv:
+machine can read it in the process list. Sunrise keeps it out of argv:
 
 - The launcher writes `session-<random>.json` (mode 0600 on Unix, created new, in the game home's
   `sessions/` folder) with `{"name", "uuid", "access_token", "user_type": "msa", "xuid"}` and starts
@@ -248,19 +250,12 @@ machine can read it in the process list. Horizon keeps it out of argv:
 - The game reads the file at start and deletes it at once; the token lives only in the game's memory.
   A file older than two minutes is refused (and deleted), so a stale file can't be replayed.
 - Without a session file the game is offline as today (`--name`, offline UUID).
-- `HORIZON_SESSION_FILE` is the same as `--session-file` (development and harnesses).
+- When the launcher plays offline (no answer from Microsoft, a sign-in to renew, a keyring that
+  didn't open), it says why in the game's `SUNRISE_OFFLINE_REASON`; the game shows that, or why its
+  session file could not be read, as a "Playing offline" toast on the title screen.
+- `SUNRISE_SESSION_FILE` is the same as `--session-file` (development and harnesses).
 - `--session-stdin` takes the same JSON on standard input instead, so nothing touches the disk (for other
   launchers: [the Launch API](api/launch.md)).
-
-
-- While the game's Splitscreen setting is on (`splitscreen:true` in `horizon-extras.txt`), the
-  other signed-in accounts get a session file each too, for splitscreen players to sign in with, listed in `HORIZON_ACCOUNT_SESSIONS` (`[{"name", "uuid", "file"}]`). Each token is renewed
-  first when due; after ten seconds no further renewal starts (an in-flight request finishes).
-  Accounts whose sessions cannot be provided are listed with `skipped` instead
-  of `file`, with no token. They remain in the picker marked “(Offline)”, with a “Sign in again
-  in the launcher” tooltip; valid sessions have a “Microsoft online” tooltip. The game logs
-  unavailable accounts and still starts. These names can play in P1's world or on local offline-mode
-  servers; external and online-mode servers require a valid session from the launcher.
 
 ## Online-mode login (game)
 
@@ -280,24 +275,24 @@ Vanilla's `ClientHandshakePacketListenerImpl.handleHello`, `Crypt` and authlib's
    game and the launcher)", `InsufficientPrivilegesException` → "Multiplayer is disabled…",
    `multiplayer.access.banned` / `FORCED_USERNAME_CHANGE` → "You are banned from playing online",
    5xx or no network → "The authentication servers are currently not reachable…". Without a session
-   the game says "This server is in online mode. Sign in with your Microsoft account in the Horizon
+   the game says "This server is in online mode. Sign in with your Microsoft account in the Sunrise
    launcher to join it." (Vanilla goes on after a failed join on LAN-discovered servers, which then
-   refuse the player anyway; Horizon stops at once.)
+   refuse the player anyway; Sunrise stops at once.)
 5. Send `ServerboundKeyPacket` (the secret and the challenge, each RSA PKCS#1 v1.5 encrypted with
    the server key), then AES/CFB8 (key = IV = the secret) both ways.
 
 The connecting screen follows vanilla's states: "Connecting to the server..." until the encryption
 request, "Logging in..." while joining the session service, "Encrypting...", then "Joining world...".
-Code: `horizon-protocol` (`rsa.rs`, `crypto::server_hash`), `horizon-client` (`auth.rs`, `net.rs`).
+Code: `sunrise-protocol` (`rsa.rs`, `crypto::server_hash`), `sunrise-client` (`auth.rs`, `net.rs`).
 
-Horizon's dedicated server verifies players when `online-mode=true`. A LAN or Play with Friends world
+Sunrise's dedicated server verifies players when `online-mode=true`. A LAN or Play with Friends world
 verifies its guests when the host is signed in, as vanilla's `IntegratedServer` does
 (`OnlineMode::lan`); started without a session (the services couldn't be reached at Play) it
 stays offline-mode. The host's own player joins through
 memory and is never asked to authenticate.
 
-`HORIZON_API_DISCOVERY` overrides the discovery URL, the counterpart of authlib's
-`-Dminecraft.api.discovery.host`; it is how the harness points both the vanilla server and Horizon at
+`SUNRISE_API_DISCOVERY` overrides the discovery URL, the counterpart of authlib's
+`-Dminecraft.api.discovery.host`; it is how the harness points both the vanilla server and Sunrise at
 a local mock.
 
 ## Skins and capes (part b)
@@ -315,7 +310,7 @@ player renderer. Until a skin arrives the default skin for the UUID shows (as to
 26.3's dedicated servers default to `enforce-secure-profile=true`. A client without a chat session
 can join and play, but every chat message and signed command argument is refused with "Chat
 disabled due to missing profile public key. Please try reconnecting." (`SignedMessageChain.Decoder.unsigned`).
-To chat on such servers the game (`auth.rs`, `game/network/remote_chat.rs`, `horizon_protocol::secure_chat`):
+To chat on such servers the game (`auth.rs`, `game/network/remote_chat.rs`, `sunrise_protocol::secure_chat`):
 
 - fetches the profile key pair from the services `player/getCertificates` endpoint with the Minecraft
   token, on a background thread at start and on each join (AccountProfileKeyPairManager): the PKCS#8
@@ -341,11 +336,11 @@ offline mode (unsigned chat, as before). Both also click commands: `sendUnattend
 only reaches the chat box, for the player to send.
 
 Chat from other players is checked as vanilla's client does (`ClientPacketListener.handlePlayerChat`,
-`game/network/remote/mod.rs`, `secure_chat::MessageValidator`): a wrong global chat index disconnects, and a sender
-with no list entry or a message its validator refuses shows the red, italic `chat.validation_error`. A
-chat session the services' profile-key keys vouch for makes a keyed validator (the key not past its
-expiry plus 8 hours, the signature, the chain); anything else makes the fallback, which accepts unsigned
-messages, or none where the server enforces secure chat. The unit tests in `secure_chat.rs` cover the
+`game/network/remote/packets_player.rs::Game::apply_player_chat_packet`, `secure_chat::MessageValidator`): a wrong
+global chat index disconnects, and a sender with no list entry or a message its validator refuses shows the red,
+italic `chat.validation_error`. A chat session the services' profile-key keys vouch for makes a keyed
+validator (the key not past its expiry plus 8 hours, the signature, the chain); anything else makes the
+fallback, which accepts unsigned messages, or none where the server enforces secure chat. The unit tests in `secure_chat.rs` cover the
 validators; the script above doesn't send another player's chat.
 
 ## Harnesses
@@ -354,15 +349,15 @@ validators; the script above doesn't send another player's chat.
 services (discovery document, `join`, `hasJoined`/`verify`, no public keys) and a vanilla 26.3
 dedicated server in online mode started with `-Dminecraft.api.discovery.host=<mock>` (authlib
 10.0.77's only override: it replaces the whole discovery URL; the old `minecraft.api.session.host`
-style properties are gone). Horizon's
-headless client (`HORIZON_NET_REPORT`) joins with a session file holding a mock token: the server
+style properties are gone). Sunrise's
+headless client (`SUNRISE_NET_REPORT`) joins with a session file holding a mock token: the server
 verifies the join through the mock with the hash it computed itself (so the RSA wrapping, the hash
 and AES/CFB8 are all checked against vanilla's code), the player spawns, chats and runs `/list`.
 Negative cases: a token the mock rejects (the client must show vanilla's "Invalid session" message)
 and a client that skips the join (the server must say "Failed to verify username!").
 
 Rust unit tests: server hash vectors (Notch, jeb_, simon), RSA wrapping round trip with a test key,
-X.509 key parsing, AES/CFB8 vectors (already in `horizon-protocol`), the session file (permissions,
+X.509 key parsing, AES/CFB8 vectors (already in `sunrise-protocol`), the session file (permissions,
 age, deletion), the error mapping. Launcher: the whole token chain against a local mock of the
 Microsoft, Xbox and Minecraft endpoints, and the keychain abstraction with an in-memory backend.
 

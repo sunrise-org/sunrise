@@ -4,9 +4,9 @@ on:
   push:
     branches: [main]
     paths:
-      - 'crates/horizon-perf/**'
-      - 'crates/horizon-perf-format/**'
-      - 'crates/horizon-bench/**'
+      - 'crates/sunrise-perf/**'
+      - 'crates/sunrise-perf-format/**'
+      - 'crates/sunrise-bench/**'
       - 'xtask/**'
       - 'Cargo.lock'
       - 'Cargo.toml'
@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      HORIZON_TELEMETRY_URL: "off"
+      SUNRISE_TELEMETRY_URL: "off"
     steps:
       - uses: actions/checkout@v7
       - name: The pinned Rust (tools/ci/rust-version)
@@ -44,7 +44,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # The agreement test: the C ABI, called natively, must print the bytes the CLI prints.
       - name: The wasm ABI agrees with the CLI
-        run: cargo test -p horizon-perf --features wasm --test wasm
+        run: cargo test -p sunrise-perf --features wasm --test wasm
       - name: Build the wasm the page loads
         run: cargo run -p xtask -- perf-wasm
       - uses: actions/upload-artifact@v4

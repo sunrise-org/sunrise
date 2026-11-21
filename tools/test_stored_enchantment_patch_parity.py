@@ -40,10 +40,12 @@ def main():
     inputs.write_text(''.join(label + '\t' + item + ('[' + arg + ']' if arg else '') + '\t'
                              + f'{{id:"{item}",count:1,components:{patch}}}\n'
                              for label, item, arg, patch in cases()), encoding='utf-8')
-    source = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaStoredEnchantmentPatchOracle.java'
-    sources = [Path(__file__), source, source.parent / 'ParityData.java', inputs, lab.ROOT / 'Cargo.lock',
-               lab.ROOT / 'crates/horizon-items/src/item_data.rs', lab.ROOT / 'crates/horizon-items/src/item_nbt.rs',
-               lab.ROOT / 'crates/horizon-items/examples/stored_enchantment_patch_probe.rs']
+    # The generated fixture belongs to the work directory, which can be outside the checkout.
+    input_hash = lab.digest(inputs, 'sha256')
+    source = lab.ROOT / 'mods/sunrise/src/test/java/dev/sunriselab/parity/VanillaStoredEnchantmentPatchOracle.java'
+    sources = [Path(__file__), source, source.parent / 'ParityData.java', lab.ROOT / 'Cargo.lock',
+               lab.ROOT / 'crates/sunrise-items/src/item_data.rs', lab.ROOT / 'crates/sunrise-items/src/item_nbt.rs',
+               lab.ROOT / 'crates/sunrise-items/examples/stored_enchantment_patch_probe.rs']
     hashes = base.source_hashes(sources)
     report = build / 'report.json'
     report.unlink(missing_ok=True)
@@ -60,9 +62,9 @@ def main():
     classes = build / 'classes'
     classes.mkdir(exist_ok=True)
     cp = os.pathsep.join(map(str, [jars['server'], *libraries]))
-    with tempfile.TemporaryDirectory(prefix='horizon-stored-enchantments-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='sunrise-stored-enchantments-') as tmp:
         scratch = Path(tmp)
-        homes = {key: scratch / key for key in ('HORIZON_HOME', 'HORIZON_LAUNCHER_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME')}
+        homes = {key: scratch / key for key in ('SUNRISE_HOME', 'SUNRISE_LAUNCHER_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME')}
         env = lab.game_env(os.environ, **homes, CARGO_BUILD_JOBS='2')
         run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-cp', cp,
              '-d', classes, source, source.parent / 'ParityData.java'], 'javac', cwd=scratch, env=env)
@@ -70,9 +72,9 @@ def main():
         expected.unlink(missing_ok=True)
         observed.unlink(missing_ok=True)
         run(['java', '-Xmx512M', '-Djava.awt.headless=true', '-Duser.home=' + tmp, '-cp',
-             str(classes) + os.pathsep + cp, 'dev.horizonlab.parity.VanillaStoredEnchantmentPatchOracle',
+             str(classes) + os.pathsep + cp, 'dev.sunriselab.parity.VanillaStoredEnchantmentPatchOracle',
              inputs, expected], 'java', cwd=scratch, env=env)
-        compiled = run(['cargo', 'build', '--locked', '-p', 'horizon-items', '--example',
+        compiled = run(['cargo', 'build', '--locked', '-p', 'sunrise-items', '--example',
                         'stored_enchantment_patch_probe', '--message-format=json'], 'compile', cwd=lab.ROOT, env=env)
         binaries = []
         for line in compiled.read_text(encoding='utf-8').splitlines():
@@ -83,7 +85,7 @@ def main():
                     binaries.append(Path(row['executable']))
         assert len(binaries) == 1, 'expected one actual stack-codec probe'
         binary_hash = lab.digest(binaries[0], 'sha256')
-        run([binaries[0], inputs, observed], 'rust', cwd=scratch, env=env)
+        run([binaries[0], inputs, observed, lab.RESOURCES.resolve()], 'rust', cwd=scratch, env=env)
         assert binary_hash == lab.digest(binaries[0], 'sha256'), 'probe changed'
     java = [line.split('\t') for line in expected.read_text(encoding='utf-8').splitlines()]
     rust = [line.split('\t') for line in observed.read_text(encoding='utf-8').splitlines()]
@@ -93,8 +95,10 @@ def main():
     assert all(len(row) == 2 for row in rust)
     mismatches = [a[0] for a, b in zip(java, rust) if a[2] != b[1]]
     base.ensure_sources_unchanged(sources, hashes)
+    if lab.digest(inputs, 'sha256') != input_hash:
+        raise RuntimeError('Input fixtures changed during validation')
     lab.write_json(report, dict(cases=len(java), matched=len(java) - len(mismatches), mismatches=mismatches,
-                               sources_sha256=hashes, server_sha256=lab.digest(jars['server'], 'sha256'),
+                               sources_sha256=hashes, inputs_sha256=input_hash, server_sha256=lab.digest(jars['server'], 'sha256'),
                                rust_binary_sha256=binary_hash, scope=__doc__))
     assert not mismatches, mismatches
     print(f'{len(java)} command/NBT codec cases match vanilla')

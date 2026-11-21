@@ -1,7 +1,0 @@
-{
-  "name": "macos",
-  "mac": true,
-  "asset": "sunrise-launcher-macos-arm64.zip",
-  "binary": "sunrise-launcher",
-  "mac_arch": "arm64"
-}

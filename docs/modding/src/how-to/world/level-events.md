@@ -9,7 +9,12 @@ on the level in place.
 - `LevelRef::global_level_event(host, id, pos, data)` is `ServerLevel.globalLevelEvent`: every player on
   the server gets it, in every level and at any distance.
 
-Both return `false` without playing anything for an event that carries a block state (2001, 2014, 3008)
+- `LevelRef::block_break_effect(host, pos, state)` plays the particles and sound of a block of `state`
+  breaking at `pos` (`Level.levelEvent(2001, pos, Block.getId(state))`), to the same players as
+  `level_event`. Nothing is written. The game resolves the state's number itself, so a mod never
+  handles one; prefer it to `level_event` with id 2001.
+
+Both `level_event` and `global_level_event` return `false` without playing anything for an event that carries a block state (2001, 2014, 3008)
 when `data` is not one, for a parked level, for a stale handle and on a client.
 
 ## The global events

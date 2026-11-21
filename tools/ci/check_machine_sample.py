@@ -11,7 +11,7 @@ import time
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-PIN = "1b0e0008107562b407a46c134903cc0b9369674d"
+PIN = "22284b5b870c2ff6c52a1b93b4dc44d870c6e071"
 
 
 def main():
@@ -29,12 +29,12 @@ def main():
 
 def check(directory, revision):
     sample = directory / "sample"
-    subprocess.run(["git", "clone", "--no-checkout", "https://github.com/arismoko/horizon-machine-sample", str(sample)], check=True)
+    subprocess.run(["git", "clone", "--no-checkout", "https://github.com/sunrise-org/sunrise-machine-sample", str(sample)], check=True)
     subprocess.run(["git", "fetch", "origin", revision], cwd=sample, check=True)
     subprocess.run(["git", "checkout", "--detach", revision], cwd=sample, check=True)
-    # The sample names the API by the path `cargo horizon-mod` fetches the signed SDK to. This checkout's own API
+    # The sample names the API by the path `cargo sunrise-mod` fetches the signed SDK to. This checkout's own API
     # source goes there instead, so the check builds the sample against this PR's API with no SDK release.
-    subprocess.run([sys.executable, str(ROOT / "tools/sdk_api_source.py"), "build", str(sample / ".horizon/sdk/api")],
+    subprocess.run([sys.executable, str(ROOT / "tools/sdk_api_source.py"), "build", str(sample / ".sunrise/sdk/api")],
                    cwd=ROOT, check=True)
     subprocess.run(["cargo", "check", "--all-targets"], cwd=sample, check=True)
 

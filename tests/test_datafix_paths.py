@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import importlib
 import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -38,7 +39,7 @@ class DatafixPaths(unittest.TestCase):
 
     def test_symlinked_ancestor_refused(self):
         (self.checkout / '.local').symlink_to(self.shared, target_is_directory=True)
-        with self.assertRaisesRegex(ValueError, 'HORIZON_DATAFIX_ROOT'):
+        with self.assertRaisesRegex(ValueError, 'SUNRISE_DATAFIX_ROOT'):
             datafix_paths.writable_root()
         self.assertEqual(list(self.shared.iterdir()), [])
 
@@ -49,13 +50,13 @@ class DatafixPaths(unittest.TestCase):
             datafix_paths.writable_root()
 
     def test_explicit_safe_root(self):
-        os.environ['HORIZON_DATAFIX_ROOT'] = str(self.base / 'private')
+        os.environ['SUNRISE_DATAFIX_ROOT'] = str(self.base / 'private')
         self.assertEqual(datafix_paths.writable_root(), self.base / 'private')
 
     def test_preflight_starts_no_subprocess_on_refusal(self):
-        os.environ['HORIZON_DATAFIX_ROOT'] = str(self.shared / 'downloads')
+        os.environ['SUNRISE_DATAFIX_ROOT'] = str(self.shared / 'downloads')
         with mock.patch.object(pr_ready.subprocess, 'Popen') as runner:
-            with self.assertRaisesRegex(ValueError, 'HORIZON_DATAFIX_ROOT'):
+            with self.assertRaisesRegex(ValueError, 'SUNRISE_DATAFIX_ROOT'):
                 step = pr_ready.Step('Parity', 'echo unexpected')
                 step.datafix_selected = True
                 pr_ready.run_script([step], 'local', False)
@@ -65,43 +66,43 @@ class DatafixPaths(unittest.TestCase):
         root = self.checkout / '.local/datafix'
         root.parent.mkdir()
         root.write_text('not a directory')
-        with self.assertRaisesRegex(ValueError, 'HORIZON_DATAFIX_ROOT.*not a directory'):
+        with self.assertRaisesRegex(ValueError, 'SUNRISE_DATAFIX_ROOT.*not a directory'):
             datafix_paths.writable_root()
         root.unlink()
         with mock.patch.object(datafix_paths.os, 'access', return_value=False):
-            with self.assertRaisesRegex(ValueError, 'HORIZON_DATAFIX_ROOT.*not writable'):
+            with self.assertRaisesRegex(ValueError, 'SUNRISE_DATAFIX_ROOT.*not writable'):
                 datafix_paths.writable_root()
 
     def test_protected_ancestor_root_refused(self):
-        os.environ['HORIZON_DATAFIX_ROOT'] = str(self.base)
+        os.environ['SUNRISE_DATAFIX_ROOT'] = str(self.base)
         (self.base / 'servers').symlink_to(self.shared / 'servers')
-        with self.assertRaisesRegex(ValueError, 'HORIZON_DATAFIX_ROOT'):
+        with self.assertRaisesRegex(ValueError, 'SUNRISE_DATAFIX_ROOT'):
             datafix_paths.writable_root()
         self.assertEqual(list(self.shared.iterdir()), [])
 
     def test_subprocess_receives_canonical_root(self):
-        os.environ['HORIZON_DATAFIX_ROOT'] = 'private-datafix'
+        os.environ['SUNRISE_DATAFIX_ROOT'] = 'private-datafix'
         step = pr_ready.Step('Parity', 'true')
         step.datafix_selected = True
         with mock.patch.object(datafix_paths.os, 'getcwd', return_value=str(self.checkout)), mock.patch.object(pr_ready.subprocess, 'Popen', side_effect=RuntimeError('intercepted')) as runner:
             with self.assertRaisesRegex(RuntimeError, 'intercepted'):
                 pr_ready.run_script([step], 'local', False)
-        self.assertEqual(runner.call_args.kwargs['env']['HORIZON_DATAFIX_ROOT'], str(self.checkout / 'private-datafix'))
-        self.assertEqual(os.environ['HORIZON_DATAFIX_ROOT'], 'private-datafix')
+        self.assertEqual(runner.call_args.kwargs['env']['SUNRISE_DATAFIX_ROOT'], str(self.checkout / 'private-datafix'))
+        self.assertEqual(os.environ['SUNRISE_DATAFIX_ROOT'], 'private-datafix')
 
     def test_unknown_dependencies_still_preflight_opt_in(self):
         args = argparse.Namespace(host='local', quick=False, harnesses=True, datafix=True)
         with mock.patch.object(pr_ready, 'affected_here', return_value=None):
             step = next(s for s in pr_ready.plan(args, 'origin/main', set(), {}, set(), {}) if s.name == 'Parity')
         self.assertTrue(step.datafix_selected)
-        os.environ['HORIZON_DATAFIX_ROOT'] = str(self.shared)
+        os.environ['SUNRISE_DATAFIX_ROOT'] = str(self.shared)
         with mock.patch.object(pr_ready.subprocess, 'Popen') as runner:
-            with self.assertRaisesRegex(ValueError, 'HORIZON_DATAFIX_ROOT'):
+            with self.assertRaisesRegex(ValueError, 'SUNRISE_DATAFIX_ROOT'):
                 pr_ready.run_script([step], 'local', False)
             runner.assert_not_called()
 
     def test_relative_override(self):
-        os.environ['HORIZON_DATAFIX_ROOT'] = 'private-datafix'
+        os.environ['SUNRISE_DATAFIX_ROOT'] = 'private-datafix'
         self.assertEqual(datafix_paths.writable_root(), Path('private-datafix').resolve())
 
     def test_descendant_symlinks_refused_without_writes(self):
@@ -111,13 +112,13 @@ class DatafixPaths(unittest.TestCase):
             with self.subTest(name=name):
                 link = root / name
                 link.symlink_to(self.shared / name)
-                with self.assertRaisesRegex(ValueError, 'HORIZON_DATAFIX_ROOT.*escapes'):
+                with self.assertRaisesRegex(ValueError, 'SUNRISE_DATAFIX_ROOT.*escapes'):
                     datafix_paths.writable_root()
                 self.assertEqual(list(self.shared.iterdir()), [])
                 link.unlink()
 
     def test_unrelated_local_and_remote_parity_do_not_preflight(self):
-        os.environ['HORIZON_DATAFIX_ROOT'] = str(self.shared)
+        os.environ['SUNRISE_DATAFIX_ROOT'] = str(self.shared)
         for host, selected in [('local', False), ('macmini', True)]:
             step = pr_ready.Step('Parity', 'true')
             step.datafix_selected = selected
@@ -127,7 +128,7 @@ class DatafixPaths(unittest.TestCase):
 
     def test_author_plan_requires_datafix_opt_in(self):
         (self.checkout / '.local/minecraft').mkdir(parents=True)
-        (self.checkout / '.local/horizon-client').mkdir()
+        (self.checkout / '.local/sunrise-client').mkdir()
         for opt_in in (False, True):
             args = argparse.Namespace(host='local', quick=False, harnesses=True, datafix=opt_in)
             output = io.StringIO()
@@ -138,7 +139,8 @@ class DatafixPaths(unittest.TestCase):
             self.assertEqual('--exclude datafix' in step.command, not opt_in)
             self.assertEqual(output.getvalue().count('datafix parity not run:'), 0 if opt_in else 1)
 
-    def test_download_and_lock_destinations_are_private(self):
+    def consumers(self):
+        """datafix_worlds and test_datafix_parity, imported with the owning boundary selecting a temp root."""
         # Script consumers import siblings directly and mutate sys.path. Keep
         # those mutations scoped so later unittest discovery cannot import a
         # tools/test_* module in place of a tests/test_* module with the same name.
@@ -148,12 +150,64 @@ class DatafixPaths(unittest.TestCase):
         alias = mock.patch.dict(sys.modules, {'datafix_paths': datafix_paths})
         alias.start()
         self.addCleanup(alias.stop)
-        # Import the actual consumers with the owning boundary selecting a temp root.
         for name in ('datafix_worlds', 'test_datafix_parity'):
             sys.modules.pop(name, None)
             self.addCleanup(sys.modules.pop, name, None)
-        worlds = importlib.import_module('datafix_worlds')
-        parity = importlib.import_module('test_datafix_parity')
+        return importlib.import_module('datafix_worlds'), importlib.import_module('test_datafix_parity')
+
+    def test_a_cut_short_download_is_fetched_again(self):
+        worlds, _ = self.consumers()
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, 'w') as jar:
+            jar.writestr('version.json', json.dumps({'world_version': 1, 'protocol_version': 2}))
+        body = payload.getvalue()
+        jar_meta = {'url': 'https://invalid.test/jar', 'sha1': hashlib.sha1(body).hexdigest()}
+        metadata = json.dumps({'downloads': {'server': jar_meta}}).encode()
+        manifest = json.dumps({'versions': [{'id': '1.19', 'url': 'https://invalid.test/meta',
+                                             'sha1': hashlib.sha1(metadata).hexdigest()}]}).encode()
+        answers = {worlds.MANIFEST: manifest, 'https://invalid.test/meta': metadata, jar_meta['url']: body}
+        fetched = []
+
+        def urlopen(url):
+            fetched.append(url)
+            return io.BytesIO(answers[url])
+
+        # What a full disk left behind: an empty jar and a version.json cut mid-write.
+        folder = self.checkout / '.local/datafix/servers/1.19'
+        folder.mkdir(parents=True)
+        (folder / 'server.jar').write_bytes(b'')
+        (folder / 'version.json').write_bytes(metadata[:10])
+        with mock.patch.object(worlds.urllib.request, 'urlopen', urlopen):
+            path, _, _ = worlds.server_jar('1.19')
+            self.assertEqual(path.read_bytes(), body)
+            self.assertEqual(json.loads((folder / 'version.json').read_text())['downloads']['server'], jar_meta)
+            self.assertEqual(fetched, [worlds.MANIFEST, 'https://invalid.test/meta', jar_meta['url']])
+            # Now whole, both are used as they are.
+            worlds.server_jar('1.19')
+        self.assertEqual(len(fetched), 3)
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ['server.jar', 'version.json'])
+
+    def test_failed_download_replace_keeps_destination_and_removes_temp(self):
+        worlds, _ = self.consumers()
+        path = self.checkout / 'version.json'
+        path.write_bytes(b'old')
+        body = b'new'
+
+        def fail_replace(source, destination):
+            self.assertEqual(Path(source).parent, path.parent)
+            self.assertEqual(Path(source).read_bytes(), body)
+            self.assertEqual(destination, path)
+            raise OSError('replace failed')
+
+        with (mock.patch.object(worlds.urllib.request, 'urlopen', return_value=io.BytesIO(body)),
+              mock.patch.object(worlds.os, 'replace', side_effect=fail_replace),
+              self.assertRaisesRegex(OSError, 'replace failed')):
+            worlds.fetch(path, 'https://invalid.test/meta', hashlib.sha1(body).hexdigest(), 'version metadata')
+        self.assertEqual(path.read_bytes(), b'old')
+        self.assertFalse(list(path.parent.glob('*.part')))
+
+    def test_download_and_lock_destinations_are_private(self):
+        worlds, parity = self.consumers()
         payload = io.BytesIO()
         with zipfile.ZipFile(payload, 'w') as jar:
             jar.writestr('dummy', 'synthetic jar')

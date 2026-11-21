@@ -34,7 +34,7 @@ Everything below is in the current release.
 - **Graphics.** Distant terrain up to 1,024 chunks, graphics presets, HDR and controllers, all off by default where they would change the vanilla look ([settings](https://playsunrise.net/docs/settings)).
 - **Packs.** Resource packs, data packs and shader packs ([below](#mods-and-shader-packs)).
 - **Mods.** Content mods and native Rust mods, installed from the launcher ([below](#mods-and-shader-packs)).
-- **Servers.** Host one from the launcher, or run `horizon-server` on a VPS ([below](#host-a-server)).
+- **Servers.** Host one from the launcher, or run `sunrise-server` on a VPS ([below](#host-a-server)).
 - **The launcher.** It installs and updates the game, prepares its files from your copy of Minecraft, and updates itself.
 
 <table>
@@ -52,19 +52,19 @@ Everything below is in the current release.
 
 ## Performance
 
-**Sunrise draws more frames per second than Java Edition, and loads faster, on the same machine, world and path.** `tools/perf_bench.py` runs each game in turn, from a fresh world (seed 1234), waiting for the terrain and then flying it over a village, a forest, an ocean and a mountain. Measured on 2026-10-29/30 on an idle Windows 11 machine (Ryzen 7 9800X3D, RTX 5080), Horizon v0.2.97 as the launcher installs it, 1280x720 in a window, VSync off, three games per figure. Frames per second, mean of the four scenes, with the slowest 1% of frames in brackets:
+**Sunrise draws more frames per second than Java Edition, and loads faster, on the same machine, world and path.** `tools/perf_bench.py` runs each game in turn, from a fresh world (seed 1234), waiting for the terrain and then flying it over a village, a forest, an ocean and a mountain. Measured on 2026-10-29/30 on an idle Windows 11 machine (Ryzen 7 9800X3D, RTX 5080), Sunrise v0.2.97 as the launcher installs it, 1280x720 in a window, VSync off, three games per figure. Frames per second, mean of the four scenes, with the slowest 1% of frames in brackets:
 
-| Render distance | Horizon v0.2.97 | Vanilla 26.3 | Vanilla + mods |
+| Render distance | Sunrise v0.2.97 | Vanilla 26.3 | Vanilla + mods |
 | --- | --- | --- | --- |
 | 8 chunks | 3,289 (1,327) | 2,437 (640) | 2,375 (709) |
 | 16 chunks | 2,074 (598) | 1,661 (375) | 1,586 (432) |
 | 32 chunks | 1,207 (333) | 1,031 (176) | 879 (264) |
 
-"Vanilla + mods" is Sodium, Lithium, FerriteCore and ImmediatelyFast. Sunrise reaches the title screen in 2.9–3.2 s against vanilla's 7.5–7.7 s (the modded client's 10.8–11.1 s), loads a scene's chunks 2.9–3.8 times faster, and playing holds a steady working set of 1.1–1.7 GB against 1.9–2.9 GB. Every scene with its confidence interval and the run's load log: [the 2026-10-29 reports](benchmarks/perf/windows-9800x3d-5080-2026-10-29.md). Method, and how to measure your own machine: [docs/benchmark.md](docs/benchmark.md). [playhorizon.dev/benchmarks](https://playsunrise.net/benchmarks) puts these runs beside a 2016 laptop, a Mac mini and a gaming desktop.
+"Vanilla + mods" is Sodium, Lithium, FerriteCore and ImmediatelyFast. Sunrise reaches the title screen in 2.9–3.2 s against vanilla's 7.5–7.7 s (the modded client's 10.8–11.1 s), loads a scene's chunks 2.9–3.8 times faster, and playing holds a steady working set of 1.1–1.7 GB against 1.9–2.9 GB. Every scene with its confidence interval and the run's load log: [the 2026-10-29 reports](benchmarks/perf/windows-9800x3d-5080-2026-10-29.md). Method, and how to measure your own machine: [docs/benchmark.md](docs/benchmark.md). [playsunrise.net/benchmarks](https://playsunrise.net/benchmarks) puts these runs beside a 2016 laptop, a Mac mini and a gaming desktop.
 
 ## Download
 
-Get **the Sunrise launcher** from [playsunrise.net/download](https://playsunrise.net/download), or from the newest `launcher@` release on [GitHub](https://github.com/sunrise-org/sunrise/releases?q=launcher&expanded=true):
+Get **the Sunrise launcher** from [playsunrise.net/download](https://playsunrise.net/download), or from GitHub: it has its own repository, [sunrise-org/sunrise-launcher](https://github.com/sunrise-org/sunrise-launcher), whose releases are also published here as `launcher@` releases ([1.0.0](https://github.com/sunrise-org/sunrise/releases?q=launcher&expanded=true) came from here):
 
 | Platform | File | Needs |
 | --- | --- | --- |
@@ -76,15 +76,15 @@ Get **the Sunrise launcher** from [playsunrise.net/download](https://playsunrise
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/media/readme/launcher-home.webp" alt="The launcher's Home page: the Horizon instance, Play, the version picker, the friend invite field, screenshots and the patch log"></td>
-    <td width="50%"><img src="docs/media/readme/launcher-mods.webp" alt="The launcher's Mods page: Horizon's mod registry with Zoom selected, and tabs for modpacks, resource packs, shader packs and data packs"></td>
+    <td width="50%"><img src="docs/media/readme/launcher-home.webp" alt="The launcher's Home page on the Dawn theme: the Sunrise instance with its icon, Sign in to play, the friend invite field and the instance's tabs"></td>
+    <td width="50%"><img src="docs/media/readme/launcher-versions.webp" alt="The launcher's Versions page: the installed Nightly, marked latest and in use, with its notes"></td>
   </tr>
 </table>
 
 ## Mods and shader packs
 
-- **Content mods** (`.hmod`): blocks, items, recipes, loot, models and textures, with no code.
-- **Native mods** (`.hnmod`): Rust that the launcher compiles into the game for you, with nothing to install.
+- **Content mods** (`.smod`): blocks, items, recipes, loot, models and textures, with no code.
+- **Native mods** (also `.smod`, whose manifest has a `[native]` table): Rust that the launcher compiles into the game for you, with nothing to install.
 - **Java mods** (Fabric, NeoForge, Forge) don't run: Sunrise has no Java. The launcher carries over the data and assets inside their jars, and imports modpacks (`.mrpack`, CurseForge zips, Prism instances) the same way ([modpacks](https://playsunrise.net/docs/modpacks)).
 - **Shader packs**: Iris/OptiFine-format packs (`shaders/` folders) and Sunrise's own WGSL packs, under Video Settings → Shader Packs ([pack format](docs/shaders.md)).
 
@@ -92,34 +92,34 @@ Mods are off by default: a fresh install plays exactly like vanilla 26.3. The la
 
 ## Host a server
 
-The launcher's **Servers** page creates, starts, backs up and updates a server, and invites friends. On a VPS, `horizon-server` installs with one command, needs no Java, and takes vanilla 26.3 and Sunrise players alike. [Host a server](https://playsunrise.net/docs/hosting) ([reference](docs/hosting.md)).
+The launcher's **Servers** page creates, starts, backs up and updates a server, and invites friends. On a VPS, `sunrise-server` installs with one command, needs no Java, and takes vanilla 26.3 and Sunrise players alike. [Host a server](https://playsunrise.net/docs/hosting) ([reference](docs/hosting.md)).
 
 ## Agent control
 
-AI agents and scripts can play Sunrise. `horizon-ctl`, shipped with the game, reads its state as JSON and acts like a player; `horizon-ctl mcp` serves the same commands over MCP.
+AI agents and scripts can play Sunrise. `sunrise-ctl`, shipped with the game, reads its state as JSON and acts like a player; `sunrise-ctl mcp` serves the same commands over MCP.
 
 ```sh
-horizon-ctl launch --world Survival --seed 5 --wait   # finds the version the launcher installed
-horizon-ctl state                                       # position, health, food, target, screen...
-horizon-ctl goto -0.5 65 -2.5 --near 2.5                # walks there along a path
-horizon-ctl break -1 65 -3                              # mines it; replies with the drops
+sunrise-ctl launch --world Survival --seed 5 --wait   # finds the version the launcher installed
+sunrise-ctl state                                       # position, health, food, target, screen...
+sunrise-ctl goto -0.5 65 -2.5 --near 2.5                # walks there along a path
+sunrise-ctl break -1 65 -3                              # mines it; replies with the drops
 ```
 
-`horizon-ctl help` lists every command. [Agent control](docs/native-client.md#agent-control-horizon-ctl-and-mcp).
+`sunrise-ctl help` lists every command. [Agent control](docs/native-client.md#agent-control-sunrise-ctl-and-mcp).
 
 ## Build from source
 
-Needs Rust 1.90+, Python 3.11+, JDK 25, and on Linux `libasound2-dev libudev-dev`. `horizon-prepare` builds the game's resources from **your own copy** of Java Edition 26.3 (checked against `research-lock.json`) and never downloads it:
+Needs Rust 1.90+, Python 3.11+, JDK 25, and on Linux `libasound2-dev libudev-dev`. `sunrise-prepare` builds the game's resources from **your own copy** of Java Edition 26.3 (checked against `research-lock.json`) and never downloads it:
 
-1. **Client:** play 26.3 once in the official launcher. Sunrise reads `~/.minecraft` (or `--minecraft-dir` / `HORIZON_MINECRAFT_DIR`).
-2. **Server jar:** the 26.3 server jar (`downloads.server.url` in `versions/26.3/26.3.json`), passed once with `--server-jar` or `HORIZON_SERVER_JAR`.
+1. **Client:** play 26.3 once in the official launcher. Sunrise reads `~/.minecraft` (or `--minecraft-dir` / `SUNRISE_MINECRAFT_DIR`).
+2. **Server jar:** the 26.3 server jar (`downloads.server.url` in `versions/26.3/26.3.json`), passed once with `--server-jar` or `SUNRISE_SERVER_JAR`.
 
 ```sh
 git clone https://github.com/sunrise-org/sunrise.git
 cd sunrise
-cargo run --release -p horizon-prepare -- --prepare --server-jar ~/Downloads/server.jar   # needs JDK 25
-cargo run --release -p horizon-prepare -- sounds   # optional: sounds from your launcher install
-cargo run --release -p horizon-game
+cargo run --release -p sunrise-prepare -- --prepare --server-jar ~/Downloads/server.jar   # needs JDK 25
+cargo run --release -p sunrise-prepare -- sounds   # optional: sounds from your launcher install
+cargo run --release -p sunrise-game
 ```
 
 Prepared files land in the gitignored `.local/`: never commit or share them. Options, controls and architecture: [the native client guide](docs/native-client.md); all developer docs: [docs/README.md](docs/README.md).
@@ -135,7 +135,7 @@ python3 tools/pr_ready.py
 
 It runs rustfmt, clippy, the touched crates' tests, the Python tests, the public-tree check and the vanilla harnesses your change affects. Never commit game files, decompiled source or prepared resources.
 
-Sunrise's own governance is being written: the proposal is [#1289](https://github.com/sunrise-org/sunrise/pull/1289).
+How Sunrise is run (the council, theme groups and their leads, the Sunrise Team, moderation): [GOVERNANCE.md](GOVERNANCE.md).
 
 ## Project status
 
@@ -166,6 +166,6 @@ Scores: 0 (absent), 0.25 (started), 0.5 (playable, major features missing), 0.75
 
 ## Licence
 
-Sunrise's code is under the [PolyForm Shield licence with the Sunrise Additional Terms](LICENSE): use it for anything, servers, hosting and mods included, and fork or port it freely as long as the fork stays free and open ([what that means](LICENSING.md)). Everything up to the fork from Horizon is also available under its original [MIT licence](LICENSES/MIT-Horizon.txt); dependencies keep their own licences ([notices](THIRD_PARTY_NOTICES.md)). Horizon is made by [Ludovic Marie](https://lu4ovic.com) ([@ludovic111](https://github.com/ludovic111)) and [its contributors](https://github.com/horizon-rust/horizon/graphs/contributors).
+Sunrise's code is under the [PolyForm Shield licence with the Sunrise Additional Terms](LICENSE): use it for anything, servers, hosting and mods included, and fork or port it freely as long as the fork stays free and open ([what that means](LICENSING.md)). Code that came from Horizon is also available under its original [MIT licence](LICENSES/MIT-Horizon.txt); dependencies keep their own licences ([notices](THIRD_PARTY_NOTICES.md)). Sunrise is a fork of Horizon, which is made by [Ludovic Marie](https://lu4ovic.com) ([@ludovic111](https://github.com/ludovic111)) and [its contributors](https://github.com/horizon-rust/horizon/graphs/contributors).
 
 NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT. Minecraft is a trademark of Mojang Synergies AB; its code and assets belong to Mojang and Microsoft under the [Minecraft EULA](https://www.minecraft.net/en-us/eula).

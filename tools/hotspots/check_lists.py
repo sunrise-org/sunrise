@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A `pub use` under crates/horizon-mod-vocab/src/exports/ names at most 12 items in braces.
+"""A `pub use` under crates/sunrise-mod-vocab/src/exports/ names at most 12 items in braces.
 
 rustfmt re-wraps a brace list on every added name, so two PRs that each add a name to one long list always
 conflict (tools/hotspots/README.md). Export a module's items with a glob, or put the new names in a fragment of
@@ -19,7 +19,7 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-EXPORTS = "crates/horizon-mod-vocab/src/exports"
+EXPORTS = "crates/sunrise-mod-vocab/src/exports"
 LIMIT = 12
 
 # file (under EXPORTS): (longest list allowed, or None while a planned PR removes the lists, why it stays).
@@ -34,7 +34,6 @@ LONG_LISTS = {
     "payload_codec.rs": (13, "no planned PR removes it"),
     "phase.rs": (15, "no planned PR removes it"),
     "registry_keys.rs": (15, "rename list"),
-    "structure_type.rs": (14, "no planned PR removes it"),
 }
 
 # Files a switch removed (file under EXPORTS: where its content lives now). One at the old path fails.

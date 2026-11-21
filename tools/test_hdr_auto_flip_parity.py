@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """HDR Auto follows the display without meshing the world again (#12989): Auto on -> off -> on.
 
-One game runs offscreen on the float frame (HORIZON_HDR_FRAME=float, HORIZON_HDR_OUTPUT=pq) with HDR on Auto, under
-HORIZON_STILL=1. No HDR display is needed: HORIZON_HDR_DISPLAY names a file that says what the system reports for the
+One game runs offscreen on the float frame (SUNRISE_HDR_FRAME=float, SUNRISE_HDR_OUTPUT=pq) with HDR on Auto, under
+SUNRISE_STILL=1. No HDR display is needed: SUNRISE_HDR_DISPLAY names a file that says what the system reports for the
 display, `on` or `off`, which the game reads every two seconds as it reads the system. The file starts at `on`, turns
 `off`, then `on` again, and the scenes are shot in each state. A second game starts with the file at `off`. A third
-flips as the first under the shader API 0.2 example pack (golden_hour_0_2) with flat draws on (HORIZON_FLAT_DRAWS=1),
-where a Horizon pack lays solid terrain out wide instead of compact (`packed_layout`).
+flips as the first under the shader API 0.2 example pack (golden_hour_0_2) with flat draws on (SUNRISE_FLAT_DRAWS=1),
+where a Sunrise pack lays solid terrain out wide instead of compact (`packed_layout`).
 
 It fails unless:
 - HDR output follows the file: the shots have their -hdr.png while it says `on`, and none while it says `off`;
 - the renderer was made again for each frame (the 8-bit one, then the float one), so the flips were real;
-- no section was meshed again by either flip (`meshed_sections` of horizon-ctl status), and as many stay resident;
+- no section was meshed again by either flip (`meshed_sections` of sunrise-ctl status), and as many stay resident;
 - the pictures after on -> off -> on are the first ones, pixel for pixel, the -hdr.png too;
 - the pictures while `off` are those of the game that started at `off`;
 - under the pack, the same, but against no game started at `off`; and the pack ran: solid terrain is laid out wide,
   and its pictures differ from the first game's.
 
-Horizon's own feature: there is no vanilla oracle, and the pictures compared are all this build's.
+Sunrise's own feature: there is no vanilla oracle, and the pictures compared are all this build's.
 
   test_hdr_auto_flip_parity.py [--bin-dir DIR] [--resources DIR] [-j N]
 """
@@ -38,7 +38,7 @@ except ImportError:
 
 RUN = lab.LOCAL / 'hdr-auto-flip'
 SCENES = ['day_water', 'night_lights']
-ENV = {'HORIZON_HDR_FRAME': 'float', 'HORIZON_HDR_OUTPUT': 'pq'}
+ENV = {'SUNRISE_HDR_FRAME': 'float', 'SUNRISE_HDR_OUTPUT': 'pq'}
 MADE_AGAIN = 'the renderer was made again for the frame'
 PACK = 'golden_hour_0_2'
 
@@ -74,15 +74,15 @@ def session(name, bin_dir, out, env_base, args, flips, pack=None):
     folder = RUN / 'games' / name
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
-    (folder / 'horizon-graphics.txt').write_text(identity.GRAPHICS + 'hdr:auto\n')
+    (folder / 'sunrise-graphics.txt').write_text(identity.GRAPHICS + 'hdr:auto\n')
     (folder / 'options.txt').write_text('chatVisibility:2\ntutorialStep:none\npauseOnLostFocus:false\n')
     display = folder / 'display.txt'
     display.write_text(flips[0])
     extra = {}
     if pack:
-        shutil.copytree(lab.ROOT / 'crates/horizon-shader-api/packs' / pack, folder / 'shaderpacks' / pack)
-        extra = {'HORIZON_SHADER_PACK': pack, 'HORIZON_FLAT_DRAWS': '1'}
-    env = lab.game_env(env_base, HORIZON_STILL='1', HORIZON_HDR_DISPLAY=display, **ENV, **extra)
+        shutil.copytree(lab.ROOT / 'crates/sunrise-shader-api/packs' / pack, folder / 'shaderpacks' / pack)
+        extra = {'SUNRISE_SHADER_PACK': pack, 'SUNRISE_FLAT_DRAWS': '1'}
+    env = lab.game_env(env_base, SUNRISE_STILL='1', SUNRISE_HDR_DISPLAY=display, **ENV, **extra)
     game = identity.Game(bin_dir, folder, env, args)
     counts = []
     try:
@@ -130,14 +130,14 @@ def checks(out, name, counts):
 
 
 def pack_ran(out):
-    """That the pack drew: solid terrain laid out wide, as for a Horizon pack, and pictures unlike the first game's."""
+    """That the pack drew: solid terrain laid out wide, as for a Sunrise pack, and pictures unlike the first game's."""
     problems = []
     layout = json.loads((out / 'pack.layout.json').read_text())
     # Without flat draws (lavapipe) solid terrain is wide with or without a pack, so only the pictures tell.
     if not layout['flat']:
         print('pack: no flat draws on this device: the wide layout is not checked, only the pictures')
     elif layout['packed_layout'][0]:
-        problems.append('pack: solid terrain stayed compact: no Horizon pack ran')
+        problems.append('pack: solid terrain stayed compact: no Sunrise pack ran')
     for n in range(3):
         for scene in SCENES:
             for suffix in ('.png', '-hdr.png'):
@@ -149,7 +149,7 @@ def pack_ran(out):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--bin-dir', help='prebuilt horizon-client and horizon-ctl (default: build them)')
+    parser.add_argument('--bin-dir', help='prebuilt sunrise-client and sunrise-ctl (default: build them)')
     parser.add_argument('--resources', default=str(lab.RESOURCES), help='the prepared resources the game reads')
     parser.add_argument('-j', '--jobs', type=int, help='cargo build jobs')
     args = parser.parse_args()

@@ -2,7 +2,7 @@
 
 A recipe viewer shows its pages in the item panel's place with `panel_recipes(mod_id, page)`, a
 client `WorldOnly` call beside `panel_items` and `panel_style`. The page is data: the game draws it
-with its own slots, arrows, fluid wells and buttons, for native and WebAssembly mods alike. It is
+with its own slots, arrows, fluid wells and buttons. It is
 the same recipe view the game's own panel uses, so a mod never draws a second recipe window.
 
 ```rust

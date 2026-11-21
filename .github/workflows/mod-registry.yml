@@ -1,12 +1,12 @@
 name: mod-registry
-# The submission service is its own workspace (crates/horizon-mod-registry), so the checks job doesn't build
-# it: this one does, and builds its image, whenever anything the image copies changes (horizon-mod-vocab's build
+# The submission service is its own workspace (crates/sunrise-mod-registry), so the checks job doesn't build
+# it: this one does, and builds its image, whenever anything the image copies changes (sunrise-mod-vocab's build
 # script reads the game's hook sources, so the image copies every crate).
 on:
   push:
     branches: [main]
     paths:
-      # Everything its image copies (crates/horizon-mod-registry/Dockerfile): every crate's sources and the
+      # Everything its image copies (crates/sunrise-mod-registry/Dockerfile): every crate's sources and the
       # layering inventory and the mixin patch its build reads, the root manifest and the build context's
       # ignore list.
       - 'crates/**'
@@ -17,7 +17,7 @@ on:
       - '.github/workflows/mod-registry.yml'
   pull_request:
     paths:
-      # Everything its image copies (crates/horizon-mod-registry/Dockerfile): every crate's sources and the
+      # Everything its image copies (crates/sunrise-mod-registry/Dockerfile): every crate's sources and the
       # layering inventory and the mixin patch its build reads, the root manifest and the build context's
       # ignore list.
       - 'crates/**'
@@ -33,12 +33,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   check:
-    # Our checks runners (label horizon-checks, docs/ci-runners.md); SELF_HOSTED_CI=light or off: GitHub's.
-    runs-on: ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-latest' }}
+    # Our checks runners (label sunrise-checks, docs/ci-runners.md); SELF_HOSTED_CI=light or off: GitHub's.
+    runs-on: ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && fromJSON('["self-hosted", "linux", "sunrise-checks"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: crates/horizon-mod-registry
+        working-directory: crates/sunrise-mod-registry
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
@@ -46,7 +46,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: runner.environment == 'github-hosted'
         with:
-          workspaces: crates/horizon-mod-registry
+          workspaces: crates/sunrise-mod-registry
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo +stable fmt --check
       - run: cargo +stable clippy --all-targets --locked -- -D warnings
@@ -58,4 +58,4 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      - run: docker build -f crates/horizon-mod-registry/Dockerfile .
+      - run: docker build -f crates/sunrise-mod-registry/Dockerfile .

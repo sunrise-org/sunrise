@@ -4,7 +4,7 @@
     python3 tools/pad_menu_e2e.py                 # every case
     python3 tools/pad_menu_e2e.py --only release
 
-Each case starts its own isolated game through horizon-ctl (fresh scratch homes from `lab.game_env`) and drives
+Each case starts its own isolated game through sunrise-ctl (fresh scratch homes from `lab.game_env`) and drives
 it with the virtual pad, reading what `pad status` reports: the focused widget and the screen's targets.
 
 Cases:
@@ -24,7 +24,6 @@ Cases:
 - optimize_world: B doesn't stop Optimize World, which declares nothing.
 - pointer_screens: Statistics', Advancements' and the packs' Done show a glyph and B presses them.
 - settings_pages: nothing labelled Done, Back or Cancel is undeclared on any options page, Graphics included.
-- split_setup: Splitscreen Setup's Done is declared, and off while a player is held.
 - actions_follow_screen: right after a press opens a screen, the screen before it can't be pressed.
 - glyphs_title: the title's X and B on their buttons, A once the focus is on the exit, gone at the mouse.
 - glyph_on_field: A on a focused text field and B on Cancel; A opens one keyboard, which hides them; B closes it.
@@ -55,7 +54,7 @@ Cases:
 - nintendo_letters: a Nintendo pad going by its letters shows the letter of the button that acts on the title's
   declared buttons (Options is X, Quit Game's B), and by places Y and A, and the guide's Jump is A or B; the guide
   and a connected pad's notice are shot in both modes.
-- extras_shell: Horizon Extras on the settings shell: the D-pad walks its rows and scrolls through the hidden ones, past
+- extras_shell: Sunrise Extras on the settings shell: the D-pad walks its rows and scrolls through the hidden ones, past
   a greyed row, the right stick scrolls it, A changes and saves a toggle, the strip follows the row, B leaves.
 - graphics_shell: the Graphics screen on the settings shell: the D-pad goes from its Quality page into the rows, A
   turns Fog off and saves it, X presses the Undo that appears, which puts it back, and B leaves.
@@ -71,8 +70,8 @@ Cases:
 - osk_sign_done: on a sign Done (Menu) closes the sign with what was typed, as its Done button.
 - osk_chat_suggestions: over chat with the keyboard open, RT fills in the selected command suggestion (Tab) and the
   right stick picks another first (Up and Down), without closing the keyboard.
-Needs built fast binaries (`cargo build --profile fast -p horizon-game -p horizon-client-lib --bins`)
-and prepared resources in .local/horizon-client/26.3. Exit status 0 when every case passes.
+Needs built fast binaries (`cargo build --profile fast -p sunrise-game -p sunrise-client-lib --bins`)
+and prepared resources in .local/sunrise-client/26.3. Exit status 0 when every case passes.
 - radial_commit: holding the opener shows the overlay and pauses nothing; the stick selects; releasing runs the action once.
 - radial_no_selection: a release with nothing selected, after retention ran out, or on an empty slot runs nothing.
 - radial_retention: a stick let go just before the release still commits.
@@ -84,7 +83,7 @@ and prepared resources in .local/horizon-client/26.3. Exit status 0 when every c
   keeps the name) and deletes a page, resets, Undo puts back what it found, and the opener's row binds Y in place.
 - radial_held_sneak: a sneak held on the pad stays held while the menu opens, selects and commits.
 - radial_focus_background: with Play in Background on, losing the window's focus still cancels the menu.
-- radial_unavailable: on a single saved page, an action that can't run (Emote, cosmetics off) is dimmed and its commit does nothing.
+- radial_unavailable: on a single saved page, an action that can't run (Quick Actions, no dialog given) is dimmed and its commit does nothing.
 - radial_old_file: a settings file from before the radial menu keeps D-pad down on the advancements.
 - radial_flick_with_press: a stick flicked as the opener goes down selects; one leaning since well before waits.
 - radial_held_drop: a drop held through the menu doesn't throw the rest of the stack as it closes.
@@ -144,11 +143,11 @@ class Game:
     def __init__(self, args, name, world=False, seed=None, env=None, extra=()):
         self.args = args
         self.home = Path(tempfile.mkdtemp(prefix=f'pad-menu-{name}-'))
-        homes = {key: self.home / key for key in ('HORIZON_HOME', 'HORIZON_LAUNCHER_HOME', 'XDG_DATA_HOME',
+        homes = {key: self.home / key for key in ('SUNRISE_HOME', 'SUNRISE_LAUNCHER_HOME', 'XDG_DATA_HOME',
                                                     'XDG_CONFIG_HOME')}
         for folder in homes.values():
             folder.mkdir()
-        self.game_home = homes['HORIZON_HOME']
+        self.game_home = homes['SUNRISE_HOME']
         # A first launch shows the accessibility onboarding before the title.
         (self.game_home / 'options.txt').write_text('onboardAccessibility:false\n')
         if seed:
@@ -168,7 +167,7 @@ class Game:
         width, height = self.ctl('ui')['gui_size']
         if abs(width / height - WINDOW_ASPECT) > WINDOW_ASPECT_SLACK:
             print(f'warning: the window is {width:g}x{height:g} GUI pixels, not 16:9, and cases that scroll will '
-                  "fail. On a tiling compositor, float the app id 'horizon'.", file=sys.stderr, flush=True)
+                  "fail. On a tiling compositor, float the app id 'sunrise'.", file=sys.stderr, flush=True)
 
     def restart(self):
         """Quit and start again on the same files."""
@@ -561,35 +560,10 @@ def settings_pages(args, name):
     return check.failures
 
 
-def split_setup(args, name):
-    game = Game(args, name)
-    check = Check()
-    try:
-        game.wait_targets()
-        game.title_buttons()
-        game.pad('west')
-        game.ctl('options', 'horizon')
-        time.sleep(SETTLE)
-        game.wait_targets()
-        click_widget(game, widget(game, 'split'))
-        game.wait_targets()
-        game.pad('down')
-        check(declared(game).get('Done') is True, f'Setup declares {declared(game)}')
-        check(game.menu()['undeclared'] == [], f"undeclared: {game.menu()['undeclared']}")
-        # A held player needs a second one, which one virtual pad can't be: `split_ui`'s
-        # done_is_declared_off_while_a_player_is_held has that.
-        game.pad('east')
-        game.wait_targets()
-        check(any('split' in w['id'] for w in game.widgets()), f'B did not press Done: {labels(game)}')
-    finally:
-        game.quit()
-    return check.failures
-
-
 @title_case
 def actions_follow_screen(game, check, single, options, quit_game):
     # X, then B before Options may have been drawn: B leaves Options either way, never the title's Quit Game.
-    # Whether a frame gets between them is up to horizon-ctl's round trip; `widgets`' own test is exact.
+    # Whether a frame gets between them is up to sunrise-ctl's round trip; `widgets`' own test is exact.
     for attempt in range(5):
         game.ctl('pad', 'west', 'tap')
         game.ctl('pad', 'east', 'tap')
@@ -1434,7 +1408,7 @@ VIBRATION_ABOUT = 'Rumble when something happens to you.'
 
 
 def controller_saved(game):
-    path = game.game_home / 'horizon-controller.txt'
+    path = game.game_home / 'sunrise-controller.txt'
     return path.read_text() if path.exists() else ''
 
 
@@ -1613,15 +1587,15 @@ def controller_settings_keys(args, name):
 
 OPTIONS_PAGES = ('main', 'video', 'sound', 'controls', 'keybinds', 'controller', 'controller-binds', 'controller-radial', 'mouse', 'chat',
                  'accessibility', 'language', 'font', 'packs', 'mods', 'shader-packs', 'graphics', 'graphics-advanced',
-                 'graphics-hdr', 'extras', 'pvp', 'credits', 'horizon', 'agent')
+                 'graphics-hdr', 'extras', 'pvp', 'credits', 'sunrise', 'agent')
 # Screens allowed to draw no target, and why. The pad falls back to the crosshair on these.
 TARGETS_WAIT = 5
 STUDIO_RECORDINGS, STUDIO_BUTTONS = 12, 3
 
 
 EXTRAS_ABOUT = 'Optional additions, all off by default'
-AUTO_RECONNECT = 'Auto-reconnect'
-AUTO_RECONNECT_ABOUT = 'Rejoins a server after a lost connection or a restart'
+PREGEN = 'Chunk pregeneration'
+PREGEN_ABOUT = 'Enables /pregen in your single-player and LAN worlds'
 FIRST_EXTRA = 'Own name tag'
 LAST_MENU_EXTRA = 'Resource pack browser'
 GREYED_EXTRA = 'Sort key'
@@ -1645,7 +1619,7 @@ def ring_on(game, rect):
 
 
 def extras_saved(game):
-    path = game.game_home / 'horizon-extras.txt'
+    path = game.game_home / 'sunrise-extras.txt'
     return path.read_text() if path.exists() else ''
 
 
@@ -1684,13 +1658,13 @@ def extras_shell(args, name):
 
         # Back up the list to a row near its top; the right stick moves the list and the focus stays on it.
         for _ in range(ROW_WALK):
-            if AUTO_RECONNECT in (game.focused_label() or ''):
+            if PREGEN in (game.focused_label() or ''):
                 break
             game.pad('up')
         label = game.focused_label()
-        check(AUTO_RECONNECT in (label or ''), f'the D-pad never came back to {AUTO_RECONNECT}: {label}')
-        check(has_label(game, AUTO_RECONNECT_ABOUT), f'the strip does not follow the row: {labels(game)}')
-        check(AUTO_RECONNECT in (label or '') and label.endswith('Off'), f'{AUTO_RECONNECT} reads {label}')
+        check(PREGEN in (label or ''), f'the D-pad never came back to {PREGEN}: {label}')
+        check(has_label(game, PREGEN_ABOUT), f'the strip does not follow the row: {labels(game)}')
+        check(PREGEN in (label or '') and label.endswith('Off'), f'{PREGEN} reads {label}')
         shot(game, 'extras-described')
         y = game.focus()[1]
         game.stick()
@@ -1699,18 +1673,18 @@ def extras_shell(args, name):
         check(moved and moved[1] < y, f'the stick did not scroll the list: {y} to {moved}')
 
         # A changes the toggle: what the row reads, and the file it is saved in.
-        check('autoReconnect:true' not in extras_saved(game), 'Auto-reconnect began on')
+        check('pregen:true' not in extras_saved(game), 'Chunk pregeneration began on')
         game.pad('south')
         label = game.focused_label()
-        check(label and label.endswith('On'), f'A left {AUTO_RECONNECT} as {label}')
-        check('autoReconnect:true' in extras_saved(game), 'the toggle was not saved to horizon-extras.txt')
+        check(label and label.endswith('On'), f'A left {PREGEN} as {label}')
+        check('pregen:true' in extras_saved(game), 'the toggle was not saved to sunrise-extras.txt')
         check('Apply' not in declared(game), f'Extras has no Undo, yet a change declared {declared(game)}')
         shot(game, 'extras-toggled')
 
         # B presses Done.
         game.pad('east')
         game.wait_targets()
-        check(not has_label(game, AUTO_RECONNECT), f'B did not leave Extras: {labels(game)}')
+        check(not has_label(game, PREGEN), f'B did not leave Extras: {labels(game)}')
     finally:
         game.quit()
     return check.failures
@@ -1721,7 +1695,7 @@ GRAPHICS_PAGES = ('General', 'Quality', 'Performance', 'Shaders', 'Advanced', 'H
 
 
 def graphics_saved(game):
-    path = game.game_home / 'horizon-graphics.txt'
+    path = game.game_home / 'sunrise-graphics.txt'
     return path.read_text() if path.exists() else ''
 
 
@@ -1752,7 +1726,7 @@ def graphics_shell(args, name):
         game.pad('south')
         label = game.focused_label() or ''
         check(label.endswith('Off'), f'A left {FOG} as {label}')
-        check('fog:false' in graphics_saved(game), 'Fog off was not saved to horizon-graphics.txt')
+        check('fog:false' in graphics_saved(game), 'Fog off was not saved to sunrise-graphics.txt')
         check(declared(game).get('Apply') is True, f'Undo did not appear: {declared(game)}')
         game.pad('west')
         check(label_of(game, FOG) and label_of(game, FOG)['label'].endswith('On'), f'X did not undo: {labels(game)}')
@@ -1765,11 +1739,11 @@ def graphics_shell(args, name):
     return check.failures
 
 
-PRESET = 'Horizon Preset'
+PRESET = 'Sunrise Preset'
 
 
 def shell_choice_step(args, name):
-    # In a world: the arrow keys go through `horizon-ctl key`, which needs one.
+    # In a world: the arrow keys go through `sunrise-ctl key`, which needs one.
     game = Game(args, name, world=True)
     check = Check()
     try:
@@ -2097,7 +2071,7 @@ def every_screen_has_targets(game, check, single, options, quit_game):
         for _ in range(4):
             if quit_game in game.rects():
                 break
-            # Not the Escape key: horizon-ctl's needs a world open.
+            # Not the Escape key: sunrise-ctl's needs a world open.
             game.pad('east')
             time.sleep(SETTLE)
         else:
@@ -2107,7 +2081,7 @@ def every_screen_has_targets(game, check, single, options, quit_game):
         game.ctl('options', page)
         time.sleep(SETTLE)
         check_has_targets(game, check, page)
-    game.ctl('options', 'horizon')
+    game.ctl('options', 'sunrise')
     time.sleep(SETTLE)
     click_widget(game, widget(game, 'studio'))
     check_has_targets(game, check, 'studio')
@@ -2128,7 +2102,7 @@ def studio_rows(args, name):
     check = Check()
     try:
         game.wait_targets()
-        game.ctl('options', 'horizon')
+        game.ctl('options', 'sunrise')
         time.sleep(SETTLE)
         click_widget(game, widget(game, 'studio'))
         time.sleep(SETTLE)
@@ -3110,7 +3084,7 @@ craft_release_press = craft_release(lambda game: game.ctl('pad', 'rb', 'tap'))
 
 
 def craft_option_on(game_home):
-    (game_home / 'horizon-controller.txt').write_text('craftOnServers:true\n')
+    (game_home / 'sunrise-controller.txt').write_text('craftOnServers:true\n')
 
 
 def taps_with_lt(game, taps):
@@ -3182,8 +3156,22 @@ def craft_lan_guest(args, name):
     return check.failures
 
 
+# A flat creative test server with nobody's account checked.
+PROPERTIES = {
+    'online-mode': 'false',
+    'white-list': 'false',
+    'level-type': 'minecraft\\:flat',
+    'generate-structures': 'false',
+    'gamemode': 'creative',
+    'force-gamemode': 'true',
+    'spawn-protection': '0',
+    'view-distance': '4',
+    'simulation-distance': '4',
+    'max-players': '100',
+}
+
+
 def craft_dedicated(args, name):
-    from anticheat_e2e import PROPERTIES
     from server_bench import DONE, Server
     check = Check()
     folder = Path(tempfile.mkdtemp(prefix=f'pad-menu-{name}-server-'))
@@ -3215,7 +3203,7 @@ def craft_dedicated(args, name):
 
 def seed_controller(text):
     def seed(game_home):
-        (game_home / 'horizon-controller.txt').write_text(text)
+        (game_home / 'sunrise-controller.txt').write_text(text)
     return seed
 
 
@@ -3232,7 +3220,7 @@ def glyph_art(args, name):
                 glyph = shown.get(button)
                 check(glyph is not None, f'{style}: no {button} glyph in {shown}')
                 if glyph:
-                    sprite = art and f'horizon:gui/controller/{art}'
+                    sprite = art and f'sunrise:gui/controller/{art}'
                     check(glyph['sprite'] == sprite, f"{style} {button}: {glyph['sprite']}, not {sprite}")
                     x, y, w, h = glyph['rect']
                     bx, by, bw, bh = widget
@@ -3279,7 +3267,7 @@ def nintendo_letters(args, name):
             for part, label in (('West', west), ('East', east)):
                 glyph = shown.get(part) or {}
                 check(glyph.get('label') == label, f'{mode} {part}: {glyph.get("label")}, not {label}')
-                sprite = f'horizon:gui/controller/nx_{label.lower()}'
+                sprite = f'sunrise:gui/controller/nx_{label.lower()}'
                 check(glyph.get('sprite') == sprite, f'{mode} {part}: {glyph.get("sprite")}, not {sprite}')
             shot(game, f'nintendo_{mode}_title')
         finally:
@@ -3336,7 +3324,7 @@ def guide(game):
     """Each column of the gameplay guide as last drawn, as (button, caption without its prefix)."""
     time.sleep(SETTLE)
     shown = game.ctl('pad', 'status')['guide']
-    return tuple([(r['button'], r['caption'].replace('horizon.controller.guide.', '')) for r in shown[side]]
+    return tuple([(r['button'], r['caption'].replace('sunrise.controller.guide.', '')) for r in shown[side]]
                  for side in ('left', 'right'))
 
 
@@ -3808,8 +3796,8 @@ def radial_precedence(game, check):
 
 # Three saved pages, the third the player's own.
 RADIAL_SEED = ('bindLayout:2\n'
-               'radial_0_name:horizon.radial.page.general\nradial_0_slots:key.advancements,,key.command,,key.socialInteractions,,,\n'
-               'radial_1_name:horizon.radial.page.camera\nradial_1_slots:key.screenshot,,key.toggleGui,,key.smoothCamera,,,\n'
+               'radial_0_name:sunrise.radial.page.general\nradial_0_slots:key.advancements,,key.command,,key.socialInteractions,,,\n'
+               'radial_1_name:sunrise.radial.page.camera\nradial_1_slots:key.screenshot,,key.toggleGui,,key.smoothCamera,,,\n'
                'radial_2_label:Mine\nradial_2_slots:key.chat,,,,,,,\n')
 # The opener's row, D-pad Right as the Bindings page names it, and LB once bound to it.
 OPENER_ROW = 'Opener: \u2192'
@@ -3826,9 +3814,9 @@ def pad_to(game, label, way, tries=30):
 
 
 def radial_editor(args, name):
-    game = Game(args, name, world=True, seed=lambda home: (home / 'horizon-controller.txt').write_text(RADIAL_SEED))
+    game = Game(args, name, world=True, seed=lambda home: (home / 'sunrise-controller.txt').write_text(RADIAL_SEED))
     check = Check()
-    saved = lambda: (game.game_home / 'horizon-controller.txt').read_text()
+    saved = lambda: (game.game_home / 'sunrise-controller.txt').read_text()
     pages = lambda: radial(game)['pages']
     enabled = lambda label: next((w.get('enabled') for w in game.widgets() if w.get('label') == label), None)
     try:
@@ -3970,7 +3958,7 @@ def radial_editor(args, name):
 def radial_held_sneak(args, name):
     def seed(home):
         # Sneak held on its stick click, not toggled: what the menu must not let go of.
-        (home / 'horizon-controller.txt').write_text('toggleSneak:false\nbindLayout:1\n')
+        (home / 'sunrise-controller.txt').write_text('toggleSneak:false\nbindLayout:1\n')
     game = Game(args, name, world=True, seed=seed)
     check = Check()
     sneaking = lambda: 'ShiftLeft' in game.ctl('status')['keys']
@@ -4013,7 +4001,7 @@ def radial_held_sneak(args, name):
 def radial_focus_background(args, name):
     def seed(home):
         # The pad keeps playing without the window's focus: the menu still ends with it.
-        (home / 'horizon-controller.txt').write_text('playInBackground:true\nbindLayout:2\n')
+        (home / 'sunrise-controller.txt').write_text('playInBackground:true\nbindLayout:2\n')
     game = Game(args, name, world=True, seed=seed)
     check = Check()
     try:
@@ -4040,10 +4028,10 @@ def radial_focus_background(args, name):
 
 def radial_unavailable(args, name):
     def seed(home):
-        # One page: Emote up, Commands right.
-        (home / 'horizon-controller.txt').write_text(
-            'bindLayout:2\nradial_0_name:horizon.radial.page.general\nradial_0_slots:key.emote,,key.command,,,,,\n')
-    game = Game(args, name, world=True, seed=seed, env={'HORIZON_COSMETICS': '0'})
+        # One page: Quick Actions up, Commands right.
+        (home / 'sunrise-controller.txt').write_text(
+            'bindLayout:2\nradial_0_name:sunrise.radial.page.general\nradial_0_slots:key.quickActions,,key.command,,,,,\n')
+    game = Game(args, name, world=True, seed=seed)
     check = Check()
     try:
         game.ctl('pad', 'focus', 'true')
@@ -4052,7 +4040,7 @@ def radial_unavailable(args, name):
         hold_opener(game)
         aim(game, 0, 1)
         state = radial(game)
-        check(state['pages'] == 1 and state['slots'][0] == 'horizon:emote', f'not the saved page: {state}')
+        check(state['pages'] == 1 and state['slots'][0] == 'key.quickActions', f'not the saved page: {state}')
         check(state['selected'] == 0, f'up selected {state["selected"]}')
         check(state['available'][0] is False and state['available'][2] is True, f"available: {state['available']}")
         shot(game, 'radial_single_page_unavailable')
@@ -4076,7 +4064,7 @@ def radial_unavailable(args, name):
 
 def radial_old_file(args, name):
     def seed(home):
-        (home / 'horizon-controller.txt').write_text('vibration:false\n')
+        (home / 'sunrise-controller.txt').write_text('vibration:false\n')
     game = Game(args, name, world=True, seed=seed)
     check = Check()
     try:
@@ -4097,7 +4085,7 @@ def seeded_radial(text, env=None):
     def wrap(body):
         def case(args, name):
             game = Game(args, name, world=True, env=env,
-                        seed=lambda home: (home / 'horizon-controller.txt').write_text(text))
+                        seed=lambda home: (home / 'sunrise-controller.txt').write_text(text))
             check = Check()
             try:
                 game.ctl('pad', 'focus', 'true')
@@ -4110,7 +4098,7 @@ def seeded_radial(text, env=None):
     return wrap
 
 
-@seeded_radial('bindLayout:2\nradial_0_name:horizon.radial.page.general\nradial_0_slots:key.inventory,,,,,,,\n')
+@seeded_radial('bindLayout:2\nradial_0_name:sunrise.radial.page.general\nradial_0_slots:key.inventory,,,,,,,\n')
 def radial_commit_screen(game, check):
     hold_opener(game)
     aim(game, 0, 1)
@@ -4334,7 +4322,7 @@ def radial_either_takeover(game, check):
 def radial_stick_back(args, name):
     """Selects With stepped from Left (Y opening it) back to Right: D-pad Right opens it again. Right and Left
     step the row, as every shell choice."""
-    seed = lambda home: (home / 'horizon-controller.txt').write_text(
+    seed = lambda home: (home / 'sunrise-controller.txt').write_text(
         'bindLayout:2\nradialStick:left\nbind_pad.radial:north\n')
     game = Game(args, name, world=True, seed=seed)
     check = Check()
@@ -4412,7 +4400,7 @@ def radial_status_rows(args, name):
     return check.failures
 
 # One page: Hide HUD up, Commands right, the rest empty.
-HIDE_HUD_SEED = ('bindLayout:2\nradial_0_name:horizon.radial.page.general\n'
+HIDE_HUD_SEED = ('bindLayout:2\nradial_0_name:sunrise.radial.page.general\n'
                  'radial_0_slots:key.toggleGui,,key.command,,,,,\n')
 
 
@@ -4652,7 +4640,7 @@ CASES = {'idle_a': idle_a, 'idle_b': idle_b, 'idle_x': idle_x, 'release': releas
          'pad_release': pad_release, 'pause_y': pause_y, 'settings': settings, 'create_world': create_world,
          'world_options': world_options, 'key_row_b': key_row_b, 'lock_question': lock_question,
          'optimize_world': optimize_world, 'pointer_screens': pointer_screens, 'settings_pages': settings_pages,
-         'split_setup': split_setup, 'actions_follow_screen': actions_follow_screen, 'glyphs_title': glyphs_title,
+         'actions_follow_screen': actions_follow_screen, 'glyphs_title': glyphs_title,
          'glyph_on_field': glyph_on_field, 'settings_apply': settings_apply, 'long_label': long_label,
          'tabs_create_world': tabs_create_world,
          'tab_release': tab_release,
@@ -4740,9 +4728,9 @@ CASES = {'idle_a': idle_a, 'idle_b': idle_b, 'idle_x': idle_x, 'release': releas
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--game', type=Path, default=lab.cargo_target() / f'fast/horizon-client{EXE}')
-    parser.add_argument('--ctl', type=Path, default=lab.cargo_target() / f'fast/horizon-ctl{EXE}')
-    parser.add_argument('--resources', type=Path, default=ROOT / '.local/horizon-client/26.3')
+    parser.add_argument('--game', type=Path, default=lab.cargo_target() / f'fast/sunrise-client{EXE}')
+    parser.add_argument('--ctl', type=Path, default=lab.cargo_target() / f'fast/sunrise-ctl{EXE}')
+    parser.add_argument('--resources', type=Path, default=ROOT / '.local/sunrise-client/26.3')
     parser.add_argument('--only', nargs='*', choices=sorted(CASES), help='run only these cases')
     parser.add_argument('--shots', type=Path, help='keep screenshots in this folder')
     parser.add_argument('--jobs', type=int, default=1, help='cases at once; each has its own game and home')

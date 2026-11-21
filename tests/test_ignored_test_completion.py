@@ -11,6 +11,9 @@ from unittest.mock import patch
 
 from tools.ci import ignored_tests
 
+# What precedes a test run's own command: GNU timeout and the run's limit, where the platform has them.
+LIMIT = len(ignored_tests.time_limit())
+
 
 def target(count, results, summary):
     return f"     Running unittests src/lib.rs (target/debug/deps/example)\nrunning {count} tests\n{results}{summary}"
@@ -28,6 +31,16 @@ class IgnoredTests(unittest.TestCase):
             result = ignored_tests.run("example", [])
         return result, log.getvalue()
 
+    def test_test_threads_get_the_harnesses_stack(self):
+        # A server Game held by value overflowed libtest's 2 MiB test thread (#3744).
+        output = target(1, "test first ... ok\n", summary(passed=1))
+        with patch.object(ignored_tests.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)) as run, \
+                contextlib.redirect_stdout(io.StringIO()):
+            ignored_tests.run("sunrise-client", [])
+        stacks = [call.kwargs["env"].get("RUST_MIN_STACK") for call in run.call_args_list if call.args[0][LIMIT:LIMIT + 2] == ["cargo", "test"]]
+        self.assertTrue(stacks)
+        self.assertEqual(set(stacks), {str(16 * 1024 * 1024)})
+
     def test_success_and_multiple_targets(self):
         output = target(1, "test first ... ok\n", summary(passed=1))
         output += target(2, "test second ... ok\ntest third ... ok\n", summary(passed=2))
@@ -37,8 +50,8 @@ class IgnoredTests(unittest.TestCase):
         self.assertIn("cargo exit 0", log)
 
     def test_a_target_whose_source_is_in_another_package_folder_completes(self):
-        # horizon-client-lib's `[[test]]` targets point at ../horizon-client/tests/, as the daily-rows leg runs them.
-        output = ("     Running ../horizon-client/tests/lan_bot.rs (target/debug/deps/lan_bot-0123)\nrunning 1 test\n"
+        # sunrise-client-lib's `[[test]]` targets point at ../sunrise-client/tests/, as the daily-rows leg runs them.
+        output = ("     Running ../sunrise-client/tests/lan_bot.rs (target/debug/deps/lan_bot-0123)\nrunning 1 test\n"
                   "test synced ... ok\n" + summary(passed=1))
         result, _ = self.run_output(output)
         self.assertEqual(result, {"synced": True})
@@ -82,15 +95,53 @@ class IgnoredTests(unittest.TestCase):
             self.assertEqual(ignored_tests.main(["example"], str(path)), 1)
             self.assertEqual(json.loads(path.read_text())["incomplete"], [{"shard": "example"}])
 
+    def test_the_tests_a_stopped_run_reported_keep_their_verdicts(self):
+        def run(package, skip, number=None, count=None):
+            return ignored_tests.stopped("a test process crashed", 0.0, None, results={"fine": True, "broken": False})
+
+        known = {("example", "gone"): None}
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(ignored_tests, "CGROUP", Path(folder)), \
+                patch.object(ignored_tests, "known_failures", return_value=known), \
+                patch.object(ignored_tests, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+            path = Path(folder) / "report.json"
+            self.assertEqual(ignored_tests.main(["example"], str(path)), 1)
+            report = json.loads(path.read_text())
+        self.assertEqual(report["passed"], [{"package": "example", "test": "fine"}])
+        self.assertEqual({(item["test"], item["kind"]) for item in report["problems"]}, {("broken", "failed")})
+        self.assertEqual([item["shard"] for item in report["incomplete"]], ["example"])
+
+    def test_a_client_half_runs_as_batches_of_fresh_processes_and_a_killed_one_stops_none_of_the_others(self):
+        calls = []
+
+        def run(package, skip, number=None, count=None):
+            calls.append((number, count))
+            if number == 3:
+                return ignored_tests.stopped("a test process crashed", 0.0, None, results={"third::passed": True})
+            return {f"batch{number}::test": True}
+
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(ignored_tests, "CGROUP", Path(folder)), \
+                patch.object(ignored_tests, "known_failures", return_value={}), \
+                patch.object(ignored_tests, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+            path = Path(folder) / "report.json"
+            self.assertEqual(ignored_tests.main(["sunrise-client#1of2"], str(path)), 1)
+            report = json.loads(path.read_text())
+        # Half 1 of 2 is every test whose leg of 8 is odd: legs 1, 3, 5 and 7, one process each, in that order.
+        self.assertEqual(calls, [(1, 8), (3, 8), (5, 8), (7, 8)])
+        self.assertEqual({item["test"] for item in report["passed"]},
+                         {"batch1::test", "third::passed", "batch5::test", "batch7::test"})
+        self.assertEqual([item["shard"] for item in report["incomplete"]], ["sunrise-client#1of2"])
+
     def test_a_test_process_killed_for_memory_reports_signal_memory_time_and_what_still_ran(self):
-        # The shape of the first daily's horizon-client#1of2 (run 43499359519): the library's test process killed by
+        # The shape of the first daily's sunrise-client#1of2 (run 43499359519): the library's test process killed by
         # the out-of-memory killer with one test past 60 s; the later targets finished; cargo exits 101.
         stuck = "game::native_datafix_tests::a_mods_host_upgrades_old_data_and_refuses_by_name"
-        output = ("     Running unittests src/lib.rs (target/debug/deps/horizon_client-0123)\nrunning 3 tests\n"
+        output = ("     Running unittests src/lib.rs (target/debug/deps/sunrise_client-0123)\nrunning 3 tests\n"
                   "test game::a ... ok\ntest game::b ... ok\n"
                   f"test {stuck} has been running for over 60 seconds\n"
                   "error: test failed, to rerun pass `--lib`\n\nCaused by:\n  process didn't exit successfully: "
-                  "`/w/target/debug/deps/horizon_client-0123 --include-ignored --exact` (signal: 9, SIGKILL: kill)\n"
+                  "`/w/target/debug/deps/sunrise_client-0123 --include-ignored --exact` (signal: 9, SIGKILL: kill)\n"
                   + target(1, "test other::c ... ok\n", summary(passed=1)))
         gib = 32 * 1024 ** 3
         with tempfile.TemporaryDirectory() as cgroup:
@@ -106,7 +157,7 @@ class IgnoredTests(unittest.TestCase):
             with patch.object(ignored_tests, "CGROUP", Path(cgroup)), \
                     patch.object(ignored_tests.subprocess, "run", side_effect=execute), \
                     contextlib.redirect_stdout(io.StringIO()):
-                self.assertIsNone(ignored_tests.run("horizon-client", []))
+                self.assertIsNone(ignored_tests.run("sunrise-client", []))
         why = dict(ignored_tests._stopped)
         self.assertGreaterEqual(why.pop("wall_seconds"), 0)
         self.assertEqual(why, {
@@ -129,6 +180,40 @@ class IgnoredTests(unittest.TestCase):
         self.assertEqual(ignored_tests._stopped["still_running"],
                          [f"identity withheld (longer than {ignored_tests.IDENTITY_CHARS} characters)"])
 
+    def test_a_run_stopped_at_its_time_limit_names_the_tests_still_running(self):
+        # A hung test held both client halves until the job limit cancelled them, naming nothing (daily 44814607973).
+        output = (target(3, "test done ... ok\ntest game::dragon::hangs has been running for over 60 seconds\n"
+                            "test game::wind::finished_late has been running for over 60 seconds\n"
+                            "test game::wind::finished_late ... ok\n", ""))
+        with patch.object(ignored_tests.subprocess, "run",
+                          return_value=subprocess.CompletedProcess([], ignored_tests.TIMED_OUT, output)) as run, \
+                contextlib.redirect_stdout(io.StringIO()) as log:
+            self.assertIsNone(ignored_tests.run("example", []))
+        if LIMIT:
+            self.assertEqual(run.call_args.args[0][:LIMIT], ["timeout", f"{ignored_tests.TEST_RUN_LIMIT}s"])
+        self.assertEqual(ignored_tests._stopped["reason"], "tests still running at the time limit (a hung test)")
+        self.assertEqual(ignored_tests._stopped["ended_by"], f"the {ignored_tests.TEST_RUN_LIMIT} s limit")
+        self.assertEqual(ignored_tests._stopped["still_running"], ["game::dragon::hangs"])
+        # What finished before the limit still counts.
+        self.assertEqual(ignored_tests._reported, {"done": True, "game::wind::finished_late": True})
+        self.assertIn("still running past 60 s: game::dragon::hangs", log.getvalue())
+
+    def test_one_executable_stopped_at_the_limit_stops_the_daily_rows_run_but_not_the_next_executable(self):
+        ran = []
+
+        def execute(command, **_):
+            executable = command[LIMIT]
+            ran.append(Path(executable).name)
+            code = ignored_tests.TIMED_OUT if executable.endswith("/a") else 0
+            return subprocess.CompletedProcess(command, code, "")
+
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(ignored_tests.ignored_shards, "workspace_members", return_value={"pkg": (folder, ".")}), \
+                patch.object(ignored_tests.subprocess, "run", side_effect=execute):
+            done = ignored_tests.run_binaries("pkg", {"lib": f"{folder}/a", "test:b": f"{folder}/b"}, ["--ignored"], {})
+        self.assertEqual(ran, ["a", "b"])
+        self.assertEqual(done.returncode, ignored_tests.TIMED_OUT)
+
     def test_the_report_names_the_run_in_progress_before_it_ends(self):
         # A job stopped at its time limit kills this script too: what it wrote before the run is what is uploaded.
         with tempfile.TemporaryDirectory() as folder:
@@ -145,7 +230,7 @@ class IgnoredTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text())["incomplete"], [])
 
     def test_client_lib_halves_run_serially_and_preserve_failure_policy(self):
-        package = "horizon-client-lib"
+        package = "sunrise-client-lib"
         names = [f"suite::case_{n}" for n in range(20)]
         seen = []
 
@@ -163,20 +248,20 @@ class IgnoredTests(unittest.TestCase):
         self.assertIn(f"{names[0]}: failed, and isn't a known failure", log.getvalue())
 
     def test_a_test_needing_a_harness_input_is_refused_by_name_without_it(self):
-        inputs = {("example", "needs_input"): "HORIZON_EXAMPLE_INPUT"}
+        inputs = {("example", "needs_input"): "SUNRISE_EXAMPLE_INPUT"}
         with patch.dict(os.environ), patch.object(ignored_tests, "known_failures", return_value={}), \
                 patch.object(ignored_tests, "harness_inputs", return_value=inputs), \
                 patch.object(ignored_tests, "run", return_value={"other": True}) as execute, \
                 contextlib.redirect_stdout(io.StringIO()) as log:
-            os.environ.pop("HORIZON_EXAMPLE_INPUT", None)
+            os.environ.pop("SUNRISE_EXAMPLE_INPUT", None)
             self.assertEqual(ignored_tests.main(["example"]), 0)
         self.assertEqual(execute.call_args.args, ("example", ["needs_input"]))
-        self.assertIn("example needs_input: refused, needs HORIZON_EXAMPLE_INPUT; run by the parity harness\n",
+        self.assertIn("example needs_input: refused, needs SUNRISE_EXAMPLE_INPUT; run by the parity harness\n",
                       log.getvalue())
 
     def test_a_test_needing_a_harness_input_runs_and_must_pass_with_it(self):
-        inputs = {("example", "needs_input"): "HORIZON_EXAMPLE_INPUT"}
-        with patch.dict(os.environ, {"HORIZON_EXAMPLE_INPUT": "/input"}), \
+        inputs = {("example", "needs_input"): "SUNRISE_EXAMPLE_INPUT"}
+        with patch.dict(os.environ, {"SUNRISE_EXAMPLE_INPUT": "/input"}), \
                 patch.object(ignored_tests, "known_failures", return_value={}), \
                 patch.object(ignored_tests, "harness_inputs", return_value=inputs), \
                 patch.object(ignored_tests, "run", return_value={"needs_input": False}) as execute, \
@@ -194,30 +279,89 @@ class IgnoredTests(unittest.TestCase):
             self.assertNotIn((package, test), ignored_tests.known_failures())
 
     def test_explicit_client_lib_selection_is_not_split_again(self):
-        with patch.object(ignored_tests, "known_failures", return_value={}), \
-                patch.object(ignored_tests, "daily_rows", return_value=[]), \
+        with patch.object(ignored_tests, "listed_entries", return_value=[]), \
                 patch.object(ignored_tests, "run", return_value={}) as execute:
-            self.assertEqual(ignored_tests.main(["horizon-client-lib#2of3"]), 0)
-        self.assertEqual(execute.call_args.args, ("horizon-client-lib", [], 2, 3))
+            self.assertEqual(ignored_tests.main(["sunrise-client-lib#2of3"]), 0)
+        self.assertEqual(execute.call_args.args, ("sunrise-client-lib", [], 2, 3))
 
-    def daily_main(self, shards, rows, run):
+    def daily_main(self, shards, rows, run, binaries=None):
         report = Path(tempfile.mkdtemp()) / "report.json"
         with patch.object(ignored_tests, "known_failures", return_value={}), \
                 patch.object(ignored_tests, "harness_inputs", return_value={}), \
                 patch.object(ignored_tests, "listed_entries", return_value=rows), \
+                patch.object(ignored_tests, "built_test_binaries", return_value=binaries or {}) as build, \
                 patch.object(ignored_tests, "run", side_effect=run) as execute, \
                 contextlib.redirect_stdout(io.StringIO()) as log:
             code = ignored_tests.main(shards, str(report))
+        self.build_calls = build.call_count
         return code, execute, log.getvalue(), json.loads(report.read_text())
 
+    def test_the_daily_rows_leg_builds_the_workspace_tests_once_and_runs_what_that_build_made(self):
+        rows = [ignored_tests.Row("sunrise-relay", "a", "test:tunnel", "daily", "daily-sunrise-relay.txt", "slow"),
+                ignored_tests.Row("sunrise-core", "c", "lib", "daily", "daily-sunrise-core.txt", "slow"),
+                ignored_tests.Row("sunrise-world", "e", "test:integration", "daily", "daily-sunrise-world.txt", "slow"),
+                ignored_tests.Row("sunrise-client-lib", "f", "test:lan_bot", "daily", "daily-sunrise-client-lib.txt",
+                                  "slow")]
+        # sunrise-world's target didn't build: its rows build and report through cargo test, as before.
+        binaries = {("sunrise-relay", "test:tunnel"): "/t/tunnel-1", ("sunrise-core", "lib"): "/t/sunrise_core-2",
+                    ("sunrise-client-lib", "test:lan_bot"): "/t/lan_bot-3"}
+        code, execute, _, _ = self.daily_main(
+            ["daily-rows"], rows, lambda package, skip, only, binaries: {name: True for name in only[1]}, binaries)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.build_calls, 1)
+        self.assertEqual({call.args[0]: call.kwargs["binaries"] for call in execute.call_args_list}, {
+            "sunrise-client-lib": None,  # its rows build at opt-level 3 (OWN_BUILD)
+            "sunrise-core": {"lib": "/t/sunrise_core-2"},
+            "sunrise-relay": {"test:tunnel": "/t/tunnel-1"},
+            "sunrise-world": None,
+        })
+
+    def test_the_workspace_test_build_maps_each_member_target_to_its_executable(self):
+        relay = str((ignored_tests.ROOT / ignored_tests.ignored_shards.workspace_members()["sunrise-relay"][0]
+                     / "Cargo.toml"))
+        records = [
+            {"reason": "compiler-artifact", "manifest_path": relay, "executable": "/t/sunrise_relay-1",
+             "profile": {"test": True}, "target": {"kind": ["lib"], "name": "sunrise_relay"}},
+            {"reason": "compiler-artifact", "manifest_path": relay, "executable": "/t/it-2",
+             "profile": {"test": True}, "target": {"kind": ["test"], "name": "it"}},
+            {"reason": "compiler-artifact", "manifest_path": relay, "executable": "/t/relay-3",
+             "profile": {"test": False}, "target": {"kind": ["bin"], "name": "relay"}},
+            {"reason": "compiler-artifact", "manifest_path": "/elsewhere/Cargo.toml", "executable": "/t/dep-4",
+             "profile": {"test": True}, "target": {"kind": ["lib"], "name": "dep"}},
+            {"reason": "build-finished", "success": True},
+        ]
+        out = "\n".join(map(json.dumps, records)) + "\n"
+        with patch.object(ignored_tests.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, out)) as build, \
+                contextlib.redirect_stdout(io.StringIO()):
+            binaries = ignored_tests.built_test_binaries()
+        self.assertEqual(binaries, {("sunrise-relay", "lib"): "/t/sunrise_relay-1",
+                                    ("sunrise-relay", "test:it"): "/t/it-2"})
+        command = build.call_args.args[0]
+        self.assertEqual(command[:command.index("--message-format=json")], ignored_tests.WORKSPACE_TEST_BUILD)
+
+    def test_prebuilt_executables_report_like_cargo_test_and_a_killed_one_is_a_crash(self):
+        with tempfile.TemporaryDirectory() as folder:
+            passing, killed = Path(folder, "passes"), Path(folder, "killed")
+            passing.write_text("#!/bin/sh\necho 'running 1 tests'\necho 'test a ... ok'\n"
+                               "echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out'\n")
+            killed.write_text("#!/bin/sh\necho 'running 1 tests'\nkill -9 $$\n")
+            for script in (passing, killed):
+                script.chmod(0o755)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(ignored_tests.run("sunrise-relay", [], only=(["lib"], ["a"]),
+                                                   binaries={"lib": str(passing)}), {"a": True})
+                self.assertIsNone(ignored_tests.run("sunrise-relay", [], only=(["lib", "test:it"], ["a", "b"]),
+                                                    binaries={"lib": str(passing), "test:it": str(killed)}))
+            self.assertEqual(ignored_tests._stopped["reason"], "a test process crashed")
+
     def test_daily_rows_of_a_shards_targets_must_run_and_pass_in_that_shard(self):
-        rows = [ignored_tests.Row("horizon-world", f"slow::{name}", "lib", "daily", "daily-horizon-world.txt", "slow")
+        rows = [ignored_tests.Row("sunrise-world", f"slow::{name}", "lib", "daily", "daily-sunrise-world.txt", "slow")
                 for name in ("passes", "fails", "gone")]
-        rows.append(ignored_tests.Row("horizon-world", "it::slow", "test:integration", "daily", "daily-horizon-world.txt", "slow"))
+        rows.append(ignored_tests.Row("sunrise-world", "it::slow", "test:integration", "daily", "daily-sunrise-world.txt", "slow"))
         code, execute, log, report = self.daily_main(
-            ["horizon-world"], rows, lambda *args, **kwargs: {"slow::passes": True, "slow::fails": False})
+            ["sunrise-world"], rows, lambda *args, **kwargs: {"slow::passes": True, "slow::fails": False})
         self.assertEqual(code, 1)
-        self.assertEqual(execute.call_args.args, ("horizon-world", []))
+        self.assertEqual(execute.call_args.args, ("sunrise-world", []))
         self.assertEqual(sorted((problem["test"], problem["kind"]) for problem in report["problems"]),
                          [("slow::fails", "failed"), ("slow::gone", "no-longer-runs")])
         self.assertNotIn("accepted failure", log)
@@ -226,85 +370,68 @@ class IgnoredTests(unittest.TestCase):
 
     def test_the_daily_rows_leg_runs_every_other_daily_row_by_package_and_target(self):
         rows = [
-            ignored_tests.Row("horizon-relay", "b", "test:tunnel", "daily", "daily-horizon-relay.txt", "slow"),
-            ignored_tests.Row("horizon-relay", "a", "test:tunnel", "daily", "daily-horizon-relay.txt", "slow"),
-            ignored_tests.Row("horizon-core", "c", "lib", "daily", "daily-horizon-core.txt", "slow"),
-            ignored_tests.Row("horizon-world", "d", "lib", "daily", "daily-horizon-world.txt", "slow"),
-            ignored_tests.Row("horizon-world", "e", "test:integration", "daily", "daily-horizon-world.txt", "slow"),
+            ignored_tests.Row("sunrise-relay", "b", "test:tunnel", "daily", "daily-sunrise-relay.txt", "slow"),
+            ignored_tests.Row("sunrise-relay", "a", "test:tunnel", "daily", "daily-sunrise-relay.txt", "slow"),
+            ignored_tests.Row("sunrise-core", "c", "lib", "daily", "daily-sunrise-core.txt", "slow"),
+            ignored_tests.Row("sunrise-world", "d", "lib", "daily", "daily-sunrise-world.txt", "slow"),
+            ignored_tests.Row("sunrise-world", "e", "test:integration", "daily", "daily-sunrise-world.txt", "slow"),
         ]
-        results = {("horizon-relay", "test:tunnel"): {"a": True, "b": True}, ("horizon-core", "lib"): {},
-                   ("horizon-world", "test:integration"): {"e": False}}
+        rows.append(ignored_tests.Row("sunrise-relay", "f", "lib", "daily", "daily-sunrise-relay.txt", "slow"))
+        results = {"sunrise-relay": {"a": True, "b": True, "f": True}, "sunrise-core": {},
+                   "sunrise-world": {"e": False}}
         code, execute, _, report = self.daily_main(
-            ["daily-rows"], rows, lambda package, skip, only: results[package, only[0]])
+            ["daily-rows"], rows, lambda package, skip, only, binaries: results[package])
         self.assertEqual(code, 1)
+        # One run per package, every target of it together.
         self.assertEqual([(call.args[0], call.kwargs["only"]) for call in execute.call_args_list], [
-            ("horizon-core", ("lib", ["c"])),
-            ("horizon-relay", ("test:tunnel", ["a", "b"])),
-            ("horizon-world", ("test:integration", ["e"])),
+            ("sunrise-core", (["lib"], ["c"])),
+            ("sunrise-relay", (["lib", "test:tunnel"], ["f", "a", "b"])),
+            ("sunrise-world", (["test:integration"], ["e"])),
         ])
         self.assertEqual(sorted((problem["package"], problem["test"], problem["kind"]) for problem in report["problems"]),
-                         [("horizon-core", "c", "no-longer-runs"), ("horizon-world", "e", "failed")])
-        self.assertEqual(sorted(entry["test"] for entry in report["passed"]), ["a", "b"])
+                         [("sunrise-core", "c", "no-longer-runs"), ("sunrise-world", "e", "failed")])
+        self.assertEqual(sorted(entry["test"] for entry in report["passed"]), ["a", "b", "f"])
 
     def test_a_daily_rows_run_selects_exactly_its_ignored_tests_of_one_target(self):
         output = target(2, "test a ... ok\ntest b ... ok\n", summary(passed=2))
         with patch.object(ignored_tests.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)) as execute, \
-                patch.object(ignored_tests, "workspace_features", return_value={"horizon-relay": ["fixture", "index"]}), \
+                patch.object(ignored_tests, "workspace_features", return_value={"sunrise-relay": ["fixture", "index"]}), \
                 contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(ignored_tests.run("horizon-relay", [], only=("test:tunnel", ["a", "b"])), {"a": True, "b": True})
-        command = execute.call_args.args[0]
+            self.assertEqual(ignored_tests.run("sunrise-relay", [], only=(["lib", "test:tunnel"], ["a", "b"])),
+                             {"a": True, "b": True})
+        command = execute.call_args.args[0][LIMIT:]
         # The features the workspace build turns on, as verify compiled the test.
         self.assertEqual(command[:command.index("--")],
-                         ["cargo", "test", "-p", "horizon-relay", "--features", "fixture,index", "--test", "tunnel"])
+                         ["cargo", "test", "-p", "sunrise-relay", "--features", "fixture,index", "--lib", "--test", "tunnel",
+                          "--no-fail-fast"])
         self.assertEqual(command[command.index("--") + 1:], ["--ignored", "--exact", "--test-threads=4", "a", "b"])
 
-    def test_each_daily_rows_leg_runs_only_its_workspaces_groups(self):
-        rows = [ignored_tests.Row("horizon-relay", "a", "test:tunnel", "daily", "daily-horizon-relay.txt", "slow"),
-                ignored_tests.Row("horizon-launcher", "b", "lib", "daily", "daily-horizon-launcher.txt", "child-process")]
-        for leg, expected in (("daily-rows", [("horizon-relay", ("test:tunnel", ["a"]))]),
-                              ("daily-rows-launcher", [("horizon-launcher", ("lib", ["b"]))])):
-            _, execute, _, _ = self.daily_main([leg], rows, lambda package, skip, only: {only[1][0]: True})
-            self.assertEqual([(call.args[0], call.kwargs["only"]) for call in execute.call_args_list], expected)
+    def test_the_daily_rows_leg_runs_its_workspaces_groups(self):
+        rows = [ignored_tests.Row("sunrise-relay", "a", "test:tunnel", "daily", "daily-sunrise-relay.txt", "slow")]
+        _, execute, _, _ = self.daily_main(["daily-rows"], rows, lambda package, skip, only, binaries: {only[1][0]: True})
+        self.assertEqual([(call.args[0], call.kwargs["only"]) for call in execute.call_args_list],
+                         [("sunrise-relay", (["test:tunnel"], ["a"]))])
 
     def test_a_package_that_needs_something_built_gets_it_before_its_daily_tests(self):
         output = target(1, "test holder::tests::slow ... ok\n", summary(passed=1))
-        prepare = ignored_tests.ignored_shards.PREPARE["horizon-mod-package"]
+        prepare = ignored_tests.ignored_shards.PREPARE["sunrise-mod-package"]
         self.assertEqual(prepare[-2:], ["--example", "holder_actor"])
         with patch.object(ignored_tests.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)) as execute, \
                 patch.object(ignored_tests, "workspace_features", return_value={}), contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(ignored_tests.run("horizon-mod-package", [], only=("lib", ["holder::tests::slow"])),
+            self.assertEqual(ignored_tests.run("sunrise-mod-package", [], only=(["lib"], ["holder::tests::slow"])),
                              {"holder::tests::slow": True})
         self.assertEqual(execute.call_args_list[0].args[0], prepare)
-        self.assertEqual(execute.call_args_list[1].args[0][:2], ["cargo", "test"])
+        self.assertEqual(execute.call_args_list[1].args[0][LIMIT:LIMIT + 2], ["cargo", "test"])
         # A failed build stops the run, saying why, before any test runs.
         with patch.object(ignored_tests.subprocess, "run", return_value=subprocess.CompletedProcess([], 101, "error: x\n")) as execute, \
                 patch.object(ignored_tests, "workspace_features", return_value={}), contextlib.redirect_stdout(io.StringIO()):
-            self.assertIsNone(ignored_tests.run("horizon-mod-package", [], only=("lib", ["holder::tests::slow"])))
+            self.assertIsNone(ignored_tests.run("sunrise-mod-package", [], only=(["lib"], ["holder::tests::slow"])))
         self.assertEqual(execute.call_count, 1)
         self.assertEqual(ignored_tests._stopped["reason"], "what the tests need could not be built")
-        # verify and the launcher job build it with the same command.
+        # verify builds it with the same command.
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/dyna-ci.yml").read_text()
-        self.assertEqual(workflow.count("ignored_shards.py --prepare horizon-mod-package"), 2)
+        self.assertEqual(workflow.count("ignored_shards.py --prepare sunrise-mod-package"), 1)
         self.assertNotIn("--example holder_actor", workflow)
-
-    def test_a_launcher_daily_row_runs_from_the_launcher_workspace_against_its_lockfile(self):
-        output = target(1, "test logs::slow ... ok\n", summary(passed=1))
-        with patch.object(ignored_tests.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)) as execute, \
-                patch.object(ignored_tests, "workspace_features", return_value={"horizon-launcher": ["default"]}) as features, \
-                contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(ignored_tests.run("horizon-launcher", [], only=("test:logs", ["logs::slow"])),
-                             {"logs::slow": True})
-        features.assert_called_once_with("launcher")
-        command = execute.call_args.args[0]
-        self.assertEqual(command[:command.index("--")],
-                         ["cargo", "test", "--locked", "-p", "horizon-launcher", "--features", "default", "--test", "logs"])
-        self.assertEqual(execute.call_args.kwargs["cwd"], ignored_tests.ROOT / "launcher")
-        # A game package still runs from the repository root.
-        with patch.object(ignored_tests.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)) as execute, \
-                patch.object(ignored_tests, "workspace_features", return_value={}), contextlib.redirect_stdout(io.StringIO()):
-            ignored_tests.run("horizon-relay", [], only=("test:tunnel", ["logs::slow"]))
-        self.assertEqual(execute.call_args.kwargs["cwd"], ignored_tests.ROOT / ".")
-        self.assertNotIn("--locked", execute.call_args.args[0])
 
     def test_a_parent_that_crashes_after_its_childs_same_count_summary_did_not_complete(self):
         # A fixture reruns its own test in a child, which reports FAILED and a one-test summary;
@@ -401,7 +528,7 @@ def leg_names(count=2):
 class Legs(unittest.TestCase):
     def test_worldgen_shard_optimizes_listing_and_execution_without_changing_parent(self):
         output = target(1, "test suite::a ... ok\n", summary(passed=1))
-        for package, optimization in [("horizon-client-lib", "3"), ("example", "0")]:
+        for package, optimization in [("sunrise-client-lib", "3"), ("example", "0")]:
             with self.subTest(package=package), patch.dict(os.environ, CARGO_PROFILE_TEST_OPT_LEVEL="0"):
                 calls = []
 
@@ -418,10 +545,10 @@ class Legs(unittest.TestCase):
                 self.assertEqual(os.environ["CARGO_PROFILE_TEST_OPT_LEVEL"], "0")
 
     def test_shard_names(self):
-        self.assertEqual(ignored_tests.parse_shard("horizon-client#2of3"), ("horizon-client", 2, 3))
-        self.assertEqual(ignored_tests.parse_shard("horizon-client-lib"), ("horizon-client-lib", None, None))
+        self.assertEqual(ignored_tests.parse_shard("sunrise-client#2of3"), ("sunrise-client", 2, 3))
+        self.assertEqual(ignored_tests.parse_shard("sunrise-client-lib"), ("sunrise-client-lib", None, None))
         with self.assertRaises(SystemExit):
-            ignored_tests.parse_shard("horizon-client#3of2")
+            ignored_tests.parse_shard("sunrise-client#3of2")
 
     def test_every_test_is_in_exactly_one_leg(self):
         for index in range(500):
@@ -683,6 +810,16 @@ class Legs(unittest.TestCase):
         code, log = self.judge({("example", mine[1]): None}, {mine[0]: True})
         self.assertEqual(code, 1)
         self.assertIn("no longer runs", log)
+
+    def test_a_windows_row_is_not_expected_by_a_linux_leg(self):
+        windows = ignored_tests.Row("example", "exporters_log", "test:hidden", "daily", "daily-example.txt", "windows")
+        mine = leg_names()[1][0]
+        with patch.object(ignored_tests, "listed_entries", return_value=[windows]):
+            self.assertEqual(ignored_tests.daily_rows(), [])
+            self.assertEqual(ignored_tests.daily_rows_groups([windows]), {})
+            code, log = self.judge({}, {mine: True})
+        self.assertEqual(code, 0, log)
+        self.assertNotIn("no longer runs", log)
 
     def test_a_new_failure_and_an_incomplete_leg_fail(self):
         mine = leg_names()[1][0]

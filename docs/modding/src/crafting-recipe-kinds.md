@@ -3,8 +3,19 @@
 A recipe file's `type` is a **serializer ID**, not its recipe type. These are two
 independent registries. All crafting serializers produce `minecraft:crafting`,
 which the engine registers. Each mod registers its own serializer IDs and any new
-recipe type IDs in namespaces it owns. Duplicate serializer IDs and duplicate
+recipe type IDs in namespaces it owns (including namespaces of content packages
+delegated to it through `served_by` with `[native] serves_content = true`).
+Duplicate serializer IDs and duplicate
 recipe type IDs refuse startup, naming the ID.
+
+A `type` written without a namespace (`crafting_shaped`, or `:crafting_shaped`)
+means `minecraft`, as everywhere an identifier is read; it is never the recipe
+file's own namespace. The id is decoded once, when the file is read, so filters,
+brewing and clients all see `minecraft:crafting_shaped`. An id that is not a
+valid identifier (`Crafting_shaped`), a missing or non-string `type` and a recipe
+that is not a JSON object are each refused by name; a valid id no mod registered
+is refused separately as an unregistered serializer. Every refusal is listed in
+the one report of recipes that failed to load.
 
 Register crafting code in `Hooks::register`, which receives `RegistrationContext`:
 
@@ -14,17 +25,58 @@ r.register_crafting_recipe_serializer("my_mod:diagonal", Diagonal);
 
 Implement `CraftingRecipeKind`. Its mod-owned `Value` must supply
 `Some(CraftingRecipeCodec::wire())` from `codec` and implement `Wire`; a missing
-codec refuses startup on native and wasm alike. `decode` reads the recipe JSON
-object with `type` removed. `write` writes an equivalent JSON object for Horizon
+codec refuses startup. `decode` reads the recipe JSON
+object with `type` removed. `write` writes an equivalent JSON object for Sunrise
 client synchronization. Known serializers that refuse malformed data skip that
 recipe alone, with the file and serializer in the diagnostic.
 
-`matches`, `assemble` and `remaining_items` receive the decoded value and an owned
-`CraftingGrid`: width, height and row-major optional stacks, including empty
-cells. Callbacks must be pure and deterministic. The engine retains the owning
+`matches` and `assemble` take `&dyn LoopContext` before the decoded value and an
+owned `CraftingGrid`: width, height and row-major optional stacks, including empty
+cells. `remaining_items` instead takes `&dyn CraftingRemainders`, which extends
+`LoopContext` with `default_remainder(cell: u32) -> Option<ItemStack>`.
+Callbacks must be pure and deterministic. The engine retains the owning
 handler with its value. Counts must be 1 through 99; encoded values are limited
 to 1 MiB. Invalid result keys/counts refuse the result. Invalid remainder keys,
 counts or vector lengths use default item remainders.
+
+## Frozen tag reads and default remainders
+
+All three callbacks read the same owning resource generation's authoritative item
+tags with `is_in_tag(item, tag) -> Option<bool>`, `item_count(tag) -> Option<usize>`
+and `item_at(tag, index) -> Option<ItemKey>`. Count and index preserve the server's
+member order without allocating an iterator or member list. Reads allocate
+nothing and do no file I/O. `None` means tags or item keys are not ready (including
+client tags not yet synced); a matcher should then not match. Once loaded, an
+unknown tag returns `Some(false)` membership and `Some(0)` members; an out-of-range
+index returns `None`. Reload/sync publishes a new snapshot, not a mutable live tag
+service, so one callback cannot mix generations.
+
+`RegistrationContext` does **not** resolve `TagKey`s. Resolve an identifier through
+`host.tags().key(&id)` in a hook that supplies a `Host` (for example `tags_updated`),
+and retain the process-lifetime key in state shared with the registered kind.
+Matching can return false until that state has its key. Keep the key across
+reloads; only the generation's membership changes. Registration-time key
+resolution is not part of this API.
+
+`default_remainder(cell)` reads that cell's original, **pre-take** stack and runs
+the caller's existing default rule, including `ItemPart::crafting_remainder` on
+the server. Cell indices are zero-based row-major indices within the actual
+rectangular grid, not the engine's padded square. Empty and out-of-range cells
+return `None`. The result is an owned, component-bearing stack: unlike tag reads,
+this operation may allocate. It does not call the recipe kind recursively.
+
+A kind can mix defaults, custom stacks and no remainder in one result:
+
+```rust,ignore
+let mut result = vec![None; grid.cells.len()];
+result[0] = context.default_remainder(0);
+result[1] = Some(custom_stack);
+Some(result)
+```
+
+Returning `None` for the whole vector still requests the existing all-default
+behavior. Clients retain their data-only default prediction; the server remains
+authoritative for ItemPart behavior.
 
 The server rechecks the current grid before a take. It asks remainders once per
 take, including each shift-click iteration, before consuming inputs. A remainder
@@ -55,13 +107,13 @@ Every engine serializer is registered too, including serializers in the
 `minecraft:` namespace. An **unregistered serializer refuses the entire recipe
 load**, naming the file and ID. Dedicated startup stops; a failed `/reload`
 retains the old recipe table. There is no raw fallback for unknown IDs.
-Content mods (`.hmod`) shipping mod recipe JSON need the corresponding registered
+Content mods (`.smod`) shipping mod recipe JSON need the corresponding registered
 serializer. Optional-mod recipes must use load conditions: a false condition
 skips a file quietly **before** serializer lookup. Unknown condition types retain
 the existing fatal load behavior. Malformed recipes of a known serializer retain
 the existing skip-one-file behavior; changing that is a separate task.
 
-Reload re-reads values and preserves startup registration. Joining Horizon clients
+Reload re-reads values and preserves startup registration. Joining Sunrise clients
 receive serializer-written content; vanilla clients receive no custom kind.
 `datapack_sync.recipe_types` selects actual recipe type IDs; the engine resolves
 each file's serializer to its reported type for filtering and replacement, including

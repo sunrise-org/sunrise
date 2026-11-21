@@ -1,11 +1,11 @@
-# NeoForge extension methods and Horizon
+# NeoForge extension methods and Sunrise
 
-This page compares the public methods of NeoForge 26.3's object-extension interfaces with what a Horizon mod can
+This page compares the public methods of NeoForge 26.3's object-extension interfaces with what a Sunrise mod can
 answer today. It is the reference the Parts lane starts from: before proposing a new block or item hook, check
 whether content data, a handle or an existing Part already answers the same question.
 
 Read from NeoForge `26.3.0.101` (`neoforge-26.3.0.101-universal.jar`, `net.neoforged.neoforge.common.extensions`)
-with `javap -p`, and from Horizon at commit `061a06c7b`. Method lists and parameter names are factual citations; no
+with `javap -p`, and from Sunrise at commit `061a06c7b`. Method lists and parameter names are factual citations; no
 NeoForge source or Javadoc is copied. Counts exclude each interface's private `self()` accessor.
 
 ## How to read the verdicts
@@ -15,14 +15,14 @@ NeoForge source or Javadoc is copied. Counts exclude each interface's private `s
 | **Covered** | A mod can answer the same question for its own object, at the same moment, through content data, a handle or a Part method. |
 | **Partial** | The game lets a mod answer something close, but one of these differs: the object (a global hook instead of a per-block/item method), the moment, the arguments, or the answer (a factor or notice where NeoForge returns a decision). |
 | **Missing** | Neither data, a handle nor a hook exposes the question. |
-| **n/a** | The method has no Horizon equivalent because the architecture removes its reason to exist. |
+| **n/a** | The method has no Sunrise equivalent because the architecture removes its reason to exist. |
 
 A **Part method** is a generated method on `BlockPart`, `ItemPart`, `BlockEntityPart`, `MenuPart` or `EntityPart`,
-declared with `scope` in `crates/horizon-mod-vocab/src/hooks/<area>.rs`. A Part method runs only for the objects a
+declared with `scope` in `crates/sunrise-mod-vocab/src/hooks/<area>.rs`. A Part method runs only for the objects a
 mod attached its part to. An **unscoped hook** in the same files is global: every mod hears it and filters by the
-arguments itself. **Data** means a content declaration in `crates/horizon-mod-package/src/content.rs`, read into
-the game through `crates/horizon-items/src/blocks.rs`. **Handle** means a value or reference type in
-`crates/horizon-mod-vocab/src/` (`ItemStack`, `ItemResource`, `AttachmentStore`).
+arguments itself. **Data** means a content declaration in `crates/sunrise-mod-package/src/content.rs`, read into
+the game through `crates/sunrise-items/src/blocks.rs`. **Handle** means a value or reference type in
+`crates/sunrise-mod-vocab/src/` (`ItemStack`, `ItemResource`, `AttachmentStore`).
 
 `EntityPart` exists today with goal and behavior registration, `spawn_cluster_size`, and `is_shearable` / `on_sheared` (`docs/modding/src/concepts/parts/entity-parts-and-mob-goals.md`).
 It does not answer `IEntityExtension` methods; those are covered only where a global hook or a handle does.
@@ -46,13 +46,13 @@ counts each declared public method, so the entity total is 33 rather than 30.
 
 Data fields are static values from a block's content declaration, inherited from its template when unset. They
 answer the method for a mod block but cannot vary by level, position or entity. The engine's own copy of the
-same facts is `StateFacts` in `crates/horizon-items/src/blocks.rs`.
+same facts is `StateFacts` in `crates/sunrise-items/src/blocks.rs`.
 
-| Method | Verdict | Horizon | Notes |
+| Method | Verdict | Sunrise | Notes |
 | --- | --- | --- | --- |
-| `getFriction(state, level, pos, entity)` | Covered | `BlockPart::friction` (`hooks/friction.rs`) | Asked where an entity on the block reads its friction, with the entity's id and type and the position, from the block's own value; an answer that is not finite or is outside `0..=2` is dropped. Players, mobs, armor stands, items, experience orbs, boats and leads. The part answers from its inputs, without the level. |
+| `getFriction(state, level, pos, entity)` | Covered | `BlockPart::friction` (`hooks/friction.rs`), `LevelRef::friction` | Reads a state's friction in a borrowed level view, optionally for an entity. The state need not occupy the position, so a part can ask for a material's answer there. Recursive cycles are refused, and any finite answer is used as given and a non-finite one keeps the state's own value. Players, mobs, armor stands, items, experience orbs, boats and leads. |
 | `hasDynamicLightEmission(state)` | Covered | `BlockProperties.dynamic_light` → `StateFacts.dynamic_light` | Content data, per block, not per state: it sits on the block's row, so every state of a declared block is asked and a block with mixed states pays for all of them. An undeclared block is never asked, where NeoForge's declaration only gates a chunk's first lighting. |
-| `getLightEmission(state, level, pos)` | Covered | `BlockPart::light_emission` (`hooks/light_emission.rs`), for a block declaring `dynamic_light` | Asked with the position as a chunk comes in, as an edit sets the block and at `LevelRef::check_light` (`LevelLightEngine.checkBlock`), where vanilla's engine reads emission again, only on the thread that owns the level. A client also asks again for the sections a server's light update changed, at most once per cell per update, a Horizon addition. Not asked for the block's own rendered light, ambient occlusion or the spawn rule, which take the state's light, nor from a light worker. The answer is clamped to 15 at the engine, where NeoForge clamps only its light manager's stored value. Without `dynamic_light`, `BlockProperties.light` is static. |
+| `getLightEmission(state, level, pos)` | Covered | `BlockPart::light_emission` (`hooks/light_emission.rs`), for a block declaring `dynamic_light` | Asked with the position as a chunk comes in, as an edit sets the block and at `LevelRef::check_light` (`LevelLightEngine.checkBlock`), where vanilla's engine reads emission again, only on the thread that owns the level. A client also asks again for the sections a server's light update changed, at most once per cell per update, a Sunrise addition. Not asked for the block's own rendered light, ambient occlusion or the spawn rule, which take the state's light, nor from a light worker. The answer is clamped to 15 at the engine, where NeoForge clamps only its light manager's stored value. Without `dynamic_light`, `BlockProperties.light` is static. |
 | `ignitedByLava(state, level, pos, direction)` | Covered | `BlockPart::ignited_by_lava` (`hooks/ignited_by_lava.rs`) | Asked from the face toward the air lava would light, where `LavaFluid.isFlammable` reads it; with no answer the template's `IGNITED_BY_LAVA` state flag (`StateFacts`) decides. No content field sets it. |
 | `isLadder(state, level, pos, entity)` | Covered | `BlockPart::is_ladder` (`hooks/is_ladder.rs`) | Asked of the block a living entity stands in, with the entity id, after the `#climbable` tag: the part's answer replaces the tag's, either way. Players and mobs; armor stands never ask. |
 | `makesOpenTrapdoorAboveClimbable(state, level, pos, stateAbove)` | Covered | `BlockPart::makes_open_trapdoor_above_climbable` (`hooks/makes_open_trapdoor_above_climbable.rs`) | Asked of the block under an open trapdoor a living entity stands in, with its position and the trapdoor's state, once the trapdoor itself is not a ladder; starts with vanilla's answer, a ladder facing the trapdoor's way. Players and mobs; armor stands never ask. |
@@ -106,9 +106,9 @@ same facts is `StateFacts` in `crates/horizon-items/src/blocks.rs`.
 | `isEmpty(state)` | Missing | — | Air/replaceable facts exist (`block_states().replaceable`), but no `isEmpty` answer for a state. |
 | `getBubbleColumnDirection(state)` | Missing | — | Bubble-column rules are engine-owned. |
 | `shouldHideAdjacentFluidFace(state, direction, fluid)` | Partial | `BlockPart::should_hide_adjacent_fluid_face` (`hooks/should_hide_adjacent_fluid_face.rs`) | Client side, resolved per (state, fluid) on the client thread at join and on `refresh_render_visibility`, and read by the fluid mesher from a table, with one bit per direction. The fluid is asked as its source at amount 8 or its flowing form at amount 7, not the cell's own amount. `hidden` starts false and vanilla's same-fluid and occlusion tests apply first. |
-| `getBounceRestitution(level, pos, state, entity)` | Covered | `BlockPart::bounce_restitution` (`hooks/bounce_restitution.rs`) | Asked for the player and the mobs on both sides, with the entity's level as a read-only `LevelSide` host, the entity, its type and the block's position. The answer must be pure because replayed ticks ask again: the same host and event inputs must give the same factor. Dropped items keep their own slime rule. `BlockPart::bounce_on` still edits the movement after the bounce. |
+| `getBounceRestitution(level, pos, state, entity)` | Covered | `BlockPart::bounce_restitution` (`hooks/bounce_restitution.rs`, version 2) | Pure query in the simulating entity’s level, with the exact legacy effect state and position. Nonliving bodies scale the block coefficient in float precision. |
 | `getRelocability(level, pos, state)` | Missing | — | No relocation query (pistons, structure blocks). |
-| `canBeConnectedTo(state, direction, neighborBlock)` | Covered | `BlockPart::can_be_connected_to` (`hooks/can_be_connected_to.rs`) | The block being connected to answers, with its position, the connector's state, its rule (`ConnectionKind`), the direction toward it and its face's sturdiness, after the connector's vanilla rule (fences, walls, bars and panes ask). The connector's own `BlockPart::connects_to` (`hooks/connects_to.rs`) is asked after and has the last word; that order is Horizon's. |
+| `canBeConnectedTo(state, direction, neighborBlock)` | Covered | `BlockPart::can_be_connected_to` (`hooks/can_be_connected_to.rs`) | The block being connected to answers, with its position, the connector's state, its rule (`ConnectionKind`), the direction toward it and its face's sturdiness, after the connector's vanilla rule (fences, walls, bars and panes ask). The connector's own `BlockPart::connects_to` (`hooks/connects_to.rs`) is asked after and has the last word; that order is Sunrise's. |
 | `getModelData(state, level, pos)` | Missing | — | No `ModelData`; block-entity drawing takes a `block_entity_submit` part with its own model path. |
 
 ## `IBlockStateExtension`
@@ -129,11 +129,11 @@ do not change any verdict.
 
 ## `IItemExtension`
 
-Item data is a 26.3 component patch over a vanilla template (`crates/horizon-mod-package/src/content.rs`),
+Item data is a 26.3 component patch over a vanilla template (`crates/sunrise-mod-package/src/content.rs`),
 which is the same place NeoForge's item components live. Reads are on `host` (`host/items.rs`) or on the owned
 `ItemStack` / `ItemResource` values.
 
-| Method | Verdict | Horizon | Notes |
+| Method | Verdict | Sunrise | Notes |
 | --- | --- | --- | --- |
 | `MutableDataComponentHolder`: `set`, `remove`, `update`, `applyComponents`, `copyFrom` | Covered | `ItemStack::set`, `remove`, `get`, `apply_components`, `copy_component_from`; `ItemPlace::edit` | `update` is `get` then `set`. Patch merges retain unrelated overrides and normalize damage atomically; copying preserves the source's own value/removal or clears the target override when the source inherits. Server-side `edit` writes the whole slot without changing its item/count or splitting one off, and a transaction abort restores it. [#3339](https://github.com/arismoko/horizon/issues/3339). |
 | `getDefaultAttributeModifiers(stack)` | Partial | `item_attribute_modifier` (`hooks/item_attribute_modifier.rs`) | Global `ItemAttributeModifierEvent` edits the stack's modifiers; the stack filters it, but it is not a Part method. |
@@ -152,7 +152,7 @@ which is the same place NeoForge's item components live. Reads are on `host` (`h
 | `createEntity(level, entity, stack)` | Missing | — | Same. |
 | `onEntityItemUpdate(stack, itemEntity)` | Missing | — | No per-item dropped-entity tick. [#1039](https://github.com/arismoko/horizon/issues/1039). |
 | `doesSneakBypassUse(stack, level, pos, player)` | Missing | — | No sneak-bypass query. |
-| `canEquip(stack, slot, entity)` | Covered | `ItemPart::can_equip` (`hooks/can_equip.rs`) | Starts as the stack's own `equippable` component's answer (slot and `allowed_entities`); the part sets it either way, with a read-only `Host` and the entity as a `LivingRef`. Asked for the player's armour slots (both menus), a dispenser's equip and a mob's pickup. The wasm generator supports a retained stack per guest instance and token-based borrowed asks; missing prepared exports refuse at load/registration. One dispense, menu input scope, or one mob’s pickup attempt shares its preparation across candidates. Scoped source revisions and identity generations invalidate stale asks and apply preconditions; no-listener paths convert nothing and add no entity lookup. Target type, position, living health/status and physical equipment reads reuse prepared values; other Host reads can allocate. |
+| `canEquip(stack, slot, entity)` | Covered | `ItemPart::can_equip` (`hooks/can_equip.rs`) | Starts as the stack's own `equippable` component's answer (slot and `allowed_entities`); the part sets it either way, with a read-only `Host` and the entity as a `LivingRef`. Asked for the player's armour slots (both menus), a dispenser's equip and a mob's pickup. Native dispatch borrows the prepared stack, slot name and entity-kind name for each ask. One dispense, menu input scope, or one mob’s pickup attempt shares its preparation across candidates. The former WebAssembly route retained one stack per guest instance, used borrowed-stack tokens, and refused missing prepared exports at load or registration. Scoped source revisions and identity generations invalidate stale asks and apply preconditions; no-listener paths convert nothing and add no entity lookup. Target type, position, living health/status and physical equipment reads reuse prepared values; other Host reads can allocate. |
 | `getEquipmentSlot(stack)` | Covered | `ItemResource::equippable_slot`, `host.item_equippable_slot` | Read from the effective `equippable` component. |
 | `onEntitySwing(stack, entity, hand)` | Covered | `ItemPart::on_entity_swing` (`hooks/item_attack.rs`) | Runs where `LivingEntity.swing` starts, on both sides; a cancel starts no swing (no animation, no packet). |
 | `getDamage(stack)` | Covered | `ItemStack::damage` | The stack's numeric damage override. |
@@ -161,8 +161,8 @@ which is the same place NeoForge's item components live. Reads are on `host` (`h
 | `setDamage(stack, damage)` | Partial | `ItemStack::set_damage` | Stores the requested value; the game checks it against the effective maximum when it accepts the write instead of clamping here. |
 | `canPerformAction(instance, ability)` | Partial | `ItemPart::can_perform_action` (`hooks/can_perform_action.rs`), `block_tool_modification` (`hooks/block_tool_modification.rs`) | The part answers per stack and per plain, case-sensitive ability name, starting from vanilla's answer, where vanilla checks the item kind: `shield_block` (a raised item blocking attacks, its use time and animation), `shears_harvest` (sheep, mooshroom, snow golem, bogged, bee nests, a dispenser's shears) and `shears_carve` (a pumpkin). The block side of a tool action (strip, wax, path, ...) is `block_tool_modification`; no tool ability (`axe_strip`...) is asked of the item yet. [#1039](https://github.com/arismoko/horizon/issues/1039). |
 | `getMaxStackSize(stack)` | Partial | `max_stack_size` component, `host.max_stack_size` | The stack's effective component includes a patch over the item default; `host.max_stack_size` reads that default only, and invalid values are refused at the write. |
-| `isPrimaryItemFor(stack, enchantment)` | Covered | `ItemPart::is_primary_item_for` (`hooks/is_primary_item_for.rs`) | Starts from `Enchantment.isPrimaryItem`. Asked once per item and enchantment when parts install, with the item's default stack, because selection runs inside the loot, trade and spawn-gear rolls; the table's offers, loot `enchant_with_levels`, trades and spawn gear read the stored answers. Per item, not per stack. Server-side, read-only `Host`. |
-| `supportsEnchantment(stack, enchantment)` | Partial | `host.enchantment_supports` | A client-side read of `Enchantment.isSupportedItem` for an item id; not per stack and without NeoForge's enchanted-book special case. |
+| `isPrimaryItemFor(stack, enchantment)` | Covered | `ItemPart::is_primary_item_for` (`hooks/is_primary_item_for.rs`) | Defaults to true for a plain book; otherwise to the resolved support answer and membership in `primary_items` when present. Asked once per item and enchantment when parts install, with the item's default stack. The table's offers, loot `enchant_with_levels`, trades and spawn gear read the stored answers. Server-side, read-only `Host`. |
+| `supportsEnchantment(stack, enchantment)` | Covered | `ItemPart::supports_enchantment` (`hooks/supports_enchantment.rs`) | With no answer, the anvil accepts enchanted books; the command and compatibility-filtered loot use `supported_items` membership. Resolved for default stacks on both sides after the current tags are installed, with a read-only `Host`; not a per-stack query. `host.enchantment_supports` remains a client-side `Enchantment.isSupportedItem` membership read. |
 | `getEnchantmentLevel(instance, enchantment)` | Covered | `get_enchantment_level` (`hooks/get_enchantment_level.rs`) | Edits the level gameplay sees. |
 | `getAllEnchantments(stack, lookup)` | Covered | `get_enchantment_level` with no target | The hook's `target` is `None` for every-enchantment reads. |
 | `shouldCauseReequipAnimation(stack, oldStack, equipped)` | Covered | `ItemPart::should_cause_reequip_animation` (`hooks/should_cause_reequip_animation.rs`) | Asked in `FirstPersonHandsAndItems.tick` for each hand whose shown stack differs from the held one by slot or by value, starting from `!shouldInstantlyReplaceVisibleItem`; `equipped` is read as `slot_changed` (the held stack came from another slot). An empty hand isn't asked. |
@@ -170,7 +170,7 @@ which is the same place NeoForge's item components live. Reads are on `host` (`h
 | `canContinueUsing(stack, otherStack)` | Missing | — | No continue-use query. |
 | `getCreatorModId(registries, stack)` | Covered | `ItemPart::creator_mod_id` (`hooks/creator_mod_id.rs`), read by `ItemResource::creator_mod_id` | Both sides, from the stack alone. The answer arrives as the item id's namespace; a part sets another mod or none. An item without a part costs one table lookup. |
 | `onAnimalArmorTick(stack, level, mob)` | Missing | — | No per-item animal-armour tick. |
-| `damageItem(stack, amount, entity, onBreak)` | Covered | `ItemPart::damage_item` (`hooks/damage_item.rs`) | Runs on the server for the parts of the worn item, after Unbreaking, on every wear path (a player's tools, armour and shield, a dispenser's tool, a mob's armour). The part gets the stack, the wearing or using entity (`None` for a dispenser's tool) and the amount about to be lost, and changes it (0 or less leaves the item whole), cancels the wear, or sets `break_now` to break the item whatever durability is left, the Horizon form of calling `onBroken`. |
+| `damageItem(stack, amount, entity, onBreak)` | Covered | `ItemPart::damage_item` (`hooks/damage_item.rs`) | Runs on the server for the parts of the worn item, after Unbreaking, on every wear path (a player's tools, armour and shield, a dispenser's tool, a mob's armour). The part gets the stack, the wearing or using entity (`None` for a dispenser's tool) and the amount about to be lost, and changes it (0 or less leaves the item whole), cancels the wear, or sets `break_now` to break the item whatever durability is left, the Sunrise form of calling `onBroken`. |
 | `onDestroyed(itemEntity, source)` | Missing | — | `item_despawn` is lifetime removal, not damage destruction. |
 | `isGazeDisguise(stack, player, target)` | Missing | — | No gaze-disguise query. |
 | `canWalkOnPowderedSnow(stack, entity)` | Missing | — | Powder-snow walking is engine-owned. |
@@ -188,7 +188,7 @@ which is the same place NeoForge's item components live. Reads are on `host` (`h
 `EntityPart` carries no `IEntityExtension` method (its methods are goals, spawn group size and shearing), so
 entity coverage is data, handles and global hooks. On the server a mod can act on entities through `EntityRef` and `AttachmentStore`.
 
-| Method | Verdict | Horizon | Notes |
+| Method | Verdict | Sunrise | Notes |
 | --- | --- | --- | --- |
 | `captureDrops()` | Missing | — | `living_drops` edits a dying mob's drops; it does not capture an arbitrary entity's drops. |
 | `captureDrops(collection)` | Missing | — | Same. |
@@ -222,11 +222,11 @@ entity coverage is data, handles and global hooks. On the server a mod can act o
 | `getSoundFromFluidType(type, action)` | Missing | — | No fluid sound-action table. |
 | `sendPairingData(player, consumer)` | Missing | — | No pairing-payload API. |
 | `copyAttachmentsFrom(entity, wasDeath)` | Partial | attachments survive dimension change; player respawn keeps `copy_on_death` entries; mob conversion copies every entry with a codec; `player_clone` (`hooks/base.rs`) | Copy rules are the attachment store's; there is no per-entity hook at the copy. |
-| `getBlockBounciness(pos, state)` | Partial | `BlockPart::bounce_on` (`hooks/block_landing.rs`) | Edits post-bounce movement instead of returning a bounciness factor. |
+| `getBlockBounciness(pos, state)` | Covered for the movement query | `BlockPart::bounce_restitution` | Uses the same state/position pair as `Entity.move`; the engine applies the nonliving multiplier. This is distinct from `BlockPart::bounce_on`. |
 
 ## `ILivingEntityExtension`
 
-| Method | Verdict | Horizon | Notes |
+| Method | Verdict | Sunrise | Notes |
 | --- | --- | --- | --- |
 | `canSwimInFluidType(type)` | Partial | `FluidTypeProperties.can_swim` | Per-fluid data, not per living entity. |
 | `jumpInFluid(type)` | Missing | — | Fluid jump behaviour is engine-owned. |
@@ -237,18 +237,18 @@ entity coverage is data, handles and global hooks. On the server a mod can act o
 
 ## Player reach and flight
 
-| Method | Verdict | Horizon route |
+| Method | Verdict | Sunrise route |
 | --- | --- | --- |
-| server reach (`Player.canInteractWithEntity`, `isWithinAttackRange`) | **Covered** | `player_within_entity_reach(player, entity, EntityReach)`, both sides (local player only on a client, using its predicted eyes and synced range/main hand against the displayed target box): eyes to the closest point of the entity's box (0 inside it, no ray, no fallback). `Interact` strict below (range + 3)², `Container` strict below (range + 4)², `Attack` inclusive within [min − margin − 3, max + margin + 3] from the main hand's `attack_range`, else 0 to the range. None across levels or for an entity whose box Horizon doesn't keep. |
-| `mayFly()` | **Covered** | `player_may_fly(player)`, both sides: the `mayfly` ability. Horizon has no creative-flight attribute yet, so nothing is OR'd in. |
+| server reach (`Player.canInteractWithEntity`, `isWithinAttackRange`) | **Covered** | `player_within_entity_reach(player, entity, EntityReach)`, both sides (local player only on a client, using its predicted eyes and synced range/main hand against the displayed target box): eyes to the closest point of the entity's box (0 inside it, no ray, no fallback). `Interact` strict below (range + 3)², `Container` strict below (range + 4)², `Attack` inclusive within [min − margin − 3, max + margin + 3] from the main hand's `attack_range`, else 0 to the range. None across levels or for an entity whose box Sunrise doesn't keep. |
+| `mayFly()` | **Covered** | `player_may_fly(player)`, both sides: the `mayfly` ability. Sunrise has no creative-flight attribute yet, so nothing is OR'd in. |
 
 ## `IBlockEntityExtension`
 
 Block entity parts are attached with `r.block_entity_part`; `BlockEntityPart` extends `BlockPart` and carries the
-block-entity hooks (`crates/horizon-mod-vocab/src/hooks/` with `scope = "block_entity"`). Saved data and attachments
+block-entity hooks (`crates/sunrise-mod-vocab/src/hooks/` with `scope = "block_entity"`). Saved data and attachments
 are reachable through `BlockEntityRef`.
 
-| Method | Verdict | Horizon | Notes |
+| Method | Verdict | Sunrise | Notes |
 | --- | --- | --- | --- |
 | `onDataPacket(connection, input)` | Partial | `BlockEntityPart::block_entity_update_tag` (`hooks/base.rs`) | The server half (`getUpdateTag`) is settable; the client's merge of the received tag is engine-side. |
 | `handleUpdateTag(input)` | Partial | `BlockEntityPart::block_entity_update_tag` (`hooks/base.rs`) | Same: the data is covered, the client callback is not. |
@@ -257,18 +257,18 @@ are reachable through `BlockEntityRef`.
 | `onLoad()` | Partial | `BlockEntityPart::block_entity` (`hooks/base.rs`) | Initial saved data is set at creation, before the saved NBT is applied; no after-load notice. |
 | `requestModelDataUpdate()` | Missing | — | No model-data invalidation API. |
 | `getModelData()` | Missing | — | No `ModelData`; drawing uses `block_entity_submit` and the model path. |
-| `invalidateCapabilities()` | Covered | `LevelRef::invalidate_capabilities` (`crates/horizon-mod-vocab/src/host/levels.rs`) | `level.invalidate_capabilities(host, pos)` with the block entity's position, as NeoForge's calls `Level.invalidateCapabilities(worldPosition)`: it moves the capability generation there on; every `BlockCapabilityCache` there compares it and looks up again at its next `get`. At the root commit inside a transaction; nothing when it aborts. |
+| `invalidateCapabilities()` | Covered | `LevelRef::invalidate_capabilities` (`crates/sunrise-mod-vocab/src/host/level_block_updates.rs`) | `level.invalidate_capabilities(host, pos)` with the block entity's position, as NeoForge's calls `Level.invalidateCapabilities(worldPosition)`: it moves the capability generation there on; every `BlockCapabilityCache` there compares it and looks up again at its next `get`. At the root commit inside a transaction; nothing when it aborts. |
 | `applyStructureRotation(mirror, rotation)` | Missing | — | Structure rotation is engine-owned; no callback. |
 
 ## `IFluidExtension`
 
-Fluid type facts are one record, `FluidTypeProperties` (`crates/horizon-mod-vocab/src/block/fluid_states.rs`), read with
+Fluid type facts are one record, `FluidTypeProperties` (`crates/sunrise-mod-vocab/src/block/fluid_states.rs`), read with
 `host.fluid_states().type_properties(key)`. They are static per fluid, not per position or block, and they are
 derived today: the record describes water's and lava's families and gives every other fluid inert values
-(`crates/horizon-client/src/game/modding/native_block_states.rs`). A mod's own fluid declares a sprite and tint,
+(`crates/sunrise-client/src/game/modding/native_block_states.rs`). A mod's own fluid declares a sprite and tint,
 not its type properties, so "partial" below means the vanilla answer is readable but a mod fluid cannot set it.
 
-| Method | Verdict | Horizon | Notes |
+| Method | Verdict | Sunrise | Notes |
 | --- | --- | --- | --- |
 | `getExplosionResistance(state, level, pos, explosion)` | Missing | — | No fluid explosion resistance. |
 | `getFluidType()` | Partial | `host.fluid_states().type_properties` | Reads water's and lava's type record; a mod's own fluid cannot declare one and reads as inert. |
@@ -282,33 +282,33 @@ not its type properties, so "partial" below means the vanilla answer is readable
 
 ## `BlockItemExtension`
 
-| Method | Verdict | Horizon | Notes |
+| Method | Verdict | Sunrise | Notes |
 | --- | --- | --- | --- |
 | `onBlockPlacedBy(context, level, pos, state, placer, stack)` | Covered | `ItemPart::on_block_placed_by` (`hooks/on_block_placed_by.rs`, hook version 1) | Server notice with a `ServerHost`, the pre-shrink stack, optional player, primary position, final state and placement face/click. Fires once after stack block-entity data and `Block.setPlacedBy` companions exist, before level events and consumption, on player and dispenser block-item placement; a dispenser has no placer. Refused, failed and `entity_place`-canceled placements never notify. An item with no subscribed Part costs one lookup and no stack conversion. |
 
-With `HORIZON_TEST_RESOURCES` pointing to prepared 26.3 resources, the isolated Game regression
+With `SUNRISE_TEST_RESOURCES` pointing to prepared 26.3 resources, the isolated Game regression
 places a custom block item, a two-part red bed and a dispenser's shulker box, and checks cancellation
 and refusal without consuming the stack:
 
 ```sh
-cargo test -p horizon-client --lib game::native_hooks::on_block_placed_by_tests::block_items_notify_after_setup_and_before_consumption -- --exact --ignored
+cargo test -p sunrise-client --lib game::native_hooks::on_block_placed_by_tests::block_items_notify_after_setup_and_before_consumption -- --exact --ignored
 ```
 
 ## `IMenuTypeExtension`
 
-Menu types are content data (`MenuType` in `crates/horizon-mod-package/src/content.rs`, files under
-`data/<id>/horizon/menu/`), and the game's own menu engine opens them (`menu::Kind::Mod`). A `MenuPart` can answer
-slot rules and whether a player's block menu stays open (`menu_still_valid`, vanilla's `stillValid`), not
-construct a menu.
+Menu types are content data (`MenuType` in `crates/sunrise-mod-package/src/content.rs`, files under
+`data/<id>/sunrise/menu/`), and the game's own menu engine opens them (`menu::Kind::Mod`). A `MenuPart` can answer
+slot rules and whether a player's mod menu stays open, with or without a backing block (`menu_still_valid`,
+vanilla's `stillValid`), not construct a menu.
 
-| Method | Verdict | Horizon | Notes |
+| Method | Verdict | Sunrise | Notes |
 | --- | --- | --- | --- |
 | `create(IContainerFactory)` (static) | Partial | content `MenuType` declaration | Declares slot count, data slots and take-only slots, but cannot supply a factory that builds the client menu from server-sent data. |
 | `create(windowId, inventory, buffer)` | Partial | menu engine + `MenuPart::menu_slot_rules` | The engine builds the menu from the declaration; a mod cannot run code at construction. |
 
 ## `IDispensibleContainerItemExtension`
 
-| Method | Verdict | Horizon | Notes |
+| Method | Verdict | Sunrise | Notes |
 | --- | --- | --- | --- |
 | `emptyContents(entity, level, pos, hitResult, container)` | Covered | `ItemPart::empty_contents` (`hooks/empty_contents.rs`) | Asked on the server for a player's pour once `bucket_empty` let it go on, and for a dispenser before its own placement (`player` and `hit` are `None`). `None` keeps vanilla's emptying; `Some(true)` means the part placed the contents and the stack becomes an empty bucket; `Some(false)` fails. An item with the part reaches the dispenser's bucket behaviour even when it is no mod-fluid bucket, and a server's client does not predict its pour. |
 
@@ -339,12 +339,12 @@ their rows have landed or become partial since and should be narrowed when they 
 
 ### Resource-backed block-part checks
 
-With `HORIZON_TEST_RESOURCES` pointing to prepared resources, run the tool and player-removal
+With `SUNRISE_TEST_RESOURCES` pointing to prepared resources, run the tool and player-removal
 fixtures together (including the ice-denial regression):
 
 ```sh
 for suite in block_part_tool_tests player_destroy_tests; do
-    cargo test -p horizon-client --lib "$suite" -- --ignored
+    cargo test -p sunrise-client --lib "$suite" -- --ignored
 done
 ```
 
@@ -352,43 +352,46 @@ These checks require prepared resources; they are not ordinary resource-free uni
 
 ## IClientBlockExtensions: mining hit sound
 
-| Method | Verdict | Horizon route |
+| Method | Verdict | Sunrise route |
 | --- | --- | --- |
 | `IClientBlockExtensions.playHitSound` | **Covered** | Client `BlockPart::play_hit_sound`, with state, position, face and `ClientHost`. Returning `Flow::Cancel` handles the hit and suppresses the default sound. Both local mining ticks and `ClientLevel.addBreakingBlockEffects` use the same sound helper. Sculk growth is outside this hook. |
 
 ## Client chunk events
 
 This section is not an extension interface. It records where NeoForge's client-side `ChunkEvent` posts land in
-Horizon, as #3425 asks.
+Sunrise, as #3425 asks.
 
-| NeoForge | Verdict | Horizon route |
+| NeoForge | Verdict | Sunrise route |
 | --- | --- | --- |
 | `ChunkEvent.Load` on the client (`isNewChunk` always false) | **Covered** | `client_chunk_load(dimension, chunk)`, once per adopted chunk packet after the column and its block entities are in the client level; a re-sent column is told again. |
 | `ChunkEvent.Unload` on the client | **Covered, wider** | `client_chunk_unload(dimension, chunk)`, before the column's data is freed, on every route a column leaves by: the forget packet (NeoForge's only route), the view centre moving, the view radius shrinking and the client level going. |
 
 Both are client-only, so the server's `chunk_load` and `chunk_unload` listeners are not called on a client. An
-integrated world's own chunks are told only through the server hooks.
+integrated world's own chunks are told only through the server hooks. Inside a held column, NeoForge posts no
+client event for a block change; Sunrise's `client_block_changed(dimension, pos, old, new, predicted)` tells each
+one after the write (server updates, section updates, predictions and their reconciliation), so a client map can
+invalidate just the changed chunk (#1300).
 
 ## IShearable: shearing entities
 
-| Method | Verdict | Horizon route |
+| Method | Verdict | Sunrise route |
 | --- | --- | --- |
 | `IShearable.isShearable(player, item, level, pos)` | **Covered** | `EntityPart::is_shearable(host, entity, player, shears)`, server-side, asked by a player's shears and a dispenser's before `player_shear_entity` / `block_shear_entity`; the first part to answer wins, `None` leaves it to the species. A `false` from a part ends a player's click with nothing done. |
 | `IShearable.onSheared(player, item, level, pos)` | **Covered** | `EntityPart::on_sheared(host, entity, player, shears)`, called on the part that said yes once the cancel hook passed; it returns the drops. |
 | `IShearable.spawnShearedDrop(level, pos, drop)` | **Covered, engine-side** | The game spawns each returned drop one block above the entity with the sheep's random nudge, posts the shear game event and damages the shears. Not overridable per part. |
 
 Vanilla's shearable species (sheep, mooshroom, snow golem, bogged, copper golem, sulfur cube) keep their own
-shearing when no part answers. Entity parts are native-only, so wasm mods do not have these methods yet.
+shearing when no part answers. Mods use these methods through native [entity Parts](../../modding/src/concepts/parts/entity-parts-and-mob-goals.md#spawn-groups-and-shearing).
 
 ## IFallableExtension: falling tick
 
-| Method | Verdict | Horizon route |
+| Method | Verdict | Sunrise route |
 | --- | --- | --- |
-| `IFallableExtension.fallingTick(level, currentPosition, entity)` | **Partial** | Server `BlockPart::falling_tick` (`hooks/falling_tick.rs`) on the falling block's state, with its block position and entity handle and a `&mut dyn ServerHost`, for each tick that ends with it still in the air; not the landing, drop or removal tick. It is delivered after the ordered pass that ticked the falling block, so a write lands on the stored entity. NeoForge also calls it on the client; Horizon calls it only on the server. |
+| `IFallableExtension.fallingTick(level, currentPosition, entity)` | **Partial** | Server `BlockPart::falling_tick` (`hooks/falling_tick.rs`) on the falling block's state, with its block position and entity handle and a `&mut dyn ServerHost`, for each tick that ends with it still in the air; not the landing, drop or removal tick. It is delivered after the ordered pass that ticked the falling block, so a write lands on the stored entity. NeoForge also calls it on the client; Sunrise calls it only on the server. |
 
 ## IBaseRailBlockExtension: rail track
 
-| Method | Verdict | Horizon route |
+| Method | Verdict | Sunrise route |
 | --- | --- | --- |
 | `getRailDirection(state, level, pos, cart)` | **Covered** | `BlockPart::rail_direction` (`hooks/rail_direction.rs`), on both sides with a `LevelSide`, starting from the `shape` property: the cart's movement asks with the cart wherever it reads the track under it, and `RailState` and a minecart item's placement ask with none. |
 | `canMakeSlopes(state, level, pos)` | **Covered** | Server `BlockPart::rail_can_make_slopes` (`hooks/rail_can_make_slopes.rs`), asked as `RailState` would make the rail climb. |
@@ -401,32 +404,32 @@ A minecart now treats any block in `#minecraft:rails` built on `BaseRailBlock` a
 
 | Surface | Status | Contract |
 |---|---|---|
-| `container_loot_filled` | Implemented; Horizon addition | Server-side rolled list before shuffle and placement; blocks, chest minecarts and chest boats; each double-chest half separately. Only a player open that starts the fill names an opener. Oversized counts are trimmed and excess stacks discarded. |
+| `container_loot_filled` | Implemented; Sunrise addition | Server-side rolled list before shuffle and placement; blocks, chest minecarts and chest boats; each double-chest half separately. Only a player open that starts the fill names an opener. Oversized counts are trimmed and excess stacks discarded. |
 | Global loot modifier data files (#1270) | Separate work | This hook exposes container results and does not load NeoForge modifier data files. |
 
 ## Standalone model baking
 
 These are model-registration counterparts, not object-extension methods (#3430).
 
-| NeoForge | Verdict | Horizon route |
+| NeoForge | Verdict | Sunrise route |
 | --- | --- | --- |
-| `ModelEvent.RegisterStandalone.register` | **Covered for quad results** | Client `standalone_models` contract version 2 retains plain file ids in `models` and adds `forms: Vec<StandaloneModelForm>` on the same hook, with `RegistrationContext` on native and wasm. |
+| `ModelEvent.RegisterStandalone.register` | **Covered for quad results** | The native client `standalone_models` hook takes `RegistrationContext`; it supports plain file ids in `models` and [bake-time standalone forms](../../modding/src/how-to/client/model-drawing.md#bake-time-standalone-forms) in `forms`. |
 | `SimpleUnbakedStandaloneModel` with a `ModelState` | **Covered for quad results** | `Rotated { id, model, turns, uvlock }` uses the blockstate baker's centered negative XYZ quarter-turns and inverse face UV transform; no draw-pose substitution. |
 | `UnbakedStandaloneModel.resolveDependencies` and quad composition | **Covered for declared file dependencies** | `Combined { id, parts }` loads all sources and their transitive dependencies, concatenates their quads and publishes one `ModelRef`. A missing dependency drops the entire form and logs its registering mod. |
-| Mod-defined baked result type `T` | **Out of scope** | Horizon's standalone result is baked quads, not arbitrary mod-owned objects. |
+| Mod-defined baked result type `T` | **Out of scope** | Sunrise's standalone result is baked quads, not arbitrary mod-owned objects. |
 
 The namespace rule, `RenderAssets::model` resolution and `model_baking_completed` publication
 are unchanged. Forms rebake on every resource load; failed reloads leave old handles valid.
 See [the model drawing guide](../../modding/src/how-to/client/model-drawing.md#bake-time-standalone-forms).
 
-CPU proof selectors in `horizon-client-render` are
+CPU proof selectors in `sunrise-client-render` are
 `models::catalog::standalone_tests::standalone_rotated_arrow_has_literal_geometry_and_world_locked_uvs`,
 `models::catalog::standalone_tests::standalone_combined_keeps_both_cubes_and_rebakes_changed_dependencies`
 and `models::catalog::standalone_tests::standalone_missing_dependency_drops_entire_form_and_logs_registering_mod`.
-The resource-backed `horizon-client` test
+The resource-backed `sunrise-client` test
 `game::model_baking_completed_tests::standalone_forms_resolve_as_one_model_and_republish_after_resource_reload`
 exercises real Game publication, model-registry lookup, distinct full-block/slab geometry,
-missing-form refusal and stale/replacement handles. It requires `HORIZON_TEST_RESOURCES`
+missing-form refusal and stale/replacement handles. It requires `SUNRISE_TEST_RESOURCES`
 and `--ignored`. These are CPU/model-registry proofs, not GPU rendering or screenshot proof.
 
 ## Changes

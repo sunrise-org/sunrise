@@ -6,7 +6,8 @@ name: hot-paths
 # recorded on the `perf-history` branch, whose index.html is the trend page.
 #
 # It measures; it never judges. No threshold fails this workflow, and it never runs on a pull request.
-# Once a day on main, and by dispatch. A dispatch may name a commit to measure instead of the branch's head, to
+# Once a day on main, and by dispatch: the schedule only dispatches this workflow on main, since Dyna's runners refuse a
+# scheduled event at "Set up runner" (all three scheduled runs failed there, 2026-11-16 to 18). A dispatch may name a commit to measure instead of the branch's head, to
 # narrow a step in the trend to one commit; such a run, like any run off main, uploads its result and records nothing.
 on:
   schedule:
@@ -25,23 +26,42 @@ concurrency:
   cancel-in-progress: false
 env:
   CARGO_INCREMENTAL: 0
-  HORIZON_TELEMETRY_URL: "off"
+  SUNRISE_TELEMETRY_URL: "off"
 jobs:
-  route:
+  # Dyna runners accept dispatches, not scheduled events (as daily.yml's schedule-dispatch).
+  schedule-dispatch:
+    if: github.repository == 'sunrise-org/sunrise' && github.event_name == 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run hot-paths.yml --repo "$GITHUB_REPOSITORY" --ref main
+
+  route:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read  # the attempt's creation or start time (tools/ci/dyna_ci_route.sh)
     outputs:
       self_hosted: ${{ steps.runner.outputs.self_hosted }}
     steps:
       - uses: actions/checkout@v4
+      # The pool's switch and lease (tools/ci/dyna_ci_route.sh): a snapshot is judged at the attempt's creation (a re-run's start), so a
+      # run that waited in a concurrency group or GitHub's queue is not sent off the pool by a lease that lapsed
+      # meanwhile.
       - id: runner
         env:
-          ENABLED: ${{ vars.DYNA_CI_SELF_HOSTED }}
-          LEASE: ${{ vars.DYNA_CI_POOL_UNTIL }}
-          # Only the schedule and dispatches run this workflow, both from this repository; the schedule is
-          # routed as a dispatch is.
+          GH_TOKEN: ${{ github.token }}
+          VARS_ENABLED: ${{ vars.DYNA_CI_SELF_HOSTED }}
+          VARS_LEASE: ${{ vars.DYNA_CI_POOL_UNTIL }}
+          # Only dispatches reach this job, from this repository.
           SAME_REPO: true
           EVENT: workflow_dispatch
-        run: bash tools/ci/dyna_ci_runner.sh >> "$GITHUB_OUTPUT"
+        run: bash tools/ci/dyna_ci_route.sh >> "$GITHUB_OUTPUT"
 
   measure:
     needs: route
@@ -78,17 +98,17 @@ jobs:
         run: python3 tools/ci/cargo_jobs.py --job-mib 3072 --cap
       - name: Prepare checkout-keyed vanilla data
         run: |
-          for dir in minecraft datagen horizon-client tools; do
-            if [ ! -d "/cache/horizon-local/$dir" ]; then
+          for dir in minecraft datagen sunrise-client tools; do
+            if [ ! -d "/cache/sunrise-local/$dir" ]; then
               echo "::error::prepared data unavailable on this runner: $dir"
               exit 1
             fi
           done
-          HORIZON_DYNA_CACHE=true HORIZON_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" HORIZON_SHARED_SOURCE=/cache/horizon-local bash tools/ci/vanilla-data.sh
-      # The profile players get, on the server build (no audio, no controllers). horizon-hot-paths-game is
-      # horizon-game's entry, with one native listener mod it installs only for the hook workload.
+          SUNRISE_DYNA_CACHE=true SUNRISE_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" SUNRISE_SHARED_SOURCE=/cache/sunrise-local bash tools/ci/vanilla-data.sh
+      # The profile players get, on the server build (no audio, no controllers). sunrise-hot-paths-game is
+      # sunrise-game's entry, with one native listener mod it installs only for the hook workload.
       - name: Build the release game
-        run: cargo build --release --locked -p horizon-hot-paths-game
+        run: cargo build --release --locked -p sunrise-hot-paths-game
       - name: Measure
         run: |
           set -euo pipefail
@@ -97,8 +117,8 @@ jobs:
           scratch=$(mktemp -d "$target/hot-paths.XXXXXX")
           trap 'rm -rf "$scratch"' EXIT
           command -v valgrind > /dev/null || echo "::warning::no valgrind on this runner: instructions and allocations are not measured"
-          python3 tools/hot_paths.py measure --game "$target/release/horizon-hot-paths-game" \
-            --resources "$PWD/.local/horizon-client/26.3" --work "$scratch" \
+          python3 tools/hot_paths.py measure --game "$target/release/sunrise-hot-paths-game" \
+            --resources "$PWD/.local/sunrise-client/26.3" --work "$scratch" \
             --commit "$(git rev-parse HEAD)" --host dyna-medium --run "$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT" \
             --out "$RUNNER_TEMP/hot-paths.json" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4

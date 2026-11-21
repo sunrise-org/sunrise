@@ -29,7 +29,12 @@ The game puts this before your file:
 The function reads and returns linear light: 1.0 is paper white, and more is brighter where the frame can hold it. The
 alpha you return is coverage. The game supplies the vertex stage, the bindings and the conversion
 to the frame, so a file that declares a binding or an entry point is refused. Names that start with
-`horizon_` belong to the game.
+`sunrise_` belong to the game.
+
+The game parses the file before it can compile it, and a very deep expression would overflow the
+parser's stack, so a file longer than 131,072 bytes (the whole shader, with the game's own code
+around yours), or an expression that chains more than 200 binary operators, member accesses or
+indexings (`a + b + c + ...`), is refused by name: split a long sum over several `let` statements.
 
 ## 2. Register the pipeline
 
@@ -52,7 +57,7 @@ fn register_render_pipelines(
 scaled by its alpha. `WorldDepth::Tested` hides the quads behind nearer world surfaces, and
 `ThroughWalls` draws them over everything. No pipeline writes depth.
 
-The id must be in a namespace your mod owns. There is no per-mod pipeline count cap. A registration
+The id must be in a namespace your mod owns (or in a content package it serves via `served_by`). There is no per-mod pipeline count cap. A registration
 with an unowned namespace or a duplicate id is logged with the mod's id and dropped.
 
 ### Required or optional
@@ -73,6 +78,35 @@ event.pipelines.push(
 
 A load cannot build a pipeline when its shader file is missing, the file is refused, or the GPU
 rejects the shader. The game never panics over a pipeline's shader.
+
+### Checking a shader before you run the game
+
+`cargo sunrise-mod check`, run in the mod's folder, composes and validates every
+`assets/<namespace>/shaders/pipeline/**/*.wgsl` file with the code the game uses, and fails with
+`<file>:<line>:<column>: <reason>` for each one the game would refuse (the same text the game logs
+after the pipeline's id; a refusal with no place in the file, such as a missing function, is
+`<file>: <reason>`, and a place in the game's own prelude reads `<prelude>:<line>:<column>`). The
+tool cannot see your `RenderPipeline` registration, so it takes a file whose text contains
+`pipeline_texture` anywhere (a comment included) as textured and any other file as untextured; the
+game goes by the registration's `.textured(...)` instead. A file the check accepts can still be
+refused at load: when its registration declares no texture but the file samples one (or the
+reverse), when the registration's texture or another resource it names is missing, or when the GPU
+rejects the shader.
+
+The check, and the load, also refuse a shader that is too costly or that a player's system could
+not translate:
+
+- **Expressions.** The composed shader (your file with the game's prelude and entry points, which
+  are small and fixed) may hold 20,000 expressions over all its functions. The refusal gives the
+  count: `21066 expressions; a pipeline shader may hold 20000`.
+- **Texture reads.** It may hold 64 texture reads (`textureLoad` and `textureSample*` expressions
+  written in the code, not executions). A textured pipeline's `pipeline_texture` function is one of
+  them, so your own code has 63. The refusal gives the count.
+- **Backends.** The shader is translated to SPIR-V (Vulkan), MSL (Metal) and HLSL (DirectX 12) as
+  the GPU library does, and a shader that any of them refuses is refused naming it, as in
+  `Vulkan (SPIR-V) refuses it: ...`. Some shaders pass validation and still fail here, such as
+  passing a pointer to a matrix column or to an element of a local array to a function; copy the
+  value into a function argument instead.
 
 ## 3. Resolve and draw
 

@@ -1,0 +1,26 @@
+[package]
+name = "sunrise-client-input"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The client's input layer: key bindings and their names, mouse, controllers, clipboard and window options"
+
+[dependencies]
+sunrise-mod-api-macros = { path = "../sunrise-mod-api-macros" }
+sunrise-client-core = { path = "../sunrise-client-core" }
+sunrise-core = { path = "../sunrise-core" }
+winit = "0.30.13"
+log = "0.4"
+png = "0.18"
+arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
+
+[dev-dependencies]
+# The window icon test decodes Sunrise's icon.
+sunrise-theme = { path = "../sunrise-theme" }
+
+[features]
+controllers = []
+
+[lints]
+workspace = true

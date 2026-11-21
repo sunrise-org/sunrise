@@ -7,16 +7,16 @@ on:
     # The crates the Dockerfile copies (tests/test_service_images.py keeps that list complete).
     paths:
       - Cargo.toml
-      - crates/horizon-addresses/**
-      - crates/horizon-bench/**
-      - crates/horizon-core/**
-      - crates/horizon-guest-stack/**
-      - crates/horizon-hooks/**
-      - crates/horizon-perf-format/**
-      - crates/horizon-platform/**
-      - crates/horizon-system/**
-      - crates/horizon-telemetry/**
-      - crates/horizon-telemetry-server/**
+      - crates/sunrise-addresses/**
+      - crates/sunrise-bench/**
+      - crates/sunrise-core/**
+      - crates/sunrise-guest-stack/**
+      - crates/sunrise-hooks/**
+      - crates/sunrise-perf-format/**
+      - crates/sunrise-platform/**
+      - crates/sunrise-system/**
+      - crates/sunrise-telemetry/**
+      - crates/sunrise-telemetry-server/**
       - .github/workflows/telemetry-image.yml
   workflow_dispatch:
 
@@ -49,7 +49,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: crates/horizon-telemetry-server/Dockerfile
+          file: crates/sunrise-telemetry-server/Dockerfile
           push: true
           provenance: false
           tags: ${{ env.IMAGE }}:${{ github.sha }}

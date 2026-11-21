@@ -39,7 +39,8 @@ This method does not resize: an absent index returns `Ok(false)`. Both methods u
 same silent storage write target and journal; call `set_changed` explicitly if needed. Transactions retain their
 ordinary behavior; an aborted outer transaction restores the vector that existed
 before its first write, including writes committed by children. The normal menu
-broadcast delivers committed changes to viewers.
+broadcast delivers committed changes to viewers. To draw those values on the client, see
+[Draw a progress bar and a fuel gauge](../client/menu-gauges.md).
 
 The public handle resolves one entity's lifecycle generation as well as its level
 and position. Removal, replacement and chunk reload make it stale; in-place data
@@ -57,8 +58,9 @@ insertion; it enforces automation policy. Vanilla containers are unavailable her
 
 Indices use the current container's declared count. Lazy slots read empty; saved
 excess slots are neither exposed nor truncated. `None` clears, identical values
-return `Ok(false)`. Writes and restores are silent: issue `set_changed` explicitly when needed.
-Nested abort restores ordinary before-images, including committed-child writes. Invalid
+return `Ok(false)`. A committed change marks the chunk unsaved without notifying
+comparators or neighbours. Call `set_changed` explicitly to notify. Nested abort
+restores ordinary before-images, including committed-child writes. Invalid
 indices, unknown/air/zero-count stacks and counts above the registered or
 component-overridden maximum return `BlockEntityItemError`, never a partial write
 or silent count clamp. A stale handle refuses a replacement rather than accessing
@@ -66,8 +68,11 @@ its container; acquire a new handle for the replacement.
 
 ## Skip unchanged tick write-back
 
-The existing `BlockEntityPart::block_entity_tick` event has the same reply on native
-and wasm. It defaults to `Changed`, retaining full checked payload write-back.
+A tick with no `BlockEntityPart::block_entity_tick` subscriber for the entity's
+registered type does not snapshot the row, resize its items or mark its chunk
+unsaved. Pending load notices are still delivered before the tick.
+
+The `BlockEntityPart::block_entity_tick` reply defaults to `Changed`, retaining full checked payload write-back.
 When no payload should be written back, set:
 
 ```rust,ignore
@@ -84,7 +89,7 @@ effects. The input snapshot is still sent; this is not batching or a validity ca
 
 To tell clients about something that happened once, such as a burst of particles, queue
 fields instead of writing them to the saved `nbt`. In `block_entity_tick`, or another
-event with a mutable entity, native and wasm mods alike call
+event with a mutable entity, call
 `event.entity.set_client_update_fields(fields)`, then `host.block_entity_sync(event.pos)`.
 A later call replaces the batch; an empty compound clears it.
 
@@ -123,7 +128,7 @@ side that holds a copy, before the copy is dropped.
 
 ```rust,ignore
 struct Node;
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockEntityPart for Node {
     fn on_chunk_unloaded(
         &self,
@@ -146,7 +151,7 @@ the call, so a change made in it is not kept, and the chunk may already have lef
 handle's reads find nothing there. It is not called when the world closes, nor on a client when its whole
 level goes, and never for a vanilla block entity. The chunk-wide notice is `chunk_unload`, a
 server hook told after the chunk's block entities; a client is told of the block entities alone
-([hook notes](https://github.com/arismoko/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/on_chunk_unloaded.rs)).
+([hook notes](https://github.com/sunrise-org/sunrise/blob/main/crates/sunrise-mod-vocab/src/hooks/on_chunk_unloaded.rs)).
 
 ## Client ticks: a machine's hum
 
@@ -176,9 +181,9 @@ static HUMS: LazyLock<Mutex<HashMap<mod_api::BlockEntityRef, mod_api::SoundRef>>
     LazyLock::new(Default::default);
 
 struct Hum;
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockPart for Hum {}
-#[mod_api::horizon_part]
+#[mod_api::sunrise_part]
 impl mod_api::BlockEntityPart for Hum {
     fn block_entity_client_ticks(
         &self,
@@ -214,7 +219,7 @@ impl mod_api::BlockEntityPart for Hum {
 }
 
 struct MyMod;
-#[mod_api::horizon_mod]
+#[mod_api::sunrise_mod]
 impl mod_api::Hooks for MyMod {
     // A machine removed, replaced or whose chunk unloaded ticks no more, and its handle no
     // longer reads: its hum stops.
@@ -243,27 +248,110 @@ or changing levels stops every sound. Add particles from the same tick with `hos
 unconnected/wrong-level player, and `Err(BlockEntityError::Stale)` means the entity
 does not resolve. It never opens a replacement through an old handle.
 
-To open a content mod menu type with no block (a backpack item's use, an entity, a command),
-call `player.open_mod_menu(host, menu, title, extra, pos, replace)` (NeoForge's
+## Blockless status menus
+
+To open a content mod menu type with no block (from an item, an entity or a command),
+call `player.open_mod_menu(host, request)` with a `ModMenuOpen` request (NeoForge's
 `openMenu(provider, extraDataWriter)`). `menu` is the type's `MenuKey`. `extra`, at most
-32 KiB, is what the client's `host.screen_extra_data()` returns while the screen is open, on
-native and wasm alike. `pos`, when given, is what `screen_pos()` returns; otherwise it returns
-`None`. The type's container slots show empty, and their clicks reach `native_menu_clicked`,
-as `open_menu`'s do. It returns the window id, or `Ok(None)` when a mod cancelled the open.
-It refuses with an `OpenMenuError`: `NotModMenu`, `PlayerUnavailable` (stale, fake, or a
-vanilla client), `TooLarge`, or `Title` when the title could not cross; a cancelled or
-refused open closes nothing.
+32 KiB, is one-time context available through the client's `host.screen_extra_data()`;
+`pos` is an optional hint returned by `screen_pos()`. Neither is live data or block backing.
+Pass `Some(hand)` from an item's use to let `menu_still_valid` compare that hand's current
+stack with the one at open. Other openers pass `None`. The menu's declared container slots,
+if any, start empty; [`owned_slots`](../../concepts/capabilities/menu-slots.md#menu-owned-slots)
+declares a temporary container that belongs to the window. Opening returns the window id or
+`Ok(None)` when vetoed. Invalid type, connection or client support, opening bytes, data count or
+title returns `OpenMenuError`. Neither a refused nor a cancelled open closes the old menu.
+
+For a slotless status screen, declare `data/mymod/sunrise/menu/status.json` as
+`{ "slots": 0, "player_inventory": false, "data_slots": 2 }` and attach a `MenuPart`
+to `mymod:status`. Open it with two signed values, in index order:
+
+```rust,ignore
+let mut request = ModMenuOpen::new(status, Text::translate("mymod.status", vec![]));
+request.data = vec![-80_000, 7];
+player.open_mod_menu(host, request)?;
+```
+
+The initial values are sent after the new window opens. In `screen_draw`, read
+`event.data.get(index)`; the values are not available before they arrive. The owning mod
+gets the live `MenuRef` from `player.container_menu(host)` or the open event and calls, for
+example, `menu.set_data_slot(host, 0, 120_000)?`. It returns `true` for a changed value,
+`false` for a repeat, and refuses unsupported, stale or foreign menus and undeclared indices.
+Updates go only to this player and this window. Within a transaction, another write sees the
+pending value, but a full resend only includes committed values. Commit sends the final changed
+values and abort discards pending writes. Closing or replacing the menu discards its data.
+Buttons and validity still use `menu_button` and `menu_still_valid`; neither needs a slot.
 
 The menu the player had open closes on the server first, as a close does: its `removed`, one
 `player_container_close`, and the cursor stack and crafting grids back to the inventory. Then
-the new menu is built, its screen opened and its contents sent, and the next tick's
-`player_container_open` tells of it. `replace` is the Java `MenuProvider`'s choice
+the new menu is built, its screen opened and its contents sent, and `player_container_open`
+tells of it synchronously. Version 2 names the type string `menu_type` (also on
+`player_container_close`) and supplies `menu: Option<MenuRef>`, valid during the open callback,
+as `PlayerRef::container_menu` does. It is `None` for crafting tables, merchants, workstations,
+lecterns, mount inventories and hidden-slot menus. `replace` is the Java `MenuProvider`'s choice
 (`shouldTriggerClientSideContainerClosingOnOpen`), as for
 [`open_menu`](../../concepts/capabilities/menu-slots.md#a-mods-chest-menu):
 `MenuReplace::CloseFirst`, vanilla's default, first sends the client a close for the old
 window, which centres the mouse again; `MenuReplace::InPlace` sends none, so the client keeps
 its screen and its mouse where they are until the new screen replaces it, as when one
 screen of a machine leads to the next.
+
+## The menu's screen
+
+A mod menu type's screen belongs to the menu type, as a screen registered with NeoForge's
+`RegisterMenuScreensEvent` does: attach a `MenuPart` to the type and answer `screen` (the
+layout) and, as needed, `screen_draw`, `screen_click` and `screen_tooltip`. The same part
+answers whatever opened the menu, a machine's use or `player.open_mod_menu` from an item,
+an entity or a command. A mod menu type with no `screen` answer has no screen, and its
+window closes again.
+
+```rust
+struct BackpackScreen;
+#[mod_api::sunrise_part]
+impl mod_api::MenuPart for BackpackScreen {
+    fn screen(&self, _: &dyn mod_api::Host, _: &mut mod_api::ScreenEvent<'_>) -> Option<mod_api::Screen> {
+        Some(mod_api::Screen {
+            width: 176.0,
+            height: 133.0,
+            // One row of nine; a slot left `None` is hidden.
+            slots: (0..9)
+                .map(|i| Some(mod_api::ScreenSlot { position: [8.0 + 18.0 * i as f32, 18.0], ..Default::default() }))
+                .collect(),
+            inventory_x: 8.0,
+            inventory_y: 51.0,
+            ..Default::default()
+        })
+    }
+}
+
+// In `register`:
+r.menu_part("mymod:backpack", BackpackScreen);
+```
+
+Each of the four events names the menu type (`event.menu`) and the mod block whose menu it
+is (`event.block`: the mod block at the menu's position whose container opens this menu type,
+`None` for a menu opened without one), so blocks that share a menu type
+can lay out or draw differently. A mod block whose container names one of vanilla's menus
+gets a mod screen the same way, from a part attached to that vanilla menu type; it is asked
+only for your own mod's blocks that open the menu, never for another mod's or vanilla's own,
+so several mods' machines can share one vanilla type. One part owns each screen and alone
+hears its four hooks: a mod menu type takes one part answering them, a vanilla type one per
+mod, and a second is refused at load. The server asks `screen` too, whatever opened the
+menu, so a slot it hides takes no shift-click there either.
+
+For a menu type with a `MenuPart`, a button returned by `screen_click` reaches
+`menu_button` on the server. A block-backed menu also supplies its backing block entity;
+a menu opened without a block supplies `None` for both `event.entity` and `event.context.pos`.
+Registered recipe-book screens work for blockless menus when their recipe slots have native
+slot backing. The mod that registered the layout owns its slot controls and can attach a part
+for drawing, clicks and tooltips; another mod's screen part is refused.
+
+## Laying a screen's slots out again
+
+A screen whose slots move while it is open (Tinkers' tinker station, which lays its input slots out for the
+tool being built) calls `host.set_screen_slot(menu, slot, Some([x, y]))` on the client, or `None` to hide a
+slot ([moving or hiding a mod screen's slots](../client/screens.md#moving-or-hiding-a-mod-screens-slots)). Only
+the screen changes: the server's menu keeps every slot.
 
 ## Receiving synchronized data
 

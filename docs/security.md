@@ -1,6 +1,6 @@
 # Security
 
-How Horizon keeps its code and its downloads safe while most of the work is done by AI agents and releases go out
+How Sunrise keeps its code and its downloads safe while most of the work is done by AI agents and releases go out
 by themselves, including when Ludovic isn't at his computer. In plain words: what someone could have done before,
 what stops them now, and what still needs Ludovic.
 
@@ -33,17 +33,17 @@ and some are waiting for Ludovic:
 
 | Part | Today |
 | --- | --- |
-| `verify` always runs | **Live** (#1010). |
+| `verify` always runs | **Live**. |
 | Fork pull requests need approval | **Live**: every outside contributor's workflows wait for a maintainer's approval. |
 | Private vulnerability reporting | **Live** (see the end of this page). |
-| Signed checksums on releases | **Live** for new releases (#1011): the `release` environment holds the key, and its public half is in `release-keys.txt` (#1023). Releases from before then are unsigned. |
-| Signed prebuilt native-mod builds | **Being built** (#11859): horizon-mods' `native-builds` environment (deployable from `main` only) holds `NATIVE_BUILD_SIGNING_KEY`, a key of its own, never the release key, because the registry compiles other people's code there. Its public half is in `native-build-keys.txt`. Each signature covers the build's request key (target, base commit, each mod's file SHA-256), its target and the archive's SHA-256 (`horizon_release_sign::native_build`), so it can't pass for another set's file or for a release. `tools/ci/sign_native_build.sh` signs with OpenSSL. |
-| Launchers and servers checking signatures | **Not yet**: #1014 waits as a draft until a signed stable game release and a signed launcher release exist. Until then they trust GitHub's checksum, as before. |
-| Smoke test and release-blocker before publishing | **Live**: since 2026-10-23 every release is the latest at once (one channel, Ludovic's decision), so it is published only after its smoke test passed and while no `release-blocker` is open. The 6-hour beta of the old Alpha, then stable flow (#1012) is gone. |
+| Signed checksums on releases | **Live** for new releases: the `release` environment holds the key, and its public half is in `crates/sunrise-release-sign/release-keys.txt`. Releases from before then are unsigned. |
+| Signed prebuilt native-mod builds | **Being built**: sunrise-mods' `native-builds` environment (deployable from `main` only) holds `NATIVE_BUILD_SIGNING_KEY`, a key of its own, never the release key, because the registry compiles other people's code there. Its public half is in `native-build-keys.txt`. Each signature covers the build's request key (target, base commit, each mod's file SHA-256), its target and the archive's SHA-256 (`sunrise_release_sign::native_build`), so it can't pass for another set's file or for a release. `tools/ci/sign_native_build.sh` signs with OpenSSL. |
+| Launchers and servers checking signatures | **Live**: the launcher (for the game and for itself) and `sunrise-server update` check the release signature and refuse anything unsigned or signed with another key ("Signed updates", below). The first install with `packaging/server/install.sh` or `install.ps1` checks it too, with a verifier the script pins by hash ("The first install", below). |
+| Smoke test and release-blocker before publishing | **Live**: since 2026-10-23 every release is the latest at once (one channel, Ludovic's decision), so it is published only after its smoke test passed and while no `release-blocker` is open. The 6-hour beta of the old Alpha, then stable flow is gone. |
 | Reports marked suspicious | **Partly**: the scan of Discord for agents does it. Kira's issues do it once its pull request merges. |
-| Code owners' review of the pipeline | **Not yet**: `.github/CODEOWNERS` and its protection (#1015) wait for the App, below. Until then pipeline changes merge like any other once `verify` passes. |
+| Code owners' review of the pipeline | **Not yet**: `.github/CODEOWNERS` and its protection wait for the App, below. Until then pipeline changes merge like any other once `verify` passes. |
 | Agents on their own GitHub App | **Not yet**: prepared, waiting for Ludovic to create it. Agents still use his account. |
-| Mac mini releases from a clean checkout | **Waiting to merge** (#1024): see "What this doesn't solve". |
+| Mac mini releases from a clean checkout | **Waiting to merge**: see "What this doesn't solve". |
 
 ## What stops it now
 
@@ -58,8 +58,8 @@ and some are waiting for Ludovic:
   install by themselves, so the release run publishes it only after its smoke test passed (the game started and
   drew a world on the Mac mini) and only while no issue labelled `release-blocker` is open; otherwise nothing is
   published.
-- **Signed updates.** Each release carries a list of its files' checksums, signed with Horizon's release key. The
-  launcher (for the game and for itself) and `horizon-server update` check that signature against the public key
+- **Signed updates.** Each release carries a list of its files' checksums, signed with Sunrise's release key. The
+  launcher (for the game and for itself) and `sunrise-server update` check that signature against the public key
   built into them, then check the download against the list. Anything unsigned, signed with another key, signed
   for another version, or changed in any way is refused with a message saying why. Releases from before signing
   stay installable, for going back to an older version, but only with the exact files they had when signing
@@ -69,9 +69,9 @@ and some are waiting for Ludovic:
   the code that gets built. Nobody, Ludovic included, ever needs to see it.
 - **A test SDK key, developer builds only.** An SDK is checked against the release keys like a release is. The daily
   run's `fn-replace-check` checks its own, unpublished SDK, signed with a throwaway key made for that run; it gives
-  the launcher the public key in `HORIZON_SDK_TRUSTED_KEY` (one base64 Ed25519 key, `ephemeral.pub` from
-  `EPHEMERAL=yes tools/ci/sign_release.sh`). `horizon_release_sign::sdk_keys_for` adds it for SDK checks only (the
-  launcher's SDK index and `cargo horizon-mod`'s fetch) and only in a build with `debug_assertions`: a release build
+  the launcher the public key in `SUNRISE_SDK_TRUSTED_KEY` (one base64 Ed25519 key, `ephemeral.pub` from
+  `EPHEMERAL=yes tools/ci/sign_release.sh`). `sunrise_release_sign::sdk_keys_for` adds it for SDK checks only (the
+  launcher's SDK index and `cargo sunrise-mod`'s fetch) and only in a build with `debug_assertions`: a release build
   does not compile the lookup, so no environment adds trust to a shipped launcher, and game and launcher releases
   are never checked with it. A test in both profiles proves the release profile ignores the variable. No release
   key enters the daily job.
@@ -79,32 +79,34 @@ and some are waiting for Ludovic:
   A Nightly carries two signatures over the same `SHA256SUMS`. `SHA256SUMS.sig` is signed
   for the channel (`horizon release nightly`), for launchers and servers from before this change, which read only
   that one. `SHA256SUMS.v2.sig` is signed for the Nightly's own version (`horizon release nightly-<date>-<commit>`),
-  which its release title names (`Nightly <date> · <commit>`). Current launchers, `horizon-server update` and
+  which its release title names (`Nightly <date> · <commit>`). Current launchers, `sunrise-server update` and
   `install.sh` parse that title strictly, refuse a Nightly whose title doesn't parse, and install it only with a v2
   signature for exactly that version. That way an older Nightly can't be served as tonight's: its signature names its own date. Installing
   an older Nightly on purpose still works as a rollback, with a warning, and never happens as an automatic update.
   **The changeover:** Nightlies published before this change have no `SHA256SUMS.v2.sig`, so they can't be installed
   or picked with `--version` any more; they leave GitHub with the 7-day rotation. Until a v2 Nightly exists, a
   launcher has nothing to update to, so the first Nightly is built right after this merges. A server can still go back
-  to a build it already has with `horizon-server rollback`, which checks nothing it hasn't already checked.
+  to a build it already has with `sunrise-server rollback`, which checks nothing it hasn't already checked.
   **When the old signature can go:** once support for launchers and servers predating v2 is retired. The fork
   collects no telemetry, so it cannot determine this from usage data. Then drop `SHA256SUMS.sig` from nightly-build.yml's
-  publish step and the `--tag nightly` check before it, and remove `NIGHTLY` from horizon-release-sign. Releases (not
+  publish step and the `--tag nightly` check before it, and remove `NIGHTLY` from sunrise-release-sign. Releases (not
   Nightlies) keep their single `SHA256SUMS.sig`, which is already signed for their tag.
-  **Fork releases (`arismoko/horizon`):** the launcher chooses keys by repository. Only
-  `crates/horizon-release-sign/fork-release-keys.txt` authorizes fork downloads; upstream's keys
-  authorize only `horizon-rust/horizon`, and unknown repositories have no trusted keys. An empty
-  fork key file refuses every fork release. Upstream's legacy checksum pins never authorize a
-  fork archive: every fork game or launcher download needs a fork signature. The real private key
-  exists only as the repository secret `RELEASE_SIGNING_KEY`; dry runs receive no release secrets
-  and sign with an ephemeral test key instead. To rotate, first ship the next public key in the
-  same fork key file, then enable `RELEASE_SIGNING_KEY_NEXT` for overlapping signatures before
-  replacing the primary secret and eventually retiring the old public key. Nightly title,
+  **Keys by repository:** `sunrise_release_sign::trusted_keys_for` trusts
+  `crates/sunrise-release-sign/release-keys.txt` for `sunrise-org/sunrise` only; every other
+  repository (`horizon-rust/horizon` and `arismoko/horizon` included) has no trusted keys and fails
+  closed. Upstream's legacy checksum pins never authorize a Sunrise archive. The real private key
+  exists only as the secret `RELEASE_SIGNING_KEY`; dry runs receive no release secrets
+  and sign with an ephemeral test key instead. To rotate, first ship the next public key in
+  `release-keys.txt` (and a new `verifier@X.Y.Z`, pinned in `packaging/server/install.sh` and `install.ps1`), with
+  its private half set as whichever of `RELEASE_SIGNING_KEY` and `RELEASE_SIGNING_KEY_NEXT` is empty
+  (`tools/ci/new_release_key.sh` sets it), so releases are signed with both; then retire the old key's secret and
+  public key and pin a verifier built without it ([release-flow.md](release-flow.md#signed-checksums), "Rotating the
+  key"). Nightly title,
   channel and exact-version signature binding remain unchanged.
 - **Upstream release machinery needs the council.** The workflows, the release and signing tools, the update-checking code
   and the installers are listed in `.github/CODEOWNERS`. Once main's protection requires code owners' reviews, a
   change to any of them waits for a review from the `horizon-rust/council` team (council poll P35). Everything else still merges as soon as its checks pass.
-- **Agents get their own, smaller identity** (prepared, switched on by Ludovic). The `horizon-agent` GitHub App
+- **Agents get their own, smaller identity** (prepared, switched on by Ludovic). The `sunrise-agent` GitHub App
   can read and write code, pull requests and issues, and read the checks. It cannot change settings, workflows,
   secrets or members, and its tokens last an hour. Once agents use it, their pull requests are the app's, and
   Ludovic approves the rare pipeline change with one tap.
@@ -115,8 +117,8 @@ and some are waiting for Ludovic:
 - **Holding releases back or speeding one up**, from his phone if he likes. Label an issue `release-blocker` to
   hold every release until it is closed; label a pull request `release-now` to release it as soon as it merges.
 - **Creating the GitHub App**: one link, "Create GitHub App", then "Install". His login, his clicks.
-- **Fork pull requests**: their checks run only after a maintainer approves them, and they run on the Mac mini only
-  after a maintainer has read them and added `run-parity`.
+- **Fork pull requests**: their checks run only after a maintainer approves them. Parity harnesses never run a
+  pull request's code: they run only in the daily run, on main's head.
 - **A leaked key**: rotate it (docs/release-flow.md, "Signed checksums"). Launchers older than the new key then
   refuse new versions until players download the launcher again.
 
@@ -128,18 +130,24 @@ and some are waiting for Ludovic:
   within minutes of merging.
 - **Until agents switch to the App**, they still work with Ludovic's own account, so nothing technical tells his
   actions from theirs. Code owners' reviews are switched on together with the App.
-- **The Mac mini** builds the macOS release and also runs pull requests' parity checks: a pull request from this
-  repository runs its code there before review, and a fork's does once a maintainer adds `run-parity`. Code
-  running there as the runner's user could tamper with what the next release builds. Releases check out clean
-  (#1024), which removes anything a pull request left in the work folder by accident, but
+- **The Mac mini** builds the macOS release. Pull requests' parity checks no longer run there (parity runs only in
+  the daily run, on main's head), but a release builds whatever merged. Code
+  running there as the runner's user could tamper with what the next release builds. Releases check out clean,
+  which removes anything a pull request left in the work folder by accident, but
   not a deliberate attack. The protection is review: only agents and maintainers push to this repository, and a
-  maintainer reads a fork's change before labelling it.
-- **The first install** with `install.sh` or `install.ps1` checks the signature when OpenSSL 3 is installed: it
-  verifies `SHA256SUMS.sig` (a Nightly's `SHA256SUMS.v2.sig`, for its own version) against the release key built
-  into the script, then the archive against `SHA256SUMS`. `install.ps1` looks for OpenSSL on the PATH and in Git
-  for Windows, which ships it; Windows itself can't check Ed25519. With an older OpenSSL, LibreSSL (what macOS
-  ships) or none, the script says so and checks only the SHA-256 GitHub publishes. Every update after that checks
-  the signature.
+  maintainer reads a fork's change before it merges.
+- **The first install** with `packaging/server/install.sh` or `install.ps1` from a GitHub release (the default)
+  trusts the script itself. The script downloads `sunrise-verify` from the `verifier@X.Y.Z` release it pins and
+  refuses it unless its SHA-256 is the one pinned in the script. The verifier then checks `SHA256SUMS.sig` (a Nightly's `SHA256SUMS.v2.sig`, for its
+  own version) against the release keys built into it, then the archive against `SHA256SUMS`. Any failure stops
+  the install with its cause; nothing falls back to GitHub's SHA-256. So the anchor is the pin on main, fetched
+  over HTTPS: it changes only by pull request, written by `tools/ci/pin_verifier.py` after `gh attestation verify`
+  accepts every binary as built by `verifier.yml` on main
+  (docs/release-flow.md, "The install scripts' verifier"). The verifier binaries are not code-signed, so macOS
+  Gatekeeper and Windows SmartScreen don't vouch for them; the pin does. `--insecure-checksum-only`
+  (`-InsecureChecksumOnly`) skips the signature, with a loud warning, for CI fixtures; no install command in these
+  docs uses it. `install.sh --archive FILE` installs an archive already on the machine (a build of your own) and
+  checks nothing: checking it is up to whoever brought it.
 
 ## Reporting a security problem
 

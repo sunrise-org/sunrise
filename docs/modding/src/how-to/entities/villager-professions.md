@@ -6,7 +6,7 @@ Declare custom professions once per mod load through
 `event.professions.register(definition)` on its `VillagerProfessions` registrar.
 The engine records the declaring mod as owner. World mutation is unavailable
 at registration, and datapack reload resolves the declarations again without
-rerunning the callback. Native and wasm mods use the same declaration API.
+rerunning the callback.
 
 ## Definitions and resources
 

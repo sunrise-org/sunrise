@@ -1,0 +1,5 @@
+manifest:
+refused: sunrise-mod.toml: rule for other: url is not https://
+
+icon:
+unavailable

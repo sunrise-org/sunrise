@@ -30,7 +30,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           sparse-checkout: |
-            .github/fork-reviewers.txt
+            .github/trusted-reviewers.txt
             tools/ci/nightly_set.py
             tools/ci/claim_command.py
             tools/fork/claim.py
@@ -60,7 +60,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           sparse-checkout: |
-            .github/fork-reviewers.txt
+            .github/trusted-reviewers.txt
             tools/ci/nightly_set.py
             tools/ci/claim_command.py
             tools/fork/claim.py

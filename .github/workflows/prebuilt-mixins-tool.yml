@@ -2,7 +2,7 @@ name: prebuilt mixins tool
 # The horizon-mixins tool the launcher runs for [[native.mixin]] builds, prebuilt for each launcher
 # platform, so a player's first mixin build downloads it instead of compiling it for a minute. The
 # tool is decided by the pinned horizon-mixins commit and the one carried patch
-# (crates/horizon-mod-package/src/mixins_tool.rs), so one prerelease per pair, tagged
+# (crates/sunrise-mod-package/src/mixins_tool.rs), so one prerelease per pair, tagged
 # mixins-tool-<commit>-<patch hash>, never marked latest and never deleted: older launchers keep
 # finding theirs. A run whose pair already has a release stops early, unless a dispatch forces the build. The source is patched by
 # `xtask mixins-tool patch`, the applier the launcher uses where no prebuilt exists. A dispatch on
@@ -12,7 +12,7 @@ on:
     branches: [main]
     paths:
       - tools/mixins/**
-      - crates/horizon-mod-package/src/mixins_tool.rs
+      - crates/sunrise-mod-package/src/mixins_tool.rs
       - .github/workflows/prebuilt-mixins-tool.yml
   workflow_dispatch:
     inputs:

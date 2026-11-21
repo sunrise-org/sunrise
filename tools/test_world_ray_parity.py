@@ -36,6 +36,14 @@ def corpus():
         yield row(state(collider=full,outline=shapes[2],visual=shapes[3],interaction=shapes[4],fluid_shape=full,source=bool(mask&1),empty=bool(mask&2),water=bool(mask&4)),fluid_mode=mode,**{'from':list(map(bits,ray[0])),'to':list(map(bits,ray[1]))})
     for mode,fluid_mode,fail in itertools.product(range(4),range(4),range(-1,42)):
         yield row(state(collider=full,outline=full,visual=full,interaction=full,fluid_shape=full,nether=True,source=True,empty=False,water=True),block_mode=mode,fluid_mode=fluid_mode,fail=fail,entity=True,player=True,server=True,delay=0)
+    # Real 26.3 shapes by mode: fence (outline 16 px, collision 24 px), powder snow (no visual shape,
+    # falling-entity collision), four snow layers (outline one layer above collision).
+    fence=state(collider=shape([[.375,0,.375,.625,1.5,.625]]),outline=shape([[.375,0,.375,.625,1,.625]]),visual=shape([[.375,0,.375,.625,1,.625]]),empty=False)
+    powder=state(collider=shape([[0,0,0,1,.8999999761581421,1]]),outline=full,visual=[],empty=False)
+    snow4=state(collider=shape([[0,0,0,1,.375,1]]),outline=shape([[0,0,0,1,.5,1]]),visual=shape([[0,0,0,1,.5,1]]),empty=False)
+    for s,rays in((fence,[([.5,2,.5],[.5,1.2,.5]),([.5,2,.5],[.5,.5,.5]),([.2,2,.5],[.5,1.2,.5]),([.5,1.9,.5],[.5,.9,.5]),([-1,1.2,.5],[2,1.2,.5])]),(powder,[([.5,2,.5],[.5,.5,.5]),([.5,1.5,.5],[.5,.95,.5]),([-1,.5,.5],[2,.5,.5])]),(snow4,[([.5,1,.5],[.5,.45,.5]),([.5,1,.5],[.5,.3,.5]),([.5,1,.5],[.5,.6,.5]),([-1,.4,.5],[2,.4,.5])])):
+        for (a,b),mode in itertools.product(rays,range(3)):
+            yield row(s,block_mode=mode,**{'from':list(map(bits,a)),'to':list(map(bits,b))})
     rng=random.Random(0x524159434c4950)
     for _ in range(7000):
         sh=[rng.choice(shapes) for _ in range(5)];p=[rng.choice([-2,-1,-0.,0.,.25,.5,1.,2.,3.]) for _ in range(3)];q=[rng.choice([-2,-1,-0.,0.,.25,.5,1.,2.,3.]) for _ in range(3)]
@@ -48,19 +56,19 @@ def main():
     report_path=build/'report.json';report_path.unlink(missing_ok=True)
     if args.prepare:lab.prepare()
     lock,jars,libraries=base.verify_artifacts()
-    oracle=lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaWorldRayOracle.java'
-    sources=[oracle,Path(__file__),lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/lab.py',lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-core/Cargo.toml',lab.ROOT/'crates/horizon-world/Cargo.toml',*sorted((lab.ROOT/'crates/horizon-core/src').rglob('*.rs')),*sorted((lab.ROOT/'crates/horizon-world/src').rglob('*.rs')),lab.ROOT/'crates/horizon-world/examples/probe/world_ray_fixture.rs']
+    oracle=lab.ROOT/'mods/sunrise/src/test/java/dev/sunriselab/parity/VanillaWorldRayOracle.java'
+    sources=[oracle,Path(__file__),lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/lab.py',lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/sunrise-core/Cargo.toml',lab.ROOT/'crates/sunrise-world/Cargo.toml',*sorted((lab.ROOT/'crates/sunrise-core/src').rglob('*.rs')),*sorted((lab.ROOT/'crates/sunrise-world/src').rglob('*.rs')),lab.ROOT/'crates/sunrise-world/examples/probe/world_ray_fixture.rs']
     tested_sources=base.source_hashes(sources)
     classes=build/'classes';classes.mkdir(exist_ok=True)
     def run(command,name):
         with (build/(name+'.log')).open('w',encoding='utf-8') as log:base.run(list(map(str,command)),stdout=log,stderr=subprocess.STDOUT)
     dependency_path=os.pathsep.join(map(str,libraries))
-    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',str(jars['server'])+os.pathsep+dependency_path,'-d',classes,oracle],'compile-java')
+    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/sunrise/src/test/java'),'-cp',str(jars['server'])+os.pathsep+dependency_path,'-d',classes,oracle],'compile-java')
     def java(side,mode,path):
-        run(['java','-Xmx512M','-cp',os.pathsep.join([str(classes),str(jars[side]),dependency_path]),'dev.horizonlab.parity.VanillaWorldRayOracle',mode,path],side+'-'+mode)
+        run(['java','-Xmx512M','-cp',os.pathsep.join([str(classes),str(jars[side]),dependency_path]),'dev.sunriselab.parity.VanillaWorldRayOracle',mode,path],side+'-'+mode)
     fixtures=list(corpus());inputs=build/'inputs.txt';inputs.write_text(''.join(json.dumps(value,separators=(',',':'))+'\n' for value in fixtures),encoding='utf-8')
     fixture_paths=[inputs];tested_fixtures=base.source_hashes(fixture_paths)
-    run(['cargo','build','--release','-p','horizon-world','--example','world_probe'],'compile-rust')
+    run(['cargo','build','--release','-p','sunrise-world','--example','world_probe'],'compile-rust')
     metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True))
     binary=Path(metadata['target_directory'])/'release/examples'/('world_probe.exe' if os.name=='nt' else 'world_probe')
     run([binary,'world_ray_fixture',build],'rust');references=[]

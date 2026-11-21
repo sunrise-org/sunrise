@@ -1,6 +1,6 @@
 [book]
-title = "Modding Horizon"
-description = "Guide and reference for making Horizon mods: content, native and WebAssembly"
+title = "Modding Sunrise"
+description = "Guide and reference for making Sunrise mods: content and native"
 language = "en"
 src = "src"
 
@@ -29,8 +29,8 @@ if sys.argv[1:2] == ["supports"]:
     sys.exit(0)
 context, book = json.load(sys.stdin)
 sys.path.insert(0, str(pathlib.Path(context["root"]).resolve().parents[1] / "tools"))
-import neoforge_counterparts as counterparts
-print(json.dumps(counterparts.preprocess(context, book)))
+import modding_hook_notes as notes
+print(json.dumps(notes.chapter(context, book, "counterparts", "NeoForge counterparts", "reference/neoforge-counterparts.md")))
 '"""
 before = ["concept-pages", "links"]
 
@@ -65,9 +65,16 @@ before = ["links"]
 [output.html]
 default-theme = "light"
 preferred-dark-theme = "coal"
-additional-css = ["theme/horizon.css"]
+additional-css = ["theme/sunrise.css"]
 git-repository-url = "https://github.com/sunrise-org/sunrise"
 edit-url-template = "https://github.com/sunrise-org/sunrise/edit/main/docs/modding/{path}"
+
+# Pages that moved keep their old address.
+[output.html.redirect]
+"/start/installing.html" = "../players/installing-mods.html"
+"/concepts/injections.html" = "./hooks-and-the-host.html"
+"/concepts/injections/typed-api.html" = "../hooks-and-the-host.html"
+"/how-to/entities/named-hook-points.html" = "./entity-hooks.html"
 
 # The how-to groups are long: show each part's top chapters, open one to see its pages.
 [output.html.fold]

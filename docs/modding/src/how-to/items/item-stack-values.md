@@ -8,9 +8,8 @@ slot or a consumed stack is `None`; it is never a zero-count `ItemStack`.
 Every loaded item, vanilla or modded, has an `ItemKey`. Resolve identifiers through
 `Host::item_key` once when loading data and retain the key. Forward references requested during
 registration keep their slots when the load completes; unresolved references refuse the load.
-Keys are process-local identities, not persistent names. Tags likewise have retained `TagKey`
-identities, while their item and fluid membership is read through `Host::tags` and changes on
-reload. Unknown tags are empty; unavailable authoritative mappings return `None`.
+Keys are process-local identities, not persistent names. See [Item values and tag names](../../concepts/registry-keys.md#item-values-and-tag-names)
+for retaining a `TagKey` and reading the current membership through `Host::tags`.
 
 ## Stored values and effective components
 
@@ -46,8 +45,11 @@ normalized just like `set_components`; malformed damage leaves the entire stack 
 including explicit zero damage. If `other` has no override, the target inherits too:
 no effective prototype value is materialized. `get` followed by `set` covers `update`.
 These owned-value operations require no host. To persist them on a whole stack, use
-server-side `ItemPlace::edit` inside a transaction; it preserves item/count and rolls
-back with its parent transaction instead of splitting one item off.
+server-side `ItemPlace::edit` inside a transaction. It preserves item/count, rolls
+back with its parent transaction and applies only changed components to player slots,
+hands and equipment without equipping the stack again. The cursor and virtual transfer
+wrappers do not support whole-stack edits. Use a normal slot write if you need to replace
+the item or change its count.
 
 `ItemResource::with_component` is also fallible for raw component values. Its default-value
 elision and `without_component` preserve the normal prototype-plus-patch semantics. The latter
@@ -57,7 +59,9 @@ records real NBT removal entries for default components; it is not an unknown-va
 
 A consume or death-protection override whose opaque native effect payload cannot be decoded
 refuses the whole stack write with `StackWriteError::InvalidEffectPayload`, before any
-resident state changes.
+resident state changes. A `villager_food` patch without positive nutrition is refused as
+`StackWriteError::InvalidComponents { reason: StackError::InvalidComponent { id } }`;
+`id` names `minecraft:villager_food`. An explicit removal remains valid.
 The items host area owns metadata reads such as `max_stack_size(ItemKey)` and
 `max_damage(ItemKey)`. A stack does not take a host just to read a maximum, and an unavailable
 maximum never turns into a fabricated limit of 64.
@@ -77,24 +81,44 @@ edits retain those captured engine values. Consuming mutable events such as `bon
 `item_after_vertical_collision` lend `Option<ItemStack>` so a listener can consume the value by
 setting `None`.
 
-The `item_stacked_on_other` bridge commits its clicked slot, cursor and cancellation flags as
-one unit, including the menu's slot-operation queues and map-id reservations. The block-entity
+The `item_stacked_on_other` hook runs on the authoritative side only (a client predicts vanilla and the server corrects it). It does not lend the slot: it hands the listener the cursor and
+the clicked slot's stack, frozen, and takes a typed answer (`StackedOnOtherResult`: `handled`, and
+`StackResult::Keep` or `Set` for the cursor and the slot) that the game validates once and applies
+once. A stack can be set only by a cancelled click that is also `handled`; any other answer that
+sets one is refused. A replacement must pass the clicked slot's pickup, placement and capacity
+rules for the actual stacks. It cannot change a result slot or take an item from a brewing potion
+slot, because the replacement does not run the slot's take effects. A refused replacement keeps
+the slot and cursor as they were and undoes the listener's writes. A write through the `Host` to
+what the click read likewise makes the click stale and refuses it.
+
+The block-entity
 tick, menu-button and menu-quick-move bridges validate their captured snapshot outputs together
 before applying them. These are output guarantees, not whole-world transactions: independent
 `ServerHost` storage writes, commands, messages and other effects are not rolled back on a
 refused output. Carrier-form callbacks such as `bonemeal` and `item_after_vertical_collision`
 also retain their captured stack outputs on refusal but do not journal independent host writes.
 
+A client without this mod predicts vanilla here; the server corrects it.
+
 Item-model callbacks receive the owned stack and a separate `bundle_selected` number (`-1`
 means none). Runtime selection is not a persistent component. Drawing receives the API-owned
 `ItemDisplayContext`, not the renderer's enum.
+
+## A stack's name
+
+`host.hover_name(&stack)` is `ItemStack.getHoverName()` as a component, on both sides: the custom
+name as written, else a potion's contents name, a written book's non-blank title, a player head's
+`%s's Head`, the `item_name` component, else the item's name as a translatable (`item.*` or
+`block.*`, with no fallback; a fallback written into a component is kept). It has no rarity colour or italics. Because it
+stays a component, each player renders it in their own language: put it into world text or a
+display as it is. Call `host.text_string(&name)` for a string, which is in the language of the
+side that calls it. An invalid stack is a `TextFormError`.
 
 ## The NBT escape
 
 `ItemStack::from_nbt(host, compound)` and `to_nbt(host)` are the NBT escape. They live on the
 plain API value, not as a second engine implementation in the items host area. They use only
-typed host key lookup and canonical id metadata, so native and WebAssembly mods execute the
-same parsing and serialization code. Persistent NBT contains identifiers, never process-local
+typed host key lookup and canonical id metadata. Persistent NBT contains identifiers, never process-local
 key slots. Unknown ids, malformed values and zero counts fail decoding; unavailable id
 metadata fails encoding.
 

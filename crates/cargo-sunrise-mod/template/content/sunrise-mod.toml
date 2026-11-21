@@ -1,0 +1,7 @@
+id = "{id}"
+name = "{name}"
+version = "0.1.0"
+description = ""
+authors = []
+# A content mod: blocks, items and mob effects from data/ and assets/, no code.
+side = "both"

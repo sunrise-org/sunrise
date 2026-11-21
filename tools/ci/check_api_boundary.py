@@ -5,7 +5,7 @@ This is a conservative token-based source audit, not a Rust type checker. It sca
 all source files (including generator export fragments and cfg-gated code), follows
 use aliases, and checks public declarations and catalog signatures. Cargo then
 proves type correctness. Private implementation bodies are not public signatures.
-The only engine-owned vocabulary permitted is the explicit horizon-core leaf list
+The only engine-owned vocabulary permitted is the explicit sunrise-core leaf list
 below. Additions require a reason, not a wildcard or a whole-file exemption.
 """
 from __future__ import annotations
@@ -20,18 +20,19 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 ENGINE = {
-    "horizon_world", "horizon_client", "horizon_client_lib",
-    "horizon_client_core", "horizon_client_render", "horizon_items",
-    "horizon_assets", "horizon_mod_package", "horizon_mods", "horizon_core",
+    "sunrise_world", "sunrise_client", "sunrise_client_lib",
+    "sunrise_client_core", "sunrise_client_render", "sunrise_items",
+    "sunrise_assets", "sunrise_mod_package", "sunrise_mods", "sunrise_core",
 }
 # Shared Minecraft vocabulary: plain, engine-independent values, parity RNG,
-# and the JSON/NBT format converter. Never allow all of horizon-core.
+# and the JSON/NBT format converter (JavaString is the key and string type of
+# nbt::Compound and nbt::Tag, a plain UTF-16 vector). Never allow all of sunrise-core.
 LEAVES = {
     "arm_pose::ArmPose", "game_mode::GameMode", "geometry::Direction",
     "position::BlockPos", "position::ChunkPos", "random::LegacyRandom",
     "random::RandomSource", "bounding_box::BoundingBox",
     "equipment_slot::EquipmentSlot", "identifier::Identifier", "nbt::Compound",
-    "nbt::Tag", "use_animation::UseAnimation", "connection_kind::ConnectionKind",
+    "nbt::JavaString", "nbt::Tag", "use_animation::UseAnimation", "connection_kind::ConnectionKind",
     "dimension::Dimension", "neighbour_update::NeighbourUpdate",
 }
 # Owner-approved JSON source-file parser exceptions, not arbitrary JSON carriers.
@@ -182,7 +183,7 @@ def source_findings(path: Path, source: str):
                 continue
             if parts[0] in ENGINE:
                 leaf = "::".join(parts[1:])
-                if parts[0] != "horizon_core" or leaf not in LEAVES:
+                if parts[0] != "sunrise_core" or leaf not in LEAVES:
                     findings.append(Finding(str(path), token.line, "engine-type", "::".join(parts)))
             if parts[0] == "serde_json":
                 allowed = path.name == "serde_json.rs" and path.parent.name == "exports"
@@ -272,7 +273,7 @@ def check(crate: Path):
                 for alias, spec in value.items():
                     package = spec.get("package", alias) if isinstance(spec, dict) else alias
                     normalized = package.replace("-", "_")
-                    if normalized in ENGINE and normalized != "horizon_core":
+                    if normalized in ENGINE and normalized != "sunrise_core":
                         findings.append(Finding(str(manifest_path), 1, "engine-dependency", package))
             elif isinstance(value, dict):
                 dependencies(value)
@@ -291,14 +292,14 @@ def generated_findings(target: Path):
     from generation. Checking only the catalog would miss those public types.
     Cargo must run first; callers may not silently skip missing build output.
     """
-    # Cargo's build folder: `build/horizon-mod-vocab-<hash>/out`, or `build/horizon-mod-vocab/<hash>/out` in the
+    # Cargo's build folder: `build/sunrise-mod-vocab-<hash>/out`, or `build/sunrise-mod-vocab/<hash>/out` in the
     # layout newer Cargo uses.
     candidates = [p for p in target.rglob("mod_api_generated.rs")
-                  if re.fullmatch(r"horizon-mod-vocab-[0-9a-f]+", p.parent.parent.name)
-                  or (p.parent.parent.parent.name == "horizon-mod-vocab"
+                  if re.fullmatch(r"sunrise-mod-vocab-[0-9a-f]+", p.parent.parent.name)
+                  or (p.parent.parent.parent.name == "sunrise-mod-vocab"
                       and re.fullmatch(r"[0-9a-f]+", p.parent.parent.name))]
     if not candidates:
-        return [Finding(str(target), 1, "missing-generated", "build horizon-mod-vocab before the full boundary audit")]
+        return [Finding(str(target), 1, "missing-generated", "build sunrise-mod-vocab before the full boundary audit")]
     newest = max(candidates, key=lambda p: p.stat().st_mtime_ns)
     findings = []
     for name in ("mod_api_generated.rs", "mod_api_generated_host.rs"):
@@ -311,12 +312,12 @@ def generated_findings(target: Path):
 
 
 NEGATIVE = '''
-use horizon_items::items::ItemStack as Borrowed;
-pub use horizon_world::fluid::FluidState as Innocent;
-pub use horizon_client_core::text::*;
+use sunrise_items::items::ItemStack as Borrowed;
+pub use sunrise_world::fluid::FluidState as Innocent;
+pub use sunrise_client_core::text::*;
 pub fn stack() -> Borrowed { todo!() }
 pub fn json() -> serde_json::Value { todo!() }
-pub mod __private { pub use horizon_world::fluid::FluidState; }
+pub mod __private { pub use sunrise_world::fluid::FluidState; }
 pub use crate::__private::FluidState as Public;
 '''
 
@@ -326,7 +327,7 @@ def negative_control():
     with tempfile.TemporaryDirectory() as directory:
         crate = Path(directory)
         (crate / "src/exports").mkdir(parents=True)
-        (crate / "Cargo.toml").write_text('[dependencies]\nrenamed = { package = "horizon-world", version = "1" }\n')
+        (crate / "Cargo.toml").write_text('[dependencies]\nrenamed = { package = "sunrise-world", version = "1" }\n')
         (crate / "src/exports/probe.rs").write_text(NEGATIVE)
         found = check(crate)
         required = {"engine-dependency", "engine-type", "json-signature", "private-export"}
@@ -335,7 +336,7 @@ def negative_control():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--crate", type=Path, default=ROOT / "crates/horizon-mod-api")
+    parser.add_argument("--crate", type=Path, default=ROOT / "crates/sunrise-mod-api")
     parser.add_argument("--source-only", action="store_true", help="early pre-build dependency/source gate only")
     parser.add_argument("--generated-root", type=Path, default=Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")))
     args = parser.parse_args()

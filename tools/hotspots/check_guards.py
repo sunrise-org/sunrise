@@ -5,13 +5,9 @@ Each guard compares this change with the merge base, the way tools/merge_base.py
 today stays and only growth fails:
 - docs/modding/src/SUMMARY.md may not gain a line for a page the book adds on its own
   (tools/modding_concept_pages.py: a page in concepts/ or how-to/, or in a folder beside its parent page);
-- a change may touch at most 5 files under launcher/lang/: English is the `tr()` text and a missing translation
-  falls back to it (launcher/src/i18n/tests.rs). A rollup or an upstream sync carries other PRs' changes and is not
-  checked; it is recognised by its `rollup` or `sync` label, or by the branch name our rollups and syncs use
-  (CI passes the branch only for a pull request from this repository, so a fork cannot borrow the name);
-- crates/horizon-mod-vocab/src/hooks/notes.rs may not grow.
+- crates/sunrise-mod-vocab/src/hooks/notes.rs may not grow.
 
-    python3 tools/hotspots/check_guards.py --base origin/main [--branch NAME] [--labels "a b"]
+    python3 tools/hotspots/check_guards.py --base origin/main
 """
 
 import argparse
@@ -29,16 +25,9 @@ import modding_concept_pages as pages  # noqa: E402
 ROOT = TOOLS.parent
 BOOK_SRC = "docs/modding/src"
 SUMMARY = f"{BOOK_SRC}/SUMMARY.md"
-LANG = "launcher/lang/"
-LANG_LIMIT = 5
-NOTES = "crates/horizon-mod-vocab/src/hooks/notes.rs"
+NOTES = "crates/sunrise-mod-vocab/src/hooks/notes.rs"
 # A chapter line, with an optional trailing HTML comment (mdBook still renders the chapter).
 SUMMARY_LINE = re.compile(r"^(\s*)(?:[-*] )?\[([^\]]*)\]\(([^)]*)\)\s*(?:<!--.*-->\s*)?$")
-# The labels and branch names of rollup and upstream-sync pull requests (AGENTS.md, handbook "Rollups"):
-# fork-review-rollup-<n>, rollup-<n>, sync-<n>, sync-after-<x>, upstream-sync-<n>.
-CARRIER_LABELS = {"rollup", "sync"}
-CARRIER_BRANCH = re.compile(r"(?:fork-review-rollup|rollup|upstream-sync|sync)-.+")
-
 
 def git(root, *args, check=True):
     return subprocess.run(["git", *args], cwd=root, capture_output=True, encoding="utf-8", check=check).stdout
@@ -127,27 +116,12 @@ def summary_problems(now, before, renamed=None):
     return out
 
 
-def carries_other_prs(branch, labels):
-    """Whether this pull request is a rollup or an upstream sync, by its label or its branch name."""
-    return bool(CARRIER_LABELS & set(labels)) or bool(branch and CARRIER_BRANCH.fullmatch(branch))
-
-
-def lang_problems(changed, carrier):
-    """`changed`: the paths under launcher/lang/ this change touches; `carrier`: a rollup or a sync."""
-    if len(changed) <= LANG_LIMIT or carrier:
-        return []
-    return [f"{LANG}: this change touches {len(changed)} language files and at most {LANG_LIMIT} may change outside "
-            "a rollup or an upstream sync (a `rollup` or `sync` label). A label missing from a language shows its "
-            "English `tr()` text, so add a new label only to the languages you translate, and leave the other files "
-            "alone."]
-
-
 def notes_problems(before, now):
     if before is None or now is None or now <= before:
         return []
     return [f"{NOTES}: {now} lines, {before} on the base; this file may not grow. Put prose about one hook in that "
             "hook's own `#[notes]`, and other prose in a `Notes` trait in a new file under "
-            "crates/horizon-mod-vocab/src/hooks/."]
+            "crates/sunrise-mod-vocab/src/hooks/."]
 
 
 def line_count(text):
@@ -155,12 +129,11 @@ def line_count(text):
 
 
 def at(root, rev, path):
-    """`path`'s text at `rev`, or None where it does not exist."""
-    shown = subprocess.run(["git", "show", f"{rev}:{path}"], cwd=root, capture_output=True, encoding="utf-8")
-    return shown.stdout if shown.returncode == 0 else None
+    """`path`'s text at `rev`, or None where it does not exist; a baseline that can't be read stops the check."""
+    return merge_base.text_at(rev, path, root)
 
 
-def problems(root, merge_base, carrier=False):
+def problems(root, merge_base):
     src = root / BOOK_SRC
     now_summary, base_summary = (root / SUMMARY).read_text(), at(root, merge_base, SUMMARY) or ""
     now_paths, base_paths = listed_paths(now_summary), listed_paths(base_summary)
@@ -168,8 +141,6 @@ def problems(root, merge_base, carrier=False):
                if title in base_paths and base_paths[title] != path}
     out = summary_problems(redundant_summary_lines(now_summary, src),
                            redundant_summary_lines(base_summary, src) if base_summary else [], renamed)
-    changed = git(root, "diff", "--name-only", "--no-renames", merge_base, "--", LANG).split()
-    out += lang_problems(changed, carrier)
     notes = root / NOTES
     out += notes_problems(line_count(at(root, merge_base, NOTES)),
                           line_count(notes.read_text()) if notes.is_file() else None)
@@ -180,8 +151,6 @@ def main(argv=None, root=ROOT):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", help="the git ref the branch starts from (CI: the pull request's base)")
     parser.add_argument("--pull-request-merge", action="store_true", help=merge_base.PULL_REQUEST_MERGE_HELP)
-    parser.add_argument("--branch", default="", help="the pull request's head branch, when it is in this repository")
-    parser.add_argument("--labels", default="", help="the pull request's labels, separated by spaces")
     args = parser.parse_args(argv)
     if not args.base:
         print("Hotspot guards: no base to compare with, nothing checked.")
@@ -193,8 +162,7 @@ def main(argv=None, root=ROOT):
     if error:
         print(f"Hotspot guards failed: {error}")
         return 1
-    found = problems(root, git(root, "merge-base", base, "HEAD").strip(),
-                     carries_other_prs(args.branch, args.labels.split()))
+    found = problems(root, git(root, "merge-base", base, "HEAD").strip())
     for problem in found:
         print(problem)
     print("Hotspot guards: " + (f"{len(found)} problem(s)" if found else "pass"))
