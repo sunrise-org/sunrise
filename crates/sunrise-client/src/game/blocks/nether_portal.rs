@@ -931,6 +931,18 @@ impl Game<'_> {
             );
         }
     }
+    /// `Entity.load` on a live entity (`/data merge`): `portalCooldown` is the
+    /// compound's (0 when it has none), and the portal process is kept.
+    pub(super) fn merge_portal_cooldown(&mut self, id: u32, tag: &Tag) {
+        if let Some(portal) = self.portals.entities.get_mut(&id) {
+            portal.cooldown = tag
+                .get("PortalCooldown")
+                .and_then(sunrise_client::nbt_path::int_value)
+                .unwrap_or(0);
+        } else {
+            self.restore_portal_cooldown(id, tag);
+        }
+    }
     /// `Entity.saveWithoutId` writes the live `PortalCooldown`: the countdown
     /// `Entity.processPortalCooldown` ticks down, not the value the entity was
     /// loaded with. Every entity that can stand in a portal takes it from the

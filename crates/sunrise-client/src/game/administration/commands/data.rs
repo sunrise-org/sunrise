@@ -597,6 +597,7 @@ impl Game<'_> {
                         slot.extra.anger_stamp = Some((slot.extra.anger, slot.age));
                     }
                 }
+                self.merge_portal_cooldown(id, &tag);
                 if unresolved {
                     self.close_opaque_merchant(id);
                 }
@@ -2447,6 +2448,10 @@ mod loot_table_tests {
         assert!(saved.get("Items").is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "data/portal_cooldown_tests.rs"]
+mod portal_cooldown_tests;
 
 #[cfg(test)]
 mod compute_tests;

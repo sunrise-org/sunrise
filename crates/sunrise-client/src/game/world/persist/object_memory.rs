@@ -915,6 +915,7 @@ impl Game<'_> {
             self.res.items(),
         );
         self.put_last_hurt_by_mob(self.mob_at(object), &mut tag);
+        self.save_portal_cooldown(id, &mut tag);
         if sunrise_client::mobs::camel::is_camel(self.mob_at(object).species())
             && let Tag::Compound(c) = &mut tag
         {
