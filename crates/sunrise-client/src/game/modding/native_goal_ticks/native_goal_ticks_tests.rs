@@ -593,6 +593,7 @@ fn view_player(at: [f64; 3]) -> sunrise_client::mobs::PlayerView {
         passenger: false,
         riding_vehicle: None,
         vehicle: None,
+        elsewhere: false,
     }
 }
 

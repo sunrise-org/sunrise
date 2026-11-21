@@ -1185,6 +1185,7 @@ pub fn main() -> sunrise_client::Result<()> {
                 passenger: false,
                 riding_vehicle: None,
                 vehicle: None,
+                elsewhere: false,
             }
         });
         // The level's random (`Level.random`), which mobs and their hits draw from.

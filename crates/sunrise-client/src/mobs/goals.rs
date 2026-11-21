@@ -796,6 +796,11 @@ impl Mob {
         let Some(t) = w.target_info(who).filter(|_| !super::ravager::blind(self)) else {
             return false;
         };
+        // `LivingEntity.hasLineOfSight` refuses a target in another level.
+        if who == Who::Player && w.target_player().is_some_and(|p| p.elsewhere) {
+            self.ai.seen_cache.push((who, false));
+            return false;
+        }
         let eye = Vec3::new(self.position.x, self.eye_y(), self.position.z);
         let v = w.line_of_sight_for(
             Some(self.position.y),

@@ -66,6 +66,9 @@ pub(super) struct BorrowedMobTick<'a> {
     pub(super) died: &'a mut sunrise_client::fast_hash::FxHashSet<u32>,
     pub(super) ticked: &'a mut sunrise_client::fast_hash::FxHashSet<u32>,
     pub(super) guests: &'a mut super::super::lan_mobs::GuestViews,
+    /// Bound guests who went to another level, as a mob targeting them sees
+    /// them ([`PlayerView::elsewhere`]); empty while no binding names one.
+    pub(super) elsewhere: &'a super::super::lan_mobs::GuestViews,
     pub(super) spare: &'a mut Option<PlayerView>,
     pub(super) bindings: &'a mut sunrise_client::fast_hash::FxHashMap<u32, u32>,
     pub(super) guest_ids: &'a mut Vec<(u32, u32)>,
@@ -89,6 +92,7 @@ impl Game<'_> {
         Option<Box<dyn std::any::Any + Send>>,
     ) {
         let passenger_objects = state.passenger_objects;
+        let elsewhere = state.elsewhere;
         let mut blocked = std::borrow::Cow::Borrowed(state.blocked);
         let mut mobs = state.mobs.take_owned_pass();
         let mut snapshot = std::mem::take(state.snapshot);
@@ -272,7 +276,9 @@ impl Game<'_> {
                     let (bx, bz) = (m.position.x.floor() as i32, m.position.z.floor() as i32);
                     let seen_guest = if resuming {
                         resume_guest
-                    } else if guests.is_empty() {
+                    } else if guests.is_empty() && !bindings.contains_key(&m.id) {
+                        // A binding outlives the last guest leaving: a target
+                        // on them stays theirs until the mob lets go (#1278).
                         None
                     } else {
                         let bound = bindings.get(&m.id).copied();
@@ -475,7 +481,11 @@ impl Game<'_> {
                         (Some(_), Some(k)) => spare
                             .take()
                             .map(|stand_in| std::mem::replace(&mut guests[k].1, stand_in)),
-                        (Some(_), None) => None,
+                        // A guest bound but not here: one who changed level
+                        // stays the target, out of sight; one who left is gone.
+                        (Some(conn), None) => {
+                            elsewhere.iter().find(|g| g.0 == conn).map(|g| g.1.clone())
+                        }
                     };
                     let active_identity = match seen_guest {
                         None => base.player_identity,

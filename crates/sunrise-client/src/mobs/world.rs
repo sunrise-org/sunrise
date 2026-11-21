@@ -652,7 +652,8 @@ impl MobWorld<'_> {
             return Some(target);
         }
         match who {
-            Who::Player => self.selected_player().map(|p| TargetInfo {
+            // The target itself, even in another level (`target_player`).
+            Who::Player => self.target_player().map(|p| TargetInfo {
                 position: p.position,
                 eye_y: p.eye[1],
                 bounds: p.bounds,
@@ -1068,6 +1069,7 @@ pub(crate) fn test_player(position: Vec3) -> super::PlayerView {
         passenger: false,
         riding_vehicle: None,
         vehicle: None,
+        elsewhere: false,
     }
 }
 

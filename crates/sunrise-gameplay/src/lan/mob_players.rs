@@ -38,9 +38,15 @@ pub fn player_for(
     // the angry-at UUID), and outlasts the 100 ticks of `getLastHurtByMob`:
     // while it lasts, the golem keeps that player, not whoever is nearest.
     let angry = m.species() == Species::IronGolem && m.extra.angry_at == Some(Who::Player);
-    let targeting = m.ai.target == Some(Who::Player)
-        || angry
-        || m.ai.last_hurt_by == Some(Who::Player) && m.age as i32 - m.ai.last_hurt_by_time <= 100;
+    let hurt_by =
+        m.ai.last_hurt_by == Some(Who::Player) && m.age as i32 - m.ai.last_hurt_by_time <= 100;
+    let aimed = m.ai.target == Some(Who::Player);
+    let targeting = aimed || angry || hurt_by;
+    // A player it was just hurt by is held too: `HurtByTargetGoal` reads
+    // `getLastHurtByMob`, the departed player, never a bystander.
+    if let Some(conn) = departed(targeting, guests, bound) {
+        return Some(conn);
+    }
     // A tame wolf, cat or parrot sees its owner (`TamableAnimal.getOwner`), while they
     // are in play, whoever is nearer. Not while it targets or was just hurt by
     // a player: then `Who::Player` is that attacker, whoever it is, and the
@@ -69,8 +75,20 @@ pub fn player_for(
             return Some(*conn);
         }
     }
-    let aimed = m.ai.target == Some(Who::Player);
     choose(m.position, targeting, aimed, host, guests, bound)
+}
+
+/// The guest a mob aims at, was hurt by in the last 100 ticks, or an iron
+/// golem is angry at, who has left this
+/// level (disconnected, or gone to another dimension): the mob keeps that
+/// departed identity and sees no player for its tick. Vanilla removes that
+/// player from the level, so the mob's own goals drop the target on their
+/// cadence (`TargetGoal.canContinueToUse` in the goal selector's full tick,
+/// the brain's `StopAttackingIfTargetInvalid`), through the target-change
+/// hook, and never while its AI is frozen; the anger never lands on another
+/// player. Once the mob lets go, the binding is chosen afresh (#1278).
+pub fn departed(holds: bool, guests: &GuestViews, bound: Option<u32>) -> Option<u32> {
+    bound.filter(|conn| holds && !guests.iter().any(|(c, _)| c == conn))
 }
 
 pub fn choose(
