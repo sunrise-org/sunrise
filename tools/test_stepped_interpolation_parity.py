@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Compare how a client walks a living entity along its server's positions with vanilla.
 
-Vanilla's unmodified SteppedInterpolationHandler.InterpolationData (VanillaSteppedInterpolationOracle
-drives it as the handler does) and sunrise-world's SteppedInterpolation replay the same packets and
-client ticks: move packets with and without a position or rotation, straight or stepped paths,
-repeats of the one the entity is headed for, packets a tick apart that pile up and others after it
-stopped, for update intervals of 1 to 3 ticks, plus a punched pig's knockback as the server sends it
-(its first move at once, `needsSync`, then every update interval). The entity's position and rotation
-after every event must match bit for bit. The handler's entity hooks (deltas, passengers) are out of
-scope.
+A real pig (or another player) in a client level, moved by vanilla's own `Entity.moveOrInterpolateTo`,
+its SteppedInterpolationHandler, `Entity.setRot`, `lerpMotion` and `aiStep` (VanillaSteppedInterpolationOracle),
+and sunrise-world's SteppedInterpolation, `mob_motion` and `RemotePlayerMotion` replay the same packets and
+client ticks: move packets with and without a position or rotation, straight or stepped paths, repeats
+of the one the entity is headed for, packets a tick apart that pile up and others after it stopped, for
+update intervals of 1 to 3 ticks, plus a punched pig's knockback as the server sends it (its first move
+at once, `needsSync`, then every update interval). Motion packets set a mob's velocity, which each
+tick's `LivingEntity.aiStep` decays while it isn't interpolating and zeroes when tiny; another player
+eases to it instead (`RemotePlayer.aiStep`, which replaces that). The entity's position, rotation and
+velocity after every event must match bit for bit while it interpolates, just after and long after;
+the game moves mobs and players with the same functions. Nothing else moves the entity (riding,
+physics).
 """
 import os
 import random
@@ -33,13 +37,28 @@ def rotation(rng):
     return [round(rng.uniform(-400, 400), rng.choice([0, 1, 3])), round(rng.uniform(-120, 120), rng.choice([0, 2]))]
 
 
+def motion(rng):
+    """A set_entity_motion: a real push, or one about to fall under aiStep's 0.003."""
+    def axis():
+        r = rng.random()
+        if r < 0.3:
+            return round(rng.uniform(-1, 1), 4)
+        if r < 0.7:
+            return rng.choice([-1, 1]) * rng.uniform(0.0, 0.0045)
+        return rng.choice([0.0, -0.0])
+    return ' '.join(repr(axis()) for _ in range(3))
+
+
 def cases(count, seed):
     rng = random.Random(seed)
+    # Its own stream, so the motion added to every case leaves the cases' moves as they were.
+    motions = random.Random(seed + 1)
     lines = []
     for interval in (1, 2, 3):
         # The knockback: a packet for the hit tick's move, then every interval (each phase).
         for phase in range(interval):
             lines.append(f'case {interval} 10.5 64.0 0.5 90.0 0.0')
+            lines.append('motion 0.4 0.4 0.0')  # the hit's set_entity_motion
             for k in range(1, len(KNOCKBACK)):
                 if k == 1 or (k + phase) % interval == 0:
                     x, y = KNOCKBACK[k]
@@ -49,9 +68,12 @@ def cases(count, seed):
     for _ in range(count):
         p = [rng.uniform(-100, 100), rng.uniform(-64, 300), rng.uniform(-100, 100)]
         yaw, pitch = rotation(rng)
-        lines.append(f'case {rng.choice([1, 2, 3, 3, 3])} {p[0]!r} {p[1]!r} {p[2]!r} {yaw!r} {pitch!r}')
+        lines.append(f'case {rng.choice([1, 2, 3, 3, 3])} {p[0]!r} {p[1]!r} {p[2]!r} {yaw!r} {pitch!r}'
+                     + (' P' if motions.random() < 0.15 else ''))
         last = None
         for _ in range(rng.randrange(1, 40)):
+            if motions.random() < 0.2:
+                lines.append(f'motion {motion(motions)}')
             if rng.random() < 0.45:
                 lines.append('tick')
                 continue
@@ -96,7 +118,7 @@ def main():
     subprocess.run(['cargo', 'run', '--quiet', '--release', '-p', 'sunrise-world', '--example',
                     'world_probe', '--', 'stepped_interpolation_fixture', str(events), str(build / 'rust.txt')], cwd=lab.ROOT, check=True)
     matched = base.compare(build / 'vanilla.txt', build / 'rust.txt')
-    print(f'Stepped interpolation parity passed: {matched} entity positions and rotations match vanilla')
+    print(f'Stepped interpolation parity passed: {matched} entity positions, rotations and velocities match vanilla')
 
 
 if __name__ == '__main__':

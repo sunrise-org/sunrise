@@ -8,6 +8,51 @@
 
 use std::collections::VecDeque;
 
+/// The start of `LivingEntity.aiStep` on a client for a mob it doesn't
+/// simulate (`canSimulateMovement` false), after this tick's `commonTick`
+/// step: while it isn't interpolating, its motion (the server's last
+/// `set_entity_motion`, which `Entity.lerpMotion` set as it came) keeps
+/// 0.98 of itself; then an x, y or z under 0.003 drops to zero. Another
+/// player runs `RemotePlayer.aiStep` instead, which has neither
+/// ([`RemotePlayerMotion`]).
+pub fn mob_motion(motion: [f64; 3], interpolating: bool) -> [f64; 3] {
+    let motion = if interpolating {
+        motion
+    } else {
+        motion.map(|v| v * 0.98)
+    };
+    motion.map(|v| if v.abs() < 0.003 { 0.0 } else { v })
+}
+
+/// `RemotePlayer`'s motion: `lerpMotion` keeps the server's motion as a
+/// target, which `aiStep` eases to over the player type's update interval
+/// and one tick more.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RemotePlayerMotion {
+    target: [f64; 3],
+    steps: u32,
+}
+
+impl RemotePlayerMotion {
+    /// `RemotePlayer.lerpMotion`: the player type's update interval (2) + 1.
+    pub fn lerp_to(&mut self, motion: [f64; 3]) {
+        *self = Self {
+            target: motion,
+            steps: 3,
+        };
+    }
+    /// `RemotePlayer.aiStep`'s `addDeltaMovement`: the player's motion a
+    /// tick closer to the target, while steps are left.
+    pub fn step(&mut self, motion: [f64; 3]) -> [f64; 3] {
+        if self.steps == 0 {
+            return motion;
+        }
+        let steps = f64::from(self.steps);
+        self.steps -= 1;
+        [0, 1, 2].map(|i| motion[i] + (self.target[i] - motion[i]) / steps)
+    }
+}
+
 /// A position and rotation (`PositionAndRotation`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PosRot {
@@ -75,6 +120,9 @@ pub struct SteppedInterpolation {
     /// `AbstractInterpolationHandler.lastPositionAndRotation`: where the
     /// handler last left the entity.
     placed: PosRot,
+    /// The turn the entity made by itself since then, which the next step
+    /// adds to the target and its steps.
+    turn: (f32, f32),
 }
 
 /// `Mth.wrapDegrees(float)`.
@@ -111,6 +159,7 @@ impl SteppedInterpolation {
             remaining_ticks: 0.0,
             speed: 1.0,
             placed: PosRot::default(),
+            turn: (0.0, 0.0),
         }
     }
     /// `hasActiveInterpolation`.
@@ -190,6 +239,10 @@ impl SteppedInterpolation {
             self.cancel();
             return None;
         }
+        // adjustInterpolationTargetFromDeltas' addRotation: the entity's own
+        // turn `follow` measured, else +0.0, which still makes a -0.0 angle 0.0.
+        let (yaw, pitch) = std::mem::take(&mut self.turn);
+        self.add_rotation(yaw, pitch);
         // doInterpolate: getNewPositionAndRotation, then advance by the
         // level's relative tick speed (1 at the normal tick rate).
         let at = self.new_position();
@@ -220,7 +273,7 @@ impl SteppedInterpolation {
             }
         }
         // The client's yaw may be a whole turn from the handler's.
-        self.add_rotation(
+        self.turn = (
             wrap_degrees(entity.yaw - self.placed.yaw),
             entity.pitch - self.placed.pitch,
         );

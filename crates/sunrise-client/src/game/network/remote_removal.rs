@@ -74,6 +74,7 @@ impl Game<'_> {
                 r.cart_lerps.remove(&id);
                 r.stepped.remove(&id);
                 r.head_lerps.remove(&id);
+                r.player_motions.remove(&id);
                 r.pending_items.remove(&id);
             }
         }

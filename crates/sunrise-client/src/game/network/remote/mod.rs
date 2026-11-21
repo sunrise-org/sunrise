@@ -82,7 +82,9 @@ use {
     sunrise_world::{
         level::InteractionResult,
         registry::BlockStateId,
-        stepped_interpolation::{Path, PosRot, Start, SteppedInterpolation},
+        stepped_interpolation::{
+            Path, PosRot, RemotePlayerMotion, Start, SteppedInterpolation, mob_motion,
+        },
     },
 };
 
@@ -737,6 +739,9 @@ pub(super) struct Remote {
     pub(super) stepped: HashMap<i32, SteppedInterpolation>,
     /// `LivingEntity.lerpHeadTo`: the head yaw and the ticks left to reach it.
     pub(super) head_lerps: HashMap<i32, (f32, u32)>,
+    /// Other players' `RemotePlayer.lerpMotion`: the server's motion they
+    /// ease to.
+    pub(super) player_motions: HashMap<i32, RemotePlayerMotion>,
     /// The happy ghast the player just got off, until the server's teleport
     /// puts the player on top of it (`place_ghast_under`).
     pub(super) ghast_dismount: Option<u32>,
@@ -1320,6 +1325,7 @@ impl Game<'_> {
             cart_lerps: HashMap::new(),
             stepped: HashMap::new(),
             head_lerps: HashMap::new(),
+            player_motions: HashMap::new(),
             ghast_dismount: None,
             first_passenger: false,
             passenger_index: 0,
@@ -1573,6 +1579,7 @@ impl Game<'_> {
             cart_lerps: HashMap::new(),
             stepped: HashMap::new(),
             head_lerps: HashMap::new(),
+            player_motions: HashMap::new(),
             ghast_dismount: None,
             first_passenger: false,
             passenger_index: 0,
@@ -2581,6 +2588,7 @@ impl Game<'_> {
                 r.cart_lerps.clear();
                 r.stepped.clear();
                 r.head_lerps.clear();
+                r.player_motions.clear();
                 r.pending_items.clear();
                 // The entity ids are the old world's; the new dimension's
                 // player entities re-map to their profiles on AddEntity.
@@ -4374,6 +4382,20 @@ impl Game<'_> {
             C::SetEntityMotion(p) if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) => {
                 if let Some(pl) = self.player.as_mut() {
                     pl.velocity = Vec3::new(p.velocity[0], p.velocity[1], p.velocity[2]);
+                }
+            }
+            // Another player: RemotePlayer.lerpMotion eases to it.
+            C::SetEntityMotion(p)
+                if self
+                    .remote
+                    .as_ref()
+                    .is_some_and(|r| r.level_players.contains_key(&p.id)) =>
+            {
+                if let Some(r) = self.remote.as_mut() {
+                    r.player_motions
+                        .entry(p.id)
+                        .or_default()
+                        .lerp_to(p.velocity);
                 }
             }
             // The same packet for another entity: Entity.lerpMotion.
@@ -7302,6 +7324,7 @@ impl Game<'_> {
                 .flatten();
             let r = self.remote.as_mut().unwrap();
             let stepped = &mut r.stepped;
+            let player_motions = &mut r.player_motions;
             let players = &r.level_players;
             let tab_players = &r.tab_players;
             let m = &mut self.mobs[i];
@@ -7390,6 +7413,18 @@ impl Game<'_> {
             {
                 place_interpolated(m, at);
             }
+            // LivingEntity.aiStep for a mob this client does not simulate (the
+            // driven mount was skipped above); RemotePlayer.aiStep, which
+            // replaces it, for another player.
+            let v = [m.velocity.x, m.velocity.y, m.velocity.z];
+            let v = if player {
+                player_motions
+                    .get_mut(&(m.id as i32))
+                    .map_or(v, |motion| motion.step(v))
+            } else {
+                mob_motion(v, stepped.get(&(m.id as i32)).is_some_and(|h| h.active()))
+            };
+            m.velocity = Vec3::new(v[0], v[1], v[2]);
             // `ClientLevel.tickNonPassenger`'s `commonTick` interpolated the
             // entity before `Player.tick`, which `Pre` precedes.
             if let Some(player) = player_ref {
