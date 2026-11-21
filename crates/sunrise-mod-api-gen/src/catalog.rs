@@ -183,7 +183,6 @@ pub enum CatalogError {
     ScopeNeedsKey(String),
     NoHooks,
     Retired(String),
-    InvalidModule(String),
 }
 
 impl fmt::Display for CatalogError {
@@ -196,7 +195,6 @@ impl fmt::Display for CatalogError {
                 "{path}: hooks are declared in Rust now, in {DECLARATIONS}/<area>.rs; move the entry there as a \
                  `#[hook(...)]` declaration (the old keys are the attribute's arguments) and delete this file"
             ),
-            Self::InvalidModule(name) => write!(f, "invalid hook declaration filename {name}"),
             Self::NamelessHook => f.write_str("hook name missing"),
             Self::DuplicateHook(name) => write!(f, "duplicate hook {name}"),
             Self::InvalidHook { hook, error } => write!(f, "hook {hook}: {error}"),
@@ -766,18 +764,12 @@ impl Catalog {
             path: path.display().to_string(),
             error: e.to_string(),
         };
-        let mut modules = fs::read_dir(dir)
-            .map_err(|e| read_error(dir, e))?
-            .map(|entry| entry.map_err(|e| read_error(dir, e)))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .filter_map(|entry| {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                name.strip_suffix(".rs")
-                    .filter(|module| *module != "mod")
-                    .map(str::to_string)
-            })
-            .collect::<Vec<_>>();
+        // The one enumerator of source modules, shared with the static inventories.
+        let mut modules =
+            sunrise_game_discovery::module_files(dir).map_err(|error| CatalogError::Read {
+                path: dir.display().to_string(),
+                error,
+            })?;
         // Split declarations retain their original HookId positions in per-item metadata.
         // Unnumbered additions are discovered alphabetically, without a shared registry.
         let mut order = std::collections::HashMap::new();
@@ -810,11 +802,6 @@ impl Catalog {
                 b,
             ))
         });
-        for module in &modules {
-            if syn::parse_str::<syn::Ident>(module).is_err() {
-                return Err(CatalogError::InvalidModule(module.clone()));
-            }
-        }
         Ok(modules)
     }
 
@@ -1021,7 +1008,7 @@ mod tests {
             Catalog::load_declarations(&root)
                 .unwrap_err()
                 .to_string()
-                .contains("invalid hook declaration filename")
+                .contains("not-valid.rs")
         );
         fs::remove_dir_all(root).unwrap();
     }

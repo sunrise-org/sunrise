@@ -71,6 +71,8 @@ prebuilt = ["dep:cap-std", "dep:tar", "dep:xz4rust"]
 index = ["dep:minisign-verify", "dep:object", "dep:sunrise-shader-api", "dep:libc", "dep:same-file", "dep:tar", "dep:xz4rust"]
 
 [dev-dependencies]
+sunrise-game-discovery = { path = "../sunrise-game-discovery" }
+syn = { version = "2", features = ["full"] }
 tempfile = "3.27.0"
 
 [lints]
