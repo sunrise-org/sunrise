@@ -5094,22 +5094,25 @@ impl Hub {
     /// the position, LEVEL_CHUNKS_LOAD_START (the client's loading screen
     /// closes once its chunk is in) and TeleportTransition.PLAY_PORTAL_SOUND.
     pub fn land(&mut self, i: usize, at: [f64; 3]) {
-        {
-            let value = false;
-            self.guests.update(i, |guest| guest.landing = value);
-        }
-        self.guests.update(i, |g| g.place(at)); // hold the exit chunk
-        self.teleport(i, Some(at));
-        let g = &self.guests[i];
-        g.send(&C::GameEvent(play::GameEvent {
-            event: game_event::LEVEL_CHUNKS_LOAD_START,
-            param: 0.0,
-        }));
-        g.send(&C::LevelEvent(play::LevelEvent {
+        self.land_respawn(i, at);
+        self.guests[i].send(&C::LevelEvent(play::LevelEvent {
             kind: 1032,
             pos: [0, 0, 0],
             data: 0,
             global: false,
+        }));
+    }
+
+    /// [`Self::land`] without the portal's sound: `PlayerList.respawn`'s
+    /// position and LEVEL_CHUNKS_LOAD_START (`sendLevelInfo`), as the End
+    /// credits' respawn sends them.
+    pub fn land_respawn(&mut self, i: usize, at: [f64; 3]) {
+        self.guests.update(i, |guest| guest.landing = false);
+        self.guests.update(i, |g| g.place(at)); // hold the exit chunk
+        self.teleport(i, Some(at));
+        self.guests[i].send(&C::GameEvent(play::GameEvent {
+            event: game_event::LEVEL_CHUNKS_LOAD_START,
+            param: 0.0,
         }));
     }
 }

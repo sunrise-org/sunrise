@@ -1336,7 +1336,8 @@ impl Game<'_> {
                     [trip.target.x, trip.target.y, trip.target.z].map(|v| v.floor() as i32);
                 match self.search_spawn(suggestion, &mut trip.finder) {
                     // The respawn already put the player on this column:
-                    // vanilla teleports once, so no second move.
+                    // vanilla teleports once, so no second move. The End
+                    // credits' level change sent no position yet: it lands here.
                     Ok(at)
                         if self.lan.as_ref().is_some_and(|host| {
                             host.hub.guests[i].position == [at.x, at.y, at.z]
@@ -1351,31 +1352,41 @@ impl Game<'_> {
                             yaw,
                             pitch,
                         };
-                        if let Some(d) = self.respawn_position(trip.conn, found, trip.missing) {
-                            self.apply_respawn_copy(trip.conn, &d, trip.missing);
-                            if trip.credits_respawn
-                                && let Some(host) = self.lan.as_mut()
-                            {
-                                let _ = host.hub.update_guest(trip.conn, Self::finish_credits_body);
-                            }
-                            if d.moved && d.to.dim != trip.dim {
-                                self.respawn_into_other_level(trip.conn, d.to);
-                            } else if d.moved
-                                && let Some(host) = self.lan.as_mut()
-                            {
-                                host.hub.guests.update(i, |g| {
-                                    (g.yaw, g.pitch) = (d.to.yaw, d.to.pitch);
-                                    if !trip.credits_respawn {
-                                        g.new_body(true);
-                                    }
-                                });
-                                host.hub
-                                    .teleport(i, Some([d.to.at.x, d.to.at.y, d.to.at.z]));
-                            }
-                        } else if trip.credits_respawn
+                        let decision = self.respawn_position(trip.conn, found, trip.missing);
+                        if let Some(d) = &decision {
+                            self.apply_respawn_copy(trip.conn, d, trip.missing);
+                        }
+                        if trip.credits_respawn
                             && let Some(host) = self.lan.as_mut()
                         {
                             let _ = host.hub.update_guest(trip.conn, Self::finish_credits_body);
+                        }
+                        match decision {
+                            Some(d) if d.moved && d.to.dim != trip.dim => {
+                                self.respawn_into_other_level(trip.conn, d.to);
+                            }
+                            // PlayerList.respawn: the Respawn is followed by
+                            // the player's position, wherever it stands.
+                            d if trip.credits_respawn => {
+                                let to = d.map_or(found, |d| d.to);
+                                if let Some(host) = self.lan.as_mut() {
+                                    host.hub.guests.update(i, |g| {
+                                        (g.yaw, g.pitch) = (to.yaw, to.pitch);
+                                    });
+                                    host.hub.land_respawn(i, [to.at.x, to.at.y, to.at.z]);
+                                }
+                            }
+                            Some(d) if d.moved => {
+                                if let Some(host) = self.lan.as_mut() {
+                                    host.hub.guests.update(i, |g| {
+                                        (g.yaw, g.pitch) = (d.to.yaw, d.to.pitch);
+                                        g.new_body(true);
+                                    });
+                                    host.hub
+                                        .teleport(i, Some([d.to.at.x, d.to.at.y, d.to.at.z]));
+                                }
+                            }
+                            _ => {}
                         }
                         continue;
                     }
