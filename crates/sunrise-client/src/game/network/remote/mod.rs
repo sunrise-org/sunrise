@@ -606,8 +606,8 @@ pub(super) struct Remote {
     /// `Minecraft.cameraEntity` when the server put the view on another
     /// entity (ClientboundSetCameraPacket); None while it is the player.
     pub(super) camera: Option<i32>,
-    /// The item the player's use began with (`LivingEntity.useItem`).
-    pub(super) use_item: Option<Arc<str>>,
+    /// The stack the player's use goes on with (`LivingEntity.useItem`).
+    pub(in crate::game) use_item: Option<ItemStack>,
     pub(super) dimension: DimensionType,
     /// The level's key (`minecraft:overworld`): where its far terrain is kept.
     pub(in crate::game) level: String,
@@ -9019,17 +9019,12 @@ impl Game<'_> {
             return;
         };
         let stack = self.stack_in(slot).cloned();
-        // The use stops when the hand no longer holds the item it began with
-        // (ItemStack.isSameItem).
-        let item = stack.as_ref().map(|s| Arc::clone(&s.item));
-        if let Some(r) = self.remote.as_mut() {
-            if ticks == 0 {
-                r.use_item = item;
-            } else if r.use_item != item {
-                self.using = None;
-                self.end_mod_use();
-                return;
-            }
+        // The use stops when the hand no longer holds what it may go on with
+        // (ItemStack.isSameItem, then a part's canContinueUsing).
+        if !self.remote_use_goes_on(slot, ticks, stack.as_ref()) {
+            self.using = None;
+            self.end_mod_use();
+            return;
         }
         // Another hotbar slot picked: LivingEntity.updatingUsingItem sees a
         // different stack in the hand. The off hand keeps its item.

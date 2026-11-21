@@ -107,12 +107,15 @@ impl Game<'_> {
             self.use_start = Default::default();
             return;
         };
-        // `isSameItem(getItemInHand(hand), useItem)`: another item stops the use
-        // of the stack it began with, without a release. The same item goes on;
-        // only the item is compared, so the start's stack is kept as it was.
-        if let Some(item) = self.use_start.item.take_if(|item| item.item != stack.item) {
-            self.stop_using_item(&item);
-            return;
+        // The may-still-use check (`isSameItem`, then a part's `canContinueUsing`):
+        // a refused use stops for the stack it began with, without a release;
+        // one that goes on takes the hand's stack as its own (`useItem = held`).
+        if let Some(began) = self.use_start.item.take() {
+            if !self.can_continue_using(&began, &stack, None, self.hand) {
+                self.stop_using_item(&began);
+                return;
+            }
+            self.use_start.item = Some(stack.clone());
         }
         let hand_changed = self.use_hand_changed(slot);
         if !self.right || hand_changed || self.screen != Screen::Playing {
@@ -297,6 +300,49 @@ impl Game<'_> {
         }
     }
 
+    /// `LivingEntity.updatingUsingItem`'s may-still-use check, one rule for both
+    /// sides: `ItemStack.isSameItem(held, began)`, then the parts of `began`'s
+    /// item (`IItemExtension.canContinueUsing`) may answer either way.
+    pub(in crate::game) fn can_continue_using(
+        &self,
+        began: &ItemStack,
+        held: &ItemStack,
+        entity: Option<i32>,
+        hand: Hand,
+    ) -> bool {
+        let mut can_continue = began.item == held.item;
+        if mod_api::__private::item_listens(mod_api::HookId::CanContinueUsing, &began.item) {
+            self.native_can_continue_using(began, held, entity, hand, &mut can_continue);
+        }
+        can_continue
+    }
+    /// A server client's use in `slot`, `ticks` in, with `held` there now: does it
+    /// go on? Its first tick keeps `held` as the use's stack; later ones ask
+    /// [`Self::can_continue_using`] and go on with `held`. An emptied hand stops it.
+    pub(in crate::game) fn remote_use_goes_on(
+        &mut self,
+        slot: usize,
+        ticks: u32,
+        held: Option<&ItemStack>,
+    ) -> bool {
+        let Some(began) = self.remote.as_ref().map(|r| r.use_item.clone()) else {
+            return true;
+        };
+        let hand = if slot == super::shield::OFFHAND_SLOT {
+            Hand::Off
+        } else {
+            Hand::Main
+        };
+        let goes_on = match (began.filter(|_| ticks > 0), held) {
+            (None, _) => ticks == 0 || held.is_none(),
+            (Some(began), Some(held)) => self.can_continue_using(&began, held, None, hand),
+            (Some(_), None) => false,
+        };
+        if let Some(r) = self.remote.as_mut().filter(|_| goes_on) {
+            r.use_item = held.cloned();
+        }
+        goes_on
+    }
     /// `LivingEntity.stopUsingItem`: the use of `stack` is over (`useItem` and
     /// its remaining ticks are cleared), and when the use effects of the stack
     /// ask for it, `ItemStack.causeUseVibration` sends an `ITEM_INTERACT_FINISH`
