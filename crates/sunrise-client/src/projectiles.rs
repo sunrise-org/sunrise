@@ -1149,8 +1149,13 @@ impl Projectile {
             .sqrt()
             .max(1.0e-9);
         p.velocity = Vec3::new(dir[0] / len * 0.1, dir[1] / len * 0.1, dir[2] / len * 0.1);
-        p.update_rotation();
         p
+    }
+    /// `AbstractHurtingProjectile(EntityType, LivingEntity, Vec3, Level)`'s `setRot(owner.getYRot(), owner.getXRot())`.
+    pub fn facing_shooter(mut self, yaw: f32, pitch: f32) -> Self {
+        self.yaw = yaw;
+        self.pitch = pitch;
+        self
     }
     /// `ThrownEgg`'s item: what its hatchlings' variant comes from.
     pub fn set_egg_item(&mut self, stack: &crate::items::ItemStack) {
@@ -2979,6 +2984,22 @@ mod tests {
         p.tick(&w);
         // Fresh Java 26.3: (0.1 + 0.1) * (double) 0.95f.
         assert_eq!(p.velocity.x, 0.189_999_997_615_814_2);
+    }
+
+    /// A mob's fireball starts at its shooter's rotation and only turns towards its motion on its first tick.
+    #[test]
+    fn a_shot_fireball_starts_facing_its_shooter() {
+        let mut p = Projectile::fireball(
+            ProjectileKind::SmallFireball,
+            Vec3::new(0.0, 100.0, 0.0),
+            Some(Who::Mob(7)),
+            [1.0, 0.0, 0.0],
+        )
+        .facing_shooter(-90.0, 0.0);
+        assert_eq!((p.yaw, p.pitch), (-90.0, 0.0));
+        p.tick(&Empty(vec![]));
+        // rotateTowardsMovement(0.2F): yRotO -90 moves to 270, then 270 + 0.2 * (90 - 270).
+        assert_eq!((p.yaw, p.pitch), (234.0, -1.525_878_9e-6));
     }
 
     /// `Fireball.setItem` with `Fireball.defineSynchedData`'s default and
