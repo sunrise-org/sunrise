@@ -104,7 +104,21 @@ fn main() {
         (mix_elapsed.as_micros() as f64) / (mix_iterations as f64)
     );
 
-    // 3b. The same mix with every sound shaped by its own effects (`SoundPlay::effects`): a
+    // 2c. The same 128 channels through OpenAL Soft's HRTF (`directionalAudio`).
+    audio.set_directional_audio(true);
+    let start = Instant::now();
+    for _ in 0..mix_iterations {
+        audio.mix_buffer(&mut buffer, 2, 48_000);
+    }
+    let hrtf_elapsed = start.elapsed();
+    println!(
+        "2c. mix_buffer with Directional Audio, HRTF (128 active channels): {:?} for {} buffers ({:.2} µs/buffer)",
+        hrtf_elapsed,
+        mix_iterations,
+        (hrtf_elapsed.as_micros() as f64) / (mix_iterations as f64)
+    );
+
+    // 2b. The same mix with every sound shaped by its own effects (`SoundPlay::effects`): a
     // low-pass, a high-pass and sends to all three shared reverbs.
     let mut shaped = Audio::silent(&ResourceSource::indexed(Default::default()));
     shaped.engine.loaded = true;

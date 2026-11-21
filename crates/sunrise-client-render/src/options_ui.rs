@@ -186,11 +186,10 @@ impl Opt {
             Opt::HideMatchedNames
                 | Opt::OnlySecureChat
                 // Saved, but no Sunrise system reads them yet: no Realms, no
-                // friends list, no directional audio.
+                // friends list.
                 | Opt::RealmsNotifications
                 | Opt::InGameNotification
                 | Opt::SharePresence
-                | Opt::DirectionalAudio
                 // Saved, but nothing in rendering reads it yet.
                 | Opt::ChunkBuilder
         )
@@ -5027,6 +5026,7 @@ mod tests {
             Opt::SaveChatDrafts,
             Opt::MusicToast,
             Opt::CtrlClickEmulatesRightClick,
+            Opt::DirectionalAudio,
         ] {
             assert!(opt.available(), "{opt:?} is read and must be clickable");
         }
@@ -5036,7 +5036,6 @@ mod tests {
             Opt::RealmsNotifications,
             Opt::InGameNotification,
             Opt::SharePresence,
-            Opt::DirectionalAudio,
             Opt::ChunkBuilder,
         ] {
             assert!(!opt.available(), "{opt:?} still has no reader");

@@ -24,6 +24,7 @@ use sunrise_assets::resource_source::{Resource, ResourceSource};
 use sunrise_core::random::{LegacyRandom, RandomSource};
 
 mod fx;
+mod hrtf;
 mod reverb;
 
 /// An OpenAL source's state.
@@ -56,6 +57,8 @@ struct Channel {
     unmuffled: bool,
     /// Its own effects (`SoundPlay::effects`) and their filters' state.
     fx: fx::VoiceFx,
+    /// Its HRTF state while Directional Audio renders it.
+    hrtf: hrtf::Voice,
 }
 /// The cutoff of the muffle's low-pass at full strength: the world heard through ringing ears.
 const MUFFLED_CUTOFF: f32 = 300.0;
@@ -193,8 +196,16 @@ struct Mixer {
     world_names: Vec<String>,
     /// The callback's cameras (position, basis, world), kept to be refilled without allocating.
     cameras: Vec<([f64; 3], Basis, u32)>,
-    /// Per-source gain/pan/step cache for one buffer, reused across callbacks.
-    voices: Vec<(ChannelId, [f32; 3], f64)>,
+    /// Per-source gain/pan/step cache for one buffer, reused across callbacks, with where a
+    /// sound Directional Audio renders is heard from.
+    voices: Vec<(ChannelId, [f32; 3], f64, Option<hrtf::Place>)>,
+    /// Directional Audio (`directionalAudio`): on a stereo output heard from one camera, every
+    /// sound is rendered through OpenAL Soft's HRTF ([`hrtf`]).
+    directional: bool,
+    /// The HRTF renderer: its data set, loaded when the mixer is created, and accumulators.
+    hrtf: hrtf::Hrtf,
+    /// Destroyed sounds Directional Audio still fades out; the game thread drops them.
+    fading: Vec<Channel>,
     /// Mods' audio streams (`ClientHost::open_audio_stream`).
     streams: Vec<streams::StreamVoice>,
     /// Each `SoundSource`'s volume for a stream: master times the group, as every sound's.
@@ -489,6 +500,8 @@ pub struct Audio {
     entities_stale: std::sync::atomic::AtomicBool,
     /// The `stream_gain` the mixer was last given: it is locked again only when this changes.
     stream_gain_sent: [f32; 11],
+    /// The `directionalAudio` option as last set; none before the first.
+    directional: Option<bool>,
     /// `SoundEngine.lastSeenDevices`: the system default output last seen.
     #[cfg(feature = "audio")]
     default_seen: Option<String>,
@@ -686,13 +699,22 @@ impl Backend for MixerBackend {
                 started: None,
                 unmuffled: false,
                 fx: fx::VoiceFx::default(),
+                hrtf: hrtf::Voice::default(),
             },
         );
         Some(id)
     }
     fn destroy(&mut self, channel: ChannelId) {
         if let Ok(mut m) = self.mixer.lock() {
-            m.channels.remove(&channel);
+            // A sound the HRTF renders fades out first (`alDeleteSources` stops it); the ones
+            // done fading are dropped here, never in the output callback.
+            m.fading.retain(|c| c.hrtf.playing());
+            if let Some(c) = m.channels.remove(&channel)
+                && c.hrtf.playing()
+                && m.fading.len() < FADING_MOST
+            {
+                m.fading.push(c);
+            }
         }
     }
     fn set_pitch(&mut self, channel: ChannelId, pitch: f32) {
@@ -940,6 +962,114 @@ fn mix_with_effects(
         c.position += step;
     }
 }
+/// Destroyed sounds Directional Audio fades out at once, at most.
+const FADING_MOST: usize = 256;
+/// One update of a sound Directional Audio renders: its next `n` frames, read as the plain path
+/// reads them (linear interpolation, looping or stopping at the end) and through its effects
+/// when it has any, with its sends at `gain` into the shared reverbs, written into each of its
+/// channels' working input after the history. Frames past its end are silence.
+fn hrtf_input(
+    c: &mut Channel,
+    (samples, source_channels, frames, step): (&[f32], usize, usize, f64),
+    gain: f32,
+    n: usize,
+    rate: u32,
+    reverbs: &mut Reverbs,
+    inputs: &mut [[f32; hrtf::WORK]; 2],
+) {
+    let stereo = source_channels > 1;
+    for input in inputs.iter_mut() {
+        input[hrtf::HISTORY..hrtf::HISTORY + n].fill(0.0);
+    }
+    let mut glide = if c.fx.bypassed() {
+        c.fx.played(rate);
+        None
+    } else {
+        Some(c.fx.begin(n, rate))
+    };
+    let mut sends: &mut [f32] = &mut [];
+    if let Some(glide) = glide.as_ref().filter(|g| g.sends) {
+        for (sent, to) in reverbs.sent.iter_mut().zip(glide.sent) {
+            *sent |= to;
+        }
+        sends = reverbs.input(n);
+    }
+    let [left, right] = &mut *inputs;
+    for f in 0..n {
+        let mut i = c.position as usize;
+        if i + 1 >= frames {
+            if c.looping && frames > 1 {
+                c.position = 0.0;
+                i = 0;
+            } else {
+                c.state = State::Stopped;
+                break;
+            }
+        }
+        let t = (c.position - i as f64) as f32;
+        let mut x = if stereo {
+            [
+                samples[i * 2] + (samples[(i + 1) * 2] - samples[i * 2]) * t,
+                samples[i * 2 + 1] + (samples[(i + 1) * 2 + 1] - samples[i * 2 + 1]) * t,
+            ]
+        } else {
+            [samples[i] + (samples[i + 1] - samples[i]) * t, 0.0]
+        };
+        if let Some(glide) = glide.as_mut() {
+            let send = c.fx.frame(glide, &mut x, stereo);
+            if glide.sends {
+                for (bus, level) in send.into_iter().enumerate() {
+                    sends[bus * n + f] += level * gain;
+                }
+            }
+        }
+        left[hrtf::HISTORY + f] = x[0];
+        right[hrtf::HISTORY + f] = x[1];
+        c.position += step;
+    }
+}
+/// A sound Directional Audio rendered has stopped, paused or been destroyed: its filters fade
+/// out over the next samples it would have played, which it doesn't advance past.
+fn hrtf_stop(c: &mut Channel, n: usize, rate: u32, h: &mut hrtf::Hrtf, muffling: bool) {
+    let (Some(set), Some((samples, source_rate, source_channels))) =
+        (h.set.as_deref(), c.samples.as_ref())
+    else {
+        c.hrtf.reset();
+        return;
+    };
+    let taps = set.taps();
+    let source_channels = usize::from(*source_channels).max(1);
+    let frames = samples.len() / source_channels;
+    let step = f64::from(*source_rate) / f64::from(rate) * f64::from(c.pitch.max(0.0));
+    let [left, right] = &mut *h.inputs;
+    left[hrtf::HISTORY..hrtf::HISTORY + n].fill(0.0);
+    right[hrtf::HISTORY..hrtf::HISTORY + n].fill(0.0);
+    let mut position = c.position;
+    for f in 0..n {
+        let mut i = position as usize;
+        if i + 1 >= frames {
+            if c.looping && frames > 1 {
+                position = 0.0;
+                i = 0;
+            } else {
+                break;
+            }
+        }
+        let t = (position - i as f64) as f32;
+        if source_channels > 1 {
+            left[hrtf::HISTORY + f] = samples[i * 2] + (samples[(i + 1) * 2] - samples[i * 2]) * t;
+            right[hrtf::HISTORY + f] =
+                samples[i * 2 + 1] + (samples[(i + 1) * 2 + 1] - samples[i * 2 + 1]) * t;
+        } else {
+            left[hrtf::HISTORY + f] = samples[i] + (samples[i + 1] - samples[i]) * t;
+        }
+        position += step;
+    }
+    let acc = &mut h.acc[usize::from(muffling && !c.unmuffled)];
+    c.hrtf
+        .stop(&mut h.inputs, source_channels.min(2), n, taps, acc);
+    h.ringing = true;
+}
 /// [`mix`] over `data` in pieces of at most [`MAX_MIX_FRAMES`] frames: the reverbs' send buffer
 /// was sized for that when the mixer was made, so mixing never allocates, however large a buffer
 /// the device asks for. One piece, the whole buffer, for every usual buffer size, and whenever no
@@ -995,6 +1125,28 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
         }),
     );
     let shared = mixer.cameras.len() > 1;
+    // OpenAL Soft's HRTF renders only a stereo output (`ALC_HRTF_SOFT` on any other layout is
+    // `ALC_HRTF_UNSUPPORTED_FORMAT_SOFT`: the option-off rendering), here heard from one camera.
+    let hrtf = mixer.directional && channels == 2 && !shared && mixer.hrtf.ready(rate);
+    if hrtf && data.len() > hrtf::UPDATE_FRAMES * 2 {
+        // One mixer update renders at most `BufferLineSize` frames.
+        for piece in data.chunks_mut(hrtf::UPDATE_FRAMES * 2) {
+            mix(mixer, piece, channels, rate);
+        }
+        return;
+    }
+    if !hrtf && mixer.hrtf.ringing {
+        mixer.hrtf.clear();
+    }
+    let frames_out = data.len() / channels.max(1);
+    // The HRTF's listener space, from the camera as floats (`alListenerfv`).
+    let listener = hrtf.then(|| {
+        let (at, (forward, up, _), _) = &mixer.cameras[0];
+        let f = |v: [f64; 3]| v.map(|c| c as f32);
+        hrtf::Listener::new(f(*at), f(*forward), f(*up))
+    });
+    // A mod's muffle: the sounds it doesn't exempt mix into a bus of their own first.
+    let muffling = mixer.muffle.active();
     let dot = |a: [f64; 3], b: [f64; 3]| (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) as f32;
     // Gains and pans per source for this buffer.
     let mut voices = std::mem::take(&mut mixer.voices);
@@ -1008,6 +1160,13 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
         // music and records are stereo. A mono buffer is the positional one.
         let direct = *source_channels > 1;
         if c.state != State::Playing {
+            if c.hrtf.playing() {
+                if hrtf {
+                    hrtf_stop(c, frames_out, rate, &mut mixer.hrtf, muffling);
+                } else {
+                    c.hrtf.reset();
+                }
+            }
             continue;
         }
 
@@ -1035,8 +1194,8 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
                 .min_by(|a, b| length_sq(away(a.0)).total_cmp(&length_sq(away(b.0))))
                 .map(|camera| (camera.0, camera.1))
         };
-        let (listener, (forward, up, right)) = camera.unwrap_or(([0.0; 3], basis(0.0, 0.0)));
-        let d = if c.relative { at } else { away(listener) };
+        let (listener_at, (forward, up, right)) = camera.unwrap_or(([0.0; 3], basis(0.0, 0.0)));
+        let d = if c.relative { at } else { away(listener_at) };
         let d_sqr = length_sq(d);
 
         let (gain, [left, right]) = if camera.is_none() {
@@ -1070,17 +1229,24 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
                 (gain, [left * gain, right * gain])
             }
         };
+        // Under the HRTF a stereo sound plays from the virtual speakers whatever its position;
+        // a mono one from its direction, at the dry gain alone.
+        let place = listener.as_ref().map(|l| {
+            if direct {
+                hrtf::Place::Speakers
+            } else {
+                l.place(c.at, c.relative)
+            }
+        });
         let step = f64::from(*source_rate) / f64::from(rate) * f64::from(c.pitch.max(0.0));
-        voices.push((*id, [left, right, gain], step));
+        voices.push((*id, [left, right, gain], step, place));
     }
-    // A mod's muffle: the sounds it doesn't exempt mix into a bus of their own first.
-    let muffling = mixer.muffle.active();
     let mut bus = std::mem::take(&mut mixer.muffle.bus);
     if muffling {
         bus.clear();
         bus.resize(data.len(), 0.0);
     }
-    for (id, [left, right, gain], step) in voices.iter().copied() {
+    for (id, [left, right, gain], step, place) in voices.iter().copied() {
         let Some(c) = mixer.channels.get_mut(&id) else {
             continue;
         };
@@ -1089,6 +1255,48 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
         };
         let source_channels = source_channels as usize;
         let frames = samples.len() / source_channels;
+        if let Some(place) = place {
+            // Through the HRTF, heard or not: a sound turning silent fades out as any change.
+            let h = &mut mixer.hrtf;
+            let Some(set) = h.set.as_deref() else {
+                continue;
+            };
+            match place {
+                hrtf::Place::Mono {
+                    elevation,
+                    azimuth,
+                    distance,
+                } => set.filter(elevation, azimuth, distance, 0.0, &mut h.filters[0]),
+                hrtf::Place::Speakers => *h.filters = h.speakers,
+            }
+            hrtf_input(
+                c,
+                (samples.as_slice(), source_channels, frames, step),
+                gain,
+                frames_out,
+                rate,
+                &mut mixer.reverbs,
+                &mut h.inputs,
+            );
+            let acc = &mut h.acc[usize::from(muffling && !c.unmuffled)];
+            let used = source_channels.min(2);
+            c.hrtf.mix(
+                &mut h.inputs,
+                &h.filters,
+                used,
+                gain,
+                frames_out,
+                set.taps(),
+                acc,
+            );
+            h.ringing = true;
+            if c.state == State::Stopped {
+                // It reached its end: the rest of the update played its silence.
+                c.hrtf.reset();
+            }
+            continue;
+        }
+        c.hrtf.reset();
         let inaudible = if channels >= 2 {
             left == 0.0 && right == 0.0
         } else {
@@ -1173,6 +1381,21 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
                 }
             }
             c.position += step;
+        }
+    }
+    if hrtf {
+        // Destroyed sounds fade out too, then `HrtfPostProcess`: the accumulators into the output.
+        for c in &mut mixer.fading {
+            if c.hrtf.playing() {
+                hrtf_stop(c, frames_out, rate, &mut mixer.hrtf, muffling);
+            }
+        }
+        let [acc, muffled] = &mut mixer.hrtf.acc;
+        acc.post(data, frames_out);
+        muffled.post(if muffling { &mut bus } else { &mut *data }, frames_out);
+    } else {
+        for c in &mut mixer.fading {
+            c.hrtf.reset();
         }
     }
     // Mods' audio streams join the sounds the muffle takes, as any sound does.
@@ -1398,6 +1621,12 @@ fn build_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
 ) -> Result<cpal::Stream> {
     let rate = config.sample_rate().0;
     let channels = config.channels() as usize;
+    // The HRTF data set at the output's rate, converted here rather than in the callback.
+    if let Some(set) = hrtf::Hrtf::prepare(rate)
+        && let Ok(mut m) = mixer.lock()
+    {
+        m.hrtf.install(set);
+    }
     let mut scratch = Vec::new();
     let on_error = mixer.clone();
     let stream = device.build_output_stream(
@@ -1558,6 +1787,7 @@ impl Audio {
             muffle: None,
             stream_gain_sent: [f32::NAN; 11],
             entities_stale: Default::default(),
+            directional: None,
             #[cfg(feature = "audio")]
             default_seen: if live { default_output_name() } else { None },
             #[cfg(feature = "audio")]
@@ -1739,6 +1969,7 @@ impl Audio {
             muffle: None,
             stream_gain_sent: [f32::NAN; 11],
             entities_stale: Default::default(),
+            directional: None,
             // The primary backend owns and maintains the output device.
             #[cfg(feature = "audio")]
             default_seen: self.default_seen.clone(),
@@ -2005,6 +2236,36 @@ impl Audio {
     fn set_muffle_level(&mut self, level: [f32; 2]) {
         if let Ok(mut m) = self.backend.mixer.lock() {
             m.muffle.target = level;
+        }
+    }
+    /// Vanilla's `directionalAudio` option, which asks OpenAL Soft for its HRTF
+    /// (`ALC_HRTF_SOFT` 1, `ALC_HRTF_ID_SOFT` 0: the built-in `Default HRTF.mhr`): on a stereo
+    /// output every sound is rendered through that HRTF as vanilla renders it ([`hrtf`], spec
+    /// #3511), mono sounds from their direction and stereo ones from two virtual speakers at
+    /// ±30°. On any other output layout, and off, the output is the option-off mix. A change
+    /// after the first setting reloads the sound manager, as the option's own update does
+    /// (`SoundManager.reload`: every sound stops and the device starts afresh), then plays the
+    /// button click it plays.
+    pub fn set_directional_audio(&mut self, on: bool) {
+        let changed = match self.directional.replace(on) {
+            Some(was) if was == on => return,
+            Some(_) => true,
+            None => false,
+        };
+        if let Ok(mut m) = self.backend.mixer.lock() {
+            m.directional = on;
+            if changed {
+                // A reopened device holds no HRTF state.
+                m.hrtf.clear();
+                for c in m.channels.values_mut() {
+                    c.hrtf.reset();
+                }
+                m.fading.clear();
+            }
+        }
+        if changed {
+            self.stop_all();
+            self.play_button_click();
         }
     }
     /// The `uiSoundReserve` extra: positional sounds leave
@@ -2421,7 +2682,15 @@ impl Audio {
     }
     /// Mixes one buffer of audio into `data` (channels: 1 or 2, rate in Hz).
     pub fn mix_buffer(&mut self, data: &mut [f32], channels: usize, rate: u32) {
+        let set = self.backend.mixer.lock().ok().and_then(|m| {
+            (m.directional && !m.hrtf.ready(rate))
+                .then(|| hrtf::Hrtf::prepare(rate))
+                .flatten()
+        });
         if let Ok(mut m) = self.backend.mixer.lock() {
+            if let Some(set) = set {
+                m.hrtf.install(set);
+            }
             mix_pieces(&mut m, data, channels, rate);
         }
     }
@@ -2780,6 +3049,7 @@ mod tests {
             started: None,
             unmuffled: false,
             fx: fx::VoiceFx::default(),
+            hrtf: hrtf::Voice::default(),
         }
     }
 
@@ -3429,6 +3699,258 @@ mod tests {
             .map(|(a, b)| (b[0] - a[0]).abs().max((b[1] - a[1]).abs()))
             .fold(0.0f32, f32::max);
         assert!(jump <= largest * 1.05, "{jump} > {largest}");
+    }
+
+    /// A 1.0 impulse at frame 0 heard with Directional Audio on, as the HRTF oracle of #3511
+    /// plays it: a listener at the origin facing -z with +y up, no attenuation, a source at
+    /// `rate`, `updates` updates of 1024 frames of stereo output.
+    fn impulse_heard(at: [f32; 3], stereo: bool, rate: u32) -> Vec<f32> {
+        let mut m = Mixer {
+            directional: true,
+            listener_yaw: 180.0,
+            ..Mixer::default()
+        };
+        m.hrtf.install(hrtf::data_set(rate).unwrap());
+        let mut c = if stereo {
+            let mut s = vec![0.0; 8192];
+            s[0] = 1.0;
+            stereo_channel(s, None, at, false)
+        } else {
+            let mut s = vec![0.0; 4096];
+            s[0] = 1.0;
+            channel(s, None, at, false)
+        };
+        if let Some((_, r, _)) = c.samples.as_mut() {
+            *r = rate;
+        }
+        m.channels.insert(1, c);
+        let mut out = Vec::new();
+        let mut buffer = vec![0.0; 2048];
+        for _ in 0..4 {
+            mix(&mut m, &mut buffer, 2, rate);
+            out.extend_from_slice(&buffer);
+        }
+        out
+    }
+
+    /// Each ear's first nonzero sample and energy (to six places).
+    fn first_and_energy(out: &[f32]) -> [(usize, String); 2] {
+        std::array::from_fn(|ear| {
+            let ear: Vec<f32> = out.iter().skip(ear).step_by(2).copied().collect();
+            let first = ear.iter().position(|s| *s != 0.0).unwrap();
+            let energy: f64 = ear.iter().map(|s| f64::from(*s) * f64::from(*s)).sum();
+            (first, format!("{energy:.6}"))
+        })
+    }
+
+    /// #3511's measurements of vanilla's own OpenAL Soft (LWJGL 3.4.3, 1.25.2), less its
+    /// limiter's look-ahead (48 samples at 48 kHz, 44 at 44.1 kHz), which this mixer's limiter
+    /// does not have.
+    #[test]
+    fn directional_audio_matches_vanillas_measured_hrtf() {
+        let rows: [([f32; 3], bool, u32, [(usize, &str); 2]); 9] = [
+            (
+                [1.0, 0.0, 0.0],
+                false,
+                48_000,
+                [(88, "0.024430"), (48, "0.748976")],
+            ),
+            (
+                [-1.0, 0.0, 0.0],
+                false,
+                48_000,
+                [(48, "0.748976"), (88, "0.024430")],
+            ),
+            (
+                [0.0, 0.0, -1.0],
+                false,
+                48_000,
+                [(71, "0.280182"), (71, "0.280182")],
+            ),
+            (
+                [0.0, 0.0, 0.0],
+                false,
+                48_000,
+                [(71, "0.280182"), (71, "0.280182")],
+            ),
+            (
+                [0.0, 1.0, 0.0],
+                false,
+                48_000,
+                [(55, "0.115947"), (55, "0.115947")],
+            ),
+            (
+                [0.0, -1.0, 0.0],
+                false,
+                48_000,
+                [(55, "0.237611"), (55, "0.237611")],
+            ),
+            (
+                [-0.5, 0.0, -0.866_025_4],
+                false,
+                48_000,
+                [(66, "0.490800"), (78, "0.054868")],
+            ),
+            // A stereo buffer with the impulse in its left channel only.
+            ([0.0; 3], true, 48_000, [(66, "0.490800"), (78, "0.054868")]),
+            (
+                [1.0, 0.0, 0.0],
+                false,
+                44_100,
+                [(80, "0.022444"), (44, "0.687850")],
+            ),
+        ];
+        for (at, stereo, rate, want) in rows {
+            let look_ahead = rate as usize / 1000;
+            let got = first_and_energy(&impulse_heard(at, stereo, rate));
+            let want = want.map(|(first, energy)| (first - look_ahead, energy.to_owned()));
+            assert_eq!(got, want, "{at:?} stereo {stereo} at {rate} Hz");
+        }
+        // Measured identical: a sound at the listener and one straight ahead; the stereo
+        // buffer's left channel and a mono sound 30° to the left.
+        assert_eq!(
+            impulse_heard([0.0; 3], false, 48_000),
+            impulse_heard([0.0, 0.0, -1.0], false, 48_000)
+        );
+        assert_eq!(
+            impulse_heard([0.0; 3], true, 48_000),
+            impulse_heard([-0.5, 0.0, -0.866_025_4], false, 48_000)
+        );
+    }
+
+    #[test]
+    fn directional_audio_renders_only_a_stereo_output() {
+        // A tone 3 blocks to the listener's right (+x is left of a camera facing +z).
+        let at = [-3.0, 0.0, 0.0];
+        let heard = |directional: bool, channels: usize| {
+            let mut m = Mixer {
+                directional,
+                ..Mixer::default()
+            };
+            m.channels.insert(1, channel(sine(3000.0), None, at, true));
+            let mut out = Vec::new();
+            let mut buffer = vec![0.0; 480 * channels];
+            for _ in 0..20 {
+                mix(&mut m, &mut buffer, channels, 48_000);
+                out.extend_from_slice(&buffer);
+            }
+            out
+        };
+        let ear = |out: &[f32], e: usize| -> Vec<f32> {
+            out.iter().skip(e).step_by(2).copied().collect()
+        };
+        let on = heard(true, 2);
+        let (left, right) = (rms(&ear(&on, 0)), rms(&ear(&on, 1)));
+        // The head shadows the far ear.
+        assert!(right > left * 2.0, "{left} {right}");
+        assert_ne!(on, heard(false, 2));
+        // Mono, quad and 5.1 outputs get no HRTF: the option-off output, sample for sample.
+        for channels in [1, 4, 6] {
+            assert_eq!(heard(true, channels), heard(false, channels), "{channels}");
+        }
+    }
+
+    #[test]
+    fn directional_audio_renders_updates_of_at_most_1024_frames() {
+        // A 4096-frame buffer is four updates, the same as four buffers of 1024.
+        let heard = |buffer_frames: usize| {
+            let mut m = Mixer {
+                directional: true,
+                ..Mixer::default()
+            };
+            m.channels
+                .insert(1, channel(sine(440.0), None, [2.0, 1.0, 1.0], true));
+            let mut out = Vec::new();
+            let mut buffer = vec![0.0; buffer_frames * 2];
+            for _ in 0..8192 / buffer_frames {
+                mix(&mut m, &mut buffer, 2, 48_000);
+                out.extend_from_slice(&buffer);
+            }
+            out
+        };
+        assert_eq!(heard(4096), heard(1024));
+    }
+
+    #[test]
+    fn a_sound_the_hrtf_renders_fades_out_when_it_stops_or_goes() {
+        for destroyed in [false, true] {
+            let mut m = Mixer {
+                directional: true,
+                ..Mixer::default()
+            };
+            m.channels
+                .insert(1, channel(vec![0.5; 48_000], None, [0.0, 0.0, 2.0], true));
+            let mut buffer = vec![0.0; 2048];
+            mix(&mut m, &mut buffer, 2, 48_000);
+            if destroyed {
+                let c = m.channels.remove(&1).unwrap();
+                m.fading.push(c);
+            } else {
+                m.channels.get_mut(&1).unwrap().state = State::Stopped;
+            }
+            mix(&mut m, &mut buffer, 2, 48_000);
+            // 64 samples of fade, then the responses' tails (64 taps, delays under 64).
+            assert!(buffer[..128].iter().any(|s| *s != 0.0));
+            assert!(buffer[2 * 192..].iter().all(|s| *s == 0.0), "{destroyed}");
+            let c = if destroyed {
+                &m.fading[0]
+            } else {
+                &m.channels[&1]
+            };
+            assert!(!c.hrtf.playing());
+            mix(&mut m, &mut buffer, 2, 48_000);
+            assert!(buffer.iter().all(|s| *s == 0.0));
+        }
+    }
+
+    #[test]
+    fn turning_directional_audio_off_returns_to_the_plain_mix_exactly() {
+        let mut m = Mixer {
+            directional: true,
+            ..Mixer::default()
+        };
+        m.channels
+            .insert(1, channel(sine(440.0), None, [2.0, 1.0, 1.0], true));
+        listen(&mut m, 0.1);
+        m.directional = false;
+        let mut plain = Mixer::default();
+        let mut c = channel(sine(440.0), None, [2.0, 1.0, 1.0], true);
+        c.position = m.channels[&1].position;
+        plain.channels.insert(1, c);
+        assert_eq!(listen(&mut m, 0.1), listen(&mut plain, 0.1));
+    }
+
+    #[test]
+    fn changing_directional_audio_reloads_the_sounds_as_vanilla_does() {
+        let mut audio = Audio::silent(&sunrise_assets::resource_source::ResourceSource::directory(
+            (Path::new("/nonexistent/sunrise-test-assets")).to_path_buf(),
+        ));
+        audio.engine.registry.add_file(
+            "minecraft",
+            br#"{"ui.button.click":{"sounds":["gui/button"]},"block.hum":{"sounds":["hum"]}}"#,
+            &|_, _| true,
+        );
+        audio.engine.loaded = true;
+        audio.backend.live = true;
+        audio.play("minecraft:block.hum", Some([1.0, 2.0, 3.0]), 1.0, 1.0);
+        let playing = |audio: &Audio| audio.engine.census()["events"].to_string();
+        // The options file's first value only sets it.
+        audio.set_directional_audio(false);
+        assert!(playing(&audio).contains("block.hum"));
+        assert!(!audio.backend.mixer.lock().unwrap().directional);
+        // A change stops every sound, then clicks.
+        audio.set_directional_audio(true);
+        assert!(audio.backend.mixer.lock().unwrap().directional);
+        let now = playing(&audio);
+        assert!(
+            !now.contains("block.hum") && now.contains("ui.button.click"),
+            "{now}"
+        );
+        // Setting it again as it is changes nothing.
+        audio.play("minecraft:block.hum", Some([1.0, 2.0, 3.0]), 1.0, 1.0);
+        audio.set_directional_audio(true);
+        assert!(playing(&audio).contains("block.hum"));
+        audio.stop_all();
     }
 
     #[test]
