@@ -64,6 +64,8 @@ fn flat_world() -> World {
 struct Bot {
     c: Connection,
     name: String,
+    /// The item ids of `minecraft:beacon_payment_items`, as configuration's tags sent them.
+    beacon_payment: Vec<i32>,
 }
 impl Bot {
     fn recv_play(&mut self) -> Result<C, String> {
@@ -125,6 +127,7 @@ fn connect(port: u16, name: &str, known_pack: bool) -> Result<Bot, String> {
     c.send(&cfg::Serverbound::ClientInformation(ClientInformation::new(4)).encode())
         .map_err(e)?;
     let (mut registries, mut tags, mut features) = (0, 0, 0);
+    let mut payment = Vec::new();
     loop {
         let (id, payload) = c.recv().map_err(e)?;
         match cfg::Clientbound::decode(id, &payload).map_err(e)? {
@@ -145,7 +148,17 @@ fn connect(port: u16, name: &str, known_pack: bool) -> Result<Bot, String> {
                 let has_data = r.entries.iter().any(|e| e.data.is_some());
                 assert_eq!(has_data, !known_pack, "{}", r.registry);
             }
-            cfg::Clientbound::UpdateTags(t) => tags += t.registries.len(),
+            cfg::Clientbound::UpdateTags(t) => {
+                tags += t.registries.len();
+                payment.extend(
+                    t.registries
+                        .into_iter()
+                        .filter(|r| r.registry == "minecraft:item")
+                        .flat_map(|r| r.tags)
+                        .filter(|t| t.name == "minecraft:beacon_payment_items")
+                        .flat_map(|t| t.ids),
+                );
+            }
             cfg::Clientbound::UpdateEnabledFeatures(_) => features += 1,
             cfg::Clientbound::FinishConfiguration(_) => {
                 c.send(&cfg::Serverbound::FinishConfiguration(Empty).encode())
@@ -161,6 +174,7 @@ fn connect(port: u16, name: &str, known_pack: bool) -> Result<Bot, String> {
     Ok(Bot {
         c,
         name: name.into(),
+        beacon_payment: payment,
     })
 }
 
@@ -917,37 +931,41 @@ fn status_and_join() {
     };
     let mut s = server(&resources);
     let port = s.hub.lan.port;
-    // Server list ping.
-    let json = run(&mut s, move || {
-        let mut c = Connection::connect("127.0.0.1", port, Duration::from_secs(5))
-            .map_err(|e| e.to_string())?;
-        c.send(
-            &handshake::Serverbound::Intention(handshake::Intention {
-                protocol: PROTOCOL_VERSION,
-                host: "127.0.0.1".into(),
-                port,
-                intent: handshake::STATUS,
-            })
-            .encode(),
-        )
-        .unwrap();
-        c.send(&status::Serverbound::StatusRequest(Empty).encode())
+    // Server list ping, by a 26.3 client and by a 26.2 one (776): the server states its own
+    // status either way (ServerStatusPacketListenerImpl.handleStatusRequest).
+    for protocol in [PROTOCOL_VERSION, 776] {
+        let json = run(&mut s, move || {
+            let mut c = Connection::connect("127.0.0.1", port, Duration::from_secs(5))
+                .map_err(|e| e.to_string())?;
+            c.send(
+                &handshake::Serverbound::Intention(handshake::Intention {
+                    protocol,
+                    host: "127.0.0.1".into(),
+                    port,
+                    intent: handshake::STATUS,
+                })
+                .encode(),
+            )
             .unwrap();
-        let (id, payload) = c.recv().map_err(|e| e.to_string())?;
-        let status::Clientbound::StatusResponse(r) =
-            status::Clientbound::decode(id, &payload).map_err(|e| e.to_string())?
-        else {
-            return Err("no status".into());
-        };
-        Ok(r.json)
-    });
-    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(
-        v["version"]["protocol"],
-        sunrise_core::version::PROTOCOL_VERSION
-    );
-    // ServerStatus.CODEC writes a plain literal MOTD as a bare string.
-    assert_eq!(v["description"], "Test - World");
+            c.send(&status::Serverbound::StatusRequest(Empty).encode())
+                .unwrap();
+            let (id, payload) = c.recv().map_err(|e| e.to_string())?;
+            let status::Clientbound::StatusResponse(r) =
+                status::Clientbound::decode(id, &payload).map_err(|e| e.to_string())?
+            else {
+                return Err("no status".into());
+            };
+            Ok(r.json)
+        });
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            v["version"]["protocol"],
+            sunrise_core::version::PROTOCOL_VERSION,
+            "pinged with {protocol}"
+        );
+        // ServerStatus.CODEC writes a plain literal MOTD as a bare string.
+        assert_eq!(v["description"], "Test - World");
+    }
 
     // `DedicatedServer.setRepliesToStatus`: disabling it closes a fresh status handshake.
     s.hub.lan.shared.set_enable_status(false);
@@ -975,6 +993,12 @@ fn status_and_join() {
     // Join, receive the world, place a block, see another player arrive.
     let report = run(&mut s, move || {
         let mut bot = connect(port, "Steve", true)?;
+        // The tags carry 26.3's item ids: minecraft:diamond is 1012.
+        assert!(
+            bot.beacon_payment.contains(&1012),
+            "beacon_payment_items: {:?}",
+            bot.beacon_payment
+        );
         let mut chunks = 0;
         let (mut login_seen, mut teleported, mut time, mut info) = (false, false, false, false);
         let mut commands = false;

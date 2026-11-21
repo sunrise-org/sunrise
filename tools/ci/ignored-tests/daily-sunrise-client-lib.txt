@@ -125,6 +125,7 @@ sunrise-client-lib mobs::ai::noai_species_step_tests::noai_mobs_still_run_their_
 sunrise-client-lib mobs::ai::ravager_noai_tests::ravager_counters_tick_without_ai_and_stun_starts_a_full_roar lib daily resources
 sunrise-client-lib mobs::ai::ridden_tests::the_server_leaves_a_horse_to_its_riders_client lib daily resources
 sunrise-client-lib mobs::ai::same_vehicle_push_tests::a_camel_and_its_rider_never_push_each_other lib daily resources
+sunrise-client-lib mobs::ai::same_vehicle_push_tests::a_mob_in_a_crowded_pen_pushes_every_mob_it_overlaps lib daily resources
 sunrise-client-lib mobs::ai::same_vehicle_push_tests::a_mobs_equipment_is_listed_by_slot lib daily resources
 sunrise-client-lib mobs::ai::same_vehicle_push_tests::a_ridden_horse_is_not_pushed_but_still_pushes lib daily resources
 sunrise-client-lib mobs::ai::same_vehicle_push_tests::sleeping_fox_vetoes_pushes_received_during_other_mobs_ticks lib daily resources

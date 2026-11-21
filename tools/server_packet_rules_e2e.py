@@ -3,8 +3,13 @@
 
     python3 tools/server_packet_rules_e2e.py --bin-dir target/fast
 
-A survival dedicated server in a flat world, a world border 20 blocks wide around 0 0 (no damage):
+A survival dedicated server in a flat world, allow-flight on, a world border 20 blocks wide around 0 0
+(no damage):
 - handleAttack: a player outside the world border isn't hit, from 3 blocks away; a pair inside it fights;
+- Player.attack: inside the border, a player hit without a swing is hurt, and so are both players one
+  attacker hits each round;
+- clientIsFloating: with allow-flight on, a player hovering 4 blocks over the ground, saying in every move
+  that it stands, is never kicked for floating;
 - Player.onAttack: players hitting a boat without swinging: the attack itself starts the strength again,
   so of eight hits in a row the last seven are weak and the boat stands (24 in a row still break one);
 - handleSetCarriedItem: hotbar slot 12 is refused, and the console says "<name> tried to set an invalid
@@ -48,6 +53,9 @@ PROPERTIES = {
     'spawn-protection': '0',
     'view-distance': '3',
     'simulation-distance': '3',
+    # Vanilla's floating kick stays off (ServerGamePacketListenerImpl.clientIsFloating): the hovering
+    # bot shows it does.
+    'allow-flight': 'true',
 }
 # A flat world's grass top is at y = -61.
 GROUND = -60
@@ -62,6 +70,15 @@ SPEED = 0  # minecraft:speed in the mob_effect registry
 # without it breaks on its fifth hit; P breaks either way (on its 19th hit with the reset), which shows
 # the hits land.
 BOATS = {'P': ((5.5, GROUND, 2.5), 10, 24), 'Q': ((5.5, GROUND, -3.5), 11, 8)}
+# More fights inside the border, each victim 3 blocks or less from its attacker: one without a swing, and
+# one attacker hitting two players each round. (Attacker, victims, its options, where it stands (x, z),
+# where they do.)
+FIGHTS = [
+    ('A2', ('V2',), ('--no-swing',), (-0.5, -1.5), ((-3.5, -1.5),)),
+    ('A3', ('V3', 'V4'), (), (-0.5, -7.5), ((-3.5, -7.5), (-0.5, -4.5))),
+]
+# How many blocks over the ground the hovering bot (H0) holds itself, at the spawn.
+HOVER = 4
 
 
 class Failed(Exception):
@@ -105,6 +122,19 @@ def bot(bins, port, out, name, behaviour, *extra):
     return json.loads(report.read_text())['per_bot'][0]
 
 
+def hovering(server, name):
+    """Whether player `name` is seen 2 blocks or more over the ground within 10 s."""
+    box = f'x=-30,dx=60,y={GROUND + 2},dy=20,z=-30,dz=60'
+    for _ in range(10):
+        server.console(f'execute if entity @a[name={name},{box}] run say {name} hovers')
+        try:
+            server.wait_for(rf'{name} hovers', 1)
+            return True
+        except RuntimeError:
+            pass
+    return False
+
+
 def run(bins, folder, out):
     ids = serverbound_ids()
     use_on = (varint(0) + block_pos(*BEACON) + varint(1) + struct.pack('>fff', 0.5, 1.0, 0.5)
@@ -137,12 +167,19 @@ def run(bins, folder, out):
             server.console(f'summon minecraft:oak_boat {x} {y} {z} {{UUID:[I;0,0,0,{n}]}}')
             server.console(f'execute if entity {boat_uuid(n)} run say boat {tag} is here')
             server.wait_for(rf'boat {tag} is here', 20)
-        with ThreadPoolExecutor(7) as pool:
+        with ThreadPoolExecutor(13) as pool:
             # (victim, attacker): outside the border, then a pair inside it.
             pairs = [(pool.submit(bot, bins, port, out, f'V{i}', 'stand'),
                       pool.submit(bot, bins, port, out, f'A{i}', 'stand', '--attack', f'V{i}0',
                                   '--attack-after', '6'))
                      for i in range(2)]
+            fights = [([pool.submit(bot, bins, port, out, v, 'stand') for v in victims],
+                       pool.submit(bot, bins, port, out, attacker, 'stand', '--attack',
+                                   ','.join(f'{v}0' for v in victims), '--attack-after', '6', *extra))
+                      for attacker, victims, extra, _, _ in FIGHTS]
+            # Idle climbs to HOVER blocks over its spawn and holds there; --ground has it claim the
+            # ground in every move, up there too.
+            hover = pool.submit(bot, bins, port, out, 'H', 'idle', '--height', str(HOVER), '--ground')
             rules = pool.submit(bot, bins, port, out, 'R', 'idle', '--raw', raw)
             boats = {tag: pool.submit(bot, bins, port, out, tag, 'stand', '--attack',
                                       ','.join([boat_uuid(n)] * hits), '--no-swing', '--attack-after', '11',
@@ -158,12 +195,22 @@ def run(bins, folder, out):
             for tag, ((x, y, z), _, _) in BOATS.items():
                 server.wait_for(rf'{tag}0 joined the game', 60)
                 server.console(f'tp {tag}0 {x} {y} {z - 2}')
+            for attacker, victims, _, (x, z), spots in FIGHTS:
+                for name in (*victims, attacker):
+                    server.wait_for(rf'{name}0 joined the game', 60)
+                for name, (vx, vz) in zip(victims, spots):
+                    server.console(f'tp {name}0 {vx} {GROUND} {vz}')
+                server.console(f'tp {attacker}0 {x} {GROUND} {z}')
+            server.wait_for(r'H0 joined the game', 60)
             time.sleep(2)
             server.console(f'tp V00 12.5 {GROUND} -5.5')
             server.console(f'tp A00 9.5 {GROUND} -5.5')
             server.console(f'tp V10 -3.5 {GROUND} 5.5')
             server.console(f'tp A10 -0.5 {GROUND} 5.5')
+            hovered = hovering(server, 'H0')
             results = [(v.result(), a.result()) for v, a in pairs]
+            fought = [([v.result() for v in vs], a.result()) for vs, a in fights]
+            hover_bot = hover.result()
             rule_bot = rules.result()
             boat_bots = {tag: f.result() for tag, f in boats.items()}
         for tag, (_, n, _) in BOATS.items():
@@ -184,6 +231,23 @@ def run(bins, folder, out):
             failed.append(f'{line}: the bots never fought ({attacker["error"]}, {victim["error"]})')
         elif hit != hits:
             failed.append(f'{line}: expected {"a hit" if hits else "no hit"}')
+    for (attacker, victims, extra, _, _), (hurt, hitter) in zip(FIGHTS, fought):
+        health = [v['health'] for v in hurt]
+        how = 'without a swing' if '--no-swing' in extra else f'on {len(victims)} players each round'
+        line = f'{attacker}0 attacking {how}: {hitter["attacks"]} attacks, health {health}'
+        print(line)
+        if hitter['attacks'] == 0 or None in health:
+            failed.append(f'{line}: the bots never fought ({hitter["error"]}, {[v["error"] for v in hurt]})')
+        elif not all(h < 20 for h in health):
+            failed.append(f'{line}: expected every victim hit')
+    kicked = [l for l in lines if 'floating too long' in l]
+    line = (f'H0 hovering {HOVER} blocks up: {"seen" if hovered else "never seen"} in the air, '
+            f'{"dropped: " + hover_bot["error"] if hover_bot["error"] else "never dropped"}')
+    print(line)
+    if not hovered:
+        failed.append(f'{line}: it never rose, so floating was never tested')
+    if kicked or hover_bot['error']:
+        failed.append(f'{line}: allow-flight is on, yet a player was kicked for floating: {kicked}')
     stands = {tag: any(f'boat {tag} stands' in l for l in lines) for tag in BOATS}
     for tag, (_, _, hits) in BOATS.items():
         b = boat_bots[tag]
@@ -225,7 +289,8 @@ def main():
             run(bins, Path(scratch) / 'server', out)
         except (Failed, RuntimeError) as e:
             sys.exit(f'server_packet_rules_e2e failed (logs in {out}):\n{e}')
-    print('server_packet_rules_e2e: the border, attack strength, carried item, game mode and beacon rules hold')
+    print('server_packet_rules_e2e: the border, attack, attack strength, floating, carried item, game mode and '
+          'beacon rules hold')
 
 
 if __name__ == '__main__':
