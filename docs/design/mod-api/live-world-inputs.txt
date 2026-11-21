@@ -417,3 +417,5 @@ tools/test_material_condition_parity.py
 tools/test_piston_shape_parity.py
 tools/test_scattered_ore_parity.py
 tools/test_worldgen_parity.py
+crates/sunrise-client/src/game/modding/native_live_worlds/trace.rs
+docs/design/mod-api/live-world-render-trace.md

@@ -31,6 +31,8 @@ mod publication_tests;
 mod retention;
 #[path = "native_live_worlds/sync.rs"]
 mod sync;
+#[path = "native_live_worlds/trace.rs"]
+pub(in crate::game) mod trace;
 #[path = "native_live_worlds/transfer.rs"]
 mod transfer;
 #[path = "native_live_worlds/transfer_cells.rs"]
@@ -1366,6 +1368,9 @@ impl Game<'_> {
             glam::DVec4::new(axes[2].x, axes[2].y, axes[2].z, 0.0),
             (glam::DVec3::from_array(origin.components()) - camera).extend(1.0),
         );
+        let vertex_start = out.len();
+        let tracing = trace::enabled();
+        let mut first_cell_matrix = None;
         let mesh = self.projection_mesh(entry, world);
         for cell in &mesh.cells {
             let pos = cell.pos;
@@ -1379,6 +1384,9 @@ impl Game<'_> {
             let cell_matrix = (matrix
                 * glam::DMat4::from_translation(glam::DVec3::from_array(pos.map(f64::from))))
             .as_mat4();
+            if tracing && first_cell_matrix.is_none() {
+                first_cell_matrix = Some((pos, cell_matrix.to_cols_array()));
+            }
             super::minecarts::emit_model_faces(
                 cell.faces.iter().copied().map(|face| (face, light)),
                 cell_matrix,
@@ -1406,6 +1414,26 @@ impl Game<'_> {
                 );
             }
         }
+        trace::emit("model_draw", || {
+            serde_json::json!({
+                "side": if self.is_logical_server() { "server" } else { "client" },
+                "generation": entry.handle.generation(), "collider": entry.collider,
+                "client_tick": self.ticks, "coherent_sample": trace::sample(entry.sample),
+                "membership": entry.membership, "frozen": entry.frozen,
+                "poses": poses.map(trace::pose), "partial": partial, "partial_bits": partial.to_bits(),
+                "camera": camera.to_array(), "camera_bits": camera.to_array().map(f64::to_bits),
+                "transform": trace::transform(&pose),
+                "camera_relative_matrix": matrix.to_cols_array(),
+                "camera_relative_matrix_bits": matrix.to_cols_array().map(f64::to_bits),
+                "first_cell_matrix": first_cell_matrix.map(|(pos, matrix)| serde_json::json!({
+                    "cell": pos, "matrix_f32": matrix, "matrix_f32_bits": matrix.map(f32::to_bits)
+                })),
+                "first_vertex": out.get(vertex_start).map(|vertex| serde_json::json!({
+                    "position_f32": vertex.pos, "position_f32_bits": vertex.pos.map(f32::to_bits)
+                })),
+                "mesh_cells": mesh.cells.len(), "vertices": out.len() - vertex_start
+            })
+        });
     }
 }
 

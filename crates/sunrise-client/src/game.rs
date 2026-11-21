@@ -8825,6 +8825,7 @@ impl Game<'_> {
         hud.patches.append(&mut self.map_patches);
         hud.patches.append(self.text_patches.get_mut());
         self.dynamic_texture_patches(&mut hud.image_patches);
+        native_live_worlds::trace::marker(&mut hud, &self.gui.atlas);
         let entity_spans = std::mem::take(self.entity_spans.get_mut());
         let entity_motion = std::mem::take(self.entity_motion.get_mut());
         let entity_motion_posed = std::mem::take(self.entity_motion_posed.get_mut());
@@ -8990,6 +8991,12 @@ impl Game<'_> {
         let debug_passes = self.debug_lists_gpu_passes();
         let lightmap_chart = self.debug_shows_lightmap();
         let mut prepared_draws = std::mem::take(&mut *self.prepared_model_draws.borrow_mut());
+        native_live_worlds::trace::emit("frame_submit", || {
+            serde_json::json!({
+                "client_tick": self.ticks, "world_partial": alpha, "camera_partial": camera_alpha,
+                "size": size, "outline_edges": frame.outline.len(), "hide_gui": self.ui.hide_gui
+            })
+        });
         let result = match self.renderer.as_mut() {
             Some(renderer) => {
                 use sunrise_client::client_perf::request::GpuSwitch;
@@ -9010,6 +9017,12 @@ impl Game<'_> {
             }
             None => Err("renderer".into()),
         };
+        native_live_worlds::trace::emit("frame_submit_result", || {
+            serde_json::json!({
+                "client_tick": self.ticks, "rendered": matches!(result, Ok(true)),
+                "error": result.as_ref().err().map(|error| error.to_string())
+            })
+        });
         prepared_draws.clear();
         *self.prepared_model_draws.borrow_mut() = prepared_draws;
         let _cleanup = spans::guard("pr_cleanup");
@@ -10411,6 +10424,7 @@ impl Game<'_> {
                     let elapsed = now.duration_since(self.previous);
                     self.frame_ticks = elapsed.as_secs_f32() * 20.0;
                     self.previous = now;
+                    native_live_worlds::trace::frame_begin(elapsed, self.ticks);
                     self.upload_pace.frame(elapsed);
                     self.studio_fly(elapsed);
                     // Arrow-key camera controls belong to gameplay; chat and
@@ -10444,6 +10458,13 @@ impl Game<'_> {
                     self.report_activity();
                     let target = self.tick_target_millis();
                     let steps = self.clock.advance(elapsed, target);
+                    native_live_worlds::trace::emit("frame_steps", || {
+                        serde_json::json!({
+                            "client_tick": self.ticks, "steps": steps, "target_millis": target,
+                            "world_partial": self.frame_world_partial_tick(),
+                            "camera_partial": self.clock.camera_fraction()
+                        })
+                    });
                     if steps > 0
                         && self.title.is_none()
                         && let Err(e) = self.poll_remote_before_tick()
@@ -10459,6 +10480,14 @@ impl Game<'_> {
                     self.tick_world_icon();
                     let ticked = Instant::now();
                     let rendered = self.render_and_flip(elapsed)?;
+                    native_live_worlds::trace::emit("frame_end", || {
+                        serde_json::json!({
+                            "client_tick": self.ticks, "steps": steps, "rendered": rendered,
+                            "world_partial": self.frame_world_partial_tick(),
+                            "camera_partial": self.clock.camera_fraction(),
+                            "frame_cpu_ns": now.elapsed().as_nanos() as u64
+                        })
+                    });
                     self.native_frame_end()?;
                     // The frame's spans, taken every frame they are recorded so they never
                     // pile up: the slow-frame line's.

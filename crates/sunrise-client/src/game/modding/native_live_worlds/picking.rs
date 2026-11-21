@@ -369,7 +369,7 @@ impl Game<'_> {
             return Vec::new();
         };
         let pose = frame(poses[0]).interpolate(&frame(poses[1]), partial);
-        shape
+        let edges: Vec<_> = shape
             .edges()
             .into_iter()
             .map(|edge| {
@@ -385,6 +385,17 @@ impl Game<'_> {
                 let b = point(3);
                 [a[0], a[1], a[2], b[0], b[1], b[2]]
             })
-            .collect()
+            .collect();
+        trace::emit("outline_draw", || {
+            serde_json::json!({
+                "generation": pick.handle.generation(), "collider": entry.collider,
+                "client_tick": self.ticks, "coherent_sample": trace::sample(entry.sample),
+                "membership": entry.membership, "cell": pick.hit.cell,
+                "poses": poses.map(trace::pose), "partial": partial, "partial_bits": partial.to_bits(),
+                "transform": trace::transform(&pose), "edges": edges.len(),
+                "first_edge": edges.first(), "first_edge_bits": edges.first().map(|edge| edge.map(f64::to_bits))
+            })
+        });
+        edges
     }
 }

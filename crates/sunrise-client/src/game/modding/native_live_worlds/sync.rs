@@ -116,6 +116,63 @@ fn api_sample(s: wire::Sample) -> LiveWorldSample {
     LiveWorldSample::new(api_pose(s.previous), api_pose(s.current), s.revision)
 }
 
+fn traced_message(message: &Message) -> serde_json::Value {
+    use serde_json::json;
+    let sample = |sample: wire::Sample| {
+        json!({
+            "frame": sample.frame, "source_revision": sample.source_revision,
+            "state_hash": sample.state_hash, "poses": trace::sample(api_sample(sample))
+        })
+    };
+    match message {
+        Message::Snapshot {
+            id,
+            collider,
+            boxes,
+            source,
+            destination,
+            cells,
+            sample: poses,
+            membership,
+        } => {
+            json!({"type": "snapshot", "generation": id, "collider": collider,
+                "boxes": boxes, "source": source, "destination": destination,
+                "cells": cells.len(), "membership": membership, "sample": sample(*poses)})
+        }
+        Message::Pose { id, sample: poses } => {
+            json!({"type": "pose", "generation": id, "sample": sample(*poses)})
+        }
+        Message::Clear { id } => json!({"type": "clear", "generation": id}),
+    }
+}
+
+fn traced_replica(replica: &Replica) -> serde_json::Value {
+    use serde_json::json;
+    let contact = |contact: &ContactFrontier| {
+        json!({
+            "pose": trace::pose(contact.pose), "membership": contact.membership,
+            "resources": contact.resources, "boxes": contact.boxes.boxes().len()
+        })
+    };
+    json!({
+        "frame": replica.frame, "source_revision": replica.source_revision,
+        "sample": trace::sample(replica.sample), "membership": replica.membership,
+        "collider": replica.collider, "source": replica.source, "destination": replica.destination,
+        "state_hash": replica.state_hash,
+        "observed": replica.observed.as_ref().map(|(_, revision, hash)| json!({
+            "world_revision": revision, "state_hash": hash
+        })),
+        "coherent": replica.entry.as_ref().map(|entry| json!({
+            "generation": entry.handle.generation(), "sample": trace::sample(entry.sample),
+            "membership": entry.membership, "frozen": entry.frozen
+        })),
+        "contact": replica.contact.as_ref().map(contact),
+        "presentation": replica.presentation.as_ref().map(|shown| json!({
+            "previous": trace::pose(shown.previous), "current": contact(&shown.current)
+        }))
+    })
+}
+
 /// Prepared once per membership revision, never by a per-guest pose flush.
 pub(super) fn stream_areas(source: LevelRef, cells: &[[i32; 3]]) -> Result<Vec<ChunkArea>, Error> {
     let chunks: BTreeSet<_> = cells.iter().map(|p| (p[0] >> 4, p[2] >> 4)).collect();
@@ -376,6 +433,11 @@ impl Game<'_> {
                     PayloadBytes(bytes),
                 ) {
                     Ok(_) => {
+                        trace::emit("server_queued", || {
+                            serde_json::json!({
+                                "server_tick": self.ticks, "message": traced_message(&message)
+                            })
+                        });
                         let mut table = self.live_worlds.borrow_mut();
                         if wanted.contains(&id) {
                             table.sync.sent.insert((uuid, id), stamp);
@@ -408,6 +470,15 @@ impl Game<'_> {
             sync.clear();
             sync.epoch = Some(epoch);
         }
+        let generation = match &message {
+            Message::Snapshot { id, .. } | Message::Pose { id, .. } | Message::Clear { id } => *id,
+        };
+        trace::emit("client_received", || {
+            serde_json::json!({
+                "client_tick": self.ticks, "message": traced_message(&message),
+                "before": sync.replicas.get(&generation).map(traced_replica)
+            })
+        });
         match message {
             Message::Snapshot {
                 id,
@@ -420,6 +491,11 @@ impl Game<'_> {
                 membership,
             } => {
                 if sync.retired.contains(&id) {
+                    trace::emit("client_ignored", || {
+                        serde_json::json!({
+                            "generation": id, "reason": "retired_snapshot", "client_tick": self.ticks
+                        })
+                    });
                     return Ok(());
                 }
                 if sync.replicas.len() >= 64 && !sync.replicas.contains_key(&id) {
@@ -453,6 +529,11 @@ impl Game<'_> {
                         || sample.frame < old.frame
                         || sample.revision < old.sample.revision
                     {
+                        trace::emit("client_ignored", || {
+                            serde_json::json!({
+                                "generation": id, "reason": "stale_snapshot", "client_tick": self.ticks
+                            })
+                        });
                         return Ok(());
                     }
                     if sample.frame == old.frame {
@@ -466,6 +547,11 @@ impl Game<'_> {
                             && sample.source_revision == old.source_revision
                             && sample.state_hash == old.state_hash
                         {
+                            trace::emit("client_ignored", || {
+                                serde_json::json!({
+                                    "generation": id, "reason": "duplicate_snapshot", "client_tick": self.ticks
+                                })
+                            });
                             return Ok(());
                         }
                         return Err(sunrise_protocol::Error::new(
@@ -522,6 +608,11 @@ impl Game<'_> {
                 if let Some(replica) = sync.replicas.get_mut(&id) {
                     let incoming = api_sample(sample);
                     if sample.frame < replica.frame || sample.revision < replica.sample.revision {
+                        trace::emit("client_ignored", || {
+                            serde_json::json!({
+                                "generation": id, "reason": "stale_pose", "client_tick": self.ticks
+                            })
+                        });
                         return Ok(());
                     }
                     if sample.frame == replica.frame {
@@ -529,6 +620,11 @@ impl Game<'_> {
                             && sample.source_revision == replica.source_revision
                             && sample.state_hash == replica.state_hash
                         {
+                            trace::emit("client_ignored", || {
+                                serde_json::json!({
+                                    "generation": id, "reason": "duplicate_pose", "client_tick": self.ticks
+                                })
+                            });
                             return Ok(());
                         }
                         return Err(sunrise_protocol::Error::new(
@@ -546,6 +642,13 @@ impl Game<'_> {
                     replica.state_hash = sample.state_hash;
                     replica.frame = sample.frame;
                     replica.sample = incoming;
+                } else {
+                    trace::emit("client_ignored", || {
+                        serde_json::json!({
+                            "generation": id, "reason": "unknown_pose", "client_tick": self.ticks
+                        })
+                    });
+                    return Ok(());
                 }
             }
             Message::Clear { id } => {
@@ -558,6 +661,13 @@ impl Game<'_> {
                 sync.retired.insert(id);
             }
         }
+        trace::emit("client_accepted", || {
+            serde_json::json!({
+                "generation": generation, "client_tick": self.ticks,
+                "after": sync.replicas.get(&generation).map(traced_replica),
+                "retired": sync.retired.contains(&generation)
+            })
+        });
         Ok(())
     }
 
@@ -734,6 +844,7 @@ impl Game<'_> {
     pub(in crate::game) fn client_projection_contact_complete(&self) {
         let mut table = self.live_worlds.borrow_mut();
         for (&id, replica) in &mut table.sync.replicas {
+            let before = trace::enabled().then(|| traced_replica(replica));
             let next = {
                 let Some(entry) = self.replica_entry(id, replica) else {
                     continue;
@@ -753,6 +864,12 @@ impl Game<'_> {
                 current: next.clone(),
             });
             replica.contact = Some(next);
+            trace::emit("client_contact_complete", || {
+                serde_json::json!({
+                    "generation": id, "client_tick": self.ticks, "before": before,
+                    "after": traced_replica(replica)
+                })
+            });
         }
     }
 
@@ -801,6 +918,12 @@ impl Game<'_> {
             let Some(poses) = self.client_projection_draw_poses(id, replica) else {
                 continue;
             };
+            trace::emit("client_draw_pair", || {
+                serde_json::json!({
+                    "generation": id, "client_tick": self.ticks, "replica": traced_replica(replica),
+                    "selected": poses.map(trace::pose), "partial": partial, "partial_bits": partial.to_bits()
+                })
+            });
             let Some(entry) = replica.entry.as_ref() else {
                 continue;
             };

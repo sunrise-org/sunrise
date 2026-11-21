@@ -668,3 +668,22 @@ input-list additions do not change that Rust scope. Formatting, ignored inventor
 public-tree and the command-local .githooks/pre-commit execution are bound in the final Git
 receipt; core.hooksPath being unset is not mistaken for an installed hook. Prior whole-readiness
 nonpasses and the separate installed-world/SDK gates remain explicitly unresolved.
+
+## Bounded rendering observations before an interpolation decision
+
+A fresh-context author received only generic moving-projection rendering observations and
+the questions of idle client ticks and coalesced accepted samples. The author's source-only
+audit confirmed an unconditional presentation write at contact completion, but does not
+establish its causal role in any observed frame hold/jump. The owner then authorized only
+off-by-default bounded instrumentation; no interpolation, contact or acceptance fix is part
+of this diagnostic checkpoint.
+
+The JSONL trace and numeric frame marker are documented in `live-world-render-trace.md`,
+including limits, float bits, separate accepted/coherent revisions, monotonic/UNIX anchors,
+CPU-render versus display/capture qualifications, enabled-run overhead and shutdown flush.
+Only own Sunrise source/rules were consulted. No neighboring port, Sable, Companion, native
+caller implementation or old frame-audit evidence was opened. The implementation author
+ran the preserved formatter and source-only checks, not Cargo, a compiler, Game, SDK build,
+network, installation or publication. Actual executable traces remain the coordinator's
+next gate. The detailed authoring input record accompanies the diagnostic documentation;
+AI authorship and pending human/upstream eligibility decisions remain explicit.
