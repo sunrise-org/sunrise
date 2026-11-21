@@ -1187,6 +1187,12 @@ impl Projectile {
         self.previous_yaw = self.yaw;
         self.previous_pitch = self.pitch;
     }
+    /// `AbstractHurtingProjectile.tick`'s `rotateTowardsMovement(this, 0.2F)`, before the hit is handled, so on a hit tick too.
+    fn turn_hurting(&mut self) {
+        if self.is_fireball() || self.is_hurting() {
+            self.rotate_towards_movement(0.2);
+        }
+    }
     /// `ProjectileUtil.rotateTowardsMovement`: eases the rotation from the
     /// previous tick's towards the movement by `t`.
     fn rotate_towards_movement(&mut self, t: f32) {
@@ -1868,6 +1874,7 @@ impl Projectile {
             && self.owner == Some(who)
         {
             self.position = at;
+            self.turn_hurting();
             self.touching_water = w.in_water(self.bounds());
             let alive = self.position.y >= w.below_world_y() && self.age < 1200;
             return (alive, Hit::None);
@@ -1883,6 +1890,7 @@ impl Projectile {
             && let Some((who, at, _)) = best
         {
             self.position = at;
+            self.turn_hurting();
             return (false, Hit::Entity { who, at });
         }
         if impact
@@ -1890,6 +1898,7 @@ impl Projectile {
             && let Some((at, pos, face)) = block
         {
             self.position = at;
+            self.turn_hurting();
             return (false, Hit::Block { pos, at, face });
         }
         if self.kind == ProjectileKind::LlamaSpit {
@@ -1923,16 +1932,7 @@ impl Projectile {
             );
         }
         self.position = to;
-        // `AbstractHurtingProjectile.tick` (fireballs, dragon fireballs, wither
-        // skulls and wind charges: `is_hurting` adds the wind charges) eases
-        // towards the motion with `ProjectileUtil.rotateTowardsMovement(this,
-        // 0.2F)`; a still one keeps its rotation. The thrown kinds and the
-        // experience bottle turned before the move and llama spit returned
-        // above, shulker bullets tick in `tick_bullet` and arrows and tridents
-        // in `arrows`.
-        if self.is_fireball() || self.is_hurting() {
-            self.rotate_towards_movement(0.2);
-        }
+        self.turn_hurting();
         // Entity.baseTick's updateFluidInteraction, after the move: the fluids
         // it touches now, and their currents push it.
         self.touching_water = w.in_water(self.bounds());
@@ -2731,6 +2731,29 @@ mod tests {
             );
             assert!(kept);
         }
+    }
+    /// `AbstractHurtingProjectile.tick` turns before `hitTargetOrDeflectSelf`, so a fireball that hits still turns.
+    #[test]
+    fn a_fireball_turns_on_the_tick_it_hits() {
+        let mut p = Projectile::new(
+            ProjectileKind::SmallFireball,
+            Vec3::new(0.5, 100.0, 0.0),
+            None,
+        );
+        p.velocity = Vec3::new(0.0, 0.0, 0.5);
+        let target = Aabb::new(Vec3::new(0.0, 99.5, 0.25), Vec3::new(1.0, 100.5, 1.25));
+        let (keep, hit) = p.tick(&Empty(vec![(Who::Mob(7), target)]));
+        assert!(!keep);
+        let at = Vec3::new(0.5, 100.0, 0.25);
+        assert_eq!(
+            hit,
+            Hit::Entity {
+                who: Who::Mob(7),
+                at
+            }
+        );
+        // Target yaw 180; yRotO 0 moves to 360, then 360 + 0.2 * (180 - 360).
+        assert_eq!((p.position, p.yaw), (at, 324.0));
     }
     #[test]
     fn a_tick_through_an_entity_does_not_hit_it() {
