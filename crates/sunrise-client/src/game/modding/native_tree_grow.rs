@@ -1,4 +1,3 @@
-// game-module-visibility: pub(crate)
 //! The engine side of `on_tree_grow`: the trunk placer's callback, asking the parts of the block
 //! under a growing trunk on the worldgen workers, and on the server thread when a sapling grows.
 //! It reads what the server published (`native_worldgen_parts`), never a game thread's tables.

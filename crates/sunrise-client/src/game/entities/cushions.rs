@@ -1,4 +1,3 @@
-// game-module-visibility: pub(crate)
 //! Cushions: `CushionItem.useOn` placement on the top face of a block,
 //! `Cushion.canBePlacedAt`/`survives`, `Cushion.interact` (sit),
 //! `BlockAttachedEntity.hurtServer` (break, dropping the matching colour),

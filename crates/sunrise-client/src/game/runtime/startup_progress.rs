@@ -1,4 +1,3 @@
-// game-module-visibility: pub(crate)
 //! Mods' bars and lines on the startup loading screen (`RegistrationContext::progress` and
 //! `message`, NeoForge's `StartupNotificationManager`): kept here, drawn under the stage bar by
 //! the startup menu, or logged on a dedicated server, which has no screen.

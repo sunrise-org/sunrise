@@ -1,4 +1,3 @@
-// game-module-visibility: pub(crate)
 //! The dedicated server (net.minecraft.server.Main and DedicatedServer):
 //! `sunrise-client --dedicated [--nogui] [--port N] [--world NAME]
 //! [--universe DIR] [--initSettings]`. It reads server.properties and

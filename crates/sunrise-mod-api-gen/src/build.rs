@@ -50,18 +50,7 @@ pub fn generate(root: &Path, out_dir: &Path, target: Target) -> Result<(), Strin
     let generated = sources(root, super::FillMode::Require)?;
     let outputs = match target {
         Target::Client => vec![
-            (
-                "native_hook_modules.rs",
-                sunrise_game_discovery::native_hook_modules(root)?,
-            ),
-            ("lan_action_modules.rs", {
-                let directory = root.join("crates/sunrise-client/src/game/network/lan_actions");
-                sunrise_game_discovery::lan_action_modules(
-                    &directory,
-                    Catalog::modules(&directory).map_err(|e| e.to_string())?,
-                )?
-            }),
-            ("game_host_modules.rs", game_host_modules(root)?),
+            (HOST_OUTPUT, game_host_generated(root)?),
             ("mod_api_fire_generated.rs", generated.fire),
             // The mob tick's goal read view (#1077), included beside the
             // engine's `GoalCx` in `mobs/part_goals.rs`.
@@ -173,14 +162,15 @@ mod generated_visibility_tests {
     }
 }
 
-/// The game's side of the host traits: one module for each area file of `game/host/`.
-pub(crate) fn game_host_modules(root: &Path) -> Result<String, String> {
-    let mut modules = sunrise_game_discovery::host_modules(root)?;
-    modules.push_str(&format!(
+/// The game's side of the host traits, which `game/host/mod.rs` includes.
+pub(crate) const HOST_OUTPUT: &str = "game_host_generated.rs";
+
+/// The generated forwarders from each host area's trait to the inherent `Game` functions.
+pub(crate) fn game_host_generated(root: &Path) -> Result<String, String> {
+    Ok(format!(
         "mod generated {{\n{}\n}}\n",
         host::game_forwarders(root)?
-    ));
-    Ok(modules)
+    ))
 }
 
 /// Generate the native-only raw render records, without trait dispatch or subscriptions.

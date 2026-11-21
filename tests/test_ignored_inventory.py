@@ -20,8 +20,7 @@ class IgnoredInventory(unittest.TestCase):
             put("launcher/Cargo.toml", '[package]\nname = "sunrise-launcher"\n[workspace]\nmembers = []\n')
             put("crates/sunrise-client/Cargo.toml", '[package]\nname = "sunrise-client"\n')
             put("crates/sunrise-client/src/lib.rs", "mod game;\n")
-            put("crates/sunrise-client/src/game.rs", 'include!(concat!(env!("OUT_DIR"), "/game_modules.rs"));\n')
-            put("crates/sunrise-client/src/game/blocks/.game-area", "")
+            put("crates/sunrise-client/src/game.rs", '#[path = "game/blocks/widget.rs"]\nmod widget;\n')
             put("crates/sunrise-client/src/game/blocks/widget.rs",
                 'mod tests { include!("widget_parts/tests.rs"); }\n')
             put("crates/sunrise-client/src/game/blocks/widget_parts/tests.rs",

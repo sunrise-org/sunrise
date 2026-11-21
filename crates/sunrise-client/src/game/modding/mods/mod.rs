@@ -1,4 +1,3 @@
-// game-module-visibility: pub(crate)
 //! Mods in the game (`docs/modding/src/how-to/content-mods.md`): content mods' blocks, items, data and
 //! assets (`content_root`), and the Mods page's rows. Code mods are native (`native_hooks.rs`)
 //! with content-only packages loaded separately.

@@ -38,7 +38,7 @@ host implemented above the engine: a dev-dependency cycle gives the test build a
 engine↔`mod_api` value conversions (`game/modding/api_values`) are counted with the hook bodies: 117 engine files
 that stay use them.
 
-**Module discovery:** `sunrise-mod-api-gen` uses the `.game-area` markers and `game_modules.rs`.
+**Module discovery: none.** The game's modules are plain `mod` items in `game.rs`, so no module list is generated.
 
 **Attachments: stay in the engine (phase 4 dropped).** Attachment storage lives in `sunrise-mod-runtime`, which is
 already an engine-layer crate, so moving it buys no layering. `sunrise-world`'s dependency on `sunrise-mod-runtime`

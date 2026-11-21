@@ -117,12 +117,13 @@ A target is the function's module path, then its type and name:
 - a trait method: the module of the `impl Trait for Type` block, then `<Type as Trait>` as written, then the
   function: `sunrise_client::game::level_access::<GameLevel<'_> as LevelAccess>::block_state`.
 
-To get the module from the file, start from `crates/sunrise-client/src/`, which is `sunrise_client`. A folder
-directly under `src/game/` that holds a `.game-area` file is an **area**, and an area is not a module.
+To get the module from the file, start from `crates/sunrise-client/src/`, which is `sunrise_client`, and follow
+the `mod` items. `game.rs` declares each file of an **area**, a folder directly under `src/game/` such as `world/`,
+with a `#[path]`, and an area is not a module.
 
 So `src/game/world/autosave.rs` is `sunrise_client::game::autosave` (`world/` is an area). But
-`src/game/native_hooks/` has no `.game-area`, so `src/game/native_hooks/base.rs` is
-`sunrise_client::game::native_hooks::base`.
+`src/game/native_hooks/` is a module that `game.rs` declares with `mod native_hooks;`, so
+`src/game/native_hooks/base.rs` is `sunrise_client::game::native_hooks::base`.
 
 Any function of the game crate can take a mixin. A function in a crate below it, such as `sunrise_world`, needs
 the marker `#[sunrise_mod_api_macros::replaceable]` in its source. Otherwise, target a replaceable caller or callee.

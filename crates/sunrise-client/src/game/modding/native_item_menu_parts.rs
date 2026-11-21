@@ -1,4 +1,3 @@
-// game-module-visibility: pub(crate)
 //! The executable's side of the item hooks the client library asks inside its menus and
 //! recipe matching (`native_client_hooks`): `can_grindstone_repair`, `is_combine_repairable`
 //! and `can_fit_inside_container_items`. Each asks the parts of the stack's item, with the

@@ -65,9 +65,8 @@ RULES = [
 RULES = [(strand, re.compile(pattern)) for strand, pattern in RULES]
 # Generated files an engine crate includes, by strand.
 GENERATED = {
-    "game_modules.rs": "slots", "lan_action_modules.rs": "slots", "native_hook_modules.rs": "hooks",
     "mod_api_fire_generated.rs": "hooks", "mod_api_goal_view_generated.rs": "hooks",
-    "game_host_modules.rs": "host",
+    "game_host_generated.rs": "host",
 }
 # File rules for the move set, before the edges' majority decides.
 FILE_RULES = [

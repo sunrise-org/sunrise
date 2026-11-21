@@ -10,7 +10,6 @@ autoexamples = false
 autotests = false
 
 [build-dependencies]
-sunrise-game-discovery = { path = "../sunrise-game-discovery" }
 sunrise-mod-api-gen = { path = "../sunrise-mod-api-gen" }
 # The build script runs on the host, but embeds resources based on the target OS.
 winresource = "0.1"

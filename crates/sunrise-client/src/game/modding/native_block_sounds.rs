@@ -1,4 +1,3 @@
-// game-module-visibility: pub(crate)
 //! The `sound_type` Part method (`IBlockExtension.getSoundType`). The client library asks through
 //! `native_client_hooks`; only a state whose block has a subscribing part is converted, and only
 //! then is its own sound type kept to fall back on.

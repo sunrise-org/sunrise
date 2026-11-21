@@ -9,9 +9,6 @@ license.workspace = true
 rust-version.workspace = true
 description = "Reusable client systems, control tool and parity probes"
 
-[build-dependencies]
-sunrise-game-discovery = { path = "../sunrise-game-discovery" }
-
 [lib]
 path = "../sunrise-client/src/client_lib.rs"
 

@@ -1,4 +1,3 @@
-// game-module-visibility: pub(crate)
 //! What a server publishes for its world generation at each Parts install (world open and
 //! `/reload`): its resolved Part table, which the worldgen Part methods read on the workers and on
 //! the server thread alike, and the block-state index their states convert through, with the

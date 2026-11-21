@@ -1,4 +1,3 @@
-// game-module-visibility: pub(crate)
 //! The game-owned conversion boundary between API records and engine values.
 //! Rust's orphan rule prevents foreign From/TryFrom implementations here.
 #[path = "api_values/ingredient.rs"]

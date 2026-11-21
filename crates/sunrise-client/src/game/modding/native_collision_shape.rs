@@ -1,4 +1,3 @@
-// game-module-visibility: pub(crate)
 //! The `collision_shape` Part method (vanilla's `getCollisionShape` with its `CollisionContext`).
 //! The client library asks through `native_client_hooks` from inside a move; only a state whose
 //! block has a subscribing part is converted, and a part that faults is switched off.

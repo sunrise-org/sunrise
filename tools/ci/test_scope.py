@@ -63,7 +63,7 @@ READERS = {
     # The daily Character comparator reads the original public-JDK API helper.
     "sunrise-core": ["tools/JavaCharacterTables.java"],
     "sunrise-game": ["packaging/windows/exe.rs"],
-    # Shared source-only module discovery reads the game's declarations and vocabulary export fragments.
+    # The ignored-test inventory reads the game's modules and the vocabulary's export fragments.
     "sunrise-game-discovery": ["crates/sunrise-client/src", "crates/sunrise-mod-vocab/src"],
     # The shared guest-stack tests read the sources that use its constants, and the jobs they wait on.
     "sunrise-guest-stack": ["crates/sunrise-client/src", "crates/sunrise-threads/src"],

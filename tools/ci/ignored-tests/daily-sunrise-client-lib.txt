@@ -275,11 +275,14 @@ sunrise-client-lib mobs::living::farmland_event_tests::a_mob_trampling_farmland_
 sunrise-client-lib mobs::living::fluid_heights::tests::a_mob_measures_fluids_from_its_bottom_and_tracks_lava_at_its_eyes lib daily resources
 sunrise-client-lib mobs::living::tests::a_bubble_column_lifts_a_mob_after_travel_not_inside_it lib daily resources
 sunrise-client-lib mobs::living::tests::a_gliding_mob_passes_through_vines_but_not_a_ladder lib daily resources
+sunrise-client-lib mobs::living::tests::a_mob_in_a_boat_on_water_is_not_in_the_water lib daily resources
 sunrise-client-lib mobs::living::tests::a_mob_in_vines_slides_down_slowly lib daily resources
 sunrise-client-lib mobs::living::tests::a_mob_jumps_by_the_jump_factor_of_the_block_under_it lib daily resources
 sunrise-client-lib mobs::living::tests::a_mob_on_soul_sand_or_honey_is_slowed_by_the_move lib daily resources
 sunrise-client-lib mobs::living::tests::a_sniffers_hop_from_a_standstill_carries_it_forward lib daily resources
 sunrise-client-lib mobs::living::tests::a_squid_and_a_bat_step_without_a_sound lib daily resources
+sunrise-client-lib mobs::living::tests::a_strider_landing_in_lava_takes_no_fall_damage lib daily resources
+sunrise-client-lib mobs::living::tests::a_swimming_drowned_is_not_pushed_by_the_current lib daily resources
 sunrise-client-lib mobs::living::tests::damaging_mob_fall_plays_block_fall_sound lib daily resources
 sunrise-client-lib mobs::living::tests::the_world_border_stops_a_mob lib daily resources
 sunrise-client-lib mobs::llama::tests::breeding_experience_is_drawn_in_the_goal_unless_a_mod_must_decide lib daily resources

@@ -642,9 +642,7 @@ def failure_diagnostics(output):
             path = location[1] if location else ""
             if any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in path):
                 path = ""
-            # game-discovery emits canonical absolute #[path] declarations. Only
-            # this checkout's exact resolved prefix is authoritative; never guess
-            # another checkout's prefix or search for a matching path suffix.
+            # An absolute path counts only under this checkout's exact prefix, never a guessed one.
             path = path.replace(os.sep, "/")
             prefix = ROOT.as_posix() + "/"
             if path.startswith(prefix):

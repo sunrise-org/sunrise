@@ -16,7 +16,6 @@ sunrise-mod-api-gen dispatch::tests::scoped_native_hook_uses_selected_host_and_g
 sunrise-mod-api-gen dispatch::tests::setting_changes_notify_only_the_owner lib daily slow
 sunrise-mod-api-gen dispatch::tests::settings_boundary_owns_and_caches_values lib daily child-process
 sunrise-mod-api-gen dispatch::writeback_tests::untouched_writeback_runtime_and_mutants lib daily slow
-sunrise-mod-api-gen game_modules::tests::existing_game_exports_keep_their_visibility lib daily slow
 sunrise-mod-api-gen hook_targets::tests::every_catalog_target_resolves_and_missing_function_is_rejected lib daily slow
 sunrise-mod-api-gen host::state_write_tests::boolean_state_writes_refuse_before_mutation_without_changing_the_bool_contract lib daily child-process
 sunrise-mod-api-gen internals::tests::discovery_keeps_the_catalog_and_normal_output_and_reports_compiler_uses lib daily child-process
