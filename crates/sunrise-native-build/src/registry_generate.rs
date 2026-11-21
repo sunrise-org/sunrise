@@ -11,51 +11,7 @@ use sunrise_mod_package::native_route::PACKAGES;
 
 /// Copies only inert manifests. Source files, build scripts and Cargo config never enter it.
 pub fn stage(bundle: &Bundle, output: &Path) -> Result<(), String> {
-    let mut todo = vec![PathBuf::new()];
-    let mut seen = BTreeSet::new();
-    while let Some(relative) = todo.pop() {
-        if !seen.insert(relative.clone()) {
-            continue;
-        }
-        let input = bundle.dir.join(&relative);
-        let manifest_path = input.join("Cargo.toml");
-        if super::crates::is_link_or_junction(
-            &fs::symlink_metadata(&manifest_path).map_err(|e| e.to_string())?,
-        ) {
-            return Err("linked dependency manifest is refused".into());
-        }
-        let mut manifest: toml::Table = fs::read_to_string(&manifest_path)
-            .map_err(|e| e.to_string())?
-            .parse()
-            .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-        for section in ["patch", "replace", "workspace"] {
-            if manifest.contains_key(section) {
-                return Err(format!(
-                    "{}: [{section}] is refused",
-                    manifest_path.display()
-                ));
-            }
-        }
-        for config in [".cargo/config", ".cargo/config.toml"] {
-            if input.join(config).exists() {
-                return Err(format!(
-                    "{}: Cargo source configuration is refused",
-                    input.display()
-                ));
-            }
-        }
-        rewrite_dependencies(bundle, &relative, &mut manifest, &mut todo)?;
-        if let Some(targets) = manifest
-            .get_mut("target")
-            .and_then(toml::Value::as_table_mut)
-        {
-            for target in targets
-                .iter_mut()
-                .filter_map(|(_, value)| value.as_table_mut())
-            {
-                rewrite_dependencies(bundle, &relative, target, &mut todo)?;
-            }
-        }
+    visit_manifests(bundle, None, |relative, mut manifest| {
         manifest.remove("bin");
         manifest.remove("example");
         manifest.remove("test");
@@ -76,7 +32,103 @@ pub fn stage(bundle: &Bundle, output: &Path) -> Result<(), String> {
         let dest = output.join(relative);
         fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
         fs::write(dest.join("Cargo.toml"), manifest.to_string()).map_err(|e| e.to_string())?;
-        fs::write(dest.join("inert.rs"), "").map_err(|e| e.to_string())?;
+        fs::write(dest.join("inert.rs"), "").map_err(|e| e.to_string())
+    })
+}
+
+/// Rebase a disposable project's SDK edges on the tested mod's SDK and wire its installed
+/// library edges. Unlike inert lock generation, this preserves targets and build scripts.
+pub fn stage_for_release(
+    bundle: &Bundle,
+    packages: &[super::dependencies::Package<'_>],
+    sdk_root: &str,
+    root: bool,
+) -> Result<(), String> {
+    visit_manifests(bundle, Some(sdk_root), |relative, mut manifest| {
+        if relative.as_os_str().is_empty() {
+            let enabled =
+                super::dependencies::rewrite(&bundle.manifest.id, &mut manifest, packages)
+                    .map_err(|e| e.to_string())?;
+            if !enabled.is_empty() {
+                let default = manifest["features"]
+                    .as_table_mut()
+                    .expect("optional features added by rewrite")
+                    .entry("default")
+                    .or_insert_with(|| toml::Value::Array(Vec::new()))
+                    .as_array_mut()
+                    .ok_or("Cargo.toml: features.default must be an array")?;
+                default.extend(enabled.into_iter().map(toml::Value::String));
+            }
+            if root {
+                manifest.insert("workspace".into(), toml::Table::new().into());
+            }
+        }
+        fs::write(
+            bundle.dir.join(relative).join("Cargo.toml"),
+            manifest.to_string(),
+        )
+        .map_err(|e| e.to_string())
+    })
+}
+
+fn visit_manifests(
+    bundle: &Bundle,
+    sdk_root: Option<&str>,
+    mut visit: impl FnMut(&Path, toml::Table) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut todo = vec![PathBuf::new()];
+    let mut seen = BTreeSet::new();
+    while let Some(relative) = todo.pop() {
+        if !seen.insert(relative.clone()) {
+            continue;
+        }
+        let input = bundle.dir.join(&relative);
+        let manifest_path = input.join("Cargo.toml");
+        if super::crates::is_link_or_junction(
+            &fs::symlink_metadata(&manifest_path).map_err(|e| e.to_string())?,
+        ) {
+            return Err("linked dependency manifest is refused".into());
+        }
+        let mut manifest: toml::Table = fs::read_to_string(&manifest_path)
+            .map_err(|e| e.to_string())?
+            .parse()
+            .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+        for section in ["patch", "replace", "workspace"] {
+            if manifest.contains_key(section)
+                && !(sdk_root.is_some()
+                    && section == "workspace"
+                    && relative.as_os_str().is_empty()
+                    && manifest[section]
+                        .as_table()
+                        .is_some_and(toml::Table::is_empty))
+            {
+                return Err(format!(
+                    "{}: [{section}] is refused",
+                    manifest_path.display()
+                ));
+            }
+        }
+        for config in [".cargo/config", ".cargo/config.toml"] {
+            if input.join(config).exists() {
+                return Err(format!(
+                    "{}: Cargo source configuration is refused",
+                    input.display()
+                ));
+            }
+        }
+        rewrite_dependencies(bundle, &relative, &mut manifest, &mut todo, sdk_root)?;
+        if let Some(targets) = manifest
+            .get_mut("target")
+            .and_then(toml::Value::as_table_mut)
+        {
+            for target in targets
+                .iter_mut()
+                .filter_map(|(_, value)| value.as_table_mut())
+            {
+                rewrite_dependencies(bundle, &relative, target, &mut todo, sdk_root)?;
+            }
+        }
+        visit(&relative, manifest)?;
     }
     Ok(())
 }
@@ -86,6 +138,7 @@ pub fn rewrite_dependencies(
     relative: &Path,
     table: &mut toml::Table,
     todo: &mut Vec<PathBuf>,
+    sdk_root: Option<&str>,
 ) -> Result<(), String> {
     for kind in [
         "dependencies",
@@ -103,7 +156,12 @@ pub fn rewrite_dependencies(
             let package = get("package").unwrap_or(key);
             if let Some(&(name, _)) = PACKAGES.iter().find(|(name, _)| *name == package) {
                 api::sdk_source(key, name, dep)?;
-                sdk.push(key.clone());
+                if let Some(root) = sdk_root {
+                    let up = "../".repeat(relative.components().count());
+                    dep["path"] = format!("{up}{root}{}", api::sdk_path(name)).into();
+                } else {
+                    sdk.push(key.clone());
+                }
                 continue;
             }
             for selector in [

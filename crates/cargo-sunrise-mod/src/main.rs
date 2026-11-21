@@ -98,12 +98,12 @@ fn main() -> ExitCode {
         }),
         Some("build") => build_command(entry, &args[1..]).map(drop),
         Some("publish") => publish::run(entry, &args[1..]),
-        Some("release") => release::run(Path::new("."), &args[1..]),
+        Some("release") => release::run(entry, Path::new("."), &args[1..]),
         Some("keygen") => signing::keygen(&args[1..]),
         Some("sign") => signing::sign(&args[1..]),
         Some("run") => run(&args[1..]).map_err(|e| e.to_string()),
         Some("check") => check_args(&args[1..]).and_then(|wanted| match wanted {
-            Check::Folder { uses } => sdk_cmds::check_mod(entry, uses),
+            Check::Folder { uses } => sdk_cmds::check_mod(entry, Path::new("."), uses, false),
             Check::File(file) => check(file),
         }),
         Some("hooks") => sdk_cmds::hooks(&args[1..]),
@@ -264,6 +264,7 @@ fn build_command(
         .transpose()?;
     let path = build(
         entry,
+        root,
         &package,
         &output,
         built.as_ref().map(|built| built.mixins.as_str()),
@@ -563,11 +564,11 @@ fn new_native(
 /// checkout it lies in, which has no published surface to scan against).
 fn build(
     entry: mod_surface::child::ChildEntry,
+    root: &Path,
     package: &Package,
     output: &PackageOutput,
     mixins: Option<&str>,
 ) -> Result<PathBuf, String> {
-    let root = Path::new(".");
     let uses = if package.is_native() && sdk_fetch::game_tree(root)?.is_none() {
         let sdk = sdk_fetch::ensure_sdk(root)?;
         let surface = uses_table::surface_of(&sdk)?;

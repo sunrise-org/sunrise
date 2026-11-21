@@ -247,10 +247,24 @@ you are ready to publish a stable version from GitHub:
 A tag build verifies Sunrise's rolling signed [`mod-tool`](../start/install-tool.md#newest-tool-from-main), then
 plans against the tag's independently signed SDK. All jobs require the same authenticated tool commit. A
 standalone API mod builds an archive for each host in that SDK. Other valid native mods get a signed source
-package only, including mods with required content dependencies. If your code imports another mod's library,
-the standalone check cannot supply it and the tag workflow stops before signing. Dependency-aware tagged
-releases are tracked in [#3885](https://github.com/sunrise-org/sunrise/issues/3885). A failed check or binary
-build stops the release; it does not publish a source-only substitute.
+package only, including mods that import another mod's library. The build job resolves required dependencies
+for both sides on the stable release the mod pins, verifies each selected library's source SHA-256 and author
+signature, and checks and tests in a disposable folder with the usual
+[Cargo aliases and optional features](../concepts/dependencies.md). It releases only your own source and lockfile.
+A failed check, test or binary build stops the release; it does not publish a source-only substitute.
+
+Before tagging a mod with dependencies, generate its lock in the same layout and commit it after reviewing the diff:
+
+```sh
+cargo sunrise-mod registry releases --out releases.json
+cargo sunrise-mod release source --tag v0.1.0 --releases releases.json --update-lock
+```
+
+Use the Rust toolchain named by the pinned SDK. This command prepares the lock, runs the checks and tests, and
+writes a local `.smod`; it does not sign or upload anything. The tag job runs with `--locked`. If the reviewed
+registry selection changes and the lock no longer fits, rerun the command and review the new lock before tagging.
+Optional dependencies are not downloaded just because your mod declares them; they are available when selected by
+another requirement.
 
 The workflow keeps the verified signed batch as a run artifact before uploading. If an upload stops partway,
 rerun the failed jobs of that run while the original signed batch is available. Identical assets are reused;

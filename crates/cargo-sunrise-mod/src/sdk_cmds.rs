@@ -775,8 +775,12 @@ fn report(
 
 /// `check [--uses]` in a mod folder: the package rules, then `cargo check` and an API use
 /// report for a native mod. `--uses` lists each item and the line that brought it in.
-pub(crate) fn check_mod(entry: ChildEntry, show_uses: bool) -> Result<(), String> {
-    let root = Path::new(".");
+pub(crate) fn check_mod(
+    entry: ChildEntry,
+    root: &Path,
+    show_uses: bool,
+    locked: bool,
+) -> Result<(), String> {
     let package = Package::read(root)?;
     let files = package.directory_files(root)?;
     let (pipelines, refused) = crate::check::pipeline_shaders(&files);
@@ -801,11 +805,12 @@ pub(crate) fn check_mod(entry: ChildEntry, show_uses: bool) -> Result<(), String
     let sdk = ensure_sdk(root)?;
     let surface = surface_of(&sdk)?;
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let status = Command::new(cargo)
-        .arg("check")
-        .current_dir(root)
-        .status()
-        .map_err(|e| format!("cargo check: {e}"))?;
+    let mut command = Command::new(cargo);
+    command.arg("check").current_dir(root);
+    if locked {
+        command.arg("--locked");
+    }
+    let status = command.status().map_err(|e| format!("cargo check: {e}"))?;
     if !status.success() {
         let mut error = format!("cargo check failed: {status}");
         let required: Vec<_> = package
@@ -814,7 +819,7 @@ pub(crate) fn check_mod(entry: ChildEntry, show_uses: bool) -> Result<(), String
             .iter()
             .filter_map(|(id, dependency)| (!dependency.details().optional).then_some(id.as_str()))
             .collect();
-        if !required.is_empty() {
+        if root == Path::new(".") && !required.is_empty() {
             error.push_str(&format!(
                 "\nRequired mods: {}. A standalone build does not supply library mods.",
                 required.join(", ")

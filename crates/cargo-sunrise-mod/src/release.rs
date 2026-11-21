@@ -22,8 +22,9 @@ use sunrise_native_build::{library_record::Library, prebuilt::Route};
 
 mod plan;
 mod prepare;
+mod source;
 
-pub(crate) const USAGE: &str = "release plan|scripts|prepare-rebuild";
+pub(crate) const USAGE: &str = "release plan|scripts|prepare-rebuild|source";
 const SCRIPTS_USAGE: &str = "release scripts --out <new-dir>";
 
 const SCRIPTS: &[(&str, &str)] = &[
@@ -37,7 +38,11 @@ const SCRIPTS: &[(&str, &str)] = &[
     ),
 ];
 
-pub(crate) fn run(project: &Path, args: &[String]) -> Result<(), String> {
+pub(crate) fn run(
+    entry: sunrise_mod_package::mod_surface::child::ChildEntry,
+    project: &Path,
+    args: &[String],
+) -> Result<(), String> {
     if crate::help::asked(args) {
         print!(
             "{}",
@@ -52,6 +57,7 @@ pub(crate) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         "plan" => plan::USAGE,
         "scripts" => SCRIPTS_USAGE,
         "prepare-rebuild" => prepare::USAGE,
+        "source" => source::USAGE,
         _ => {
             return Err(format!(
                 "unknown release command {command:?}; use `cargo sunrise-mod {USAGE}`"
@@ -65,6 +71,7 @@ pub(crate) fn run(project: &Path, args: &[String]) -> Result<(), String> {
     match command.as_str() {
         "plan" => return plan::run(project, args),
         "prepare-rebuild" => return prepare::run(args),
+        "source" => return source::run(entry, project, args),
         _ => (),
     }
     let mut options =
@@ -332,7 +339,8 @@ mod tests {
             "--out".to_owned(),
             out.display().to_string(),
         ];
-        run(temp.path(), &args).unwrap();
+        let entry = sunrise_mod_package::mod_surface::child::child_entry();
+        run(entry, temp.path(), &args).unwrap();
         assert_eq!(fs::read_dir(&out).unwrap().count(), 2);
         for (name, bytes) in [
             (
@@ -348,7 +356,7 @@ mod tests {
         }
         let keep = out.join("sunrise_release.py");
         fs::write(&keep, b"keep these bytes").unwrap();
-        assert!(run(temp.path(), &args).is_err());
+        assert!(run(entry, temp.path(), &args).is_err());
         assert_eq!(fs::read(keep).unwrap(), b"keep these bytes");
     }
 

@@ -220,6 +220,71 @@ def exercise_rebuild(work, project, private, initial, empty, old):
     print("Generated rebuild: preserved reviewed bytes, appended one distinct stable build, identical retry was a no-op.")
 
 
+def exercise_library_release(work, library, library_project, commit):
+    published = work / "library-index.json"
+    release_api.tool("registry", "build", library, "--files", library / "files", "--out", published,
+                     "--releases", library_project.releases, "--sdk-data", library_project.sdk)
+
+    id, tag = "dependent_release", "v0.1.0"
+    repo = f"example/{id}"
+    project = work / id
+    release_api.tool("new", project, "--template", "native", "--sunrise", commit)
+    manifest = project / "sunrise-mod.toml"
+    text = manifest.read_text(encoding="utf-8")
+    text = text.replace('description = ""',
+                        f'homepage = "https://github.com/{repo}"\nlicense = "MIT"\n'
+                        'description = "A release smoke test that calls a reviewed library."')
+    manifest.write_text(text + f'\n[dependencies]\n{library_project.id} = "={library_project.plan["version"]}"\n',
+                        encoding="utf-8")
+    cargo = (project / "Cargo.toml").read_bytes()
+    source = project / "src" / "lib.rs"
+    source.write_text(source.read_text(encoding="utf-8") + f"""
+pub fn answer() -> u32 {{
+    {library_project.id}::release_smoke_value()
+}}
+
+#[test]
+fn calls_the_required_library() {{
+    assert_eq!(answer(), 42);
+    std::fs::write(std::env::var_os("SUNRISE_RELEASE_TEST_MARKER").unwrap(), b"tested").unwrap();
+}}
+""", encoding="utf-8")
+    icon(project / "icon.png")
+    options = ["--tag", tag, "--releases", library_project.releases, "--index", published,
+               "--files", library / "files"]
+    marker = work / "dependent-test-ran"
+    with patch.dict(os.environ, {"SUNRISE_RELEASE_TEST_MARKER": str(marker),
+                                 "CARGO_TARGET_DIR": str(work / "dependent-cargo-target")}):
+        release_api.tool("release", "source", *options, "--update-lock", cwd=project)
+        lock = (project / "Cargo.lock").read_bytes()
+        marker.unlink()
+
+        batch = release_api.plan(work / "dependent-release", project, commit, repo, tag, library_project.releases)
+        assert batch.plan["mode"] == "source-only" and batch.descriptor is None
+        host, = batch.hosts
+        release_api.build(batch, project, host, dependency_index=published, dependency_files=library / "files")
+        assert marker.read_bytes() == b"tested", "the tagged build did not run the dependent's tests"
+
+    assert (project / "Cargo.lock").read_bytes() == lock
+    assert (project / "Cargo.toml").read_bytes() == cargo
+    private = work / "dependent-key"
+    key = release_api.tool("keygen", "--out", private, "--no-password", cwd=project, capture=True).strip()
+    with signing_key(private):
+        release_api.sign(batch, project)
+    assert release_api.files(batch.assets) == {batch.source, f"{batch.source}.minisig"}
+    with zipfile.ZipFile(batch.assets / batch.source) as package:
+        assert package.read("Cargo.toml") == cargo and package.read("Cargo.lock") == lock
+        assert not any(library_project.id in name for name in package.namelist())
+    out = work / "dependent-submission"
+    with patch.dict(os.environ, {"SUNRISE_MOD_PUBLIC_KEY": key}):
+        release_api.stage(batch, project, library, out)
+    staged = tomllib.loads((out / "mods" / f"{id}.toml").read_text(encoding="utf-8"))
+    row, = staged["versions"]
+    assert row["sha256"] == release_api.sha(batch.assets / batch.source) and row["signature"]
+    assert row["sunrise"] == batch.plan["source"]["tag"] and "builds" not in row
+    print("Tagged source release: checked and tested a required library, staged only the dependent's signed source.")
+
+
 def exercise(work, project, commit, old):
     repo, tag = f"example/{old['id']}", f"v{old['version']}"
     manifest = project / "sunrise-mod.toml"
@@ -230,6 +295,8 @@ def exercise(work, project, commit, old):
     cargo = project / "Cargo.toml"
     cargo.write_text(cargo.read_text(encoding="utf-8").replace('version = "0.1.0"', f'version = "{old["version"]}"')
                      + "\n[workspace]\n", encoding="utf-8")
+    with (project / "src" / "lib.rs").open("a", encoding="utf-8") as source:
+        source.write("\npub fn release_smoke_value() -> u32 { 42 }\n")
     icon(project / "icon.png")
     sdk_base = Path(os.environ["SUNRISE_SDK_BASE"])
     game = release_api.json_read(sdk_base / f"sdk-{commit}" / "sdk.json")["build"]["game"]
@@ -286,6 +353,7 @@ def exercise(work, project, commit, old):
         published = release_api.json_read(index)["projects"][0]["versions"][0]["native_binaries"]
         assert {(item["build"], item["target"]) for item in published} == {(commit, host) for host in wanted_hosts}
     print("Generated release: Linux client and server, signed first listing and unchanged-source append passed.")
+    exercise_library_release(work, seeded, batch, commit)
     exercise_rebuild(work, project, private, batch, empty, old)
 
 

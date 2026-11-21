@@ -164,6 +164,7 @@ pub fn compile(
                 &local,
                 &mut manifest,
                 &mut todo,
+                None,
             )?;
             if let Some(targets) = manifest
                 .get_mut("target")
@@ -172,7 +173,7 @@ pub fn compile(
                 for (_, target) in targets.iter_mut() {
                     if let Some(table) = target.as_table_mut() {
                         super::registry_generate::rewrite_dependencies(
-                            bundle, &local, table, &mut todo,
+                            bundle, &local, table, &mut todo, None,
                         )?;
                     }
                 }

@@ -153,20 +153,21 @@ pub(crate) fn run(project: &Path, args: &[String]) -> Result<(), String> {
     )
 }
 
-fn initial<'a>(
-    project: &Path,
+pub(super) fn tagged_source<'a>(
+    manifest: &sunrise_mod_package::Manifest,
     tag: &str,
     releases: &'a [SunriseRelease],
-) -> Result<Selection<'a>, String> {
-    let bundle =
-        sunrise_native_build::bundle_in(project)?.ok_or("release plan needs a native mod")?;
-    let version = version(&bundle.manifest)?;
+) -> Result<(String, &'a SunriseRelease), String> {
+    let native = manifest
+        .native
+        .as_ref()
+        .ok_or("a tagged release needs a native mod")?;
+    let version = version(manifest)?;
     if tag != format!("v{version}") {
         return Err(format!(
             "tag {tag:?} must match the manifest version: v{version}"
         ));
     }
-    let native = bundle.native();
     let mut named = releases.iter().filter(|r| {
         r.commit == native.sunrise
             && index::stable_tag(&r.tag).expect("validated release tag").0 == native.game
@@ -183,6 +184,17 @@ fn initial<'a>(
             source.tag, other.tag
         ));
     }
+    Ok((version, source))
+}
+
+fn initial<'a>(
+    project: &Path,
+    tag: &str,
+    releases: &'a [SunriseRelease],
+) -> Result<Selection<'a>, String> {
+    let bundle =
+        sunrise_native_build::bundle_in(project)?.ok_or("release plan needs a native mod")?;
+    let (version, source) = tagged_source(&bundle.manifest, tag, releases)?;
     let project = api::Project::read(&bundle).map_err(|e| e.to_string())?;
     let mode = match prebuilt::release_project(&project) {
         Ok(()) => {

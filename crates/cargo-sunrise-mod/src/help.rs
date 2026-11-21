@@ -56,7 +56,7 @@ const COMMANDS: &[Command] = &[
         name: "release",
         everyday: false,
         usage: crate::release::USAGE,
-        summary: "`release plan` selects a tagged native release or a rebuild and stages verified SDK metadata. `release prepare-rebuild` verifies the original reviewed source and writes a scratch manifest or project without running Cargo. `release scripts` writes the shipped workflow scripts.",
+        summary: "`release plan` selects a tagged native release or a rebuild and stages verified SDK metadata. `release prepare-rebuild` verifies the original reviewed source and writes a scratch manifest or project without running Cargo. `release source` checks and tests with reviewed library dependencies and packs the tagged mod's source. `release scripts` writes the shipped workflow scripts.",
     },
     Command {
         name: "keygen",
