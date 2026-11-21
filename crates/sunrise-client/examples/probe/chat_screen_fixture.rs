@@ -69,6 +69,8 @@ pub fn main() -> sunrise_client::Result<()> {
                         &c,
                         a["x"].as_f64().unwrap_or(0.0),
                         a["y"].as_f64().unwrap_or(0.0),
+                        // VanillaChatScreenOracle: screen.mouseClicked(event, false).
+                        false,
                     );
                 }
                 "key" => {

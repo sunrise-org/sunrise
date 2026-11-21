@@ -1321,6 +1321,9 @@ struct Game<'a> {
     book: Option<books::BookScreen>,
     /// The last click on the book screen, for double clicks.
     book_last_click: Option<std::time::Instant>,
+    /// `MouseHandler.lastClick`: a click within 250 ms of the last one is a
+    /// double click on the chat or command block screen's input.
+    chat_last_click: Option<std::time::Instant>,
     /// Lecterns whose page-turn pulse is running (ticks left).
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
     /// LevelLoadingScreen.smoothedProgress while the player is not placed yet.
@@ -11092,6 +11095,7 @@ impl<'a> Game<'a> {
             sign_edit: None,
             book: None,
             book_last_click: None,
+            chat_last_click: None,
             lectern_pulses: Vec::new(),
             loading_progress: 0.0,
             creation_job: None,

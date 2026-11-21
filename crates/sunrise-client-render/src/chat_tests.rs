@@ -72,7 +72,7 @@ fn clicked_suggestion_reports_the_actual_length_limited_input() {
     screen.type_text(&m, &c, "hi st");
     screen.key(&m, &c, &[], K::Tab, false, false);
     let [x, y, _, _] = screen.suggestions.as_ref().unwrap().rect;
-    assert!(screen.click(&m, &c, f64::from(x + 1), f64::from(y + 1)));
+    assert!(screen.click(&m, &c, f64::from(x + 1), f64::from(y + 1), false));
     assert_eq!(screen.value(), "hi Ste");
     assert_eq!(
         screen.take_suggestion_completion(),
@@ -325,7 +325,7 @@ fn locate_coordinates_fill_chat_with_teleport_without_submitting() {
         add(&mut chat, &font, Text::literal("Found at ").append(link));
         let mut screen = ChatScreen::new(&m, &commands, "draft", false, 0, 640, 360, full());
         let x = 4.0 + f64::from(font.width("Found at "));
-        assert!(!screen.click(&m, &commands, x, 315.0));
+        assert!(!screen.click(&m, &commands, x, 315.0, false));
         let Some(ClickEvent::SuggestCommand(command)) = chat.click_at(&font, 360, x, 315.0) else {
             panic!("locate coordinates must suggest a command");
         };
@@ -365,10 +365,10 @@ fn a_double_click_in_the_chat_box_selects_the_word() {
     // the second takes the word.
     let x = f64::from(screen.input.x) + f64::from(font.width("hello world")) - 1.0;
     let y = f64::from(screen.input.y) + 2.0;
-    assert!(screen.click(&m, &c, x, y));
+    assert!(screen.click(&m, &c, x, y, false));
     assert!((10..=11).contains(&screen.input.cursor));
     assert_eq!(screen.input.highlight, screen.input.cursor);
-    assert!(screen.click(&m, &c, x, y));
+    assert!(screen.click(&m, &c, x, y, true));
     assert_eq!((screen.input.highlight, screen.input.cursor), (6, 11));
     assert_eq!(screen.input.selected_text(), "world");
 }

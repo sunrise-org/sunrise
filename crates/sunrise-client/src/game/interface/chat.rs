@@ -1422,7 +1422,13 @@ impl Game<'_> {
             }
         }
         if let Some(screen) = self.ui.chat_screen.as_mut() {
-            if screen.click(&m, &c, cursor.0 as f64, cursor.1 as f64) {
+            // MouseHandler: a click within 250 ms of the last one on this screen is a double click.
+            let now = std::time::Instant::now();
+            let double = self
+                .chat_last_click
+                .is_some_and(|at| now.duration_since(at).as_millis() < 250);
+            self.chat_last_click = Some(now);
+            if screen.click(&m, &c, cursor.0 as f64, cursor.1 as f64, double) {
                 self.notify_chat_suggestion_completion();
                 return;
             }

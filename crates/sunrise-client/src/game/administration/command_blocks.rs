@@ -569,7 +569,13 @@ impl Game<'_> {
                 registries: &self.ui.registries,
             };
             let (x, y) = (f64::from(self.cursor.0), f64::from(self.cursor.1));
-            if s.command.click(&m, &c, x, y) {
+            // MouseHandler: a click within 250 ms of the last one on this screen is a double click.
+            let now = std::time::Instant::now();
+            let double = self
+                .chat_last_click
+                .is_some_and(|at| now.duration_since(at).as_millis() < 250);
+            self.chat_last_click = Some(now);
+            if s.command.click(&m, &c, x, y, double) {
                 self.command_block_screen = Some(s);
                 return;
             }
