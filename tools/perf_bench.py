@@ -645,25 +645,30 @@ def parse_tick_query(lines):
     return None
 
 
-GAME_TIME = re.compile(r"The time is (\d+)")
+def parse_game_time(reply):
+    """The game time in a `command time query gametime` reply: the command's own `result`, not its chat text."""
+    # The game answers "The game time is N tick(s)" in a line the control reply may not carry, and its result is N.
+    result = reply.get("result")
+    if not reply.get("success") or isinstance(result, bool) or not isinstance(result, int):
+        raise RuntimeError(f"`time query gametime` gave no game time: {reply}")
+    return result
 
 
 def game_time(control):
     """The server's game time (`/time query gametime`): one per server tick, so two readings count the ticks between."""
-    try:
-        lines = control("command time query gametime").get("chat") or []
-    except (OSError, ValueError, RuntimeError):
-        return None
-    return next((int(m[1]) for line in lines if (m := GAME_TIME.search(line))), None)
+    return parse_game_time(control("command time query gametime"))
 
 
 def server_ticks(control, ticked):
-    """The server's tick times over the flight, or None unless `/tick query`'s window lies inside its `ticked` server ticks."""
-    try:
-        query = parse_tick_query(control("command tick query").get("chat") or [])
-    except (OSError, ValueError, RuntimeError):
-        return None
-    return query if query and query["samples"] >= TICK_WINDOW and (ticked or 0) >= TICK_WINDOW else None
+    """The server's tick times over the flight; raises unless `/tick query` answers with a window inside the flight's `ticked` server ticks."""
+    reply = control("command tick query")
+    query = parse_tick_query(reply.get("chat") or [])
+    if query is None:
+        raise RuntimeError(f"`tick query` gave no percentiles line: {reply}")
+    if query["samples"] < TICK_WINDOW or ticked < TICK_WINDOW:
+        raise RuntimeError(f"`tick query` shows {query['samples']} tick times but the flight ran {ticked} server ticks; "
+                           f"its window of {TICK_WINDOW} needs a longer --seconds")
+    return query
 
 
 def menu_hold(control, seconds):
@@ -778,9 +783,7 @@ def run_sunrise(args, distance):
                 scene["client_tick_ms"] = tick_phase * summary.get("frames", 0) / ticks
             scene["entities"] = {"mobs": status.get("mobs"), "block_entities": status.get("block_entities")}
             if server_scene:
-                time_after = game_time(control)
-                ran = time_after - time_before if None not in (time_before, time_after) else None
-                scene["server_tick"] = server_ticks(control, ran)
+                scene["server_tick"] = server_ticks(control, game_time(control) - time_before)
             if name in stress_scenes.NAMES:
                 for line in stress_scenes.cleanup(name):
                     control("command " + line)
