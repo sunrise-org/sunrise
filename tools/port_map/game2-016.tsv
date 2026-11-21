@@ -135,7 +135,7 @@ BaseContainerBlockEntity.collectImplicitComponents	port	crates/sunrise-client/sr
 BaseContainerBlockEntity.getLootContext	port	crates/sunrise-client/src/structure_blocks.rs::roll_container	position seed and biome feed the loot table roll.
 BeaconBlockEntity.updateBase	port	crates/sunrise-client/src/game/blocks/beacon.rs::Game::beacon_base	counts the pyramid levels (steps 1 to 4)
 BeaconBlockEntity.storeEffect	port	crates/sunrise-client/src/save/block_entity_encode.rs::encode	primary and secondary written to the beacon tag
-BeaconBlockEntity.loadEffect	port	crates/sunrise-client/src/save.rs::decode_block_entity	primary and secondary read from the beacon tag
+BeaconBlockEntity.loadEffect	port	crates/sunrise-client/src/save/block_entity_decode.rs::decode_block_entity	primary and secondary read from the beacon tag
 BeaconBlockEntity.createMenu	port	crates/sunrise-client/src/game/blocks/beacon.rs::Game::beacon_opened
 BeaconBlockEntity.applyImplicitComponents	port	crates/sunrise-client/src/block_entity_item.rs::place	beacon name and lock from item components
 BeaconBlockEntity.collectImplicitComponents	port	crates/sunrise-client/src/block_entity_item.rs::collect	beacon name and lock to item components

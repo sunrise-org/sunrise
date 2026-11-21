@@ -40,7 +40,7 @@ Util.describeError	skip:debug		error text for game test reports and FreeType err
 Util.executeInSequence	missing		minor: the steps of a file move are not retried as a unit; a failed move is reported once
 Util.runWithRetries	missing		minor: no retry loop (10 attempts) around file moves for Windows file locks; Sunrise's save and datafix moves do not retry
 Util.safeMoveFile	port	crates/sunrise-world/src/datafix/files.rs::move_file	gap: minor: one attempt, no 10-try retry; still refuses to overwrite an existing target
-Util.safeReplaceOrMoveFile	port	crates/sunrise-client/src/save.rs::write_dat	gap: minor: no retries and no rollback to the backup when the new file cannot be renamed in; the old file is moved to a *_old name
+Util.safeReplaceOrMoveFile	port	crates/sunrise-client/src/save/level_dat.rs::write_dat	gap: minor: no retries and no rollback to the backup when the new file cannot be renamed in; the old file is moved to a *_old name
 Util.offsetByCodepoints	inline	crates/sunrise-client-render/src/screen_draw.rs::TextField::key	gap: minor: arrow keys move one character only (no count argument, no surrogate pairs); ctrl-arrows use ui word_position
 Util.startTimerHackThread	skip:other		JVM Windows timer-resolution thread; Rust timers do not need it
 Util.copyBetweenDirs	inline	crates/sunrise-client-render/src/datapack.rs::install	Create World's picks are copied into <world>/datapacks one by one, each pack's folder or zip (datapack.rs::copy)

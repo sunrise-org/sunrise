@@ -92,7 +92,7 @@ PoiRecord.releaseTicket	inline	crates/sunrise-client/src/mobs/villager_brain.rs:
 PoiRecord.isOccupied	inline	crates/sunrise-client/src/mobs/villager_brain.rs::village_sections	a POI counts as occupied (village centre) when a villager memory holds it
 PoiRecord.equals	skip:java		position equality
 PoiRecord.Packed.unpack	skip:other		POI files are not loaded into records; keep_claims reads free_tickets only to carry claims across a save
-PoiSection.pack	port	crates/sunrise-client/src/save.rs::encode_poi	Valid and Records with free_tickets at the max (claims kept by keep_claims)
+PoiSection.pack	port	crates/sunrise-client/src/save/villager_poi.rs::encode_poi	Valid and Records with free_tickets at the max (claims kept by keep_claims)
 PoiSection.getRecords	inline	crates/sunrise-client-render/src/poi_sections.rs::PoiSections::get	per-section POI list, type filter done by poi_matches
 PoiSection.add	inline	crates/sunrise-client-render/src/poi_sections.rs::PoiSections::get	list rebuilt from the blocks
 PoiSection.remove	inline	crates/sunrise-client-render/src/poi_sections.rs::PoiSections::get	list rebuilt from the blocks
@@ -100,8 +100,8 @@ PoiSection.getFreeTickets	skip:debug		deprecated, debug only
 PoiSection.release	inline	crates/sunrise-client/src/mobs/villager_brain.rs::tickets	see PoiManager.release
 PoiSection.refresh	inline	crates/sunrise-client-render/src/poi_sections.rs::PoiSections::get	invalid sections need no refresh, the list is rebuilt from blocks
 PoiSection.Packed.unpack	skip:other		POI files are not loaded into sections
-PoiTypes.registerBlockStates	inline	crates/sunrise-client/src/save.rs::poi_type	state to POI type and max tickets in one match
-PoiTypes.bootstrap	port	crates/sunrise-client/src/save.rs::poi_type	every POI type with its tickets (bed heads of the sixteen colours only, cauldrons, bell 32); villagers use villager_brain::state_poi for jobs, beds and bell
+PoiTypes.registerBlockStates	inline	crates/sunrise-world/src/poi.rs::poi_type	state to POI type and max tickets in one match
+PoiTypes.bootstrap	port	crates/sunrise-world/src/poi.rs::poi_type	every POI type with its tickets (bed heads of the sixteen colours only, cauldrons, bell 32); villagers use villager_brain::state_poi for jobs, beds and bell
 Bat.isFlapping	port	crates/sunrise-client/src/game/blocks/sculk.rs::flaps	an awake bat flaps every tenth tick, and the movement pass posts minecraft:flap when the block below is air (a bee, every other tick in the air, shares the same fn)
 Bat.getMovementEmission	port	crates/sunrise-client/src/mobs/ai.rs::movement_sounds	EVENTS
 Bat.getAmbientSound	inline	crates/sunrise-client/src/mobs/ai.rs::play_ambient	Species::Bat arm: a resting bat is silent three times in four

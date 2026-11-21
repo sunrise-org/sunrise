@@ -81,7 +81,7 @@ Inventory.getSuitableHotbarSlot	port	crates/sunrise-world/src/player_inventory.r
 Inventory.removeItem	port	crates/sunrise-world/src/player_inventory.rs::PlayerInventory::remove	slots past the main inventory address equipment
 Inventory.removeItemNoUpdate	port	crates/sunrise-world/src/player_inventory.rs::PlayerInventory::remove_no_update
 Inventory.setItem	port	crates/sunrise-world/src/player_inventory.rs::PlayerInventory::set	slots past the main inventory address equipment
-Inventory.save	port	crates/sunrise-client/src/save.rs::Level::player_tag	writes the non-empty slots of the Inventory list
+Inventory.save	port	crates/sunrise-client/src/save/level.rs::Level::player_tag	writes the non-empty slots of the Inventory list
 Inventory.isEmpty	port	crates/sunrise-world/src/player_inventory.rs::PlayerInventory::is_empty
 Inventory.getItem	port	crates/sunrise-world/src/player_inventory.rs::PlayerInventory::get	slots past the main inventory address equipment
 Inventory.replaceWith	port	crates/sunrise-world/src/player_inventory.rs::PlayerInventory::replace_with
@@ -96,8 +96,8 @@ Player.getWeaponItem	missing		the riptide spin attack keeps only `auto_spin_atta
 Player.destroyVanishingCursedItems	port	crates/sunrise-client/src/game/item_entities.rs::Game::drop_inventory	vanishing-curse stacks are removed from the death drops
 Player.hasCorrectToolForDrops	port	crates/sunrise-client/src/game.rs::Game::tick_mining	the correct-tool test for harvest drops
 Player.canDropItems	inline	crates/sunrise-client/src/lan/menu.rs::click	THROW is not acted on while the client has dropped items too fast
-Player.readAdditionalSaveData	port	crates/sunrise-client/src/save.rs::Level::read_player
-Player.addAdditionalSaveData	port	crates/sunrise-client/src/save.rs::Level::player_tag
+Player.readAdditionalSaveData	port	crates/sunrise-client/src/save/level.rs::Level::read_player
+Player.addAdditionalSaveData	port	crates/sunrise-client/src/save/level.rs::Level::player_tag
 Player.hurtHelmet	port	crates/sunrise-client/src/game.rs::Game::hurt_helmet
 Player.isAboveGround	inline	crates/sunrise-world/src/edge_backoff.rs::back_off_from_edge	the on-the-edge test before backing off
 Player.canFallAtLeast	inline	crates/sunrise-world/src/edge_backoff.rs::back_off_from_edge	the no-collision drop test at the edge

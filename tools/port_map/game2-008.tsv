@@ -130,7 +130,7 @@ ItemUtils.onContainerDestroyed	port	crates/sunrise-client/src/game/item_entities
 Items.registerBlock	skip:data		item registry bootstrap
 Items.registerItem	skip:data		item registry bootstrap
 JukeboxSong.hasFinished	port	crates/sunrise-items/src/items.rs::Song::finished
-JukeboxSongPlayer.setSongWithoutPlaying	inline	crates/sunrise-client/src/save.rs::decode_block_entity	the load sets the record and `ticks_since_song_started` straight into the `Jukebox` block entity, which is the whole of `setSongWithoutPlaying`; the song carries on from that tick in `tick_jukebox`
+JukeboxSongPlayer.setSongWithoutPlaying	inline	crates/sunrise-client/src/save/block_entity_decode.rs::decode_block_entity	the load sets the record and `ticks_since_song_started` straight into the `Jukebox` block entity, which is the whole of `setSongWithoutPlaying`; the song carries on from that tick in `tick_jukebox`
 JukeboxSongPlayer.play	port	crates/sunrise-client/src/game/blocks/jukebox.rs::Game::start_song	the song starts at the jukebox with its sound
 JukeboxSongPlayer.shouldEmitJukeboxPlayingEvent	inline	crates/sunrise-client/src/game/blocks/jukebox.rs::Game::tick_jukebox
 JukeboxSongPlayer.spawnMusicParticles	inline	crates/sunrise-client/src/game/blocks/jukebox.rs::Game::tick_jukebox	the note particle is emitted in tick_jukebox
