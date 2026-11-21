@@ -4866,6 +4866,7 @@ impl Game<'_> {
                         && seen.breezes.contains(&id)
                     {
                         super::wind::reverse(p);
+                        p.turn_bullet();
                         if p.arrow.is_some() {
                             sunrise_client::arrows::finish_entity_hit(
                                 p,

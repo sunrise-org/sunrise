@@ -1210,6 +1210,12 @@ impl Projectile {
         self.pitch = self.previous_pitch + t * (x_rot - self.previous_pitch);
         self.yaw = self.previous_yaw + t * (y_rot - self.previous_yaw);
     }
+    /// `ShulkerBullet.tick`'s `rotateTowardsMovement(this, 0.5F)`, after the move and any hit, so a bullet a hit leaves alive turns from its new motion.
+    pub fn turn_bullet(&mut self) {
+        if matches!(self.kind, ProjectileKind::ShulkerBullet { .. }) {
+            self.rotate_towards_movement(0.5);
+        }
+    }
     /// The kinds whose tick turns them with `Projectile.updateRotation`: a
     /// `ThrowableProjectile` (the thrown kinds and the experience bottle) and
     /// llama spit.
@@ -1476,7 +1482,7 @@ impl Projectile {
             return (false, Hit::Block { pos, at, face });
         }
         self.position = to;
-        self.update_rotation();
+        self.turn_bullet();
         if let Some(b) = target {
             let (dir, steps) = match self.kind {
                 ProjectileKind::ShulkerBullet { dir, steps, .. } => (dir, steps),
@@ -2866,6 +2872,30 @@ mod tests {
             falling.position.y
         );
         assert_eq!(held.position, Vec3::new(0.5, 110.0, 0.5));
+    }
+
+    /// `ShulkerBullet.tick` turns halfway towards its motion each tick, in `rotateTowardsMovement`'s convention.
+    #[test]
+    fn a_shulker_bullet_turns_halfway_towards_its_motion() {
+        let mut p = Projectile::new(
+            ProjectileKind::ShulkerBullet {
+                target: None,
+                dir: None,
+                steps: 0,
+                delta: [0.0; 3],
+                seed: 0,
+            },
+            Vec3::new(0.5, 110.0, 0.5),
+            None,
+        );
+        p.no_gravity = true;
+        p.velocity = Vec3::new(0.0, 0.0, 0.5);
+        let w = Empty(vec![]);
+        p.tick(&w);
+        // Target yaw 180, pitch (float) 89.99999506 - 90; yRotO 0 moves to 360, then lerps by 0.5.
+        assert_eq!((p.yaw, p.pitch), (270.0, -3.814_697_3e-6));
+        p.tick(&w);
+        assert_eq!((p.yaw, p.pitch), (225.0, -5.722_046e-6));
     }
     /// `ShulkerBullet.tick`: a bullet turns off its axis before the block
     /// ahead when it could stand on it (`loadedAndEntityCanStandOn`, asked
