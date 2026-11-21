@@ -98,6 +98,25 @@ impl Registry {
         });
     }
 
+    fn stable_review(&self) -> Result<(), String> {
+        let releases = self.0.path().join("releases.json");
+        std::fs::write(
+            &releases,
+            format!(r#"[{{"tag":"{RELEASE_TAG}","commit":"{RELEASE_PIN}"}}]"#),
+        )
+        .unwrap();
+        self.run(
+            "review",
+            &["base", "head"],
+            &[
+                "--author",
+                "author",
+                "--releases",
+                releases.to_str().unwrap(),
+            ],
+        )
+    }
+
     fn screenshot(&self, id: &str, bytes: &[u8]) {
         let dir = self.0.path().join(format!("head/screenshots/{id}"));
         std::fs::create_dir_all(&dir).unwrap();
@@ -262,6 +281,7 @@ fn a_stable_native_version_must_pin_the_named_release_commit() {
 fn review_without_packages_checks_stable_release_declarations() {
     let r = Registry::new();
     r.add("coords", "1.0.0", "26.3", "");
+    r.make_base();
     let releases = r.0.path().join("releases.json");
     std::fs::write(&releases, "[]").unwrap();
     let review = || {
@@ -277,6 +297,7 @@ fn review_without_packages_checks_stable_release_declarations() {
     };
     assert_eq!(review(), Ok(())); // Legacy row without a release declaration.
     r.pin_source("coords", RELEASE_TAG);
+    r.make_base();
     assert!(review().is_err());
 }
 
@@ -662,6 +683,43 @@ fn check_refuses_a_malformed_base_checkout() {
     assert!(error.contains("mods/broken.toml"), "{error}");
 }
 
+#[test]
+fn an_unchanged_legacy_row_still_passes_review_check_and_build() {
+    let r = Registry::new();
+    r.add("coords", "1.0.0", "26.3", "");
+    r.make_base();
+    r.edit("coords", |t| {
+        t.replace("A mod for registry validation.", "Updated project summary.")
+    });
+    assert_eq!(r.review(), Ok(()));
+    assert_eq!(r.check(), Ok(()));
+    let index = r.build(&[]).unwrap();
+    let versions = &index.project("coords").unwrap().versions;
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0].version, "1.0.0");
+    assert!(versions[0].sunrise.is_none());
+}
+
+#[test]
+fn the_last_legacy_row_can_leave_without_a_takedown() {
+    let r = Registry::new();
+    r.add("coords", "1.0.0", "26.3", "");
+    r.make_base();
+    r.edit("coords", |t| {
+        t.split_once("[[versions]]").unwrap().0.to_owned()
+    });
+    assert_eq!(r.review(), Ok(()));
+    let base = super::registry::load(&r.0.path().join("base")).unwrap();
+    let head = super::registry::load(&r.0.path().join("head")).unwrap();
+    let review = super::registry::review_checkout(&base, &head, "author");
+    assert_eq!(
+        review.notes,
+        ["coords 1.0.0: leaves the entry, it never named a stable release"]
+    );
+    assert_eq!(r.check(), Ok(()));
+    assert!(r.build(&[]).unwrap().project("coords").is_none());
+}
+
 const NEEDS: &str = "needs at least one screenshot";
 
 #[test]
@@ -669,8 +727,8 @@ fn a_new_project_needs_a_screenshot_image_in_the_checkout() {
     let r = Registry::new();
     r.add("coords", "1.0.0", "26.3", "");
     assert_eq!(r.check(), Ok(()));
-    assert_eq!(r.review(), Ok(()));
-    assert_eq!(r.bare_review(), Ok(()));
+    r.pin_source("coords", RELEASE_TAG);
+    assert_eq!(r.stable_review(), Ok(()));
     // Listed but missing, empty or remote: refused by check and review alike.
     for (what, edit) in [
         ("missing", None),
@@ -685,7 +743,8 @@ fn a_new_project_needs_a_screenshot_image_in_the_checkout() {
             Some(bytes) => std::fs::write(&file, bytes).unwrap(),
         }
         assert!(r.check().unwrap_err().contains(NEEDS), "{what}");
-        assert!(r.bare_review().is_err(), "{what}");
+        r.pin_source("coords", RELEASE_TAG);
+        assert!(r.stable_review().is_err(), "{what}");
     }
     let r = Registry::new();
     r.add("coords", "1.0.0", "26.3", "");
@@ -693,7 +752,8 @@ fn a_new_project_needs_a_screenshot_image_in_the_checkout() {
         t.replace("screenshots/coords/one.png", "https://example.test/one.png")
     });
     assert!(r.check().unwrap_err().contains(NEEDS));
-    assert!(r.bare_review().is_err());
+    r.pin_source("coords", RELEASE_TAG);
+    assert!(r.stable_review().is_err());
 }
 
 #[test]
@@ -712,7 +772,6 @@ fn an_existing_listing_without_screenshots_needs_one_only_for_a_new_version() {
     // A new version of it is refused until it has a screenshot.
     r.add("coords", "1.1.0", "26.3", "");
     assert!(r.check().unwrap_err().contains(NEEDS));
-    assert!(r.bare_review().is_err());
     r.edit("coords", |t| {
         t.replacen(
             "\n[[versions]]",
@@ -721,7 +780,6 @@ fn an_existing_listing_without_screenshots_needs_one_only_for_a_new_version() {
         )
     });
     assert_eq!(r.check(), Ok(()));
-    assert_eq!(r.review(), Ok(()));
 }
 
 #[test]
@@ -733,10 +791,12 @@ fn a_library_mod_and_a_collection_need_no_screenshot() {
             .replace("['utility']", "['library']")
     });
     assert_eq!(r.check(), Ok(()));
-    assert_eq!(r.review(), Ok(()));
     // The category must be `library`: another one with no screenshot is refused.
     r.edit("coords", |t| t.replace("['library']", "['utility']"));
     assert!(r.check().unwrap_err().contains(NEEDS));
+    r.edit("coords", |t| t.replace("['utility']", "['library']"));
+    r.pin_source("coords", RELEASE_TAG);
+    assert_eq!(r.stable_review(), Ok(()));
     // A collection of mods that are already listed.
     let r = Registry::new();
     for id in ["coords", "second"] {

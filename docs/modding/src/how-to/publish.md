@@ -1,11 +1,10 @@
 # Publishing your mod
 
 Sunrise's registry, [sunrise-org/sunrise-mods](https://github.com/sunrise-org/sunrise-mods), lists mods, modpacks,
-resource packs and shader packs at [playsunrise.net/mods](https://playsunrise.net/mods). The
-[registry submission form](https://playsunrise.net/mods/submit) uploads your package and opens a pull request for a
-person to review. To prepare a mod submission locally, follow the steps below with `cargo sunrise-mod publish`,
-then upload the package and open the pull request yourself. Native mods for stable releases use the
-[stable source submission](#publishing-a-stable-source-version) below.
+resource packs and shader packs at [playsunrise.net/mods](https://playsunrise.net/mods). Every new or changed
+registry version row must name a stable Sunrise release in `sunrise`, so submit a version through
+[the stable source submission](#publishing-a-stable-source-version). The steps below show how to prepare and check
+a local draft, and what review and staging do with a submission.
 
 ## 1. Build and write the submission
 
@@ -61,6 +60,9 @@ cargo sunrise-mod registry build 'target/sunrise-mod/publish' --files 'target/su
 
 ## 3. Open the pull request
 
+A row written without `--sunrise` is refused by review; give `publish` the flags of
+[the stable source submission](#publishing-a-stable-source-version) before opening the pull request.
+
 1. Create a release of your repository and attach `<id>-<version>.smod` to it. Its address is the artifact URL.
 2. Fork [sunrise-org/sunrise-mods](https://github.com/sunrise-org/sunrise-mods) and copy in `mods/<id>.toml`.
    For a first listing, copy in `icons/<id>.png` too, and at least one screenshot: save a PNG or JPEG (320×180 to
@@ -99,8 +101,10 @@ not written into the entry. The dependencies are read from the package itself, s
 `--registry`, the registry's CI checks both when the pull request opens; it also checks sides and what the dependencies
 themselves require.
 
-Published source versions never change. A file that must go is taken down by the registry's maintainers in
-`revoked.toml`. The only update `publish` makes to an existing version is an [append of signed native builds](#publishing-native-binaries).
+Published source files never change. Removing a row published with `sunrise` requires a takedown by the
+registry's maintainers in `revoked.toml` naming the project id and file hash. Legacy rows without `sunrise`
+can be removed without a takedown, but the project entry must stay. The only update `publish` makes to an
+existing version is an [append of signed native builds](#publishing-native-binaries).
 
 ## Signing
 

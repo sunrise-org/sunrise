@@ -387,7 +387,7 @@ pub struct EntryVersion {
     pub published: String,
     /// The Minecraft version it is for.
     pub game: String,
-    /// The stable Sunrise release tag it was made for, when declared.
+    /// The stable Sunrise release tag it was made for. Absent only on legacy rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sunrise: Option<String>,
     /// A bare asset name, or the author's GitHub release URL when `sunrise` is set.
@@ -1456,17 +1456,17 @@ pub fn review_checkout(base: &Checkout, head: &Checkout, author: &str) -> Review
 }
 
 /// Compares the entries of a pull request (`head`) with `main`'s (`base`):
-/// a published file never changes and is never removed (take it down in
-/// `revoked.toml`), a project's kind never changes, and changes by someone who
-/// isn't an owner, or to owners and keys, are pointed out.
+/// new and changed version rows must name a stable Sunrise release. A published
+/// file never changes, a project's kind never changes, and changes by someone
+/// who isn't an owner, or to owners and keys, are pointed out.
 pub fn review(base: &[Entry], head: &[Entry], author: &str) -> Review {
     review_with_revoked(base, head, &[], author)
 }
 
-/// [`review`], where a version may leave its entry once `revoked` (the pull
-/// request's `revoked.toml`) takes its file down by hash: a project whose
-/// signing key was lost lists its next version under a new key and drops the
-/// versions the new key can't verify.
+/// [`review`], where a version may leave its entry if it never named a stable
+/// Sunrise release or `revoked` (the pull request's `revoked.toml`) takes its
+/// file down by hash. A project whose signing key was lost can drop the versions
+/// its new key can't verify once those files are taken down.
 pub fn review_with_revoked(
     base: &[Entry],
     head: &[Entry],
@@ -1545,6 +1545,10 @@ pub fn review_with_revoked(
                     "{} {}: leaves the entry, taken down in {REVOKED}",
                     old.id, v.version
                 )),
+                None if v.sunrise.is_none() => r.notes.push(format!(
+                    "{} {}: leaves the entry, it never named a stable release",
+                    old.id, v.version
+                )),
                 None => r.errors.push(format!(
                     "{} {}: removed; take it down in {REVOKED} instead",
                     old.id, v.version
@@ -1560,7 +1564,7 @@ pub fn review_with_revoked(
                             old.id, v.version
                         ));
                     }
-                    if v.sunrise.is_some() && w.sunrise != v.sunrise {
+                    if v.sunrise.is_some() && w.sunrise.is_some() && w.sunrise != v.sunrise {
                         r.errors.push(format!(
                             "{} {}: the stable release a published version names never changes: publish a new version",
                             old.id, v.version
@@ -1650,15 +1654,34 @@ pub fn review_with_revoked(
         }
     }
     for new in head {
+        let old = base.iter().find(|e| e.id == new.id);
+        if old != Some(new) {
+            // Only unchanged legacy rows may omit the release. Match each base row at most once.
+            let mut legacy: Vec<_> = old
+                .into_iter()
+                .flat_map(|e| &e.versions)
+                .filter(|v| v.sunrise.is_none())
+                .collect();
+            for v in new.versions.iter().filter(|v| v.sunrise.is_none()) {
+                if let Some(i) = legacy.iter().position(|&w| w == v) {
+                    legacy.swap_remove(i);
+                } else {
+                    r.errors.push(format!(
+                        "{} {}: a new or changed version row needs sunrise = \"<stable release tag>\"",
+                        new.id, v.version
+                    ));
+                }
+            }
+        }
         // Every version is a submission, checked and reviewed: the registry no longer follows a
         // repository's releases (entries from before keep theirs until they are pinned).
-        if new.repo.is_some() && base.iter().all(|e| e.id != new.id || e.repo.is_none()) {
+        if new.repo.is_some() && old.is_none_or(|e| e.repo.is_none()) {
             r.errors.push(format!(
                 "{}: the registry doesn't follow repositories any more: list each version's file (the form, or [[versions]])",
                 new.id
             ));
         }
-        if !base.iter().any(|e| e.id == new.id) {
+        if old.is_none() {
             if new.nightly.is_some() {
                 let (status, reason) = if new.versions.is_empty()
                     && new.repo.is_none()
