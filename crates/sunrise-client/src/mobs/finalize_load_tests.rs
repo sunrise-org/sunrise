@@ -216,3 +216,38 @@ fn a_wolf_with_a_health_modifier_keeps_its_taming_base() {
         }
     }
 }
+
+/// `LivingEntity.readAdditionalSaveData` reads the attributes, then `setHealth` clamps the saved
+/// `Health` to `[0, getMaxHealth()]`, the loaded modifiers included (vanilla 26.3, #2360).
+#[test]
+fn a_loaded_health_is_clamped_to_the_loaded_max_health() {
+    let health = |id: &str, species, max: f32, extra: &str| {
+        let mut types = types(id, species, &[("minecraft:max_health", f64::from(max))]);
+        Arc::make_mut(types.get_mut(id).unwrap()).max_health = max;
+        let snbt = format!(r#"{{id:"{id}",Pos:[0.5d,200d,0.5d]{extra}}}"#);
+        let input = parse_snbt(&snbt).unwrap().0;
+        mob_from_nbt(&input, &types, 1, None).unwrap().health
+    };
+    assert_eq!(
+        health(
+            "minecraft:endermite",
+            Species::Endermite,
+            8.0,
+            ",Health:20f"
+        ),
+        8.0
+    );
+    assert_eq!(
+        health("minecraft:parched", Species::Parched, 16.0, ",Health:20f"),
+        16.0
+    );
+    let bonus = r#",Health:25f,attributes:[{id:"minecraft:max_health",base:20d,modifiers:[{id:"minecraft:leader_zombie_bonus",amount:10d,operation:"add_value"}]}]"#;
+    assert_eq!(
+        health("minecraft:zombie", Species::Zombie, 20.0, bonus),
+        25.0
+    );
+    assert_eq!(
+        health("minecraft:pig", Species::Pig, 10.0, ",Health:-3f"),
+        0.0
+    );
+}

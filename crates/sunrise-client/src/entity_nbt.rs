@@ -1772,6 +1772,21 @@ fn home_block_pos(tag: Option<&Tag>) -> Option<[i32; 3]> {
 mod mob_load;
 pub use mob_load::{mob_from_nbt, mob_from_nbt_remote, mob_from_nbt_with_random};
 
+/// `LivingEntity.readAdditionalSaveData`'s `setHealth(getFloatOr("Health", getMaxHealth()))`:
+/// `Mth.clamp` to `[0, getMaxHealth()]`, the max health the loaded attributes and their
+/// modifiers give (a NaN stays, as `Math.min` keeps it).
+pub(crate) fn loaded_health(m: &Mob, health: Option<f64>) -> f32 {
+    let max = m.attrs.max_health;
+    let health = health.map_or(max, |h| h as f32);
+    if health < 0.0 {
+        0.0
+    } else if health.is_nan() {
+        health
+    } else {
+        health.min(max)
+    }
+}
+
 fn mob_from_nbt_at(
     tag: &Tag,
     types: &HashMap<String, Arc<MobType>>,
@@ -1898,16 +1913,10 @@ fn mob_from_nbt_at(
                 && !Attr::ALL.iter().any(|a| *a != Attr::Armor && a.id() == id)
         });
     }
-    m.health = float(tag.get("Health")).map_or(m.attrs.max_health, |h| h as f32);
+    m.health = loaded_health(&m, float(tag.get("Health")));
     // LivingEntity.readAdditionalSaveData: `internalSetAbsorptionAmount`
     // stores the value as read; only `setAbsorptionAmount` clamps.
     m.absorption = float(tag.get("AbsorptionAmount")).map_or(0.0, |h| h as f32);
-    // LivingEntity.setHealth clamps to the max health: a horse or llama is made
-    // with the type's and saved before it drops to the one it rolled. (Only
-    // the base is read here, so the clamp would cut a leader zombie's bonus.)
-    if crate::mobs::equine::is_equine(m.species()) {
-        m.health = m.health.min(m.attrs.max_health);
-    }
     m.hurt_time = i32::from(number(tag.get("HurtTime")).unwrap_or(0) as i16);
     // What it holds (equipment.mainhand / offhand), when saved.
     if let Some(eq) = tag.get("equipment") {
@@ -2551,9 +2560,7 @@ fn mob_from_nbt_at(
             &mut m,
             (number(tag.get("Size")).unwrap_or(0) as i32).wrapping_add(1),
         );
-        if let Some(h) = float(tag.get("Health")) {
-            m.health = h as f32;
-        }
+        m.health = loaded_health(&m, float(tag.get("Health")));
         m.extra.flag2 = flag(tag, "wasOnGround");
     }
     if m.species() == crate::mobs::Species::Phantom {

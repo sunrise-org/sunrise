@@ -1536,9 +1536,8 @@ pub fn from_nbt(m: &mut Mob, tag: &sunrise_core::nbt::Tag) {
             }
         }
     }
-    // The saved Health, not the one the living load's Health Boost clamp cut
-    // to the unsized maximum: vanilla sizes the cube before `setHealth`.
-    m.health = crate::save::float(tag.get("Health")).map_or(m.attrs.max_health, |h| h as f32);
+    // The saved Health, clamped to the sized maximum: vanilla sizes the cube before `setHealth`.
+    m.health = crate::entity_nbt::loaded_health(m, crate::save::float(tag.get("Health")));
     m.extra.flag2 = int("wasOnGround").unwrap_or(0) != 0;
     m.extra.ints[3] = int("pickup_timer").unwrap_or(0);
     m.extra.scratch[3] = int("from_bucket").unwrap_or(0);
