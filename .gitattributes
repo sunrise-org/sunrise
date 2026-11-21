@@ -11,3 +11,6 @@ crates/sunrise-client/assets/sunrise/lang/*.json merge=sunrise-lang
 
 # The carried horizon-mixins patch is hashed into its tool's release tag: the same bytes on every OS.
 tools/mixins/*.patch text eol=lf
+
+# Third-party data shipped byte for byte (its SHA-256 is checked): never converted.
+crates/sunrise-client-render/assets/hrtf/*.mhr binary
