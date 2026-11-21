@@ -127,7 +127,11 @@ pub fn start(
     game::startup_progress::install(side == "server");
     // Mod loading emits refusals; both client and dedicated logs must exist first.
     load(&native, &launch);
-    crash::install(home.clone(), side);
+    let save_failure_diagnostics = options.save_failure_diagnostics.clone();
+    let panic_diagnostics = save_failure_diagnostics.clone();
+    crash::install(home.clone(), side, move || {
+        panic_diagnostics.suppressed_summary()
+    });
     let _ = sunrise_world::loot::types::install(crate::game::loot_types::capture);
     if sunrise_world::native_load_hooks::install(
         sunrise_world::native_load_hooks::NativeLoadHooks {
@@ -193,7 +197,9 @@ pub fn start(
         logging::flush();
         // The report's path is the last line on stderr (crash::SAVED_LINE).
         if !usage {
-            crash::report_error(&home, side, &*error);
+            crash::report_error(&home, side, &*error, || {
+                save_failure_diagnostics.suppressed_summary()
+            });
         }
         // Started from Explorer, the console window closes with the game:
         // keep the message on screen until it is read.

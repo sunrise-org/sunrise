@@ -1252,7 +1252,7 @@ impl Game<'_> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::game) mod tests {
     use super::super::api_values::TryIntoApi;
     use super::*;
     use sunrise_core::geometry::Vec3;
@@ -1759,10 +1759,10 @@ mod tests {
     }
 
     /// The UUID the transfer tests give their attacker, as `summon` takes it.
-    const ZOMBIE_UUID: [i32; 4] = [7, 8, 9, 10];
+    pub(in crate::game) const ZOMBIE_UUID: [i32; 4] = [7, 8, 9, 10];
     const ZOMBIE_NBT: &str = "{NoAI:1b,UUID:[I;7,8,9,10]}";
 
-    fn summon_mob(game: &mut super::Game<'_>, kind: &str, nbt: &str) -> u32 {
+    pub(in crate::game) fn summon_mob(game: &mut super::Game<'_>, kind: &str, nbt: &str) -> u32 {
         match game
             .summon_with_nbt(kind, [0.5, 70.0, 0.5], nbt)
             .unwrap()
@@ -1775,7 +1775,7 @@ mod tests {
 
     /// A pig hurt by a zombie of [`ZOMBIE_UUID`] in the Overworld, with the
     /// Nether's spawn chunk forced loaded so it stays parked beside it.
-    fn hurt_pig(game: &mut super::Game<'_>) -> (u32, u32) {
+    pub(in crate::game) fn hurt_pig(game: &mut super::Game<'_>) -> (u32, u32) {
         use crate::game::Dim;
         use std::sync::Arc;
         game.world_root = game.save.root.clone();
@@ -1798,7 +1798,7 @@ mod tests {
         (pig, zombie)
     }
 
-    fn send_to_the_nether(game: &mut super::Game<'_>, mob: u32) {
+    pub(in crate::game) fn send_to_the_nether(game: &mut super::Game<'_>, mob: u32) {
         use crate::game::{Dim, vehicle_teleport::TeleportMotion};
         assert!(
             game.teleport_vehicle_across(

@@ -6681,6 +6681,11 @@ impl Game<'_> {
         self.level = level;
         self.check_mod_mismatch();
         self.world_adopted = true;
+        if self.options.execution_role.is_logical_server() {
+            self.options
+                .save_failure_diagnostics
+                .register(self.save.save_failure_reporter());
+        }
         // ServerRecipeBook.loadUntrusted: recipes the manager does not have are dropped.
         let index = &world_stations!(self).recipe_index;
         let book = &mut self.level.recipe_book;

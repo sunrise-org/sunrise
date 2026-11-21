@@ -7,11 +7,12 @@ use sunrise_core::{
 use sunrise_world::region::RegionFile;
 
 use super::{
-    Chunk, ChunkExtras, Compression, Encoding, LevelShape, QueuedWrite, Record,
+    Chunk, ChunkExtras, Compression, Encoding, Folder, LevelShape, Record,
     compression_pool::{
         CompressionPool, compress_record, compress_records, compress_records_with_pool,
     },
-    write_chunk_record,
+    write_chunk_record, write_prepared_region_records,
+    writes::QueuedWrite,
 };
 
 #[test]
@@ -68,25 +69,47 @@ fn full_record_overflow_discards_edits_without_losing_current_chunk_data() {
     let record = Record::Chunk(Arc::new(chunk), encoding, None);
     let dir = tempfile::tempdir().unwrap();
     let mut region = RegionFile::open_writable(dir.path().join("r.0.0.mca"), true).unwrap();
-    let pos = ChunkPos::new(0, 0);
+    let region_pos = ChunkPos::new(0, 0);
     for (limits, compressed_overflow, admitted) in [
         (Limits::saved(), false, true),
         (limits, false, false),
         (Limits::saved(), true, false),
     ] {
-        let job = QueuedWrite::new((0, 0), record.clone(), 0);
+        let (record, compression) = if compressed_overflow {
+            let Record::Chunk(chunk, encoding, blending) = &record else {
+                unreachable!()
+            };
+            let mut chunk = (**chunk).clone();
+            let extras = Arc::make_mut(chunk.saved.as_mut().unwrap());
+            let edits = Arc::make_mut(extras.block_entity_save_edits.as_mut().unwrap());
+            edits
+                .get_mut(&pos)
+                .unwrap()
+                .insert("edit".into(), Tag::ByteArray(vec![0; 64 * 1024 * 1024]));
+            (
+                Record::Chunk(Arc::new(chunk), encoding.clone(), blending.clone()),
+                Compression::None,
+            )
+        } else {
+            (record.clone(), Compression::Zlib)
+        };
+        let job = QueuedWrite::new((0, 0), record, 0);
         let pending = job.record.clone();
-        let mut compressed = compress_record(&job.record, Compression::Zlib, 0, limits)
+        let compressed = compress_record(&job.record, compression, 0, limits)
             .unwrap()
             .unwrap();
-        if compressed_overflow {
-            // Simulate an oversized compressor result without the cost of
-            // zlib encoding a large incompressible input.
-            compressed.record.compressed = vec![0; 64 * 1024 * 1024 + 1];
-        }
-        write_chunk_record(&mut region, pos, &job.record, compressed).unwrap();
+        assert_eq!(
+            compressed.primary, admitted,
+            "prepare the stored fallback before writing the region"
+        );
+        write_chunk_record(&mut region, region_pos, &job.record, compressed).unwrap();
         drop(job);
-        let saved = region.read(pos).unwrap().unwrap().nbt(limits).unwrap();
+        let saved = region
+            .read(region_pos)
+            .unwrap()
+            .unwrap()
+            .nbt(limits)
+            .unwrap();
         assert_eq!(pending.tag().unwrap().as_ref(), &saved);
         assert_eq!(saved.tag.get("LastUpdate"), Some(&Tag::Long(37)));
         assert_eq!(saved.tag.get("test:unrelated"), Some(&unrelated));
@@ -99,6 +122,135 @@ fn full_record_overflow_discards_edits_without_losing_current_chunk_data() {
             entities[0].get("stored"),
             if admitted { None } else { Some(&Tag::Int(7)) }
         );
+    }
+}
+
+#[test]
+fn an_encoder_panic_does_not_strand_serial_or_parallel_writes() {
+    use super::{Folder, SaveDir};
+    use std::{sync::mpsc, time::Duration};
+
+    for count in [3, 4] {
+        let dir = tempfile::tempdir().unwrap();
+        let open = || SaveDir::new(dir.path().to_path_buf(), LevelShape::OVERWORLD, None);
+        let save = open();
+        save.write_records("region", vec![((1, 0), Some(sample_tag(10)))], true)
+            .unwrap();
+        let records = (0..count)
+            .map(|x| {
+                let record = if x == 1 {
+                    Record::TestEncode(Arc::new(|_| panic!("injected encoding panic")))
+                } else {
+                    Record::Tag(Arc::new(sample_tag(20 + x)))
+                };
+                ((x, 0), record)
+            })
+            .collect();
+        let (send, receive) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            save.queue(Folder::Region, records, false).unwrap();
+            save.flush().unwrap();
+            send.send((save.record_save_failures(), save.active_chunk_writes()))
+                .unwrap();
+        });
+        let (failures, active) = receive
+            .recv_timeout(Duration::from_secs(1))
+            .expect("flush waited indefinitely for the panicking batch");
+        worker.join().unwrap();
+        assert_eq!(failures, 1);
+        assert_eq!(active, 0);
+        let disk = open();
+        for x in 0..count {
+            let marker = if x == 1 { 10 } else { 20 + x };
+            assert_eq!(
+                disk.raw_chunk(x, 0).unwrap().tag.get("xPos"),
+                Some(&Tag::Int(marker))
+            );
+        }
+    }
+}
+
+#[test]
+fn a_compressed_size_fallback_panic_is_rejected_before_region_writes() {
+    let oversized = Arc::new(NamedTag {
+        name: "".into(),
+        tag: Tag::ByteArray(vec![0; 64 * 1024 * 1024]),
+    });
+    let record = Record::TestEncode(Arc::new(move |edits| {
+        assert!(edits, "injected fallback encoder panic");
+        Some(oversized.clone())
+    }));
+    assert!(compress_record(&record, Compression::None, 0, Limits::saved()).is_err());
+}
+
+#[test]
+fn a_compressed_size_rejection_does_not_skip_healthy_records_in_either_region() {
+    use super::SaveDir;
+    use sunrise_core::nbt::Compound;
+
+    const OVERSIZED: usize = 64 * 1024 * 1024 + 1;
+    let (registry, biomes) = super::loot_tests::fixture();
+    let encoding = Arc::new(Encoding {
+        registry: Box::leak(Box::new(registry)),
+        biomes: Arc::new(biomes),
+        items: Default::default(),
+        tables: None,
+        shape: LevelShape::OVERWORLD,
+    });
+    for with_fallback in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let open = || SaveDir::new(dir.path().to_path_buf(), LevelShape::OVERWORLD, None);
+        let save = open();
+        save.write_records("region", vec![((1, 0), Some(sample_tag(1)))], true)
+            .unwrap();
+        let old = open().raw_chunk(1, 0).unwrap();
+        let mut chunk = Chunk::empty(1, 0);
+        // Dropping the block-entity edits still leaves this oversized stored payload.
+        chunk.saved = Some(Arc::new(ChunkExtras {
+            root: Compound::from([("test:stored".into(), Tag::ByteArray(vec![0; OVERSIZED]))]),
+            block_entity_save_edits: with_fallback.then(Arc::default),
+            ..Default::default()
+        }));
+        let bad = Record::Chunk(Arc::new(chunk), encoding.clone(), None);
+        let healthy = Record::Tag(Arc::new(sample_tag(11)));
+        let neighbour = Record::Tag(Arc::new(sample_tag(33)));
+        let later = Record::Tag(Arc::new(sample_tag(22)));
+        let records = [
+            ((0, 0), &healthy),
+            ((1, 0), &bad),
+            ((2, 0), &neighbour),
+            ((32, 0), &later),
+        ];
+        let prepared = records
+            .iter()
+            .map(|(_, record)| compress_record(record, Compression::None, 0, Limits::saved()))
+            .collect();
+        let outcome = write_prepared_region_records(
+            save.region_storage(Folder::Region),
+            0,
+            &records,
+            prepared,
+            &std::fs::File::sync_data,
+        );
+        assert!(outcome.sync_error.is_none());
+        let failed = outcome.failed_records;
+        let disk = open();
+        assert_eq!(
+            disk.raw_chunk(0, 0).unwrap().tag.get("xPos"),
+            Some(&Tag::Int(11))
+        );
+        assert_eq!(
+            disk.raw_chunk(2, 0).unwrap().tag.get("xPos"),
+            Some(&Tag::Int(33))
+        );
+        assert_eq!(
+            disk.raw_chunk(32, 0).unwrap().tag.get("xPos"),
+            Some(&Tag::Int(22))
+        );
+        assert_eq!(disk.raw_chunk(1, 0), Some(old));
+        assert_eq!(failed.keys().copied().collect::<Vec<_>>(), [(1, 0)]);
+        let cause = failed[&(1, 0)].get_ref().unwrap();
+        assert!(cause.is::<sunrise_world::region::CompressedChunkLimit>());
     }
 }
 

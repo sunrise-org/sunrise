@@ -46,7 +46,7 @@ impl SaveDir {
                 std::collections::btree_map::Entry::Vacant(e) => {
                     // Propagate damaged/unreadable regions; never discard their legacy exits.
                     let Some(mut root) =
-                        read_region_record(&self.root, &self.regions, "region", key.0, key.1)?
+                        read_region_record(self.region_storage(Folder::Region), key.0, key.1)?
                     else {
                         continue;
                     };

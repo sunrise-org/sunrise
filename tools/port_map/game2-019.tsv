@@ -114,7 +114,7 @@ Strategy.getIndex	port	crates/sunrise-client-render/src/chunk.rs::index	block fo
 ChunkStatus.register	skip:data	-	status registry entry
 ChunkStatus.getStatusList	skip:data	-	status list is the ALL constant in chunk_status.rs
 EntityStorage.storeEntities	port	crates/sunrise-client/src/save.rs::SaveDir::save_entities	-
-EntityStorage.reportSaveFailureIfPresent	skip:other	-	error reporting plumbing; failures come back as Result from save_entities
+EntityStorage.reportSaveFailureIfPresent	port	crates/sunrise-client/src/chunk_io.rs::SaveFailureReporter::report	failed entity saves log the chunk position before the common server report
 EntityStorage.reportLoadFailureIfPresent	skip:other	-	error reporting plumbing; failures come back as Result from load_entities
 IOWorker.isOldChunkAround	port	crates/sunrise-client/src/old_world.rs::SavedOldWorld::is_old_chunk_around	the region files within range are scanned once each (SaveDir::old_chunk_bits) and searched for an old chunk
 IOWorker.getOrCreateOldDataForRegion	skip:java	-	cache of old-chunk data per region

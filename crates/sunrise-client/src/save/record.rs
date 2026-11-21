@@ -20,6 +20,8 @@ pub(super) enum Record {
         Option<Arc<crate::mobs::villager::ResolvedProfessions>>,
     ),
     Delete,
+    #[cfg(test)]
+    TestEncode(Arc<dyn Fn(bool) -> Option<Arc<NamedTag>> + Send + Sync>),
 }
 /// The pending reader only waits for this record's final payload selection.
 pub(super) struct EditedChunk {
@@ -92,6 +94,8 @@ impl Record {
                 chunk.saved.as_ref()?.block_entity_save_edits.as_ref()?;
                 Some(Self::chunk_tag(chunk, e, blending.as_deref(), false))
             }
+            #[cfg(test)]
+            Self::TestEncode(encode) => encode(false),
             _ => None,
         }
     }
@@ -139,6 +143,8 @@ impl Record {
                 encode_poi(c, t, professions.as_deref()).map(Arc::new)
             }
             Record::Delete => None,
+            #[cfg(test)]
+            Record::TestEncode(encode) => encode(edits),
         }
     }
 

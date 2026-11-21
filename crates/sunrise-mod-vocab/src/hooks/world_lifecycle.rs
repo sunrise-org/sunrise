@@ -3,8 +3,10 @@
 
 pub trait Hooks {
     /// The world's phases, read-only; `error_text` carries the engine's
-    /// own open-failure text, empty otherwise. Server-side. A server loop or final
-    /// save failure fires `WorldCloseFailed` with the error text.
+    /// error text for `WorldOpenFailed` and `WorldCloseFailed`, empty otherwise.
+    /// Server-side. A server loop or final save failure fires `WorldCloseFailed`.
+    /// A normal stop with only individually reported record failures still fires
+    /// `WorldCloseFinal`.
     #[hook(
         side = "server",
         contract = "listen",

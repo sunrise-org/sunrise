@@ -21,6 +21,154 @@ struct StoppedProbe {
     save: Arc<sunrise_client::save::SaveDir>,
 }
 
+#[test]
+#[ignore = "daily"]
+fn integrated_stop_finishes_after_an_unencodable_record() {
+    use sunrise_client::save::{LevelShape, SaveDir, SessionLock};
+    use sunrise_core::nbt::{DISK_WRITE_NESTING_GUARD, Tag};
+
+    struct SaveEvents(Arc<Mutex<Vec<&'static str>>>);
+    #[mod_api::__subscriptions]
+    impl Hooks for SaveEvents {
+        fn level_save(&self, _: &mut dyn ServerHost, _: &mut mod_api::LevelSaveEvent<'_>) {
+            self.0.lock().unwrap().push("level saved");
+        }
+        fn world_saved(&self, _: &mut dyn ServerHost, _: &mut mod_api::WorldSavedEvent) {
+            self.0.lock().unwrap().push("world saved");
+        }
+        fn world_lifecycle(
+            &self,
+            _: &mut dyn ServerHost,
+            event: &mut mod_api::WorldLifecycleEvent<'_>,
+        ) {
+            match event.phase {
+                mod_api::WorldPhase::WorldCloseFinal => self.0.lock().unwrap().push("closed"),
+                mod_api::WorldPhase::WorldCloseFailed => {
+                    self.0.lock().unwrap().push("close failed")
+                }
+                _ => (),
+            }
+        }
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mods = vec![ModEntry::new(
+        "save_events",
+        Box::new(SaveEvents(events.clone())),
+    )]
+    .into();
+    with_mods(mods, || {
+        with_game(|game| {
+            game.world_root = root.path().to_path_buf();
+            let open = || {
+                SaveDir::new(
+                    root.path().to_path_buf(),
+                    LevelShape::OVERWORLD,
+                    Some(Default::default()),
+                )
+            };
+            game.save = Arc::new(open());
+            game.session_lock = Some(SessionLock::acquire(root.path()).unwrap());
+            game.world_adopted = true;
+            game.native_lifecycle
+                .begin_open(mod_api::Authority::IntegratedServer);
+            game.native_lifecycle.world_open_ready().unwrap();
+            game.save_game().unwrap();
+            assert_eq!(*events.lock().unwrap(), ["level saved", "world saved"]);
+            events.lock().unwrap().clear();
+            game.level.name = "saved on exit after record failure".into();
+
+            let slot = (2, -3);
+            let neighbour = (3, -3);
+            let deleted = (4, -3);
+            let entity = |marker| Tag::compound([("marker", Tag::Int(marker))]);
+            game.save
+                .save_entities(vec![(slot, vec![entity(1)]), (deleted, vec![entity(3)])])
+                .unwrap();
+            let invalid = (0..=DISK_WRITE_NESTING_GUARD)
+                .fold(Tag::Int(0), |nested, _| Tag::List(vec![nested]));
+            game.save
+                .save_entities_later(vec![
+                    (slot, vec![invalid]),
+                    (neighbour, vec![entity(2)]),
+                    (deleted, vec![]),
+                ])
+                .unwrap();
+
+            // An Err here reaches the client through Integrated::stop and makes quitting fatal.
+            game.run_server_lifecycle(false, |_, began| {
+                *began = true;
+                Ok(())
+            })
+            .unwrap();
+            assert!(game.session_lock.is_none());
+            let disk = open();
+            assert_eq!(disk.load_entities(slot.0, slot.1).unwrap(), [entity(1)]);
+            assert_eq!(
+                disk.load_entities(neighbour.0, neighbour.1).unwrap(),
+                [entity(2)]
+            );
+            assert!(disk.load_entities(deleted.0, deleted.1).unwrap().is_empty());
+            assert_eq!(
+                sunrise_client::save::Level::read(root.path()).unwrap().name,
+                "saved on exit after record failure"
+            );
+            game.save.flush().unwrap();
+            assert_eq!(game.save.record_save_failures(), 1);
+            assert_eq!(
+                *events.lock().unwrap(),
+                ["level saved", "world saved", "closed"]
+            );
+        });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn integrated_stop_propagates_metadata_errors_even_after_a_record_failure() {
+    use sunrise_client::save::{LevelShape, SaveDir, SessionLock};
+    use sunrise_core::nbt::{DISK_WRITE_NESTING_GUARD, Tag};
+
+    with_mods(Vec::new().into(), || {
+        with_game(|game| {
+            for mixed in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                game.world_root = root.path().to_path_buf();
+                game.save = Arc::new(SaveDir::new(
+                    game.world_root.clone(),
+                    LevelShape::OVERWORLD,
+                    Some(Default::default()),
+                ));
+                game.session_lock = Some(SessionLock::acquire(root.path()).unwrap());
+                game.world_adopted = true;
+                if mixed {
+                    let invalid = (0..=DISK_WRITE_NESTING_GUARD)
+                        .fold(Tag::Int(0), |nested, _| Tag::List(vec![nested]));
+                    game.save
+                        .save_entities(vec![((2, 0), vec![invalid])])
+                        .unwrap();
+                    assert_eq!(game.save.record_save_failures(), 1);
+                }
+                let blocked = root.path().join("level.dat_new");
+                std::fs::create_dir(&blocked).unwrap();
+                let expected = std::fs::write(&blocked, b"test").unwrap_err();
+                let error = game
+                    .run_server_lifecycle(false, |_, began| {
+                        *began = true;
+                        Ok(())
+                    })
+                    .unwrap_err();
+                assert_eq!(
+                    error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                    expected.kind()
+                );
+                assert!(game.session_lock.is_none());
+            }
+        });
+    });
+}
+
 /// Exercise the real stop/save paths, not just direct calls to hook dispatch.
 #[test]
 #[ignore = "daily"]

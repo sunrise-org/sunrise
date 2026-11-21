@@ -1180,8 +1180,8 @@ fn eager_saves_keep_dirty_order_cooldowns_and_writer_budget() {
     dirty.save_eagerly(
         now,
         || writes.get() < 128,
-        |k| k != (3, 0),
-        |k| {
+        |k| (k != (3, 0)).then_some(true),
+        |k, _| {
             chosen.push(k);
             writes.set(writes.get() + 1);
             true
@@ -1192,8 +1192,8 @@ fn eager_saves_keep_dirty_order_cooldowns_and_writer_budget() {
     dirty.save_eagerly(
         now,
         || true,
-        |_| true,
-        |k| {
+        |_| Some(true),
+        |k, _| {
             chosen.push(k);
             true
         },
@@ -1204,8 +1204,8 @@ fn eager_saves_keep_dirty_order_cooldowns_and_writer_budget() {
     dirty.save_eagerly(
         now + Duration::from_secs(10),
         || true,
-        |_| true,
-        |k| {
+        |_| Some(true),
+        |k, _| {
             chosen.push(k);
             true
         },
@@ -1215,8 +1215,8 @@ fn eager_saves_keep_dirty_order_cooldowns_and_writer_budget() {
     dirty.save_eagerly(
         now + Duration::from_secs(11),
         || false,
-        |_| true,
-        |_| panic!("no time"),
+        |_| Some(true),
+        |_, _| panic!("no time"),
     );
     assert!(dirty.contains(&(4, 0)));
     dirty.unloaded(&(4, 0)); // unloading removes the cooldown even if reloaded immediately
@@ -1224,8 +1224,8 @@ fn eager_saves_keep_dirty_order_cooldowns_and_writer_budget() {
     dirty.save_eagerly(
         now + Duration::from_secs(11),
         || true,
-        |_| true,
-        |k| {
+        |_| Some(true),
+        |k, _| {
             chosen.push(k);
             true
         },

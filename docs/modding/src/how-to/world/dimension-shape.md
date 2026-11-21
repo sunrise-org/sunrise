@@ -212,11 +212,12 @@ pay only the empty-index guard, not a mod scan or callback.
 
 ## Saving a level
 
-`level.request_save(host)` asks the server to save a level, as the autosave and `/save-all` do, with its
-chunks on disk when it ends. The save runs at the start of the next server tick, not inside the call (a hook
-may be running in the tick that is saving), and a level asked for twice before then is saved once. The call
-answers whether the request was taken. `level_save` fires with the level's dimension once it was written; a
-save that fails fires nothing and is logged.
+`level.request_save(host)` asks the server to save a level, as the autosave and `/save-all` do. The
+save runs at the start of the next server tick, not inside the call; multiple requests before
+then save it once. The call answers whether the request was taken, not whether the save succeeded.
+`level_save` fires with the level's dimension after the save pass, even if an individual record
+could not be written. As in vanilla, those failures are logged but do not fail the pass. A failed
+awaited storage flush fails the pass and does not fire `level_save`.
 
 Inside a hook, use `level.request_save(host)`, not a synchronous `save-all` command.
 While an entity pass or held-out row is borrowed, synchronous saving refuses with vanilla's

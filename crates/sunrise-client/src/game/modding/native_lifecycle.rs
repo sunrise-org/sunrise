@@ -120,6 +120,12 @@ impl NativeLifecycle {
         attempt.server_context()
     }
 
+    pub(super) fn is_opening(&self) -> bool {
+        self.attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.session == OpenState::Opening)
+    }
+
     /// `WorldOpenFailed`: only while opening; the attempt is invalidated.
     pub(super) fn world_open_failed(&mut self) -> Option<LifecycleContext> {
         let attempt = self.attempt.as_mut()?;

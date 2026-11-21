@@ -397,8 +397,8 @@ fn eager_save_edits_reach_disk_during_ticks_and_again_after_cooldown() {
         dirty.save_eagerly(
             now + Duration::from_millis(tick * 50),
             || save.active_chunk_writes() < 128,
-            |_| true,
-            |_| {
+            |_| Some(true),
+            |_, _| {
                 save.save_later(&[Arc::new(chunk.clone())], registry, &biomes)
                     .unwrap();
                 true
