@@ -656,9 +656,11 @@ pub(super) fn mob_meta(
             }
             defaults.push((18, serializer::INT, Value::Int(1)));
             if kind == "minecraft:sulfur_cube" {
-                let fuse = sunrise_client::mobs::sulfur_cube::fuse(m);
-                if fuse >= 0 {
-                    meta.push((19, serializer::INT, Value::Int(fuse)));
+                // The synced MAX_FUSE, not the countdown: a late tracker gets the value the
+                // fuse was set from, and only a change of it reaches those already tracking.
+                let max = sunrise_client::mobs::sulfur_cube::max_fuse(m);
+                if max != -1 {
+                    meta.push((19, serializer::INT, Value::Int(max)));
                 }
                 defaults.push((19, serializer::INT, Value::Int(-1)));
                 if e.scratch[3] != 0 {

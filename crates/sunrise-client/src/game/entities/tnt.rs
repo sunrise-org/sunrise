@@ -1784,7 +1784,8 @@ mod tests {
             let mut cube = Mob::new(9123, kind, Vec3::new(8.5, 64.0, 8.5), 0.0);
             cube.silent = silent;
             cube.extra.set_body(Some("minecraft:tnt".into()));
-            cube.extra.counter2 = 2; // fuse 1: explodes on this tick.
+            // Fuse 1: explodes on this tick.
+            cube.extra.sulfur_fuse = sunrise_client::mobs::sulfur_cube::Fuse::set(1);
             game.mobs.push(cube);
             game.portals.entities.insert(
                 9123,

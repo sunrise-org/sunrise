@@ -211,7 +211,7 @@ fn sulfur_cube_splits_two_babies_unless_primed_and_size_one_asks_nobody() {
             // Primed: no children, nobody asked.
             game.mobs.clear();
             let mut dying = cube(game, "minecraft:sulfur_cube", 4, 0);
-            dying.extra.counter2 = 40;
+            dying.extra.sulfur_fuse = sunrise_client::mobs::sulfur_cube::Fuse::set(40);
             assert!(sunrise_client::mobs::sulfur_cube::primed(&dying));
             game.split_dead_cube(dying);
             assert!(game.mobs.is_empty());

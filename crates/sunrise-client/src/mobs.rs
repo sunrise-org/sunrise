@@ -1393,6 +1393,8 @@ pub struct Extra {
     /// attribute modifiers is worn or it is read. Mob logic still reads
     /// `MobType::attributes` and `attributes` above.
     pub live: crate::living_attributes::LivingAttributes,
+    /// A sulfur cube's fuse countdown and synced `MAX_FUSE`.
+    pub sulfur_fuse: sulfur_cube::Fuse,
     /// The knockback resistance modifiers of the items it wears or holds.
     pub gear_knockback: Option<Box<GearKnockback>>,
     /// What the game last read from the hands' `minecraft:death_protection`

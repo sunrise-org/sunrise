@@ -189,7 +189,7 @@ pub(super) fn apply(
             // SulfurCube.MAX_FUSE: onSyncedDataUpdated copies it into the fuse
             // the client ticks for swell / white flash (#4548); -1 is not primed.
             (Species::SulfurCube, 19, Value::Int(fuse)) => {
-                m.extra.counter2 = (*fuse).max(-1) + 1;
+                m.extra.sulfur_fuse = sunrise_client::mobs::sulfur_cube::Fuse::set(*fuse);
             }
             (Species::SulfurCube, 20, Value::Bool(from_bucket)) => {
                 m.extra.scratch[3] = i32::from(*from_bucket);
@@ -1533,21 +1533,52 @@ mod tests {
     /// (`isPrimed`: fuse >= 0). FROM_BUCKET is 20 (#13721).
     #[test]
     fn sulfur_cube_max_fuse_sets_the_client_fuse() {
-        use sunrise_client::mobs::sulfur_cube::{fuse, primed};
-        let Some(mut m) = mob("minecraft:sulfur_cube") else {
-            return;
-        };
-        assert_eq!(m.extra.counter2, 0);
+        use sunrise_client::mobs::sulfur_cube::{client_tick, fuse, primed};
+        let root =
+            std::env::temp_dir().join(format!("sunrise-sulfur-receive-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("entity-types.json"),
+            r#"{"minecraft:sulfur_cube":{"width":0.52,"height":0.52,"eye_height":0.325,"category":"monster","fire_immune":false,"attributes":{"minecraft:max_health":4.0}}}"#,
+        )
+        .unwrap();
+        let attributes =
+            &sunrise_world::attributes::entity::Catalog::from_json(&serde_json::json!({
+                "data_version": sunrise_world::DATA_VERSION,
+                "attributes": [],
+                "entities": {},
+            }))
+            .unwrap();
+        let types = sunrise_client::mobs::MobTypes::load_for_server(&root, attributes).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let kind = std::sync::Arc::new(types.types["minecraft:sulfur_cube"].clone());
+        let mut m = Mob::new(1, kind, sunrise_core::geometry::Vec3::ZERO, 0.0);
+        client_defaults(&mut m);
+        assert_eq!(fuse(&m), -1);
+        assert!(!primed(&m));
         apply(&mut m, &[(19, s::INT, Value::Int(40))]);
         assert_eq!(fuse(&m), 40);
         assert!(primed(&m));
+        client_tick(&mut m);
+        assert_eq!(fuse(&m), 39);
         apply(&mut m, &[(19, s::INT, Value::Int(0))]);
         // Last fuse tick: still primed at 0 until the server removes it.
         assert_eq!(fuse(&m), 0);
+        client_tick(&mut m);
+        assert_eq!(fuse(&m), 0);
         apply(&mut m, &[(19, s::INT, Value::Int(-1))]);
         assert!(!primed(&m));
-        apply(&mut m, &[(20, s::BOOLEAN, Value::Bool(true))]);
+        // `setFuse` takes the synced value as it is: below -1 it stays put and unprimed.
+        apply(&mut m, &[(19, s::INT, Value::Int(-5))]);
+        client_tick(&mut m);
+        assert_eq!(fuse(&m), -5);
         assert!(!primed(&m));
+        // The full int range: the largest fuse counts down without wrapping.
+        apply(&mut m, &[(19, s::INT, Value::Int(i32::MAX))]);
+        client_tick(&mut m);
+        assert_eq!(fuse(&m), i32::MAX - 1);
+        apply(&mut m, &[(20, s::BOOLEAN, Value::Bool(true))]);
+        assert_eq!(fuse(&m), i32::MAX - 1);
     }
 
     /// `Pig.onSyncedDataUpdated` and `Strider.onSyncedDataUpdated`: a synced
