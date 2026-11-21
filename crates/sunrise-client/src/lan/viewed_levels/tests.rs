@@ -978,7 +978,7 @@ fn open_levels(hub: &mut Hub, ids: &[&'static str]) {
             shape: crate::chunk::LevelShape::OVERWORLD,
         })
         .collect();
-    hub.config.levels.extra = extra.leak();
+    hub.config.levels.extra = crate::chunk::ExtraLevelTable::from_vec(extra);
 }
 
 /// Guest `i`'s client logged in now: it was told the levels open now.

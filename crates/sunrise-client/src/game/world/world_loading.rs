@@ -746,7 +746,7 @@ fn set_level_sea_levels(
 fn shapes_of(
     overrides: &sunrise_world::worldgen::overrides::WorldgenOverrides,
 ) -> sunrise_client::chunk::LevelShapes {
-    use sunrise_client::chunk::{ExtraLevel, LevelShape, LevelShapes};
+    use sunrise_client::chunk::{ExtraLevel, ExtraLevelTable, LevelShape, LevelShapes};
     let mut shapes = LevelShapes::VANILLA;
     for level in [
         "minecraft:overworld",
@@ -801,7 +801,7 @@ fn shapes_of(
             })
         })
         .collect();
-    shapes.extra = extra.leak();
+    shapes.extra = ExtraLevelTable::from_vec(extra);
     set_level_types(overrides, &shapes);
     shapes
 }

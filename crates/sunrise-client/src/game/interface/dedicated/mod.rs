@@ -1118,7 +1118,7 @@ impl Game<'_> {
             code_of_conducts,
             // DedicatedServer.serverLinks: `bug-report-link` as the only link
             // (ServerLinks.KnownLinkType.BUG_REPORT is id 0).
-            levels: self.level_shapes,
+            levels: self.level_shapes.clone(),
             sunrise_clients_only: props
                 .raw
                 .get(sunrise_client::lan::SUNRISE_CLIENTS_ONLY)
@@ -1152,7 +1152,7 @@ impl Game<'_> {
             view_distance: props.view_distance.clamp(2, 32),
             simulation_distance: props.simulation_distance.clamp(2, 32),
             dimension: self.dim.id().to_owned(),
-            levels: self.level_shapes,
+            levels: self.level_shapes.clone(),
             level_seeds: self.levels.runtime.seeds(),
             seed: self.level.seed,
             max_players: props.max_players.max(0) as usize,

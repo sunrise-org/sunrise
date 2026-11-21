@@ -1,6 +1,7 @@
 //! Resident client chunk storage. Sections are reference-counted so worker
 //! threads can mesh and light immutable snapshots while the game thread edits
 //! (copy-on-write through `Arc::make_mut`).
+use std::ops::Deref;
 use std::sync::atomic::{AtomicI16, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use sunrise_core::nbt::{Compound, Tag};
@@ -103,14 +104,14 @@ impl LevelShape {
 }
 
 /// The shapes of a world's levels, from its dimension types.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LevelShapes {
     pub overworld: LevelShape,
     pub nether: LevelShape,
     pub end: LevelShape,
     /// The levels past vanilla's three that the world's data packs give, by id.
-    /// Leaked once per world opened, so the shapes stay `Copy`.
-    pub extra: &'static [ExtraLevel],
+    /// Clones share the table; it stays alive while a render or network reader holds it.
+    pub extra: ExtraLevelTable,
 }
 /// A level past vanilla's three.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,12 +121,56 @@ pub struct ExtraLevel {
     pub dimension_type: &'static str,
     pub shape: LevelShape,
 }
+
+/// Shared storage for a world's extra level shapes. The empty variant keeps `LevelShapes::VANILLA`
+/// usable as a const while non-empty tables are reference counted across readers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExtraLevelTable(Option<Arc<[ExtraLevel]>>);
+
+impl ExtraLevelTable {
+    pub const EMPTY: Self = Self(None);
+
+    pub fn from_vec(levels: Vec<ExtraLevel>) -> Self {
+        if levels.is_empty() {
+            Self::EMPTY
+        } else {
+            Self(Some(Arc::from(levels)))
+        }
+    }
+
+    pub fn from_shared(levels: Arc<[ExtraLevel]>) -> Self {
+        if levels.is_empty() {
+            Self::EMPTY
+        } else {
+            Self(Some(levels))
+        }
+    }
+
+    pub fn as_slice(&self) -> &[ExtraLevel] {
+        self.0.as_deref().unwrap_or(&[])
+    }
+}
+
+impl Deref for ExtraLevelTable {
+    type Target = [ExtraLevel];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl AsRef<[ExtraLevel]> for ExtraLevelTable {
+    fn as_ref(&self) -> &[ExtraLevel] {
+        self.as_slice()
+    }
+}
+
 impl LevelShapes {
     pub const VANILLA: Self = Self {
         overworld: LevelShape::OVERWORLD,
         nether: LevelShape::NETHER,
         end: LevelShape::END,
-        extra: &[],
+        extra: ExtraLevelTable::EMPTY,
     };
     /// The shape of the level `id` (`minecraft:overworld`,
     /// `minecraft:the_nether`, `minecraft:the_end`); others get the
@@ -1186,12 +1231,11 @@ mod tests {
     fn a_worlds_extra_levels_keep_their_shape_and_type() {
         let shape = super::LevelShape::new(-128, 448, 448, true, false).unwrap();
         let levels = super::LevelShapes {
-            extra: vec![super::ExtraLevel {
+            extra: super::ExtraLevelTable::from_vec(vec![super::ExtraLevel {
                 id: "test:pocket",
                 dimension_type: "test:small",
                 shape,
-            }]
-            .leak(),
+            }]),
             ..super::LevelShapes::VANILLA
         };
         assert_eq!(levels.get("test:pocket"), shape);

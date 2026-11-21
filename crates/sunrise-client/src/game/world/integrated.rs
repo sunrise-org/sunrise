@@ -937,7 +937,7 @@ impl Game<'_> {
             view_distance,
             simulation_distance: self.settings.simulation_distance.max(2),
             dimension: self.dim.id().to_owned(),
-            levels: self.level_shapes,
+            levels: self.level_shapes.clone(),
             level_seeds: self.levels.runtime.seeds(),
             seed: self.level.seed,
             max_players: MAX_PLAYERS,
@@ -959,7 +959,7 @@ impl Game<'_> {
                 )
                 .then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
             })),
-            levels: self.level_shapes,
+            levels: self.level_shapes.clone(),
             owner_profile: launch.owner_profile.clone(),
             // `IntegratedServer.getSingleplayerProfile`: the window's own player logs in
             // through memory as the account's profile, whatever the hello says.

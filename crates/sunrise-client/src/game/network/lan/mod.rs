@@ -2968,7 +2968,7 @@ impl Game<'_> {
         let force = host.hub.config.force_game_mode;
         let root = self.world_root.clone();
         let in_place = host.hub.config.dimension.clone();
-        let levels = host.hub.config.levels;
+        let levels = host.hub.config.levels.clone();
         let owner = host.owner.as_mut();
         let Some((known, uuid, name)) = host.hub.update_guest(conn, |g| {
             // PlayerList.loadPlayerData: the owner gets the world's player file,
@@ -4573,7 +4573,7 @@ mod tests {
                     seed: 0,
                     max_players: 3,
                     integrated: true,
-                    levels: game.level_shapes,
+                    levels: game.level_shapes.clone(),
                     level_seeds: game.levels.runtime.seeds(),
                 };
                 game.lan_host(settings, net, config).unwrap();
@@ -4838,7 +4838,7 @@ mod tests {
                 seed: 0,
                 max_players: 2,
                 integrated: true,
-                levels: game.level_shapes,
+                levels: game.level_shapes.clone(),
                 level_seeds: game.levels.runtime.seeds(),
             };
             game.lan_host(settings, net, config).unwrap();
