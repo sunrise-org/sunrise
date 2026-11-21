@@ -404,6 +404,152 @@ fn through_public_alias() { public_alias(); }
 }
 
 #[test]
+fn bare_type_paths_are_checked_in_signatures_and_bodies() {
+    let root = fixture();
+    fs::write(
+        root.path().join("crates/sunrise-client/src/game.rs"),
+        r#"
+mod types {
+    mod imp { pub type Tag = (); }
+    pub(super) use imp::Tag;
+    pub type PublicTag = ();
+}
+mod copy {
+    use super::types::*;
+    fn signature(_: Option<Tag>) {}
+    fn body() {
+        let Tag = ();
+        let _: Option<Tag> = None;
+    }
+    fn public(_: Option<PublicTag>) {
+        let _: Option<PublicTag> = None;
+    }
+    fn local_type() {
+        type Tag = ();
+        let _: Option<Tag> = None;
+    }
+}
+"#,
+    )
+    .unwrap();
+    let index = index(root.path(), &BTreeSet::new()).unwrap();
+    let check = |name| index.check(root.path(), &format!("sunrise_client::game::copy::{name}"));
+    for name in ["signature", "body"] {
+        let (code, why) = check(name).unwrap_err();
+        assert_eq!(code, "E_MIXIN_NOT_REPLACEABLE");
+        assert!(why.contains("`Tag`"), "{why}");
+    }
+    check("public").unwrap();
+    check("local_type").unwrap();
+}
+
+#[test]
+fn local_value_bindings_mask_imports_only_where_in_scope() {
+    let root = fixture();
+    fs::write(
+        root.path().join("crates/sunrise-client/src/game.rs"),
+        r#"
+mod hooks {
+    mod imp { pub fn queue() {} }
+    pub(super) use imp::queue;
+    pub fn public() {}
+}
+mod copy {
+    use super::hooks::*;
+    fn before_binding() {
+        let queue = { queue(); || {} };
+        queue();
+    }
+    fn outside_block() {
+        { let queue = || {}; queue(); }
+        queue();
+    }
+    fn in_let_else() {
+        let Some(queue) = None::<fn()> else { queue(); return; };
+        queue();
+    }
+    fn outside_if_let() {
+        if let Some(queue) = Some(|| {}) { queue(); } else { queue(); }
+    }
+    fn outside_match_arm() {
+        match None::<fn()> {
+            Some(queue) if { queue(); true } => queue(),
+            _ => queue(),
+        }
+    }
+    fn after_nested_item() {
+        fn nested(queue: fn()) { queue(); }
+        queue();
+    }
+    fn in_for_iterator() {
+        for queue in { queue(); [|| {}] } { queue(); }
+    }
+    fn public_and_shadowed() {
+        public();
+        { let queue = || {}; queue(); }
+        let closure = |queue: fn()| queue();
+        closure(public);
+        for queue in [public] { queue(); }
+        if let Some(queue) = Some(|| true) && queue() { queue(); }
+        while let Some(queue) = Some(|| {}) { queue(); break; }
+        match Some(|| true) {
+            Some(queue) if queue() => { queue(); }
+            _ => (),
+        }
+    }
+}
+"#,
+    )
+    .unwrap();
+    let index = index(root.path(), &BTreeSet::new()).unwrap();
+    let check = |name| index.check(root.path(), &format!("sunrise_client::game::copy::{name}"));
+    for name in [
+        "before_binding",
+        "outside_block",
+        "in_let_else",
+        "outside_if_let",
+        "outside_match_arm",
+        "after_nested_item",
+        "in_for_iterator",
+    ] {
+        let (code, why) = check(name).unwrap_err();
+        assert_eq!(code, "E_MIXIN_NOT_REPLACEABLE");
+        assert!(why.contains("`queue`"), "{why}");
+    }
+    check("public_and_shadowed").unwrap();
+}
+
+#[test]
+fn a_private_crate_root_call_refuses_the_target() {
+    let root = fixture();
+    fs::write(
+        root.path().join("crates/sunrise-client/src/lib.rs"),
+        "pub mod game; fn hidden() {} pub(crate) fn restricted() {} pub fn exposed() {}",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("crates/sunrise-client/src/game.rs"),
+        r#"
+fn private_call() { crate::hidden(); }
+fn restricted_call() { super::restricted(); }
+fn public_call() { crate::exposed(); }
+"#,
+    )
+    .unwrap();
+    let index = index(root.path(), &BTreeSet::new()).unwrap();
+    let check = |name| index.check(root.path(), &format!("sunrise_client::game::{name}"));
+    for (name, path) in [
+        ("private_call", "crate::hidden"),
+        ("restricted_call", "super::restricted"),
+    ] {
+        let (code, why) = check(name).unwrap_err();
+        assert_eq!(code, "E_MIXIN_NOT_REPLACEABLE");
+        assert!(why.contains(path), "{why}");
+    }
+    check("public_call").unwrap();
+}
+
+#[test]
 fn a_target_is_checked_by_its_key_and_its_text() {
     let root = fixture();
     let index = index(root.path(), &BTreeSet::new()).unwrap();
