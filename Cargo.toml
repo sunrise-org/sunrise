@@ -1,5 +1,5 @@
 [workspace]
-exclude = ["crates/sunrise-telemetry-server", "crates/sunrise-mod-registry", "third_party/wgpu-hal", "third_party/naga", "third_party/libmimalloc-sys", "tools/fixtures/paper-trace-mod"]
+exclude = ["crates/sunrise-telemetry-server", "crates/sunrise-mod-registry", "third_party/wgpu-hal", "third_party/naga", "third_party/libmimalloc-sys", "third_party/winit", "tools/fixtures/paper-trace-mod"]
 members = [
     "crates/sunrise-guest-stack",
     "crates/sunrise-mod-vocab",
@@ -108,6 +108,8 @@ naga = { path = "third_party/naga" }
 # game died before main on CPUs without it (Core 2, #7264; THIRD_PARTY_NOTICES.md). Drop this and
 # the folder once a libmimalloc-sys release has microsoft/mimalloc#1291's fix.
 libmimalloc-sys = { path = "third_party/libmimalloc-sys" }
+# winit 0.30.13 whose X11 raw motion comes from the slave pointers, once each under its pointer grab (#3022; THIRD_PARTY_NOTICES.md).
+winit = { path = "third_party/winit" }
 
 # Line tables keep file:line in backtraces; full debug info made every
 # example and test binary hundreds of megabytes and slow to link.

@@ -149,6 +149,16 @@ sources (#3299); and
 every `MI_STAT` level as `src/page.c` raises it, instead of `mi_stat_free` (`src/free.c`) and
 `_mi_theap_page_destroy` (`src/theap.c`) lowering it only with detailed statistics (#3299).
 
+## winit
+
+`third_party/winit` is [winit](https://github.com/rust-windowing/winit) 0.30.13 by the winit
+contributors, licensed under Apache-2.0 (`LICENSE` in that folder), without its examples and tests.
+One change: its X11 backend takes raw motion from the enabled slave pointers instead of the master
+pointer's copy, tracking them from each device-hierarchy event in stream order; raw buttons and keys
+still come from the masters. While winit holds its own pointer grab (`CursorGrabMode::Confined`, the
+grab mode winit's X11 backend supports), an X server speaking XInput 2.1 or later sends a client
+each master raw event twice, so mouse look turned twice as far (#3022); each slave's arrives once.
+
 ## Pixelify Sans
 
 `crates/sunrise-theme/fonts/PixelifySans-*.ttf` is [Pixelify Sans](https://github.com/eifetx/Pixelify-Sans)
