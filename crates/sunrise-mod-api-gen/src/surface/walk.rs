@@ -19,6 +19,10 @@ pub(super) enum Target {
     Item(ItemId),
     Module(usize),
     External(Vec<String>),
+    ExternalGlob {
+        path: Vec<String>,
+        written: Vec<String>,
+    },
 }
 
 /// A public name of a module.
@@ -172,9 +176,17 @@ impl<'i, 'a> Walker<'i, 'a> {
     }
 
     /// What `path`, written in a `pub use` of `module`, leads to.
-    fn target(&mut self, module: usize, path: &[String]) -> Result<Target, String> {
+    fn target(
+        &mut self,
+        module: usize,
+        path: &[String],
+        outside: &OutsideSeam,
+    ) -> Result<Target, String> {
         if let Some(target) = self.module_at(module, path) {
             return Ok(Target::Module(target));
+        }
+        if let Some(path) = outside.external_path(self.index, module, path) {
+            return Ok(Target::External(path));
         }
         let (last, parent) = path.split_last().ok_or("an empty path")?;
         if parent.is_empty() {
@@ -187,7 +199,7 @@ impl<'i, 'a> Walker<'i, 'a> {
         }
         match self.module_at(module, parent) {
             Some(parent) => self
-                .names(parent)?
+                .names(parent, outside)?
                 .into_iter()
                 .find(|name| &name.name == last)
                 .map(|name| name.target)
@@ -202,7 +214,7 @@ impl<'i, 'a> Walker<'i, 'a> {
     }
 
     /// The public names of `module`: its public items and `pub use`s, then its globs' names.
-    fn names(&mut self, module: usize) -> Result<Vec<Name>, String> {
+    fn names(&mut self, module: usize, outside: &OutsideSeam) -> Result<Vec<Name>, String> {
         if let Some(names) = self.names.get(&module) {
             return Ok(names.clone());
         }
@@ -256,7 +268,7 @@ impl<'i, 'a> Walker<'i, 'a> {
                     for (path, alias) in found {
                         match alias {
                             Some(alias) if alias.starts_with("__") => {}
-                            Some(alias) => match self.target(module, &path) {
+                            Some(alias) => match self.target(module, &path, outside) {
                                 Ok(target) => own.push(Name {
                                     name: alias,
                                     target,
@@ -271,16 +283,31 @@ impl<'i, 'a> Walker<'i, 'a> {
                             },
                             None => match self.module_at(module, &path) {
                                 Some(target) => {
-                                    for mut name in self.names(target)? {
+                                    for mut name in self.names(target, outside)? {
                                         name.hidden |= hidden;
                                         globbed.push(name);
                                     }
                                 }
-                                None => self.notes.push(format!(
-                                    "pub use {}::* in {}: not a module of the API's crates",
-                                    path.join("::"),
-                                    self.module_name(module)
-                                )),
+                                None => {
+                                    if let Some(external) =
+                                        outside.external_path(self.index, module, &path)
+                                    {
+                                        globbed.push(Name {
+                                            name: String::new(),
+                                            target: Target::ExternalGlob {
+                                                path: external,
+                                                written: path.clone(),
+                                            },
+                                            hidden,
+                                        });
+                                    } else {
+                                        self.notes.push(format!(
+                                            "pub use {}::* in {}: not a module of the API's crates",
+                                            path.join("::"),
+                                            self.module_name(module)
+                                        ));
+                                    }
+                                }
                             },
                         }
                     }
@@ -334,13 +361,32 @@ impl<'i, 'a> Walker<'i, 'a> {
         let mut macros: BTreeMap<Vec<String>, String> = BTreeMap::new();
         let mut hidden_items: HashSet<ItemId> = HashSet::new();
         while let Some((module, prefix, behind, ancestors)) = queue.pop_front() {
-            let mut names = self.names(module)?;
+            let mut names = self.names(module, outside)?;
             names.sort_by(|a, b| a.name.cmp(&b.name));
             for name in names {
+                let behind = behind || name.hidden;
+                if let Target::ExternalGlob { path, written } = &name.target {
+                    if behind {
+                        public.notes.push(format!(
+                            "pub use {}::* in {}: not a module of the API's crates",
+                            written.join("::"),
+                            self.module_name(module)
+                        ));
+                    } else {
+                        let owner = if prefix.is_empty() {
+                            format!("{FACADE}::*")
+                        } else {
+                            format!("{FACADE}::{}::*", prefix.join("::"))
+                        };
+                        let mut external = path.clone();
+                        external.push("*".into());
+                        return Err(OutsideSeam::error(&owner, &external));
+                    }
+                    continue;
+                }
                 if name.name.starts_with("__") {
                     continue;
                 }
-                let behind = behind || name.hidden;
                 let mut path = prefix.clone();
                 path.push(name.name.clone());
                 match name.target {
@@ -373,7 +419,9 @@ impl<'i, 'a> Walker<'i, 'a> {
                             && external.len() == 2
                         {
                             macros.entry(path).or_insert_with(|| external[1].clone());
-                        } else if outside.rejects(&external) {
+                        } else if let Some(external) =
+                            outside.external_path(self.index, module, &external)
+                        {
                             return Err(OutsideSeam::error(
                                 &format!("mod_api::{}", path.join("::")),
                                 &external,
@@ -386,6 +434,7 @@ impl<'i, 'a> Walker<'i, 'a> {
                             ));
                         }
                     }
+                    Target::ExternalGlob { .. } => unreachable!("handled before building a path"),
                 }
             }
         }

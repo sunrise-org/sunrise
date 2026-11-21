@@ -6,11 +6,19 @@ use std::collections::BTreeMap;
 const FILES: &[(&str, &str)] = &[
     (
         "Cargo.toml",
-        "[workspace]\nmembers = [\"engine-fixture\"]\n",
+        "[workspace]\nmembers = [\"engine-fixture\", \"crates/sunrise-mod-vocab\", \"crates/sunrise-mod-api\"]\n",
     ),
     (
         "engine-fixture/Cargo.toml",
         "[package]\nname = \"engine-package\"\n[lib]\nname = \"engine_library\"\n",
+    ),
+    (
+        "crates/sunrise-mod-vocab/Cargo.toml",
+        "[package]\nname = \"sunrise-mod-vocab\"\n[lib]\nname = \"mod_vocab\"\n[dependencies]\nengine = { package = \"engine-package\", path = \"../../engine-fixture\" }\n",
+    ),
+    (
+        "crates/sunrise-mod-api/Cargo.toml",
+        "[package]\nname = \"sunrise-mod-api\"\n[lib]\nname = \"mod_api\"\n",
     ),
     (
         "crates/sunrise-mod-api/src/lib.rs",
@@ -368,6 +376,117 @@ fn a_public_reexport_cannot_name_a_workspace_type_outside_the_seam() {
         .err()
         .expect("the re-export must fail the export");
     assert!(error.contains("mod_api::Leaked"), "{error}");
+    assert!(error.contains("engine_library::Secret"), "{error}");
+}
+
+#[test]
+fn a_public_glob_reexport_cannot_hide_a_workspace_crate() {
+    let edited = "pub use engine_library::*;\n/// A colour.";
+    let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
+        .err()
+        .expect("the glob re-export must fail the export");
+    assert!(error.contains("mod_api::*"), "{error}");
+    assert!(error.contains("engine_library::*"), "{error}");
+}
+
+#[test]
+fn a_module_alias_reexport_cannot_hide_a_workspace_crate() {
+    let edited = "use engine_library as engine;\npub use engine::nested as Leaked;\n/// A colour.";
+    let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
+        .err()
+        .expect("the aliased re-export must fail the export");
+    assert!(error.contains("mod_api::Leaked"), "{error}");
+    assert!(error.contains("engine_library::nested"), "{error}");
+}
+
+#[test]
+fn a_whole_crate_import_alias_cannot_hide_a_workspace_type() {
+    let edited = "use engine_library as engine;\npub fn leak() -> engine::Secret { unimplemented!() }\n/// A colour.";
+    let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
+        .err()
+        .expect("the aliased signature must fail the export");
+    assert!(error.contains("mod_api::leak"), "{error}");
+    assert!(error.contains("engine_library::Secret"), "{error}");
+}
+
+#[test]
+fn a_glob_import_cannot_hide_a_workspace_type_from_a_public_signature() {
+    let edited =
+        "use engine_library::*;\npub fn leak() -> Secret { unimplemented!() }\n/// A colour.";
+    let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
+        .err()
+        .expect("the glob-imported signature must fail the export");
+    assert!(error.contains("mod_api::leak"), "{error}");
+    assert!(error.contains("engine_library::Secret"), "{error}");
+}
+
+#[test]
+fn an_extern_crate_alias_cannot_hide_a_workspace_type() {
+    let edited = "extern crate engine_library as engine;\npub fn leak() -> engine::Secret { unimplemented!() }\n/// A colour.";
+    let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
+        .err()
+        .expect("the extern-crate alias must fail the export");
+    assert!(error.contains("mod_api::leak"), "{error}");
+    assert!(error.contains("engine_library::Secret"), "{error}");
+}
+
+#[test]
+fn a_renamed_workspace_dependency_cannot_hide_a_workspace_type() {
+    let edited = "pub fn leak() -> engine::Secret { unimplemented!() }\n/// A colour.";
+    let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
+        .err()
+        .expect("the renamed dependency signature must fail the export");
+    assert!(error.contains("mod_api::leak"), "{error}");
+    assert!(error.contains("engine_library::Secret"), "{error}");
+}
+
+#[test]
+fn a_private_type_alias_cannot_hide_a_workspace_type_from_a_public_signature() {
+    let edited = "type Private = engine_library::Secret;\npub fn leak() -> Private { unimplemented!() }\n/// A colour.";
+    let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
+        .err()
+        .expect("the private alias signature must fail the export");
+    assert!(error.contains("mod_api::leak"), "{error}");
+    assert!(error.contains("engine_library::Secret"), "{error}");
+}
+
+#[test]
+fn a_private_type_alias_generic_default_cannot_hide_a_workspace_type() {
+    let edited = "type Private<T = engine_library::Secret> = T;\npub fn leak() -> Private { unimplemented!() }\n/// A colour.";
+    let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
+        .err()
+        .expect("the private alias default must fail the export");
+    assert!(error.contains("mod_api::leak"), "{error}");
+    assert!(error.contains("engine_library::Secret"), "{error}");
+}
+
+#[test]
+fn a_qualified_associated_type_checks_its_workspace_trait_path() {
+    let edited = "pub fn leak<T>(value: T) -> <T as engine_library::Trait>::Out { let _ = value; unimplemented!() }\n/// A colour.";
+    let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
+        .err()
+        .expect("the qualified trait path must fail the export");
+    assert!(error.contains("mod_api::leak"), "{error}");
+    assert!(error.contains("engine_library::Trait"), "{error}");
+}
+
+#[test]
+fn a_public_constant_checks_its_workspace_type() {
+    let edited = "pub const LEAK: engine_library::Secret = engine_library::Secret;\n/// A colour.";
+    let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
+        .err()
+        .expect("the public constant must fail the export");
+    assert!(error.contains("mod_api::LEAK"), "{error}");
+    assert!(error.contains("engine_library::Secret"), "{error}");
+}
+
+#[test]
+fn a_public_static_checks_its_workspace_type() {
+    let edited = "pub static LEAK: Option<engine_library::Secret> = None;\n/// A colour.";
+    let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
+        .err()
+        .expect("the public static must fail the export");
+    assert!(error.contains("mod_api::LEAK"), "{error}");
     assert!(error.contains("engine_library::Secret"), "{error}");
 }
 

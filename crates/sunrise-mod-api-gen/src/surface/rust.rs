@@ -2,11 +2,11 @@
 //! relative to `mod_api`, lifetimes kept, one spacing), and each type's wire layout description
 //! for the shape function.
 use crate::index::{Found, Index, ItemId, OutsideSeam};
-use mod_source::layouts::{WireForm, Wires};
+use mod_source::layouts::{WireForm, Wires, param_names};
 use mod_surface::shape::Shape;
 use proc_macro2::{Delimiter, Spacing, TokenStream, TokenTree};
 use quote::ToTokens;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use syn::visit_mut::VisitMut;
 use syn::{Item, Type};
 
@@ -131,6 +131,8 @@ pub(super) struct Paths<'p, 'a> {
     pub(super) params: Vec<String>,
     pub(super) refs: BTreeSet<String>,
     pub(super) check: Option<(&'p ExternalTypes<'p>, ItemId)>,
+    /// Private aliases already followed while checking this public item's types.
+    pub(super) aliases: HashSet<ItemId>,
 }
 
 /// A visitor cannot return an error. Keep the first disallowed path and its owning item.
@@ -147,11 +149,9 @@ impl<'a> ExternalTypes<'a> {
         }
     }
 
-    fn inspect(&self, id: ItemId, path: &[String]) {
-        if self.outside.rejects(path) {
-            self.first
-                .borrow_mut()
-                .get_or_insert_with(|| (id, path.to_vec()));
+    fn inspect(&self, index: &Index<'_>, module: usize, id: ItemId, path: &[String]) {
+        if let Some(path) = self.outside.external_path(index, module, path) {
+            self.first.borrow_mut().get_or_insert_with(|| (id, path));
         }
     }
 
@@ -175,6 +175,25 @@ pub(super) fn ref_kind(item: &Item) -> Option<&'static str> {
 }
 
 impl Paths<'_, '_> {
+    fn inspect_private_alias(&mut self, id: ItemId) {
+        if !self.aliases.insert(id) {
+            return;
+        }
+        let Item::Type(alias) = self.index.item(id).clone() else {
+            return;
+        };
+        let old_module = self.module;
+        let old_params = std::mem::replace(&mut self.params, param_names(&alias.generics));
+        let old_refs = std::mem::take(&mut self.refs);
+        self.module = id.module;
+        self.visit_generics_mut(&mut alias.generics);
+        let mut ty = *alias.ty;
+        self.visit_type_mut(&mut ty);
+        self.module = old_module;
+        self.params = old_params;
+        self.refs = old_refs;
+    }
+
     fn rewrite(&mut self, path: &mut syn::Path) {
         let segments: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
         if path.leading_colon.is_none()
@@ -192,11 +211,14 @@ impl Paths<'_, '_> {
                     }
                     public.clone()
                 }
-                None => vec![segments.last().cloned().unwrap_or_default()],
+                None => {
+                    self.inspect_private_alias(id);
+                    vec![segments.last().cloned().unwrap_or_default()]
+                }
             },
             Ok(Found::External(full)) => {
                 if let Some((check, id)) = self.check {
-                    check.inspect(id, &full);
+                    check.inspect(self.index, self.module, id, &full);
                 }
                 if STD.contains(&full[0].as_str()) {
                     vec![full.last().cloned().unwrap_or_default()]
@@ -227,7 +249,18 @@ impl Paths<'_, '_> {
 impl VisitMut for Paths<'_, '_> {
     fn visit_type_path_mut(&mut self, ty: &mut syn::TypePath) {
         syn::visit_mut::visit_type_path_mut(self, ty);
-        if ty.qself.is_none() {
+        if let Some(qself) = &ty.qself {
+            let trait_path: Vec<String> = ty
+                .path
+                .segments
+                .iter()
+                .take(qself.position)
+                .map(|segment| segment.ident.to_string())
+                .collect();
+            if let Some((check, id)) = self.check {
+                check.inspect(self.index, self.module, id, &trait_path);
+            }
+        } else {
             self.rewrite(&mut ty.path);
         }
     }
@@ -279,6 +312,7 @@ impl Wires for GameWires<'_> {
             params: params.to_vec(),
             refs: BTreeSet::new(),
             check: self.check.zip(self.item.get()),
+            aliases: HashSet::new(),
         };
         paths.visit_type_mut(&mut ty);
         Shape::Opaque(print(ty.to_token_stream()))

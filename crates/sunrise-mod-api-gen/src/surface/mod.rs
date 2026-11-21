@@ -380,6 +380,7 @@ impl<'a> Writer<'_, 'a> {
             params: params.to_vec(),
             refs: BTreeSet::new(),
             check: Some((self.external, self.item)),
+            aliases: std::collections::HashSet::new(),
         }
     }
 
@@ -773,14 +774,20 @@ pub(crate) fn build(
                 record.paths = paths;
                 functions.push(record);
             }
-            Item::Const(constant) => match capability_key(&mut writer, module, &path, constant) {
-                Some(capability) => {
-                    named.extend(capability.contract.refs.iter().cloned());
-                    capabilities.push(capability);
+            Item::Const(constant) => {
+                let _ = writer.ty(module, &[], &constant.ty);
+                match capability_key(&mut writer, module, &path, constant) {
+                    Some(capability) => {
+                        named.extend(capability.contract.refs.iter().cloned());
+                        capabilities.push(capability);
+                    }
+                    None => notes.push(format!("constant {path}: no record kind for constants")),
                 }
-                None => notes.push(format!("constant {path}: no record kind for constants")),
-            },
-            Item::Static(_) => notes.push(format!("static {path}: no record kind for statics")),
+            }
+            Item::Static(static_) => {
+                let _ = writer.ty(module, &[], &static_.ty);
+                notes.push(format!("static {path}: no record kind for statics"));
+            }
             _ => notes.push(format!("{path}: not a kind the surface records")),
         }
         for member in found.inherent.get(&id).into_iter().flatten() {
