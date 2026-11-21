@@ -108,6 +108,15 @@ pub fn loaded_motion(tag: &Tag) -> Vec3 {
 pub fn rotation(tag: &Tag) -> [f32; 2] {
     read_doubles::<2>(tag.get("Rotation")).map_or([0.0; 2], |r| [r[0] as f32, r[1] as f32])
 }
+/// `Entity.load`'s `setYRot` and `setXRot` of the saved `Rotation`: a
+/// non-finite angle is discarded (0), the pitch is clamped after modulo 360.
+pub fn loaded_rotation(tag: &Tag) -> [f32; 2] {
+    let [yaw, pitch] = rotation(tag);
+    [
+        if yaw.is_finite() { yaw } else { 0.0 },
+        normalize_pitch(pitch),
+    ]
+}
 /// `TagValueInput.getBooleanOr`: a numeric tag's byteValue is nonzero, with a false default.
 pub fn flag(tag: &Tag, key: &str) -> bool {
     flag_or(tag, key, false)

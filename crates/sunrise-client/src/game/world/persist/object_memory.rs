@@ -243,7 +243,8 @@ impl Game<'_> {
             let uuid = self.uuid_for(self.next_entity);
             self.falling.push(FallingBlock {
                 attachment_lifetime: Default::default(),
-                rotation: [0.0, 0.0],
+                // Entity.load's rotation, which nothing turns afterwards.
+                rotation: entity_nbt::loaded_rotation(&tag),
                 join: Default::default(),
                 id: self.next_entity,
                 state,

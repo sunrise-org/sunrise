@@ -206,11 +206,13 @@ pub(super) fn potion_cloud_to_nbt(c: &Breath, uuid: [i32; 4], raw: Option<&Tag>)
     };
     let at = Vec3::new(c.at[0], c.at[1], c.at[2]);
     let motion = Vec3::new(c.motion[0], c.motion[1], c.motion[2]);
+    // AreaEffectCloud never turns: the rotation it was loaded with.
+    let rotation = raw.map_or([0.0; 2], sunrise_client::entity_nbt::loaded_rotation);
     let mut tag = sunrise_client::entity_nbt::entity_base_tag(
         "minecraft:area_effect_cloud",
         at,
         motion,
-        [0.0, 0.0],
+        rotation,
         uuid,
         raw,
     );
