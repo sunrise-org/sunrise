@@ -44,10 +44,15 @@ pub fn component_equal(id: &str, a: &ItemStack, b: &ItemStack) -> bool {
         // WritableBookContent.CODEC defaults an omitted pages field to an empty list.
         // The retained raw patches can differ while the decoded contents are identical.
         "minecraft:writable_book_content" => {
-            a.data()
-                .map_or(&[][..], |data| data.writable_pages.as_slice())
-                == b.data()
-                    .map_or(&[][..], |data| data.writable_pages.as_slice())
+            fn pages(s: &ItemStack) -> (&[String], &[Option<String>]) {
+                s.data().map_or((&[], &[]), |data| {
+                    (
+                        data.writable_pages.as_slice(),
+                        data.writable_filtered.as_slice(),
+                    )
+                })
+            }
+            pages(a) == pages(b)
         }
         "minecraft:waxed" | "minecraft:intangible_projectile" | "minecraft:glider" => {
             matches!(a.data().and_then(|d| d.other(id)), Some(Tag::Compound(_)))
@@ -457,7 +462,9 @@ pub fn stored_component_equal(id: &str, a: &ItemStack, b: &ItemStack) -> bool {
         "minecraft:dyed_color" => a.dyed_color == b.dyed_color,
         "minecraft:ominous_bottle_amplifier" => a.ominous_amplifier == b.ominous_amplifier,
         "minecraft:map_post_processing" => a.map_post_processing == b.map_post_processing,
-        "minecraft:writable_book_content" => a.writable_pages == b.writable_pages,
+        "minecraft:writable_book_content" => {
+            (&a.writable_pages, &a.writable_filtered) == (&b.writable_pages, &b.writable_filtered)
+        }
         "minecraft:written_book_content" => a.written == b.written,
         "minecraft:suspicious_stew_effects" => a.stew_effects == b.stew_effects,
         "minecraft:pot_decorations" => match (&a.pot_decorations, &b.pot_decorations) {
@@ -923,6 +930,33 @@ mod tests {
         let mut written = b.clone();
         written.data_mut().writable_pages.push("A page".into());
         assert!(!component_equal(id, &a, &written));
+    }
+
+    /// `WritableBookContent` pages are `Filterable`: a page's filtered text survives a save and counts in equality.
+    #[test]
+    fn writable_book_pages_keep_their_filtered_text() {
+        let id = "minecraft:writable_book_content";
+        let read = parse_stack(
+            r#"{id:"minecraft:writable_book",count:1,components:{"minecraft:writable_book_content":{pages:["one",{raw:"two",filtered:"t*o"}]}}}"#,
+        ).unwrap().unwrap();
+        let saved = component_snapshot(&read).unwrap();
+        let page = |raw: &str, filtered: Option<&str>| {
+            Tag::compound(
+                std::iter::once(("raw", Tag::String(raw.into())))
+                    .chain(filtered.map(|f| ("filtered", Tag::String(f.into())))),
+            )
+        };
+        let pages = Tag::List(vec![page("one", None), page("two", Some("t*o"))]);
+        assert_eq!(saved.get(id), Some(&Tag::compound([("pages", pages)])));
+        let (_, reloaded) = decode_components(Some(&saved));
+        let reloaded = reloaded.unwrap();
+        assert_eq!(
+            reloaded.writable_filtered,
+            vec![None, Some("t*o".to_owned())]
+        );
+        let mut unfiltered = read.clone();
+        unfiltered.data_mut().writable_filtered.clear();
+        assert!(!component_equal(id, &read, &unfiltered));
     }
 
     #[test]

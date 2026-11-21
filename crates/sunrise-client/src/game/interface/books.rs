@@ -392,7 +392,7 @@ impl Game<'_> {
     /// `BookEditScreen.saveChanges` and `BookSignScreen`'s Sign and Close:
     /// trailing empty pages dropped, the book in hand updated here and, on a
     /// server's client, sent (ServerboundEditBookPacket).
-    fn save_book(&mut self, sign: bool) {
+    pub(super) fn save_book(&mut self, sign: bool) {
         let Some(BookScreen::Edit {
             slot, pages, title, ..
         }) = self.book.take()
@@ -434,6 +434,7 @@ impl Game<'_> {
             let mut written = stack.transmute("minecraft:written_book", stack.count);
             let data = written.data_mut();
             data.writable_pages = Vec::new();
+            data.writable_filtered = Vec::new();
             data.written = Some(WrittenBook {
                 title,
                 author,
@@ -446,7 +447,10 @@ impl Game<'_> {
             });
             *stack = written;
         } else {
-            stack.data_mut().writable_pages = if pages.iter().all(String::is_empty) {
+            let data = stack.data_mut();
+            // `updateBookContents`: new `Filterable` pages, unfiltered while no text filter runs.
+            data.writable_filtered = Vec::new();
+            data.writable_pages = if pages.iter().all(String::is_empty) {
                 Vec::new()
             } else {
                 pages

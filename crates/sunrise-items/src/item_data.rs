@@ -120,6 +120,8 @@ pub struct StackData {
     pub map_id: Option<i32>,
     /// `minecraft:writable_book_content` pages.
     pub writable_pages: Vec<String>,
+    /// Each page's `Filterable.filtered`: empty when no page has one, else one per page.
+    pub writable_filtered: Vec<Option<String>>,
     /// `minecraft:written_book_content`.
     pub written: Option<WrittenBook>,
     /// `minecraft:banner_patterns` (banners and shields).
@@ -176,6 +178,7 @@ impl PartialEq for StackData {
             fireworks,
             map_id,
             writable_pages,
+            writable_filtered,
             written,
             banner_patterns,
             base_color,
@@ -210,6 +213,7 @@ impl PartialEq for StackData {
             && fireworks == &other.fireworks
             && map_id == &other.map_id
             && writable_pages == &other.writable_pages
+            && writable_filtered == &other.writable_filtered
             && written == &other.written
             && banner_patterns == &other.banner_patterns
             && base_color == &other.base_color
@@ -249,6 +253,7 @@ impl std::hash::Hash for StackData {
             fireworks,
             map_id,
             writable_pages,
+            writable_filtered,
             written,
             banner_patterns,
             base_color,
@@ -290,6 +295,7 @@ impl std::hash::Hash for StackData {
         fireworks.hash(state);
         map_id.hash(state);
         writable_pages.hash(state);
+        writable_filtered.hash(state);
         written.hash(state);
         banner_patterns.hash(state);
         base_color.hash(state);
@@ -815,7 +821,9 @@ impl StackData {
                     replace_fields!(banner_patterns, banner_patterns_set)
                 }
                 "minecraft:base_color" => replace_fields!(base_color),
-                "minecraft:writable_book_content" => replace_fields!(writable_pages),
+                "minecraft:writable_book_content" => {
+                    replace_fields!(writable_pages, writable_filtered)
+                }
                 "minecraft:written_book_content" => replace_fields!(written),
                 "minecraft:fireworks" => replace_fields!(fireworks),
                 "minecraft:firework_explosion" => replace_fields!(firework_explosion),
@@ -1472,6 +1480,31 @@ impl WrittenBook {
     }
 }
 
+/// `WritableBookContent.CODEC`'s pages that decode, as their raw text.
+fn writable_raw(content: Option<&Tag>) -> Vec<String> {
+    writable_page_tags(content)
+        .filter_map(filterable_text)
+        .collect()
+}
+/// The filtered text of the pages [`writable_raw`] keeps: empty when none has one.
+fn writable_filtered(content: Option<&Tag>) -> Vec<Option<String>> {
+    let filtered: Vec<_> = writable_page_tags(content)
+        .filter(|t| filterable_text(t).is_some())
+        .map(|t| t.get("filtered").and_then(read_text))
+        .collect();
+    if filtered.iter().all(Option::is_none) {
+        Vec::new()
+    } else {
+        filtered
+    }
+}
+fn writable_page_tags(content: Option<&Tag>) -> impl Iterator<Item = &Tag> {
+    match content.and_then(|b| b.get("pages")) {
+        Some(Tag::List(pages)) => pages.as_slice(),
+        _ => &[],
+    }
+    .iter()
+}
 fn filterable_text(t: &Tag) -> Option<String> {
     match t.get("raw") {
         Some(raw) => read_text(raw),
@@ -1808,13 +1841,19 @@ fn components_tag_inner(
         if let Some(color) = &d.base_color {
             entries.push(("minecraft:base_color", Tag::String((&**color).into())));
         }
-        // Filterable values are saved as {raw: ..}.
-        let raw = |t: Tag| Tag::compound([("raw", t)]);
+        // `Filterable.codec` encodes the full record: {raw: ..}, and `filtered` when a page has one.
         if !d.writable_pages.is_empty() {
             let pages = d
                 .writable_pages
                 .iter()
-                .map(|p| raw(Tag::String(p.as_str().into())))
+                .enumerate()
+                .map(|(i, p)| {
+                    let filtered = d.writable_filtered.get(i).and_then(Option::as_deref);
+                    Tag::compound(
+                        std::iter::once(("raw", Tag::String(p.as_str().into())))
+                            .chain(filtered.map(|f| ("filtered", Tag::String(f.into())))),
+                    )
+                })
                 .collect();
             entries.push((
                 "minecraft:writable_book_content",
@@ -2064,10 +2103,8 @@ fn decode_components_inner(
             .get("minecraft:base_color")
             .and_then(string)
             .map(|s| Arc::from(s.as_str())),
-        writable_pages: match seen.writable_book_content.and_then(|b| b.get("pages")) {
-            Some(Tag::List(pages)) => pages.iter().filter_map(filterable_text).collect(),
-            _ => Vec::new(),
-        },
+        writable_pages: writable_raw(seen.writable_book_content),
+        writable_filtered: writable_filtered(seen.writable_book_content),
         written: seen.written_book_content.map(written_book_from_tag),
         fireworks: seen
             .fireworks
@@ -3693,13 +3730,8 @@ mod tests {
                 .get("minecraft:base_color")
                 .and_then(string)
                 .map(|s| Arc::from(s.as_str())),
-            writable_pages: match c
-                .get("minecraft:writable_book_content")
-                .and_then(|b| b.get("pages"))
-            {
-                Some(Tag::List(pages)) => pages.iter().filter_map(filterable_text).collect(),
-                _ => Vec::new(),
-            },
+            writable_pages: writable_raw(c.get("minecraft:writable_book_content")),
+            writable_filtered: writable_filtered(c.get("minecraft:writable_book_content")),
             written: c
                 .get("minecraft:written_book_content")
                 .map(written_book_from_tag),

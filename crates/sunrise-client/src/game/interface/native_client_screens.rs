@@ -319,6 +319,39 @@ mod client_screen_tests {
         });
     }
 
+    /// `BookEditScreen`'s Done always runs `saveChanges`: an unedited book is sent and rewritten with pass-through pages.
+    #[test]
+    #[ignore = "daily"]
+    fn done_on_an_unedited_book_sends_it_and_drops_its_filtered_text() {
+        with_client_game(|game| {
+            let mut reader = logged_in(game);
+            let mut book = ItemStack::new("minecraft:writable_book", 1);
+            let data = book.data_mut();
+            data.writable_pages = vec!["one".into(), "two".into()];
+            data.writable_filtered = vec![None, Some("t*o".into())];
+            *game.held_mut() = Some(book.clone());
+            assert!(game.remote_use_book(&book), "the editor opened");
+            sent(&mut reader);
+            game.save_book(false);
+            assert!(game.book.is_none());
+            let edits: Vec<_> = sent(&mut reader)
+                .into_iter()
+                .filter(|p| matches!(p, S::EditBook(_)))
+                .collect();
+            assert_eq!(
+                edits,
+                vec![S::EditBook(play::EditBook {
+                    slot: game.held_slot() as i32,
+                    pages: vec!["one".into(), "two".into()],
+                    title: None,
+                })]
+            );
+            let data = game.held().and_then(|s| s.data()).unwrap();
+            assert_eq!(data.writable_pages, ["one", "two"]);
+            assert_eq!(data.writable_filtered, Vec::<Option<String>>::new());
+        });
+    }
+
     #[test]
     #[ignore = "daily"]
     fn closing_a_chest_sends_its_menu_id_and_closes_the_client_menu() {

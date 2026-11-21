@@ -685,12 +685,19 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
             Component::Text(t) | Component::Nbt(t) => t.clone(),
             Component::Ident(v) => Tag::String(v.as_str().into()),
             Component::Lore(lines) => Tag::List(lines.clone()),
-            Component::WritableBook { pages, .. } => Tag::compound([(
+            Component::WritableBook { pages, filtered } => Tag::compound([(
                 "pages",
                 Tag::List(
                     pages
                         .iter()
-                        .map(|p| Tag::String(p.as_str().into()))
+                        .enumerate()
+                        .map(|(i, p)| match filtered.get(i).and_then(Option::as_deref) {
+                            Some(f) => Tag::compound([
+                                ("raw", Tag::String(p.as_str().into())),
+                                ("filtered", Tag::String(f.into())),
+                            ]),
+                            None => Tag::String(p.as_str().into()),
+                        })
                         .collect(),
                 ),
             )]),
