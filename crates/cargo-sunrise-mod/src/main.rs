@@ -578,8 +578,10 @@ fn build(
             }
             uses_table::Scanned::Exact(_) => None,
             uses_table::Scanned::Unread(why) => {
-                println!(
-                    "note: no uses table packed ({why}); the package counts as made for build {} only.",
+                eprintln!(
+                    "warning: no uses.json packed: {why}. Without it this package fits build {} only, \
+                     and launchers on any other build leave it out until you rebuild and republish it. \
+                     What the scan reads: docs/modding/src/reference/sdk/04-fit.md#usesjson",
                     sdk.name
                 );
                 None
