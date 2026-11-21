@@ -196,12 +196,15 @@ impl Game<'_> {
     /// `ServerPlayer.completeUsingItem` of `stack` in `slot`: the client is
     /// told, `ItemStack.finishUsingItem` (a consumable is eaten, a potion
     /// drunk, a spyglass lowered, anything else given back) with its use
-    /// cooldown, then `LivingEntityUseItemEvent.Finish`.
+    /// cooldown, then `LivingEntityUseItemEvent.Finish`, then `stopUsingItem`'s
+    /// vibration and `on_stop_using`, nothing left of the use.
     pub(super) fn complete_using_item(&mut self, slot: usize, stack: &ItemStack, info: &ItemInfo) {
+        let hand = hand_of(Some((slot, 0))).unwrap_or(self.hand);
         // a potion is drunk (no last tick of its own: a mod's tick ran it out).
         if self.finish_drinking(slot, stack) {
             self.use_item_finished(stack);
             self.use_vibration(stack, "minecraft:item_interact_finish");
+            self.stopped_using(stack, None, hand, 0);
             return;
         }
         self.using = None;
@@ -215,6 +218,7 @@ impl Game<'_> {
         self.use_item_finished(stack);
         // `LivingEntity.completeUsingItem` ends with `stopUsingItem`.
         self.use_vibration(stack, "minecraft:item_interact_finish");
+        self.stopped_using(stack, None, hand, 0);
     }
     /// `LivingEntityUseItemEvent.Finish` after `finishUsingItem` of `stack`
     /// (no ticks left): the hand holds what a mod made the result.
@@ -234,7 +238,8 @@ impl Game<'_> {
     /// the slot; the server's inventory update replaces either. Finishing a use
     /// sends no creative packet in vanilla (its inventory-slot edits go out
     /// through the open creative screen's `CreativeInventoryListener`), so the
-    /// slot counts as synced for this client's creative sync.
+    /// slot counts as synced for this client's creative sync. `stopUsingItem`
+    /// ends it: `on_stop_using`, the use already taken.
     pub(super) fn remote_use_item_finished(
         &mut self,
         slot: usize,
@@ -255,6 +260,7 @@ impl Game<'_> {
         }
         *self.stack_in_mut(slot) = result.filter(|s| s.count > 0);
         self.remote_synced_since(&before);
+        self.stopped_using(stack, None, hand, 0);
     }
     /// What `Item.finishUsingItem` leaves in the hand on a server's client: a
     /// stack that is not a consumable stays as it is (a spyglass); a
@@ -468,7 +474,8 @@ impl Game<'_> {
         true
     }
     /// `LivingEntity.releaseUsingItem` of mob `id`: a mod's `Stop` and
-    /// `Item.releaseUsing`, the use over before them as for a player. A bow's
+    /// `Item.releaseUsing`, the use over before them as for a player, then
+    /// `stopUsingItem`'s vibration and `on_stop_using`. A bow's
     /// and a trident's own release ask for a player, and a use cooldown too
     /// (`UseCooldown.apply`). False when no use runs.
     pub(super) fn release_mob_using_item(&mut self, id: u32) -> bool {
@@ -493,6 +500,7 @@ impl Game<'_> {
             self.native_release_using(&stack, entity, remaining, &mut false);
         }
         self.mob_use_vibration(id, &stack, "minecraft:item_interact_finish");
+        self.stopped_using(&stack, entity, hand, remaining);
         true
     }
     /// `Player.canEat(canAlwaysEat)` for `stack`, food that is eaten only

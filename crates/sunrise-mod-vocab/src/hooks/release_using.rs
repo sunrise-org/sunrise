@@ -9,13 +9,9 @@ pub trait Hooks {
     /// (`ItemStack.releaseUsing`). After the vanilla item's own release, once
     /// `living_entity_use_item_stop` let it through. Both sides, as
     /// vanilla's: change the world only where this `Game` runs the world,
-    /// not on a server's client.
-    #[hook(
-        side = "both",
-        contract = "listen",
-        scope = "item",
-        key = "stack",
-        neoforge = "LivingEntityUseItemEvent.Stop"
-    )]
+    /// not on a server's client. Vanilla's, with no NeoForge counterpart
+    /// (`LivingEntityUseItemEvent.Stop` is `living_entity_use_item_stop`);
+    /// `on_stop_using` hears every stop, this one included.
+    #[hook(side = "both", contract = "listen", scope = "item", key = "stack")]
     fn release_using();
 }

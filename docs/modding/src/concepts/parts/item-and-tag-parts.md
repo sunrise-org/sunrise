@@ -184,6 +184,27 @@ lookup.
   name's timer still restarts only when the item or its hover name changes, so a tip that changes every tick doesn't
   keep it up.
 
+## Continuing a use
+
+`ItemPart::can_continue_using` is `IItemExtension.canContinueUsing`: whether a use (eating, drawing a bow, raising
+a shield) goes on now that the used hand holds `event.held`. `event.stack` is the stack the use goes on with, and
+only the parts of its item are asked. `event.can_continue` arrives as vanilla's answer, `true` for the same item, and
+the part may set it either way. `true` goes on with `event.held` as the use's stack, so the next tick asks the parts
+of that item; `false` stops the use as another item would, without a release. It is asked each tick of a use, on the
+server and on a server's client, before `living_entity_use_item_tick`; `event.entity` is `None` for a player. An
+emptied hand stops the use without asking, and so does a hotbar switch, which stops a main-hand use first.
+
+## Stopping a use
+
+`ItemPart::on_stop_using` is `IItemExtension.onStopUsing`: the use of `event.stack` in `event.hand` is over, with
+`event.time_left` ticks of it left (0 for a finished use). It comes once per stop, where `LivingEntity.stopUsingItem`
+runs, whatever stopped the use: a release, a finish, another item in the hand, a brush with nothing to brush, a
+mob's release (`event.entity` is `Some`) and the server's own stops (a hotbar switch, swapped hands, a disabled
+shield, spectator mode, a dimension trip). The use is already cleared, so releasing again from here finds nothing,
+and it comes after `release_using` and `living_entity_use_item_finish`. An emptied hand is a used-up stack, not a
+stop. On a server's client it comes where the client ends its own use; change the world only on the server side of
+`HostSide`.
+
 ## Grindstone, repair combining and container items
 
 Three methods answer item questions that vanilla asks inside its menus and recipe matching. They run on both
