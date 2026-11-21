@@ -68,8 +68,8 @@ mod tests {
             Err(BlockStateError::UnknownState)
         );
         for invalid in [
-            mod_api::BlockStateRecord::new(stone.block(), u16::MAX).into(),
-            mod_api::BlockStateRecord::new(stone.block(), u16::MAX - 1).into(),
+            mod_api::__private::block_state_from_ordinal(stone.block(), u16::MAX),
+            mod_api::__private::block_state_from_ordinal(stone.block(), u16::MAX - 1),
         ] {
             // A valid prefix and suffix must not leak into an existing engine queue.
             let batch = vec![requested[0], InsideWrite::SetBlock(invalid), requested[3]];

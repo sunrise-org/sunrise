@@ -11,8 +11,8 @@ pub trait Hooks {
     /// death's is placed for good (a bed or anchor, or the world spawn's
     /// free column, after the fallback when a respawn block was gone). The
     /// level of `to` is the one in place, and the player's state is swapped
-    /// in, as for `run_mod_command`: `host.players().acting_player()`,
-    /// `PlayerRef::tell`, the item helpers and the rest reach them. Heard for:
+    /// in, so `host.players().acting_player()`, `PlayerRef::tell` and the item
+    /// helpers reach them. Heard for:
     /// Nether and End portals (also riding a vehicle, and leaving the End as
     /// its winner), `/execute in ... run tp` and any other command that
     /// teleports a player into another level, and the death respawn, on a
@@ -22,9 +22,11 @@ pub trait Hooks {
     /// player who leaves before the move ends, and a move that ends where it
     /// started (a respawn in the dimension of the death).
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_player_changed_dimension",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "PlayerEvent.PlayerChangedDimensionEvent"
     )]
-    fn player_changed_dimension();
+    fn player_changed_dimension(player: u128, name: &str, from: &str, to: &str);
 }

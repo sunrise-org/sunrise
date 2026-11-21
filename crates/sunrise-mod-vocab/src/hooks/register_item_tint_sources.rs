@@ -39,11 +39,13 @@ place in the list is the `tintindex` it colours, and its object reaches the hook
 reload keeps reading the mod's colour. Ids are checked as for numeric properties. A source no mod registers draws
 white, decided once at load, and so does an entry no mod answers; an item with no mod source never reaches the hook."#]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "client",
         contract = "collect",
         out = "sources",
         context = "registration",
         neoforge = "RegisterColorHandlersEvent.ItemTintSources"
     )]
-    fn register_item_tint_sources();
+    fn register_item_tint_sources(sources: &mut Vec<String>);
 }

@@ -14,8 +14,8 @@ use std::{
     path::Path,
     sync::OnceLock,
 };
+use sunrise_core::vanilla_bytes::Writer;
 use sunrise_protocol::{
-    buf::Writer,
     packets::play::{CommandNode, Commands},
     registry::Builtin,
 };

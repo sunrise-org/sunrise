@@ -1,0 +1,18 @@
+ids = [
+    "type:CraftingRecipeCodec",
+    "handle:CraftingRecipeCodec::wire",
+    "type:CraftingRecipeValue",
+    "type:CraftingRecipeValue.bytes",
+    "handle:CraftingRecipeValue::new",
+    "method:CraftingRecipeKind::codec",
+    "method:RecipeSerializer::codec",
+    "trait:CraftingRecipeHandler",
+    "method:CraftingRecipeHandler::decode",
+    "method:CraftingRecipeHandler::write",
+    "method:CraftingRecipeHandler::matches",
+    "method:CraftingRecipeHandler::assemble",
+    "method:CraftingRecipeHandler::remaining_items",
+    "method:RecipeSerializersRegistrar::add_recipe_serializer",
+]
+why = "The loader keeps each decoded recipe with its owning serializer for the resource generation. Matching, assembly, remainders and JSON writing borrow that native value instead of decoding local Wire bytes again. Recipe JSON sync and packet limits are unchanged."
+migrate = "Delete codec() from CraftingRecipeKind and RecipeSerializer implementations and remove CraftingRecipeCodec::wire(). Drop the Value's Wire derive only if recipes were its only use of Wire. Keep Value, decode and write, and keep register_crafting_recipe_serializer(serializer_id, kind) or register_read_only_recipe_serializer(serializer_id, recipe_type_id, serializer) in Hooks::register. If you previously implemented CraftingRecipeHandler and called add_recipe_serializer directly, move the JSON decode and write logic to CraftingRecipeKind (with matches, assemble and any custom remaining_items) or RecipeSerializer (read-only), return your typed Value from decode instead of CraftingRecipeValue::new(bytes), and borrow &Self::Value instead of reading CraftingRecipeValue.bytes in callbacks. Replace add_recipe_serializer with the corresponding typed registration call above. register_raw_recipe_serializer and recipes_of_type are unchanged."

@@ -1,3 +1,4 @@
+use crate::game::remote::RemoteDimensionEntry;
 use crate::game::{
     Game, native_entity_refs::tests::with_client_game, native_lifecycle::NativeLifecycle,
 };
@@ -30,7 +31,7 @@ fn client_camera_entity_returns_to_player_after_removal() {
             portal_cooldown: 0,
             sea_level: 63,
         };
-        game.enter_remote_dimension(&spawn, false, Reason::Other);
+        game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
         let remote = game.remote.as_mut().unwrap();
         remote.logged_in = true;
         remote.entity_id = 7;

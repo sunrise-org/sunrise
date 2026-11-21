@@ -10,11 +10,13 @@ pub trait Hooks {
     /// server and on a client (`host` says which side). Version 3 observes additional families
     /// without changing the event signature.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_entity_tick_post",
+        dispatch = "flat",
         side = "both",
         version = 3,
         contract = "listen",
         neoforge = "EntityTickEvent.Post",
         cancellable = false
     )]
-    fn entity_tick_post();
+    fn entity_tick_post(dimension: &str, entities: &[u32], kinds: &[&str]);
 }

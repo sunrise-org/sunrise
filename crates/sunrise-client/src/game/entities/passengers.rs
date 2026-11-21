@@ -1221,6 +1221,7 @@ mod off_level_tests {
 #[cfg(test)]
 mod nested_vehicle_discard_tests {
     use super::*;
+    use crate::game::native_entity_refs::tests::{collect_all_entities, collect_entities_in};
     use std::sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -1707,11 +1708,8 @@ mod nested_vehicle_discard_tests {
         );
         let level = host.level("minecraft:overworld").unwrap();
         for entities in [
-            level
-                .all_entities(host)
-                .expect("the level remains queryable"),
-            level
-                .entities_in(host, [-1000.0; 3], [1000.0; 3])
+            collect_all_entities(host, level).expect("the level remains queryable"),
+            collect_entities_in(host, level, [-1000.0; 3], [1000.0; 3])
                 .expect("spatial queries remain available"),
         ] {
             assert!(!entities.iter().any(|entity| entity.id() == 71));

@@ -263,7 +263,9 @@ impl Game<'_> {
                     if menu.slot_backing(host, slot) == Some(MenuSlotBacking::Place(place))
                         && place.resolves(host, player) =>
                 {
-                    let stack = ItemPlace::MenuSlot { menu, slot }.stack(host);
+                    let stack = ItemPlace::MenuSlot { menu, slot }
+                        .with_stack(host, |stack| stack.project())
+                        .flatten();
                     slots.push(Some(NativeMenuSlot { place, stack }));
                 }
                 Some(_) => return Err(Refusal::Changed),

@@ -41,10 +41,13 @@ pub struct Counter;
 impl BlockPart for Counter {}
 #[mod_api::sunrise_part]
 impl BlockEntityPart for Counter {
-    fn block_entity_tick(&self, host: &mut dyn ServerHost, event: &mut BlockEntityTickEvent<'_>) {
-        let level = host.level(host.dimension()).unwrap();
-        let entity = host.block_entity_identity(level, event.pos).unwrap();
-        match event.entity.data[0] {
+    fn block_entity_tick(&self, event: &mut BlockEntityTickEvent<'_>) {
+        let (entity, mode) = event
+            .subject
+            .with_view(|entity| (entity.handle(), entity.data_slots()[0]))
+            .unwrap();
+        let host = event.subject.host();
+        match mode {
             1 => {
                 let refused = Counter::edit_state(host, entity, |_, _| panic!("ran"));
                 assert_eq!(

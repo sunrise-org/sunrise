@@ -17,16 +17,29 @@ currently stores only the remainder item id, not a template's count or component
 returns `None`, while a known block with no item returns `Some("minecraft:air")`.
 Both reads are available on either side.
 
-`level.entities_in(host, min, max)` also works on the client's displayed level: tracked
-entities and the window's own non-spectator player are returned as readable handles.
-Other players are omitted (arismoko/horizon#3033);
-a level the client does not show, or a read before login, returns `None`.
-A bound that is NaN or infinite returns `None` on either side, before any entity is walked;
-a minimum above its maximum is the same box with the two swapped, as vanilla's `AABB`.
-`host.experience_orbs(dimension, min, max)` takes its box the same way, with an empty list
-for a bound that is not finite.
-Every entity list is walked once per call, O(entities) regardless of the box;
-each overlapping mob resolves through a mob-list scan, O(K*N) for K overlaps and N mobs.
+Entity, player and team visits are scoped shared reads. `Continue(())` advances and
+`Break(())` stops; the result is `Ok(Continue(()))` on completion (including empty),
+`Ok(Break(()))` on early stop, or a typed refusal before any callback. Visitors can
+make reentrant shared reads on the same host. Entity visitors and ray predicates run
+outside residency guards. For mutable work the caller collects the handles or copies
+the borrowed team names it needs, then uses the mutable host after the visit.
+
+`level.visit_entities_in(host, min, max, &mut visit)` resolves matches as it goes and
+works on the active server level or the client's displayed level. It does not build a
+list. Inverted bounds are swapped per axis, as in vanilla's `AABB`; non-finite bounds
+are refused. `level.visit_all_entities(host, &mut visit)` uses the active server level's
+lookup admission order instead. Outside the block-entity item-tick view, it preflights
+all eligible members before invoking the visitor so a missing member cannot expose a
+partial walk. `Break(())` does not skip that preflight. The item-tick view skips members
+it cannot resolve. `level.visit_online_players` also works on parked server levels;
+`team.visit_members` borrows each holder key as `&str` instead of cloning the names.
+
+For one entity ray hit, `level.ray_trace_nearest_entity` calls the predicate on every
+geometric hit in spatial traversal order. It selects the smallest accepted squared
+distance, keeping the first visited hit on an exact tie. `ray_trace_entities` keeps
+the ordered all-hit result for callers that need to process hits nearest first.
+`host.experience_orbs(dimension, min, max)` still returns a list, empty for a bound
+that is not finite.
 
 For engine contributors, every area method declares its load access once with `#[access(...)]`.
 `Metadata` admits registry facts during setup and reload; `WorldOnly`, `ClientSetup` and
@@ -47,13 +60,15 @@ The following documented `Game` helpers are not in the trait yet:
   `container_slots` uses gameplay-private types.
 - `with_mod_block_entity` is generic, so its signature cannot be called through `dyn Host`.
 
-Component writes live on `ItemPlace::edit(host, tx, |stack| { ... })`, not on
-`Host::set_component` or `remove_component`. The editor can use `ItemStack::set`,
-`remove`, `apply_components` and `copy_component_from`; `get` followed by `set`
-covers `update`. A successful edit exchanges the whole stack, preserving the slot's
-count rather than splitting off one item. Changing the item or count refuses the
-edit without changing the place. The write is server-side and journaled in the
-caller's transaction, so a parent abort restores it like other item-place writes.
+Component writes live on `ItemPlace::edit(host, tx, |editor| { ... })`, not on
+`Host::set_component` or `remove_component`. `ItemComponentEditor` stages overrides
+without access to the borrowed host; `get` sees pending changes, so `get` followed
+by `set` covers `update`. `original().project()` explicitly copies the pre-edit
+stack. For player slots, hands and equipment the backend resolves the slot before
+calling the editor, validates the batch, then changes only those components in
+place. Item and count are read-only. The usual inventory, menu and equipment sync
+publishes the write without replaying equip effects. Aborting the caller's
+transaction or a parent restores the slot.
 
 Experience-orb values use vanilla's signed `i32` representation in
 `ExperienceOrb`, `ServerHost::set_experience_orb`, and the pickup and merge hooks.

@@ -63,7 +63,11 @@ fn synced_client_queries_follow_replacement_retirement_and_level_changes() {
             portal_cooldown: 0,
             sea_level: 63,
         };
-        game.enter_remote_dimension(&spawn, false, sunrise_client::level_loading::Reason::Other);
+        game.enter_remote_dimension(
+            &spawn,
+            RemoteDimensionEntry::Login,
+            sunrise_client::level_loading::Reason::Other,
+        );
         client(game).logged_in = true;
         assert!(values(game).is_empty());
         let host: &mut dyn Host = game;
@@ -102,7 +106,11 @@ fn synced_client_queries_follow_replacement_retirement_and_level_changes() {
         assert!(values(game).is_empty());
         sync(game, Holder::Level, 71);
         spawn.dimension = "minecraft:the_nether".into();
-        game.enter_remote_dimension(&spawn, false, sunrise_client::level_loading::Reason::Other);
+        game.enter_remote_dimension(
+            &spawn,
+            RemoteDimensionEntry::Login,
+            sunrise_client::level_loading::Reason::Other,
+        );
         assert!(values(game).is_empty());
         assert!(game.remote.as_ref().unwrap().attachments.is_empty());
         sync(game, Holder::Level, 81);

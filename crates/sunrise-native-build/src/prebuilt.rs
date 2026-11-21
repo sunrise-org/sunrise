@@ -188,9 +188,6 @@ pub struct Identity {
     rustc: String,
     target: String,
     side: String,
-    /// The game executable's link policy (the guest stack size). Only the executable's link takes
-    /// it: no mod compile reads it.
-    pub link_args: Vec<String>,
     #[serde(default)]
     pub registry_lock: Option<String>,
     #[serde(default)]
@@ -529,8 +526,7 @@ fn standard_library(rust: &dyn Toolchain) -> Result<PathBuf, String> {
 
 /// rustc with the prebuilt game's settings, its libraries and `out`'s on the search path, and the
 /// native libraries the game's build scripts link (`native/`: the `windows` crates' import
-/// libraries). The identity's `link_args` are the game executable's link policy and never reach a
-/// library.
+/// libraries).
 fn rustc(rust: &dyn Toolchain, game: &Path, out: &Path, edition: &str) -> Command {
     let mut cmd = rustc_with(
         rust,
@@ -1492,7 +1488,7 @@ mod tests {
         }
         let mut sdk: Identity = serde_json::from_value(serde_json::json!({
             "commit": "test", "rustc": "test", "target": "test", "side": "client",
-            "link_args": [], "facade_crates": ["sunrise_core"],
+            "facade_crates": ["sunrise_core"],
         }))
         .unwrap();
         assert_eq!(
@@ -1514,12 +1510,7 @@ mod tests {
     }
 
     #[test]
-    fn a_mod_library_compile_holds_none_of_the_executables_link_policy() {
-        let sdk: Identity = serde_json::from_value(serde_json::json!({
-            "commit": "test", "rustc": "test", "target": "test", "side": "client",
-            "link_args": ["-Wl,-stack_size,0x1000000", "/STACK:16777216"],
-        }))
-        .unwrap();
+    fn a_mod_library_compile_uses_dynamic_linking_and_platform_rpath() {
         let toolchain = crate::rust::Unpacked {
             dir: "toolchain".into(),
             target: "test".into(),
@@ -1532,12 +1523,6 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
-        for policy in &sdk.link_args {
-            assert!(
-                !args.iter().any(|arg| arg.contains(policy.as_str())),
-                "{policy} in {args:?}"
-            );
-        }
         assert!(args.iter().any(|arg| arg == "prefer-dynamic"), "{args:?}");
         let rpath = match std::env::consts::OS {
             "linux" => Some("link-arg=-Wl,-rpath,$ORIGIN"),
@@ -1557,7 +1542,7 @@ mod tests {
         // library among them, which no fixed list carried), the identity, the executable and
         // windows-gnu import libraries, which never ship.
         let sdk: Identity = serde_json::from_value(serde_json::json!({
-            "commit": "test", "rustc": "test", "target": "test", "side": "client", "link_args": [],
+            "commit": "test", "rustc": "test", "target": "test", "side": "client",
             "slices": {"runtime": [
                 "bin/sunrise-client.exe", "deps/sunrise_mod_host.dll",
                 "deps/libsunrise_mod_host.dll.a", "deps/libmod_api.so",
@@ -1591,7 +1576,7 @@ mod tests {
             assert_eq!(runtime_libraries(&rust, &sdk, game).unwrap(), expected);
         }
         let unsliced: Identity = serde_json::from_value(serde_json::json!({
-            "commit": "test", "rustc": "test", "target": "test", "side": "client", "link_args": [],
+            "commit": "test", "rustc": "test", "target": "test", "side": "client",
         }))
         .unwrap();
         let rust = crate::rust::tests::unpacked(scratch.path(), crate::rust::tests::HOSTS[0]);
@@ -1618,7 +1603,7 @@ mod tests {
         let check = |commit: &str, rustc: &str, target: &str, side: &str| {
             let identity = serde_json::json!({
                 "package_format": sunrise_mod_package::sdk::PACKAGE_FORMAT,
-                "commit": commit, "rustc": rustc, "target": target, "side": side, "link_args": [],
+                "commit": commit, "rustc": rustc, "target": target, "side": side,
             });
             fs::write(dir.join(IDENTITY), identity.to_string()).unwrap();
             check_identity(&dir, "abc123", "x86_64-pc-windows-gnu", Target::Client)
@@ -1644,7 +1629,7 @@ mod tests {
         let write = |slices: serde_json::Value| {
             let identity = serde_json::json!({
                 "package_format": sunrise_mod_package::sdk::PACKAGE_FORMAT,
-                "commit": "abc123", "rustc": "", "target": "", "side": "client", "link_args": [],
+                "commit": "abc123", "rustc": "", "target": "", "side": "client",
                 "slices": slices,
             });
             fs::write(whole.join(IDENTITY), identity.to_string()).unwrap();

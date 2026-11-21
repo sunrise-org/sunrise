@@ -13,6 +13,8 @@ pub trait Hooks {
     /// answer, by the part of the menu's type; a menu with none skips the hook.
     /// Client-side, with the `ClientHost`.
     #[hook(
+        receiver = "read",
+        dispatch = "api_carrier",
         side = "client",
         contract = "listen",
         scope = "menu",

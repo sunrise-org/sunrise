@@ -21,11 +21,19 @@ pub trait Hooks {
     /// positions, the same on both sides. With no listener nothing is converted or allocated.
     /// Diverges from upstream: no NeoForge counterpart (its fishing events come after the roll).
     #[hook(
+        dispatch = "flat",
         side = "both",
         contract = "replace",
         out = "medium",
         answered_by = "mod",
         neoforge = "none (NeoForge's ItemFishedEvent fires after the loot roll, in FishingHook.retrieve)"
     )]
-    fn fishing_medium();
+    fn fishing_medium(
+        level: LevelRef,
+        bobber: EntityRef,
+        position: [f64; 3],
+        owner: Option<PlayerRef>,
+        owner_position: Option<[f64; 3]>,
+        medium: &mut Option<Answered<mod_api::FishingMedium>>,
+    );
 }

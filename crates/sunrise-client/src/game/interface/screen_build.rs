@@ -505,7 +505,7 @@ impl Game<'_> {
             self.screen != Screen::Playing || self.title.is_some() || self.screen_over_playing();
         // Gui.setScreen: KeyMapping.releaseAll, as the screen or overlay opens.
         if shown {
-            self.native_input.mappings.release_all();
+            self.mod_keys.release_all();
             self.release_screen_mappings();
         }
         let (framebuffer, gui) = self.gui_frame_now();

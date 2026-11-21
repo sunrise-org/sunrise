@@ -11,11 +11,17 @@ pub trait Hooks {
     /// `handleUpdateTag` perform loading; they are not counterparts of this notice,
     /// which runs after the merge.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         scope = "block_entity",
         key = "entity",
         neoforge = "none (post-merge notice; IBlockEntityExtension.onDataPacket and handleUpdateTag are related loading paths, not counterparts)"
     )]
-    fn block_entity_data_received();
+    fn block_entity_data_received(
+        entity: BlockEntityRef,
+        source: BlockEntityDataSource,
+        tag: &sunrise_core::nbt::Compound,
+    );
 }

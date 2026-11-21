@@ -5,6 +5,7 @@
 use crate::game::Game;
 use crate::game::execution_role::ExecutionRole;
 use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game_role};
+use crate::game::remote::RemoteDimensionEntry;
 use mod_api::{ClientChunkLoadEvent, ClientChunkUnloadEvent, ClientHost, Hooks};
 use std::sync::Mutex;
 use sunrise_protocol::{
@@ -69,7 +70,7 @@ fn with_loopback(f: impl FnOnce(&mut Game<'_>)) {
             game.connect_local(client, "ChunkProbe").unwrap();
             game.enter_remote_dimension(
                 &overworld(),
-                false,
+                RemoteDimensionEntry::Login,
                 sunrise_client::level_loading::Reason::Other,
             );
             game.remote.as_mut().unwrap().logged_in = true;
@@ -203,7 +204,7 @@ fn a_client_tells_a_chunk_packet_and_its_forget_once() {
                 dimension: "minecraft:the_nether".into(),
                 ..overworld()
             },
-            false,
+            RemoteDimensionEntry::Login,
             sunrise_client::level_loading::Reason::Other,
         );
         assert_eq!(take_calls(), [unload([3, 4], Some("minecraft:stone"))]);

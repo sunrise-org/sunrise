@@ -13,10 +13,11 @@ pub trait Hooks {
     /// sequence and fires neither living death hook. Armor stands, boats and other non-mob entities
     /// are not told.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         fabric = "ServerLivingEntityEvents.AFTER_DEATH",
         neoforge = "none (LivingDeathEvent fires before the death)"
     )]
-    fn living_death_post();
+    fn living_death_post(entity: u32, damage_type: &str, attacker: u32);
 }

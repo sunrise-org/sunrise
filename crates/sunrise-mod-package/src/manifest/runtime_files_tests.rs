@@ -49,19 +49,13 @@ fn a_folder_with_the_listed_files_reads_and_serves_the_verified_bytes() {
     let folder = Folder::new("folder");
     let package = Package::read(folder.path()).unwrap();
     let runtime = package.read_runtime(folder.path()).unwrap().unwrap();
-    assert_eq!(
-        runtime.names().collect::<Vec<_>>(),
-        ["image", "tables/nav.bin"]
-    );
-    assert_eq!(&*runtime.file("tables/nav.bin").unwrap(), NAV);
+    assert_eq!(runtime.names(), ["image", "tables/nav.bin"]);
+    assert_eq!(runtime.file("tables/nav.bin").unwrap().0, NAV);
     // Any file type: an ELF-looking image is data here, not an executable component.
-    assert_eq!(&*runtime.file("image").unwrap(), IMAGE);
+    let (bytes, path) = runtime.file("image").unwrap();
+    assert_eq!(bytes, IMAGE);
     assert!(runtime.file("tables/other.bin").is_none());
-    assert_eq!(
-        runtime.path("image").unwrap(),
-        folder.path().join("runtime/image")
-    );
-    assert!(runtime.path("unlisted").is_none());
+    assert_eq!(path, Some(folder.path().join("runtime/image").as_path()));
     assert_eq!(runtime.digest(), package.manifest.runtime.unwrap().digest());
 }
 
@@ -187,11 +181,7 @@ fn a_packed_smod_carries_the_files_and_is_checked_as_the_folder_is() {
     std::fs::write(&archive, &bytes).unwrap();
     let package = Package::read(&archive).unwrap();
     let runtime = package.read_runtime(&archive).unwrap().unwrap();
-    assert_eq!(&*runtime.file("tables/nav.bin").unwrap(), NAV);
-    assert!(
-        runtime.path("image").is_none(),
-        "an archive has no file to point at"
-    );
+    assert_eq!(runtime.file("tables/nav.bin"), Some((NAV, None)));
     assert_eq!(runtime.digest(), package.manifest.runtime.unwrap().digest());
     // An entry the table does not list is refused.
     let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());

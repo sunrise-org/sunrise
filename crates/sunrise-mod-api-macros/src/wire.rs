@@ -47,10 +47,17 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
             #[automatically_derived]
             impl #imp #w::Wire for #name #ty #clause {
                 const MIN: usize = <#via as #w::Wire>::MIN;
+                fn describe(schema: &mut #w::WireSchema) -> u64 where Self: 'static {
+                    schema.ordinary_only();
+                    schema.named::<Self>(|schema| <#via as #w::Wire>::describe(schema))
+                }
                 fn put(&self, out: &mut #w::Writer) {
-                    out.put(&<#via as ::core::convert::From<&Self>>::from(self));
+                    if out.ordinary_only() {
+                        out.put(&<#via as ::core::convert::From<&Self>>::from(self));
+                    }
                 }
                 fn take(input: &mut #w::Reader<'_>) -> ::core::result::Result<Self, #w::WireError> {
+                    input.ordinary_only()?;
                     <Self as ::core::convert::TryFrom<#via>>::try_from(input.take::<#via>()?)
                         .map_err(|_| #w::WireError::Invalid(::core::stringify!(#name)))
                 }
@@ -61,9 +68,16 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
     let mut puts = Vec::new();
     let mut takes = Vec::new();
     let nested;
+    let describe;
     match &input.data {
         Data::Struct(data) => {
             nested = !matches!(data.fields, Fields::Unit);
+            let shape = describe_fields(&data.fields, &w);
+            describe = quote! {
+                let hash = #w::WireSchema::leaf("struct");
+                #shape
+                hash
+            };
             let (pattern, build, fields) = fields(&data.fields);
             for (field, bind) in data.fields.iter().zip(&fields) {
                 check_owned(&field.ty)?;
@@ -80,6 +94,13 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
                 .variants
                 .iter()
                 .any(|v| !matches!(v.fields, Fields::Unit));
+            let count = data.variants.len() as u64;
+            let shapes = data.variants.iter().map(|v| describe_fields(&v.fields, &w));
+            describe = quote! {
+                let hash = #w::WireSchema::mix(#w::WireSchema::leaf("enum:u32-le"), #count);
+                #(#shapes)*
+                hash
+            };
             for (index, variant) in data.variants.iter().enumerate() {
                 let index = index as u32;
                 let case = &variant.ident;
@@ -103,12 +124,12 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
         Data::Union(_) => return Err(syn::Error::new_spanned(name, "Wire cannot encode a union")),
     }
     let take = if nested {
-        quote!(input.nested(|input| ::core::result::Result::Ok(#(#takes)*)))
+        quote!(input.record(|input| ::core::result::Result::Ok(#(#takes)*)))
     } else {
         quote!(::core::result::Result::Ok(#(#takes)*))
     };
     let put = if nested {
-        quote!(out.nested(|out| { #(#puts)* }))
+        quote!(out.record(|out| { #(#puts)* }))
     } else {
         quote!(#(#puts)*)
     };
@@ -117,10 +138,22 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
         #[automatically_derived]
             impl #imp #w::Wire for #name #ty #clause {
             const MIN: usize = #min;
+            fn describe(schema: &mut #w::WireSchema) -> u64 where Self: 'static {
+                schema.named::<Self>(|schema| { #describe })
+            }
             fn put(&self, out: &mut #w::Writer) { #put }
             fn take(input: &mut #w::Reader<'_>) -> ::core::result::Result<Self, #w::WireError> { #take }
         }
     })
+}
+
+fn describe_fields(fields: &Fields, wire: &syn::Path) -> TokenStream {
+    let count = fields.len() as u64;
+    let types = fields.iter().map(|field| &field.ty);
+    quote! {
+        let hash = #wire::WireSchema::mix(hash, #count);
+        #(let hash = #wire::WireSchema::mix(hash, <#types as #wire::Wire>::describe(schema));)*
+    }
 }
 
 fn fields(fields: &Fields) -> (TokenStream, TokenStream, Vec<syn::Ident>) {

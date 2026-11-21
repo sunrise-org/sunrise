@@ -82,8 +82,6 @@ SDK_BASE = "sunrise-core"
 # Source files the folder carries besides compiler outputs.
 CARRIED = {"Cargo.toml": None, IDENTITY: None, LOCK: ROOT / LOCK, TEMPLATE: ROOT / "crates/sunrise-client/src" / TEMPLATE,
            NATIVE_MODS_TEMPLATE: ROOT / "crates/sunrise-client/src" / NATIVE_MODS_TEMPLATE}
-# What the game's build script asks the `sunrise-client` executable's link for (Windows' 8 MB main stack).
-LINK_ARG = "cargo:sunrise-executable-link-arg="
 # Native libraries the build scripts point the final link at (the `windows` crates' MinGW import libraries):
 # cargo passes their folders to rustc, a plain rustc gets them from here (`-L native=OUT/native`).
 NATIVE = "native"
@@ -451,7 +449,7 @@ def official_externs(deps: Path) -> list[str]:
     return ["--cfg", 'feature="official"', "--extern", f"sunrise_official={library}"] if library else []
 
 
-def api_route(out: Path, link_args: list[str]) -> list[str]:
+def api_route(out: Path) -> list[str]:
     """Build the fixed executable shared by both native routes, once for this SDK."""
     deps = out / "deps"
     folder = out / RUNTIME
@@ -460,7 +458,7 @@ def api_route(out: Path, link_args: list[str]) -> list[str]:
               "-L", f"dependency={out / 'host'}", "-L", f"native={out / NATIVE}"]
     origin = {"linux": ["-Wl,-rpath,$ORIGIN"], "darwin": ["-Wl,-rpath,@executable_path"]}.get(sys.platform, [])
     run(["rustc", *common, "--crate-type", "bin", "--crate-name", "sunrise_native_game",
-         *(flag for arg in origin + link_args for flag in ("-C", f"link-arg={arg}")),
+         *(flag for arg in origin for flag in ("-C", f"link-arg={arg}")),
          *extern_args(deps, "sunrise_client"), *extern_args(deps, "mod_api"), *extern_args(deps, "sunrise_mod_package"),
          *extern_args(deps, "sunrise_mod_host"), *official_externs(deps),
          "-o", str(folder / EXECUTABLE), str(API_MAIN)])
@@ -657,14 +655,11 @@ def _build_locked(out: Path, server: bool, target_dir: Path) -> None:
     for name, path in carried.items():
         (out / name).write_bytes(blobs[path])
     patches = carry_patches(staged, out)
-    game = next(script for script in scripts if script["package_id"].split("#")[0].endswith("/sunrise-client"))
     for manifest in BUILD_DATA:
         shutil.copy2(staged / manifest, out / manifest)
-    output = Path(game["out_dir"]).parent / "output"
-    link_args = executable_link_args(output)
     if official and dylib(deps, "sunrise_official") is None:
         sys.exit("prebuilt client is missing the sunrise-official dylib")
-    sliced = slices(metadata, copied, api_route(out, link_args))
+    sliced = slices(metadata, copied, api_route(out))
     files = {str(path.relative_to(out).as_posix()): sha256(path) for path in sorted(out.rglob("*")) if path.is_file()}
     identity = {
         "package_format": layout,
@@ -674,7 +669,6 @@ def _build_locked(out: Path, server: bool, target_dir: Path) -> None:
         "profile": PROFILE,
         "side": "server" if server else "client",
         "rustflags": rustflags,
-        "link_args": link_args,
         "facade_crates": eligible,
         # The game crate's features: a `[[native.mixin]]` build compiles functions copied out of its source
         # under the same cfgs (function replacement).
@@ -722,11 +716,6 @@ def carry_patches(staged: Path, out: Path) -> dict:
             lines.append(f"{json.dumps(name)} = {{ path = {json.dumps(spec['path'])} }}")
     (out / "Cargo.toml").write_text("\n".join(lines) + "\n")
     return patches
-
-
-def executable_link_args(output: Path) -> list[str]:
-    """Executable policy emitted by the engine library's build script into the SDK identity."""
-    return [line[len(LINK_ARG):] for line in output.read_text().splitlines() if line.startswith(LINK_ARG)]
 
 
 def dylib(deps: Path, crate: str) -> Path | None:

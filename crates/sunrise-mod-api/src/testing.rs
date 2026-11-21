@@ -51,6 +51,54 @@ pub fn with_recipe_types<R>(ids: &[&'static str], f: impl FnOnce() -> R) -> R {
 
 #[cfg(test)]
 #[test]
+fn custom_test_host_lends_a_profile_fixture() {
+    use crate::{
+        Backend, BackendRef, GameProfile, Host, PlayerRef,
+        prelude::{PlayerSessionBackend, PlayersHost},
+    };
+
+    struct ProfileHost(GameProfileFixture);
+    impl PlayerSessionBackend for ProfileHost {
+        fn player_profile(&self, _: PlayerRef) -> Option<GameProfile<'_>> {
+            Some(self.0.profile())
+        }
+    }
+    impl Backend for ProfileHost {}
+    impl Host for ProfileHost {
+        fn backend(&self) -> Option<BackendRef<'_>> {
+            Some(crate::__private::backend_ref(self))
+        }
+    }
+    crate::impl_host_areas!(ProfileHost);
+    crate::impl_backend_areas!(ProfileHost, except(player_session));
+
+    let mut fake = FakeHost::new();
+    fake.join(42, 4);
+    let player = fake.player(42).unwrap();
+    let host = ProfileHost(GameProfileFixture::new(
+        42,
+        "Alex",
+        [
+            ("textures".into(), "skin".into(), Some("signature".into())),
+            ("fixture".into(), "unsigned".into(), None),
+        ],
+    ));
+    let profile = player.profile(&host).unwrap();
+    assert_eq!((profile.uuid, profile.name), (42, "Alex"));
+    assert_eq!(
+        profile
+            .properties()
+            .map(|row| (row.name, row.value, row.signature))
+            .collect::<Vec<_>>(),
+        [
+            ("textures", "skin", Some("signature")),
+            ("fixture", "unsigned", None),
+        ]
+    );
+}
+
+#[cfg(test)]
+#[test]
 fn a_mod_scope_does_not_freeze_the_next_scopes_registration() {
     struct Stat;
     #[mod_api::__subscriptions]

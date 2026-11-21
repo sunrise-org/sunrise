@@ -1,6 +1,5 @@
-//! Startup registration and portable values for mod crafting recipe kinds.
+//! Startup registration and native values for mod crafting recipe kinds.
 use super::*;
-use crate::wire::{Reader, Wire, Writer};
 
 /// An owned, untrimmed crafting grid. Cells are row-major; empty cells are None.
 #[derive(Clone, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
@@ -34,49 +33,11 @@ impl CraftingGrid {
     }
 }
 
-/// A kind's opaque Wire-encoded value. Only its owning handler interprets these bytes.
-#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
-#[non_exhaustive]
-pub struct CraftingRecipeValue {
-    /// The registered value's encoding; the loader admits at most 1 MiB.
-    pub bytes: Vec<u8>,
-}
-impl CraftingRecipeValue {
-    /// Retain an encoded value produced by its owning serializer.
-    pub fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes }
-    }
-}
-
-/// Explicit codec for a recipe kind's own value. Omit it to refuse registration.
-// no wire: process-local typed codec functions; only their encoded values cross.
-#[non_exhaustive]
-pub struct CraftingRecipeCodec<T> {
-    encode: fn(&T) -> Result<CraftingRecipeValue, String>,
-    decode: fn(&CraftingRecipeValue) -> Result<T, String>,
-}
-impl<T: Wire> CraftingRecipeCodec<T> {
-    /// Encodes the recipe value using its `Wire` form.
-    pub fn wire() -> Self {
-        Self {
-            encode: |value| {
-                let mut out = Writer::new();
-                out.limit(1024 * 1024);
-                value.put(&mut out);
-                if let Some(error) = out.error() {
-                    return Err(error.to_string());
-                }
-                Ok(CraftingRecipeValue::new(out.into_bytes()))
-            },
-            decode: |value| Reader::decode(&value.bytes).map_err(|error| error.to_string()),
-        }
-    }
-}
-
 // no wire: borrowed per-craft reader; its owning loop and callback retain its authority.
 /// The frozen loop view plus the engine's stack-aware default for each input cell.
-/// Only remaining_items receives this view. Tag reads allocate nothing; a default remainder
-/// is an owned stack and may allocate for component data. Reads perform no file I/O.
+/// Only `remaining_items` receives this view. [`LoopContext::items_in_tag`](crate::LoopContext::items_in_tag)
+/// borrows this generation's bound item order; a default remainder is an owned stack and may
+/// allocate for component data. Reads perform no file I/O.
 pub trait CraftingRemainders: crate::LoopContext {
     /// Default remainder for this row-major input cell's original pre-take stack,
     /// components included.
@@ -86,19 +47,20 @@ pub trait CraftingRemainders: crate::LoopContext {
     fn default_remainder(&self, cell: u32) -> Option<crate::ItemStack>;
 }
 
-/// A mod's typed crafting serializer and pure matching callbacks.
-/// Register through Hooks::register with its RegistrationContext. Callback failures refuse
-/// the file or craft; do not panic. Values must have an explicit Wire codec.
+/// A mod's JSON crafting serializer and pure matching callbacks.
+///
+/// Use `register_crafting_recipe_serializer` in `Hooks::register`. The loader
+/// retains each decoded value with its owning serializer for the recipe generation.
+/// The value stays in process and needs no `Wire` implementation. Refuse invalid
+/// inputs through the callback's return value rather than panicking.
 pub trait CraftingRecipeKind: Send + Sync + 'static {
-    /// Mod-owned decoded recipe data.
+    /// Mod-owned recipe data decoded once per generation and borrowed by callbacks.
     type Value: Send + Sync + 'static;
-    /// Portable codec; the default refuses registration by kind name.
-    fn codec(&self) -> Option<CraftingRecipeCodec<Self::Value>> {
-        None
-    }
-    /// Decode the JSON object with its type field removed.
+    /// Decode a recipe JSON object with its `type` field removed.
+    /// Return an error to skip a malformed recipe without refusing other files.
     fn decode(&self, json: &str) -> Result<Self::Value, String>;
-    /// Write the decoded value for Sunrise client synchronization.
+    /// Write an equivalent JSON object for Sunrise client synchronization.
+    /// The game supplies the registered serializer ID as `type` and applies the packet limits.
     fn write(&self, value: &Self::Value) -> Result<String, String>;
     /// Whether this value matches the owned grid snapshot. The context reads the
     /// owning frozen resource generation; unavailable tags should not match.
@@ -130,77 +92,118 @@ pub trait CraftingRecipeKind: Send + Sync + 'static {
     }
 }
 
-/// Portable dispatch to the sole owner of a registered kind.
-// hidden: type erasure for dispatch to the registered handler.
-#[doc(hidden)]
-pub trait CraftingRecipeHandler: Send + Sync {
-    /// Decode one recipe object.
-    fn decode(&self, json: &str) -> Result<CraftingRecipeValue, String>;
-    /// Write one decoded value for sync.
-    fn write(&self, value: &CraftingRecipeValue) -> Result<String, String>;
-    /// Test this owner's recipe.
-    fn matches(
+// no wire: process-local registration owns a native JSON decoder.
+// exhaustive: registration owns the opaque decoder.
+/// Engine-owned registration of a recipe serializer.
+#[derive(Clone)]
+pub struct RegisteredRecipeSerializer(Arc<dyn RecipeDecoder>);
+
+impl RegisteredRecipeSerializer {
+    /// Decode a compact JSON object whose type field the loader has removed.
+    pub fn decode(&self, json: &str) -> Result<LoadedCraftingRecipe, String> {
+        Arc::clone(&self.0).load(json)
+    }
+}
+
+trait RecipeDecoder: Send + Sync {
+    fn load(self: Arc<Self>, json: &str) -> Result<LoadedCraftingRecipe, String>;
+}
+
+impl<K: CraftingRecipeKind> RecipeDecoder for K {
+    fn load(self: Arc<Self>, json: &str) -> Result<LoadedCraftingRecipe, String> {
+        let value = self.decode(json)?;
+        Ok(LoadedCraftingRecipe(Arc::new(TypedRecipe {
+            kind: self,
+            value,
+        })))
+    }
+}
+
+// no wire: a recipe and its serializer are native values; only their JSON is synced.
+// exhaustive: only decoding constructs the opaque serializer and retained value pair.
+/// Engine-owned dispatch to one loaded recipe and its owning serializer.
+#[derive(Clone)]
+pub struct LoadedCraftingRecipe(Arc<dyn RecipeDispatch>);
+
+impl LoadedCraftingRecipe {
+    /// Write the retained value for synchronization.
+    pub fn write(&self) -> Result<String, String> {
+        self.0.write()
+    }
+
+    /// Test the retained value against the grid snapshot.
+    pub fn matches(&self, context: &dyn crate::LoopContext, grid: CraftingGrid) -> bool {
+        self.0.matches(context, grid)
+    }
+
+    /// Assemble the result for this recipe.
+    pub fn assemble(
         &self,
         context: &dyn crate::LoopContext,
-        value: &CraftingRecipeValue,
         grid: CraftingGrid,
-    ) -> bool;
-    /// Assemble this owner's recipe.
+    ) -> Option<crate::ItemStack> {
+        self.0.assemble(context, grid)
+    }
+
+    /// Return custom remainders for the pre-take grid, or request defaults.
+    pub fn remaining_items(
+        &self,
+        context: &dyn CraftingRemainders,
+        grid: CraftingGrid,
+    ) -> Option<Vec<Option<crate::ItemStack>>> {
+        self.0.remaining_items(context, grid)
+    }
+}
+
+trait RecipeDispatch: Send + Sync {
+    fn write(&self) -> Result<String, String>;
+    fn matches(&self, context: &dyn crate::LoopContext, grid: CraftingGrid) -> bool;
     fn assemble(
         &self,
         context: &dyn crate::LoopContext,
-        value: &CraftingRecipeValue,
         grid: CraftingGrid,
     ) -> Option<crate::ItemStack>;
-    /// Return custom remainders or the default policy.
     fn remaining_items(
         &self,
         context: &dyn CraftingRemainders,
-        value: &CraftingRecipeValue,
         grid: CraftingGrid,
     ) -> Option<Vec<Option<crate::ItemStack>>>;
 }
-struct TypedKind<K: CraftingRecipeKind> {
-    kind: K,
-    codec: CraftingRecipeCodec<K::Value>,
+
+struct TypedRecipe<K: CraftingRecipeKind> {
+    kind: Arc<K>,
+    value: K::Value,
 }
-impl<K: CraftingRecipeKind> CraftingRecipeHandler for TypedKind<K> {
-    fn decode(&self, json: &str) -> Result<CraftingRecipeValue, String> {
-        (self.codec.encode)(&self.kind.decode(json)?)
+
+impl<K: CraftingRecipeKind> RecipeDispatch for TypedRecipe<K> {
+    fn write(&self) -> Result<String, String> {
+        self.kind.write(&self.value)
     }
-    fn write(&self, value: &CraftingRecipeValue) -> Result<String, String> {
-        self.kind.write(&(self.codec.decode)(value)?)
+
+    fn matches(&self, context: &dyn crate::LoopContext, grid: CraftingGrid) -> bool {
+        self.kind.matches(context, &self.value, grid)
     }
-    fn matches(
-        &self,
-        context: &dyn crate::LoopContext,
-        value: &CraftingRecipeValue,
-        grid: CraftingGrid,
-    ) -> bool {
-        (self.codec.decode)(value).is_ok_and(|value| self.kind.matches(context, &value, grid))
-    }
+
     fn assemble(
         &self,
         context: &dyn crate::LoopContext,
-        value: &CraftingRecipeValue,
         grid: CraftingGrid,
     ) -> Option<crate::ItemStack> {
-        self.kind
-            .assemble(context, &(self.codec.decode)(value).ok()?, grid)
+        self.kind.assemble(context, &self.value, grid)
     }
+
     fn remaining_items(
         &self,
         context: &dyn CraftingRemainders,
-        value: &CraftingRecipeValue,
         grid: CraftingGrid,
     ) -> Option<Vec<Option<crate::ItemStack>>> {
-        self.kind
-            .remaining_items(context, &(self.codec.decode)(value).ok()?, grid)
+        self.kind.remaining_items(context, &self.value, grid)
     }
 }
+
 impl dyn Registrar + '_ {
-    /// Register a crafting kind once at startup. Duplicate names, foreign namespaces,
-    /// and values without an explicit Wire codec refuse startup, naming the kind.
+    /// Register a crafting kind once at startup. Duplicate names and foreign namespaces
+    /// refuse startup, naming the kind.
     pub fn register_crafting_recipe_serializer<K: CraftingRecipeKind>(
         &mut self,
         name: &str,
@@ -210,25 +213,19 @@ impl dyn Registrar + '_ {
         self.add_recipe_serializer(name, "minecraft:crafting", handler);
     }
 }
-/// Startup operations for registered crafting kinds.
+/// Startup operations for crafting and read-only recipe serializers.
 pub trait RecipeSerializersRegistrar {
-    /// Register one owner, or refuse a value without Wire support.
+    /// Register the engine's native serializer owner for a recipe type.
+    /// Mods use `register_crafting_recipe_serializer` or `register_read_only_recipe_serializer`
+    /// on `dyn Registrar` to supply a typed implementation.
     fn add_recipe_serializer(
         &mut self,
         name: &str,
         recipe_type: &str,
-        handler: Option<Arc<dyn CraftingRecipeHandler>>,
+        handler: RegisteredRecipeSerializer,
     );
     /// Declare a namespaced read-only recipe type.
     fn register_recipe_type(&mut self, name: &str);
-}
-/// Resolve an installed owner without scanning mods.
-pub(crate) fn installed_crafting_recipe(name: &str) -> Option<Arc<dyn CraftingRecipeHandler>> {
-    let (owner, recipe_type, handler) = installed()?.keys.recipe_serializers.get(name)?;
-    if recipe_type != "minecraft:crafting" {
-        return None;
-    }
-    crate::mod_index_on(*owner).then(|| handler.clone())
 }
 
 /// Enumerate enabled kinds at the cold synchronization boundary, including empty kinds.
@@ -252,7 +249,7 @@ pub(crate) fn installed_crafting_recipe_kinds() -> Vec<String> {
 /// Resolve a serializer and its separately registered recipe type.
 pub(crate) fn installed_recipe_serializer(
     name: &str,
-) -> Option<(String, Arc<dyn CraftingRecipeHandler>)> {
+) -> Option<(String, RegisteredRecipeSerializer)> {
     let (owner, recipe_type, handler) = installed()?.keys.recipe_serializers.get(name)?;
     (crate::mod_index_on(*owner)
         && (recipe_type == "minecraft:crafting"
@@ -263,11 +260,8 @@ pub(crate) fn installed_recipe_serializer(
     .then(|| (recipe_type.clone(), handler.clone()))
 }
 
-pub(super) fn typed_handler<K: CraftingRecipeKind>(
-    kind: K,
-) -> Option<Arc<dyn CraftingRecipeHandler>> {
-    kind.codec()
-        .map(|codec| Arc::new(TypedKind { kind, codec }) as Arc<dyn CraftingRecipeHandler>)
+pub(super) fn typed_handler<K: CraftingRecipeKind>(kind: K) -> RegisteredRecipeSerializer {
+    RegisteredRecipeSerializer(Arc::new(kind))
 }
 
 pub(crate) fn installed_recipe_serializers() -> Vec<(String, String)> {

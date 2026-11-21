@@ -2223,7 +2223,7 @@ impl Game<'_> {
                             "join",
                             &g.name,
                             g.uuid,
-                            serde_json::json!({ "address": g.address.ip().to_string() }),
+                            serde_json::json!({ "address": g.ip_address() }),
                         );
                         let [x, y, z] = g.position;
                         super::dedicated::log(
@@ -2231,7 +2231,7 @@ impl Game<'_> {
                             &format!(
                                 "{}[/{}] logged in with entity id {} at ({}, {}, {})",
                                 g.name,
-                                g.address,
+                                g.address(),
                                 g.entity_id,
                                 sunrise_core::java_number::double_to_string(x),
                                 sunrise_core::java_number::double_to_string(y),
@@ -4761,17 +4761,21 @@ mod tests {
                 event: &mut EffectParticleModificationEvent<'_>,
             ) {
                 let id = event.entity.id();
-                let name = event.effect.id.id(host).to_string();
+                let name = event
+                    .effect
+                    .id
+                    .id(host)
+                    .expect("active effect is registered");
                 assert_eq!(event.visible, event.effect.visible);
                 ASKED.lock().unwrap().push((
                     id,
-                    name.clone(),
+                    name.to_owned(),
                     event.effect.amplifier,
                     event.original_particle.try_into_engine(&()).unwrap(),
                     event.particle.try_into_engine(&()).unwrap(),
                     event.visible,
                 ));
-                match name.as_str() {
+                match name {
                     "minecraft:speed" if id == ZOMBIE as u32 => {
                         *event.particle = Some(
                             ParticleOptions::simple(ParticleType::Flame)
@@ -4801,7 +4805,7 @@ mod tests {
                 host: &dyn Host,
                 event: &mut EffectParticleModificationEvent<'_>,
             ) {
-                if event.effect.id.id(host) == "minecraft:trial_omen" {
+                if event.effect.id.id(host) == Some("minecraft:trial_omen") {
                     assert_eq!(
                         *event.particle,
                         Some(

@@ -576,7 +576,7 @@ impl ConnWriter {
         if self.memory {
             out.extend_from_slice(&(contents.len() as u64).to_le_bytes());
         } else {
-            crate::buf::write_varint(out, contents.len() as i32);
+            ::sunrise_core::vanilla_bytes::write_varint(out, contents.len() as i32);
         }
         out.extend_from_slice(contents);
         if let Some(c) = &mut self.encrypt {

@@ -33,6 +33,7 @@ pub trait Hooks {
 - Cancelling, or removing every child, spawns none. The construction draws stay spent and the parent still dies. Listeners see the earlier listeners' edits.
 - Not fired for a parent of size 1, nor for a primed sulfur cube (it makes no children). With no listener the split runs exactly as vanilla and allocates nothing for the list."#]
     #[hook(
+        dispatch = "api_carrier",
         side = "server",
         version = 2,
         contract = "cancel",

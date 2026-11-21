@@ -108,6 +108,29 @@ impl crate::NoBackend for TeamError {
     }
 }
 
+/// Why a visit to a server team's members did not run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+// no wire: the refusal is returned by a scoped in-process visitor, not encoded.
+pub enum TeamMembersReadError {
+    /// The team's handle is from an earlier open, or the team was removed.
+    Stale,
+    /// The server scoreboard is not readable from this side or phase.
+    Unavailable,
+}
+
+impl crate::AccessRefusal for TeamMembersReadError {
+    fn unavailable() -> Self {
+        Self::Unavailable
+    }
+}
+
+impl crate::NoBackend for TeamMembersReadError {
+    fn no_backend() -> Self {
+        Self::Unavailable
+    }
+}
+
 /// A team as this client was sent it. Every team goes to every client, shown or not.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]

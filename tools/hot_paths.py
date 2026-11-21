@@ -90,8 +90,7 @@ def install(game, folder, fanout_count):
     return shutil.copy2(game, folder / 'sunrise-client')
 
 
-# The game wants a main-thread stack of 136 MiB and, finding less, raises the limit and starts itself again.
-# Under Valgrind that second start would not see the raised limit, so every run gets the stack up front.
+# Keep the benchmark's main-thread stack budget consistent across direct and Valgrind runs.
 STACK = 160 << 20
 
 
@@ -158,10 +157,12 @@ def parse_dump(text):
     return name, instructions, allocations
 
 
-def callgrind(valgrind, game, resources, work, mods, only):
+def callgrind(valgrind, game, resources, work, mods, only, *, separate_threads=False):
     """One process under Callgrind; returns {workload: (instructions, allocator calls)} and the lines."""
     prefix = [valgrind, '--tool=callgrind', f'--main-stacksize={STACK}', '--instr-atstart=no', '--dump-instr=no', '--collect-jumps=no',
               '--cache-sim=no', '--branch-sim=no', f'--callgrind-out-file={work}/callgrind.out']
+    if separate_threads:
+        prefix.append('--separate-threads=yes')
     rows = run_game(game, resources, work, mods, only, prefix)
     counted = {}
     for dump in sorted(work.glob('callgrind.out*')):

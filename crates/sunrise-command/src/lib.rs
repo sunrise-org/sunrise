@@ -28,6 +28,10 @@ pub use args::{
     MAX_PROVIDER_SUGGESTIONS, MAX_SUGGESTION_TEXT, MAX_SUGGESTION_TOOLTIP, ParsedArgument,
     Registries, modify_custom_completions,
 };
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicU64, Ordering},
+};
 use sunrise_client_core::text::Text;
 
 /// The command id of a mod's command (`Dispatcher::with_mod_commands`).
@@ -416,6 +420,21 @@ pub struct ParsedArg {
     pub value: Arg,
     pub range: Range,
 }
+/// Identifies an executor registration within one authoritative command tree.
+// no wire: the incarnation and slot identify code in this process only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExecutorKey {
+    incarnation: u64,
+    slot: usize,
+}
+
+impl ExecutorKey {
+    /// The registration slot, usable only while the dispatcher owns this key.
+    pub fn slot(self) -> usize {
+        self.slot
+    }
+}
+
 /// CommandContextBuilder: the nodes and arguments parsed so far.
 #[derive(Clone, Debug)]
 pub struct Context {
@@ -423,6 +442,8 @@ pub struct Context {
     pub nodes: Vec<(usize, Range)>,
     pub args: Vec<ParsedArg>,
     pub command: Option<&'static str>,
+    /// The authorized executable node's process-local registration, if any.
+    pub executor: Option<ExecutorKey>,
     pub range: Range,
     pub child: Option<Box<Context>>,
     /// Literal words parsed so far (mode keywords such as `masked`).
@@ -435,6 +456,7 @@ impl Context {
             nodes: Vec::new(),
             args: Vec::new(),
             command: None,
+            executor: None,
             range: (start, start),
             child: None,
             literals: Vec::new(),
@@ -837,10 +859,17 @@ impl Suggests {
 /// command nesting.
 const MAX_PARSE_DEPTH: usize = 128;
 
+#[derive(Clone, Debug)]
+struct ExecutorBindings {
+    incarnation: u64,
+    slots: HashMap<usize, usize>,
+}
+
 /// The command tree (CommandDispatcher). Node 0 is the root.
 #[derive(Clone, Debug)]
 pub struct Dispatcher {
     pub nodes: Vec<Node>,
+    executors: Option<ExecutorBindings>,
 }
 impl Default for Dispatcher {
     fn default() -> Self {
@@ -862,7 +891,23 @@ impl Dispatcher {
                 suggests: None,
                 restricted: false,
             }],
+            executors: None,
         }
+    }
+    /// After building the server tree, install its node-to-registration table under a fresh
+    /// incarnation. Clones preserve the keys, but another installation invalidates them.
+    pub fn replace_executor_bindings(&mut self, slots: HashMap<usize, usize>) {
+        static NEXT_INCARNATION: AtomicU64 = AtomicU64::new(0);
+        self.executors = (!slots.is_empty()).then(|| ExecutorBindings {
+            incarnation: NEXT_INCARNATION.fetch_add(1, Ordering::Relaxed),
+            slots,
+        });
+    }
+    /// Check the incarnation before using a parsed key or its node IDs with this tree.
+    pub fn owns_executor(&self, key: ExecutorKey) -> bool {
+        self.executors
+            .as_ref()
+            .is_some_and(|bindings| bindings.incarnation == key.incarnation)
     }
     /// This tree as a player without elevated permissions has it
     /// (ClientPacketListener.restrictedSuggestionsProvider): no restricted node.
@@ -1120,6 +1165,16 @@ impl Dispatcher {
             context.command = self.nodes[child]
                 .command
                 .filter(|_| self.nodes[child].execution_permission <= level);
+            context.executor = None;
+            if context.command.is_some()
+                && let Some(bindings) = &self.executors
+                && let Some(&slot) = bindings.slots.get(&child)
+            {
+                context.executor = Some(ExecutorKey {
+                    incarnation: bindings.incarnation,
+                    slot,
+                });
+            }
             let redirect = self.nodes[child].redirect;
             if reader.can_read_n(if redirect.is_none() { 2 } else { 1 }) {
                 reader.skip();

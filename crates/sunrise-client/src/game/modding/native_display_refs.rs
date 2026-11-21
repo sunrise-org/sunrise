@@ -749,7 +749,7 @@ mod tests {
             assert_eq!(block.block_state(game), Some(stone));
             assert!(block.set_block_state(game, stairs));
             assert_eq!(block.block_state(game), Some(stairs));
-            let invalid = mod_api::BlockStateRecord::new(stairs.block(), u16::MAX).into();
+            let invalid = mod_api::__private::block_state_from_ordinal(stairs.block(), u16::MAX);
             assert!(!block.set_block_state(game, invalid));
             assert_eq!(block.block_state(game), Some(stairs));
 

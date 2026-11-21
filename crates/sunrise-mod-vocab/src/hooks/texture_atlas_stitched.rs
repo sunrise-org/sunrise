@@ -9,10 +9,11 @@ pub trait Hooks {
     /// atlas: `texture_sprites` for [`TextureAtlas::Blocks`], `gui_sprite` for
     /// [`TextureAtlas::Gui`]. Never look them up by name every frame. Client-side.
     #[hook(
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         cancellable = false,
         neoforge = "TextureAtlasStitchedEvent"
     )]
-    fn texture_atlas_stitched();
+    fn texture_atlas_stitched(atlas: mod_api::TextureAtlas);
 }

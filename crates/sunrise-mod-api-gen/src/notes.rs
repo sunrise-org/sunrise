@@ -25,9 +25,9 @@ pub fn render(catalog: &Catalog) -> String {
     page
 }
 
-/// Reads the checkout's hook declarations and renders the page without resolving native targets.
+/// Reads the checkout's hook declarations and renders the page.
 pub fn generate(root: &Path) -> Result<String, String> {
-    let catalog = Catalog::load_declarations(root)?;
+    let catalog = Catalog::load(root)?;
     Ok(render(&catalog))
 }
 

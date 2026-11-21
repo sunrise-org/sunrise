@@ -9,18 +9,18 @@ pub trait Hooks {
     /// the maximum is bounded to 1–99 and the item limit. Refusal also prevents
     /// quick-move top-ups. Runs on server and client prediction with the read
     /// `Host`: it is a query, so it can neither write nor cancel. A click asks
-    /// once for each slot and stack it consults while it plans, and never again
-    /// when it validates or applies. Answer from the stack and the host alone,
-    /// and fast. On a LAN host's own click the LAN host is not reachable
-    /// through the `Host` (it answers as if no LAN were open).
+    /// while it plans and reuses an answer while the question and the staged
+    /// slots the part read still match. A changed grid can require another
+    /// ask in planning; validation and apply replay the recorded answers.
+    /// Answer quickly from the question and the read-only Host. On a LAN
+    /// host's own click the LAN host is not reachable through the `Host`
+    /// (it answers as if no LAN were open).
     /// `container` is the container `slot` indexes ([`MenuContainer`]): a mod
     /// crafting grid's slots are `Grid`'s and its result `Result`'s slot 0.
-    /// `context` says who and where the ask is about ([`MenuSlotContext`]):
-    /// the player whose menu it is, the menu's block entity and a read-only
-    /// copy of the menu's own containers' slots, keyed by the same container
-    /// (`context.slot(container, index)`), built once per click plan and
-    /// filled the same on the server and on the client's prediction. Parts that read `context.setting(..)` or `side()` have no
-    /// counterpart on the Host.
+    /// `context` lends the player, the menu's block position and the menu's
+    /// staged slots for this ask ([`MenuSlotContext`]). Read slots on demand
+    /// with `context.slot(container, index)`; player inventory slots are not
+    /// exposed there.
     /// A client without this mod predicts vanilla here; the server corrects it.
     ///
     /// `may_pickup` is `Slot.mayPickup`, answered only for a registered mod
@@ -45,16 +45,16 @@ pub trait Hooks {
     /// not asked; then the mods, in the order `may_place` is asked, one ask
     /// answering both. A shift-click a part answers with `menu_quick_move` is
     /// asked the pickup rule before that hook.
-    /// Parts that read `context.setting(..)` or `side()` have no counterpart
-    /// on the Host.
     #[hook(
+        receiver = "read",
+        dispatch = "api_carrier",
         side = "both",
         contract = "listen",
         scope = "menu",
         key = "menu",
         host = "read",
         cancellable = false,
-        version = 5,
+        version = 6,
         neoforge = "none (vanilla Slot.mayPlace and mayPickup; NeoForge adds no event or extension for it)"
     )]
     fn menu_slot_rules(
@@ -62,7 +62,7 @@ pub trait Hooks {
         slot: usize,
         container: MenuContainer,
         stack: &ItemStack,
-        context: &MenuSlotContext,
+        context: &MenuSlotContext<'_>,
         may_place: &mut bool,
         may_pickup: &mut bool,
         max_stack: &mut u32,

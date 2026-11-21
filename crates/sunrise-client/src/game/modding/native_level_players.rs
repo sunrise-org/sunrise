@@ -1,20 +1,22 @@
-//! The players of a level and of a chunk through `LevelRef::online_players` and
-//! `ChunkRef::watchers` (docs/modding/src/how-to/native-mods.md, "Entity and level
-//! handles"). Both name players by the same UUID enumeration the spawn code
-//! reads, and resolve each through `Host::player`, so a guest's turn names its
-//! player once and a player whose handle cannot resolve is left out.
+//! Level player visits and chunk/entity tracking queries. The level visit
+//! resolves UUIDs from the spawn code's player enumeration so a guest's turn
+//! names its player once, excluding anyone who cannot resolve.
 use super::Game;
-use mod_api::{ChunkRef, EntityRef, LevelRef, PlayerRef};
+use core::ops::ControlFlow;
+use mod_api::{ChunkRef, EntityRef, LevelReadError, LevelRef, PlayerRef};
 
 impl Game<'_> {
     /// `ServerLevel.players`: the online players of an open server level, each once.
-    pub(super) fn level_online_players(&self, level: LevelRef) -> Option<Vec<PlayerRef>> {
-        self.native_level_world(level)?;
-        Some(
-            self.level_player_uuids(level.dimension_id())
-                .filter_map(|uuid| self.player(uuid))
-                .collect(),
-        )
+    pub(super) fn level_visit_online_players(
+        &self,
+        level: LevelRef,
+        visit: &mut dyn FnMut(PlayerRef) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, LevelReadError> {
+        self.native_level_world_result(level)?;
+        Ok(self
+            .level_player_uuids(level.dimension_id())
+            .filter_map(|uuid| self.player(uuid))
+            .try_for_each(visit))
     }
 
     /// `ChunkMap.TrackedEntity.seenBy`: the players of the level in place whose tracker holds
@@ -58,7 +60,8 @@ mod tests {
         Dim,
         native_guest_turn_tests::{place_host, with_guests},
     };
-    use mod_api::{ChunkRef, LevelRef, PlayerRef, WorldEpoch};
+    use super::{ControlFlow, Game};
+    use mod_api::{ChunkRef, LevelReadError, LevelRef, PlayerRef, WorldEpoch};
 
     /// Open the Nether and go back, so it is a parked level of the server.
     fn park_the_nether(game: &mut super::Game<'_>) {
@@ -68,6 +71,18 @@ mod tests {
 
     fn uuids(players: Option<Vec<PlayerRef>>) -> Option<Vec<u128>> {
         players.map(|players| players.into_iter().map(PlayerRef::uuid).collect())
+    }
+
+    fn collect_online_players(game: &Game<'_>, level: LevelRef) -> Vec<(u128, u32)> {
+        let mut players = Vec::new();
+        assert_eq!(
+            level.visit_online_players(game, &mut |player| {
+                players.push((player.uuid(), player.entity().id()));
+                ControlFlow::Continue(())
+            }),
+            Ok(ControlFlow::Continue(()))
+        );
+        players
     }
 
     /// The host and two guests, each named once with their own entity, in and
@@ -80,22 +95,26 @@ mod tests {
             let _serving = super::super::integrated::tests::install_serving(game, false);
             place_host(game);
             let level = game.level(game.dim.id()).unwrap();
-            let players = level.online_players(game).unwrap();
             assert_eq!(
-                players
-                    .iter()
-                    .map(|p| (p.uuid(), p.entity().id()))
-                    .collect::<Vec<_>>(),
+                collect_online_players(game, level),
                 [(99, 99), (12, 12), (13, 13)]
             );
+            let mut first = Vec::new();
+            assert_eq!(
+                level.visit_online_players(game, &mut |player| {
+                    first.push(player.uuid());
+                    ControlFlow::Break(())
+                }),
+                Ok(ControlFlow::Break(()))
+            );
+            assert_eq!(first, [99]);
+
             game.as_guest(12, |game| {
-                assert_eq!(uuids(level.online_players(game)), Some(vec![12, 13]));
-                let acting = level.online_players(game).unwrap()[0];
-                assert_eq!(acting.entity().id(), 12, "the guest's own entity");
+                assert_eq!(collect_online_players(game, level), [(12, 12), (13, 13)]);
                 game.as_guest(13, |game| {
                     assert_eq!(
-                        uuids(level.online_players(game)),
-                        Some(vec![13]),
+                        collect_online_players(game, level),
+                        [(13, 13)],
                         "the outer guest is displaced and cannot resolve"
                     );
                 })
@@ -104,17 +123,29 @@ mod tests {
             .unwrap();
 
             let nether = game.level("minecraft:the_nether").unwrap();
-            assert_eq!(uuids(nether.online_players(game)), Some(vec![]));
+            let mut unexpected_visits = 0;
+            let mut count = |_| {
+                unexpected_visits += 1;
+                ControlFlow::Continue(())
+            };
+            assert_eq!(
+                nether.visit_online_players(game, &mut count),
+                Ok(ControlFlow::Continue(()))
+            );
             let host = game.lan.as_mut().unwrap();
             let moved = host.hub.guests.connection_index(13).unwrap();
             host.hub.guests.update(moved, |guest| {
                 guest.dimension = "minecraft:the_nether".to_owned();
             });
-            assert_eq!(uuids(level.online_players(game)), Some(vec![99, 12]));
-            assert_eq!(uuids(nether.online_players(game)), Some(vec![13]));
+            assert_eq!(collect_online_players(game, level), [(99, 99), (12, 12)]);
+            assert_eq!(collect_online_players(game, nether), [(13, 13)]);
 
             let stale = LevelRef::new(WorldEpoch::new(level.epoch().get() + 1), level.dimension());
-            assert_eq!(stale.online_players(game), None);
+            assert_eq!(
+                stale.visit_online_players(game, &mut count),
+                Err(LevelReadError::Stale)
+            );
+            assert_eq!(unexpected_visits, 0);
         });
     }
 
@@ -127,7 +158,10 @@ mod tests {
             game.next_entity = 100;
             let level = game.level(game.dim.id()).unwrap();
             let fake = game.fake_player(level, 1234, "machine").unwrap();
-            assert_eq!(uuids(level.online_players(game)), Some(vec![99, 12, 13]));
+            assert_eq!(
+                collect_online_players(game, level),
+                [(99, 99), (12, 12), (13, 13)]
+            );
             let conn = game
                 .lan
                 .as_ref()
@@ -139,7 +173,7 @@ mod tests {
                 .unwrap()
                 .conn;
             game.as_guest(conn, |game| {
-                assert_eq!(uuids(level.online_players(game)), Some(vec![12, 13]));
+                assert_eq!(collect_online_players(game, level), [(12, 12), (13, 13)]);
             })
             .unwrap();
         });

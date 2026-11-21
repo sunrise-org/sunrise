@@ -1,11 +1,11 @@
 //! Canonical values to the pinned stream codec, with explicit registry lookup.
 use super::{Ids, builtin_component_id, component_name, is_native_component};
 use crate::item::{Component, Stack};
-use crate::{
-    Error, Result,
-    buf::{Reader, Writer},
+use crate::{Error, Result, buf::Reader};
+use sunrise_core::{
+    nbt::{self, Tag},
+    vanilla_bytes::Writer,
 };
-use sunrise_core::nbt::{self, Tag};
 use sunrise_world::component_value::{Template, Value, effective_patch};
 
 fn err(s: impl Into<String>) -> Error {

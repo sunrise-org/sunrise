@@ -180,8 +180,10 @@ even if the hook is refused afterwards. A native mod that calls a method in a ph
   hook that answers an `Option`, and the type's default (`false`, an empty list, `()`) for any other. A hook that
   isolates its listeners (`entity_move`) disables the refused listener for the session, and a retained callback
   (loot types, payload handlers, selectors, command argument types) is refused for that call only.
-- A method that returns `Result<_, LevelReadError>` or `Result<_, LevelWriteError>` does not unwind: it returns
-  `Err(Unavailable)` and the mod goes on.
+- A method with a typed phase refusal (for example, one returning `Result<_, LevelReadError>`,
+  `Result<_, LevelWriteError>`, or `Result<_, TeamMembersReadError>`) returns its `Err(Unavailable)`
+  instead of unwinding, and the mod goes on.
+  `LevelRef::with_random` returns `None` without calling your closure when world access is unavailable.
 
 **The limit:** if the thread is already unwinding when the call is refused (a mod's `Drop` that calls the Host while
 another panic unwinds), the game logs the same line and panics, and a panic during an unwind aborts the process.

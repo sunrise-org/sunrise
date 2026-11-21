@@ -20,6 +20,8 @@ pub trait Hooks {
     /// block subscription lookup before event conversion. Diverges from upstream: new hook.
     /// A client without this mod predicts vanilla here; the server corrects it.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "both",
         version = 2,
         contract = "collect",
@@ -29,5 +31,5 @@ pub trait Hooks {
         host = "read",
         neoforge = "IBlockExtension.getEnchantPowerBonus, IBlockStateExtension.getEnchantPowerBonus"
     )]
-    fn enchant_power_bonus();
+    fn enchant_power_bonus(state: BlockState, pos: BlockPos, table_pos: BlockPos, power: &mut f32);
 }

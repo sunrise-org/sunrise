@@ -65,7 +65,7 @@ fn hit(game: &mut Game<'_>, shot: &Projectile, amount: f32) -> bool {
 #[test]
 #[ignore = "daily"]
 fn death_weapon_immune_crossbow_cannot_replace_accepted_crossbow() {
-    crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
+    crate::game::native_entity_refs::tests::run_with_game_stack(|| {
         if isolated() {
             return;
         }
@@ -102,7 +102,7 @@ fn death_weapon_immune_crossbow_cannot_replace_accepted_crossbow() {
 #[test]
 #[ignore = "daily"]
 fn death_weapon_refused_crossbow_cannot_replace_accepted_longbow() {
-    crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
+    crate::game::native_entity_refs::tests::run_with_game_stack(|| {
         if isolated() {
             return;
         }
@@ -163,7 +163,7 @@ fn player(game: &mut Game<'_>) {
 #[test]
 #[ignore = "daily"]
 fn death_weapon_riptide_iii_uses_spin_trident() {
-    crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
+    crate::game::native_entity_refs::tests::run_with_game_stack(|| {
         if isolated() {
             return;
         }
@@ -300,7 +300,7 @@ fn death_weapon_removal_clears_capture_and_vehicle_transfer_keeps_its_owner() {
 #[test]
 #[ignore = "daily"]
 fn death_weapon_same_tick_stronger_arrow_replaces_weapon() {
-    crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
+    crate::game::native_entity_refs::tests::run_with_game_stack(|| {
         if isolated() {
             return;
         }

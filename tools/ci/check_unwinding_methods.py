@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The list of gated Host methods that can only refuse by unwinding only shrinks (#3123).
 
-crates/sunrise-mod-api-gen/unwinding-methods.txt names each `#[access]` method whose return type has no
-refusal-shaped `Result`. The generator refuses a method missing from it and a line that no longer applies; this
+crates/sunrise-mod-api-gen/unwinding-methods.txt names each `#[access]` method without a typed refusal or
+optional callback. The generator refuses a method missing from it and a line that no longer applies; this
 refuses a line added since the base, so the list cannot be grown to admit a new method. A base that cannot be
 read is an error, never a new list.
 

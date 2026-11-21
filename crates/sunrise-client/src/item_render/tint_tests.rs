@@ -7,6 +7,7 @@ use sunrise_assets::{
 
 /// Red for one, green for two, the entry's own `default` for more.
 struct Charge;
+impl ItemDrawEnv for Charge {}
 impl ItemEnv for Charge {
     fn item_tint_source(
         &self,
@@ -136,6 +137,7 @@ fn a_registered_source_tints_each_stack_in_hand_and_in_the_inventory() {
 
 /// The host's answer for `tintdraw:gas`, and for no fluid at all.
 struct Gas(Option<&'static str>);
+impl ItemDrawEnv for Gas {}
 impl ItemEnv for Gas {
     fn stack_fluid(&self, _stack: &StackView) -> Option<&str> {
         self.0

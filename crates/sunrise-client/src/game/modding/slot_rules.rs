@@ -30,37 +30,10 @@ impl SlotRules for Game<'_> {
         let Ok(stack) = stack.try_into_api() else {
             return;
         };
-        // The menu's own containers, read only, keyed by `MenuContainer`; a stack that cannot
-        // cross shows empty. Built once per click plan (the context's snapshot), and only here,
-        // where a part listens.
-        let build = || {
-            let copy = |slots: &[Option<ItemStack>]| -> Vec<Option<mod_api::ItemStack>> {
-                slots
-                    .iter()
-                    .map(|slot| slot.as_ref().and_then(|stack| stack.try_into_api().ok()))
-                    .collect()
-            };
-            let mut main = copy(context.slots);
-            if let Some(crafting) = context.main_crafting {
-                for (index, slot) in main.iter_mut().enumerate() {
-                    if crafting.grid_slots().contains(&index) || index == crafting.result {
-                        *slot = None;
-                    }
-                }
-            }
-            let slots = vec![main, copy(context.grid), copy(context.result)];
-            mod_api::MenuSlotContext::new(context.player, context.pos, slots)
-        };
-        // A plan's copy made for another player or block (an env changed without a mutation)
-        // is not theirs: that ask copies its own.
-        let owned;
-        let snapshot = match context.snapshot.map(|cell| cell.get_or_init(build)) {
-            Some(shared) if (shared.player, shared.pos) == (context.player, context.pos) => shared,
-            _ => {
-                owned = build();
-                &owned
-            }
-        };
+        // Lend the staged menu slots. Convert only what the part reads; a stack that cannot
+        // cross the API boundary shows empty, as an absent slot does.
+        let read = |container, index| context.slot(container, index)?.try_into_api().ok();
+        let view = mod_api::MenuSlotContext::new(context.player, context.pos, &read);
         // A listener that panics is a failed ask, not a failed click: the slot's own answers
         // stand (the dispatch writes nothing back from a failed pass), the failure is logged by
         // name, and the click goes on. The next ask, and the next click, are asked as ever.
@@ -75,7 +48,7 @@ impl SlotRules for Game<'_> {
                         slot,
                         container: context.container,
                         stack: &stack,
-                        context: snapshot,
+                        context: &view,
                         may_place: &mut place,
                         may_pickup: &mut pickup,
                         max_stack: &mut maximum,

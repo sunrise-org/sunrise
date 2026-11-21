@@ -14,7 +14,8 @@ A mod can ask which kind of process it runs in and which game it runs on, before
 | `game_tests_enabled()` | Whether the process runs with game tests on |
 
 `dist()` names the process, not the logical side of the hook that is running: a hook on the integrated server of a
-client process still sees `Dist::Client`.
+client process still sees `Dist::Client`. `Dist` and `RuntimeEnvironment` are local reads, not Wire values. If a
+protocol needs a process fact, copy that fact into a record defined by the protocol.
 
 ## From a host
 

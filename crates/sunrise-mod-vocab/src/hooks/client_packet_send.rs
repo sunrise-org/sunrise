@@ -14,6 +14,8 @@ pub trait Hooks {
     /// Play-phase pongs pass through this hook; return `Flow::Cancel` to drop a packet.
     /// Beyond NeoForge: there is no counterpart. Diverges from upstream: new hook.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "cancel",
         out = "canceled",
@@ -21,5 +23,5 @@ pub trait Hooks {
         version = 2,
         neoforge = "none (NeoForge has no raw play-packet send event)"
     )]
-    fn client_packet_send();
+    fn client_packet_send(packet: &ClientPacket, canceled: &mut bool);
 }

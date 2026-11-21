@@ -9,10 +9,17 @@ pub trait Hooks {
     /// those stacks are not returned or dropped as entities by the game. A listener can use
     /// the Host to return them or update the opening item if the player is still available.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_menu_closed",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         version = 2,
         neoforge = "PlayerContainerEvent.Close"
     )]
-    fn menu_closed();
+    fn menu_closed(
+        uuid: u128,
+        window: i32,
+        opening_hand: Option<Hand>,
+        owned_slots: &[Option<mod_api::ItemStack>],
+    );
 }

@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 #[doc(hidden)]
 #[non_exhaustive]
 pub struct ChunkDiskJob {
-    context: ChunkDiskContextWire,
+    context: ChunkDiskContext,
     captured: Compound,
     completed: OnceLock<Result<Compound, ChunkDiskFailure>>,
     #[cfg(any(test, feature = "testing"))]
@@ -21,7 +21,7 @@ pub struct ChunkDiskJob {
 impl ChunkDiskJob {
     /// Capture encoded state only when the phase has a subscriber. The empty
     /// route does not clone the identity or store, allocate, or invoke a codec.
-    pub fn capture(context: &ChunkDiskContextWire, store: &Attachments) -> Option<Self> {
+    pub fn capture(context: &ChunkDiskContext, store: &Attachments) -> Option<Self> {
         let hook = match context.phase {
             ChunkDiskPhase::Load => HookId::ChunkDataLoad,
             ChunkDiskPhase::Save => HookId::ChunkDataSave,

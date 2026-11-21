@@ -16,8 +16,9 @@ use std::{
     },
 };
 use sunrise_core::nbt::{Compound, Tag};
+use sunrise_core::vanilla_bytes::Writer;
 use sunrise_protocol::{
-    buf::{BitSet, Codec, List, Writer, check_network_nbt, set_bit},
+    buf::{BitSet, Codec, List, check_network_nbt, set_bit},
     chunk::{
         BIOMES, BLOCKS, BlockEntityInfo, ChunkData, Heightmaps, LightData, Paletted, Strategy,
     },
@@ -233,7 +234,7 @@ impl SectionCoder {
     /// LevelChunkSection.write, and its block entity blocks.
     fn wire(&self, section: &Section) -> (Arc<[u8]>, Entities) {
         let (encoded, entities) = self.section(section);
-        let mut w = sunrise_protocol::buf::Writer::new();
+        let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
         encoded.write(&mut w);
         (w.data.into(), entities.into())
     }
@@ -2152,7 +2153,7 @@ mod tests {
 
     /// The bytes on the wire for a section, encoded afresh.
     fn fresh(encoder: &ChunkEncoder, section: &Section) -> Vec<u8> {
-        let mut w = sunrise_protocol::buf::Writer::new();
+        let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
         encoder.coder.section(section).0.write(&mut w);
         w.data
     }

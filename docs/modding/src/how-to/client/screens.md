@@ -49,6 +49,57 @@ the sign's block position and whether its front side is being edited. It returns
 editor open, or outside a world. A close of the sign editor always sends the sign update, however it
 closes; there is no close that skips it, because the vanilla client never omits that packet.
 
+## Drawing a dimension transition
+
+In `Hooks::register_dimension_transition_screen`, push a `DimensionTransitionScreen` for
+each trip you want to cover. Each mod receives an empty batch at client startup.
+`Conditional { to, from }` wins over `Incoming(to)`, then `Outgoing(from)`. The first valid
+registration for each key wins. Use a namespaced, non-`minecraft` screen ID for diagnostics;
+nothing looks it up during drawing.
+
+```rust,ignore
+use mod_api::{
+    ClientHost, DimensionTransition, DimensionTransitionReason, DimensionTransitionScreen,
+    DrawContext, RegisterDimensionTransitionScreenEvent, RegistrationContext,
+};
+
+fn register_dimension_transition_screen(
+    &self,
+    _context: &RegistrationContext,
+    event: &mut RegisterDimensionTransitionScreenEvent<'_>,
+) {
+    event.screens.push(DimensionTransitionScreen::new(
+        "example:arrival".into(),
+        DimensionTransition::Incoming("example:moon".into()),
+        |_, initial_reason| {
+            // Chosen once when the screen opens, not when the tracker restarts.
+            let backdrop = match initial_reason {
+                DimensionTransitionReason::NetherPortal => 0xFF301010,
+                _ => 0xFF101030,
+            };
+            Box::new(
+                move |_: &dyn ClientHost, _reason, progress, draw: &mut dyn DrawContext| {
+                    let [w, h] = draw.size();
+                    draw.fill([0.0, 0.0, w, h], backdrop);
+                    if let Some(progress) = progress {
+                        draw.fill([0.0, h - 8.0, w * progress, 8.0], 0xFF6060FF);
+                    }
+                },
+            )
+        },
+    ));
+}
+```
+
+The client calls the matching factory once when it opens a new loading screen for travel.
+The returned `Box<dyn DimensionTransitionPresentation>` can hold a closure, as above, or an
+object implementing the trait. It draws the entire screen under its registering mod's identity.
+Its `reason` and optional smoothed integrated-server `progress` are current each frame.
+If another load starts while the screen is open, the same presentation stays in place,
+even if the reason changes. The tracker still decides when the screen closes. Login and death
+respawn do not look up dimension keys; like unmatched travel, they use vanilla when opening
+a new loading screen.
+
 ## Reading open trades
 
 From a client hook in the world, get the menu from `host.local_player()` and
@@ -71,24 +122,33 @@ an offer, buy anything, or send packets; the server still decides every trade.
 
 ## Frame coordinates
 
-`screen_draw` version 4 and `screen_tooltip` version 3 carry `pointer: [i32; 2]`
-and `gui_size: [i32; 2]`, the current frame's absolute pointer and window size
-in scaled GUI pixels. Pointer components truncate toward zero, including outside
-the panel. Both carry `origin: [f32; 2]`, the panel's top-left; tooltip `at`
-remains relative to that origin. Use these values for hover regions and layout:
-they reflect this frame's resize and panel positioning, not a cached window size.
+A [registered menu screen factory](../world/machine-menu-data.md#the-menus-screen)
+gives one opening its own callbacks. Use `with_draw(|host, frame, draw| ...)`,
+`with_click(|host, frame, right| ...)`, or
+`with_tooltip(|host, frame, slot, lines| ...)` on the returned `MenuScreen`.
+Each callback receives a `MenuScreenFrame`. Its `pointer: [i32; 2]` and `gui_size: [i32; 2]`
+are the current absolute pointer and window size in scaled GUI pixels. The absolute
+pointer truncates toward zero, including outside the panel. `origin: [f32; 2]`
+is the panel's top-left; `at: [f32; 2]` is the pointer relative to that origin,
+without truncation. Use these values for hover regions and layout after a resize
+or panel move. `frame.data` borrows the current menu's live data slots, which may
+not have arrived yet. Use `frame.data.get(index)`: a block-backed menu sends
+signed-short values at indices 0 through 32,767, and the negotiated blockless
+revision-2 payload sends `i32` values at indices 0 through 65,535, both in snapshots and in deltas.
+Higher indices stay on the server. Live data is not the opening payload: decode `open.extra` in the
+factory and capture only the owned values the callbacks need.
 
 To draw a sprite from synchronized menu data, see
 [Draw a progress bar and a fuel gauge](menu-gauges.md).
 
 ## Replacing a mod container slot's tooltip
 
-`MenuPart::screen_tooltip` runs for a hovered filled slot as well
-as an empty slot or screen space. `event.slot` is the **menu index**, including
+A screen callback installed with `MenuScreen::with_tooltip` runs for a hovered filled slot as well
+as an empty slot or screen space. `slot` is the **menu index**, including
 the player inventory, or `None` outside a mapped slot. It is not the engine's
-internal slot encoding. `event.at` remains GUI pixels from the screen's origin.
+internal slot encoding. `frame.at` gives GUI pixels from the screen's origin.
 
-On a filled slot, `event.lines` starts as the item's tooltip after item tooltip
+On a filled slot, `lines` starts as the item's tooltip after item tooltip
 hooks. Edit, replace or clear those lines: the final list replaces the screen's
 `getTooltipFromContainerItem` result before the stack's tooltip image and
 `RenderTooltipEvent.GatherComponents`. Empty slots and screen space start with
@@ -103,10 +163,12 @@ over the screen override.
 
 ## Moving or hiding a mod screen's slots
 
-A mod screen declares where each slot sits in `Screen::slots`. A screen whose layout changes while it is
-open (tabs, a collapsing panel, a scrolling slot grid, Tinkers' station laying its inputs out for the tool
-being built) moves or hides a slot afterwards with `ClientHost::set_screen_slot`, as a Java screen sets
-`Slot.x`/`Slot.y` or deactivates a slot:
+The [menu screen factory](../world/machine-menu-data.md#the-menus-screen) puts geometry in
+`MenuScreenLayout::slots` at the original backing indices. Only
+[permanent exclusions](../world/machine-menu-data.md#opening-a-stock-menu-from-a-mod-block)
+may be `None` or omitted from the end of the list. A layout that changes while open (tabs,
+a collapsing panel or a scrolling slot grid) moves or hides slots afterwards with
+`ClientHost::set_screen_slot`, as a Java screen sets `Slot.x`/`Slot.y` or deactivates a slot:
 
 ```rust,ignore
 const MENU: &str = "mymod:station";
@@ -114,21 +176,23 @@ const MENU: &str = "mymod:station";
 host.set_screen_slot(MENU, 3, Some([62.0, 18.0]))?;
 // This layout doesn't use slot 4.
 host.set_screen_slot(MENU, 4, None)?;
+// Show it again on another tab with set_screen_slot(MENU, 4, Some([x, y])).
 // Where slot 3 is from the next frame.
 assert_eq!(host.screen_slot(MENU, 3), Some([62.0, 18.0]));
 ```
 
 `menu` is the menu type whose screen is open, so a call made for another screen refuses, as does one from a mod
-that does not own the open screen. A screen with a registered recipe-book layout belongs to the mod that
-registered it, which moves its slots with or without a screen part; any other screen belongs to the mod whose
-screen part lays it out (several mods' blocks can open one vanilla menu type, each with its own mod's screen).
+that does not own the open screen. The mod whose factory built it can move its slots. A menu with
+a bound recipe book takes its factory from the mod that bound the book; several mods' blocks can open
+one vanilla menu type, each with its own mod's screen.
 `slot` is the index into
-`Screen::slots`. A position is GUI pixels from the screen's top-left corner and names the item's top-left
-corner, as in `Screen::slots`; `None` hides the slot. The call takes `&self`, so a screen hook such as
-`screen_render_post` can move slots every frame; a call that repeats a slot's current place changes nothing and
-costs no layout work. The change lasts until the screen closes, and the next screen opens with its declared
-layout. `ClientHost::screen_slot(menu, slot)` reads where a slot will be from the next frame, `None` when it is
-hidden.
+`MenuScreenLayout::slots`. A position is GUI pixels from the screen's top-left corner and names the item's top-left
+corner, as in `MenuScreenLayout::slots`; `None` hides the slot. The call takes `&self`, so the menu's
+`MenuScreen::with_draw` callback can move slots for the next frame. Repeating a slot's current place
+changes nothing and costs no layout work. The change lasts for that opening. A replacement starts from
+its declared layout, even when the server reuses the same window ID without a close packet.
+`ClientHost::screen_slot(menu, slot)` reads where a slot will be from the next frame, `None` when it
+is hidden.
 
 From the next frame a moved slot is a vanilla slot at that position, which is what the screen reads live:
 
@@ -144,18 +208,18 @@ or a hide never touches the recipe book: a bound book keeps its catalogue and it
 position outside the image is allowed and is not clamped, and a slot there takes the click instead of making it a
 click outside the screen.
 
-The call is client-side only: nothing is sent, and the server's menu never learns a position. It keeps every slot,
-so a hidden slot keeps its item and a shift-click may still fill it, as a deactivated Java slot does. A slot the
-screen hid in `Screen::slots` when it opened is not in the server's menu, so it can't be shown: declare the most
-slots any layout shows, and hide the ones a layout doesn't use.
+The call is client-side only: nothing is sent, and the server's slot exclusions never change. A locally hidden
+slot keeps its item and a shift-click may still fill it, as a deactivated Java slot does. A permanently
+excluded slot cannot be shown: give every slot that any local layout uses a position at open, then hide the
+ones the current local layout doesn't use.
 
 Each refusal changes nothing and is named by `ScreenSlotRefusal`:
 
 | Refusal | When |
 |---|---|
-| `NoScreen` | No mod screen is open, or the open one is another menu type's |
-| `NoSuchSlot` | `slot` is past the end of `Screen::slots` |
-| `HiddenAtOpen` | A position for a slot `Screen::slots` hid when the screen opened |
+| `NoScreen` | No mod screen is shown, or the shown one belongs to another menu type or mod |
+| `NoSuchSlot` | `slot` is outside the menu's container backing |
+| `HiddenAtOpen` | A position for a permanently excluded slot |
 | `BadPosition` | An `x` or `y` that is NaN or infinite |
 | `Unavailable` | No game backend: screens are the client's |
 
@@ -164,17 +228,17 @@ It moves only the slots a mod screen declares; the player's inventory stays unde
 
 ## Mod container title and inventory labels
 
-`Screen::title_label` and `Screen::inventory_label` optionally place those two labels,
+`MenuScreenLayout::title_label` and `MenuScreenLayout::inventory_label` optionally place those two labels,
 independently of slot positions. `Some([x, y])` is relative to the screen image's
 top-left corner, in GUI pixels. `None` uses vanilla's defaults: title `[8, 6]` and
 inventory `[8, height - 94]`. Moving `inventory_x` or `inventory_y` moves slots,
 not labels. `own_labels: true` suppresses both engine labels even when positions
-are supplied; draw them yourself from `screen_draw` instead.
+are supplied; draw them in the callback you install with `MenuScreen::with_draw`.
 
 The default inventory label is at y 72 for a standard 166-high screen and y 39
 for a 133-high hopper layout. Chest layouts use `height - 94`; a shulker box's
 167-high image places it at y 73.
-When building a complete `Screen` literal, include `title_label: None` and
+When building a complete `MenuScreenLayout` literal, include `title_label: None` and
 `inventory_label: None`, or use `..Default::default()`.
 
 ## Buttons with your own art
@@ -210,7 +274,7 @@ A label is text laid out in a box: measured, wrapped and placed, and nothing els
 scale the label is drawn at, and draw the lines it answers with where it says:
 
 ```rust
-// From screen_render_post, gui_render_post or another drawing hook.
+// From a menu screen draw callback, gui_render_post or another drawing hook.
 let scale = 2.0;
 let lines = draw.text_lines(&label, 120.0, TextAlign::Centre, scale)?;
 let mut draws = Vec::with_capacity(lines.lines.len() + 2);
@@ -264,14 +328,15 @@ three axes and its mirror under a pose it built itself.
 // 30 degrees about the viewer's axis, as a row-major 3x4 matrix.
 let (s, c) = 30f32.to_radians().sin_cos();
 let turn = [c, -s, 0.0, 0.0, s, c, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-draw.model_3d(Gui3dSubject::Item(wand), Gui3dView::new([60.0, 80.0], 64.0, turn))?;
+draw.model_3d(Gui3dSubject::Item(&wand), Gui3dView::new([60.0, 80.0], 64.0, turn))?;
 draw.model_3d(Gui3dSubject::Model(self.mirror), Gui3dView::new([120.0, 60.0], 40.0, IDENTITY_TRANSFORM))?;
 ```
 
-- `Gui3dSubject::Item(stack)` is the item as a slot draws it, without its count, damage bar or
-  cooldown: its model's `gui` display transform first, then `view.transform`, lit with the GUI
-  light that model asks for. `Gui3dSubject::Model(model)` is a handle from `RenderAssets::model`,
-  its 0 to 1 cube drawn about its centre, full bright and shaded by face as a scene's blocks are.
+- `Gui3dSubject::Item(&stack)` borrows the stack for the call, leaving it available for another
+  draw. The item looks as it does in a slot, without its count, damage bar or cooldown: its model's
+  `gui` display transform comes first, then `view.transform`, with the GUI light the model asks
+  for. `Gui3dSubject::Model(model)` still takes a handle from `RenderAssets::model` by value. Its
+  0 to 1 cube is drawn about its centre, full bright and shaded by face as a scene's blocks are.
 - `Gui3dView { at, size, transform }`: `at` is where the subject's centre goes, in GUI pixels,
   and `size` the pixels per block (an item is a slot's size when `size` is 16). `transform` is a
   row-major 3x4 affine matrix applied about the centre in the frame `x` right, `y` up, `z`

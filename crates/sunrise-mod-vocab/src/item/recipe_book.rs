@@ -21,10 +21,11 @@ pub mod settings;
 use crate::*;
 pub use display::{RecipeBookDisplay, RecipeBookDisplayEntry, RecipeSlotDisplay};
 pub use settings::{RecipeBookIdentity, RecipeBookSettings};
-/// A mod's book category and displays for one custom recipe type.
+// no wire: the category contains native placement declarations, not the remote book projection.
+/// A mod's book category and displays for one custom recipe type. The local
+/// declarations can include placement predicates and are not a network payload.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct RecipeBookCategory {
     /// A namespaced category id outside `minecraft:`.
     pub id: String,

@@ -16,10 +16,8 @@ use {
     sunrise_mod_runtime::attachments::{AttachmentSync, Holder},
 };
 
-use crate::{
-    Error, Result,
-    buf::{Reader, Writer},
-};
+use crate::{Error, Result, buf::Reader};
+use sunrise_core::vanilla_bytes::Writer;
 
 /// The custom payload channel, clientbound only: a client sends nothing back.
 pub const CHANNEL: &str = "sunrise:attachment_sync";

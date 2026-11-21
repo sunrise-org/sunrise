@@ -125,12 +125,13 @@ Top-level `[properties]` holds free-form values other mods read: strings, intege
 at most 64 keys and 8 KiB (keys and strings by length, 8 bytes per number, 1 per boolean); a table, an array
 or a larger table refuses the package. A mod reads any loaded package's manifest through
 `context.mods().get(id)`: `PackageInfo` gives `name`, `description`, `authors`, `license`, `homepage`,
-`issues`, `icon_path`, `runtime` (`Native` or `None` for content), `dependencies` and
-`property(key)`. Each readonly `PackageDependency` exposes `id()`, `version()`, `kind()`,
-`order()`, `side()`, `reason()` and `url()`. `DependencyKind` is `Required`, `Optional`,
-`Incompatible`, `Discouraged` or `LoadBefore`; `DependencyOrder` is `After`, `Before` or `None`.
-These are all original declarations, including inactive sides, not the effective override-rewritten
-graph. `LoadBefore` is ordering-only: its version `*` is a marker, order is `Before` and side
+`issues`, `icon_path`, `kind`, `dependencies` and `property(key)`. Each read-only `PackageDependency`
+exposes `id()`, `version()`, `kind()`, `order()`, `side()`, `reason()` and `url()`. `DependencyKind`
+is `Required`, `Optional`, `Incompatible`, `Discouraged` or `LoadBefore`; `DependencyOrder` is `After`,
+`Before` or `None` and still reads and writes the lowercase manifest strings through Serde. The package
+metadata has no Wire encoding of its own. To send a fact from it, copy just the fields your protocol needs
+into your own Wire record. The declarations include inactive sides and do not reflect the effective
+override-rewritten graph. `LoadBefore` is ordering-only: its version `*` is a marker, order is `Before` and side
 is `Both`, not an API library declaration. The metadata is the same on client and server (NeoForge's
 `ModContainer.getModInfo`, `IModInfo` and `getModProperties`).
 

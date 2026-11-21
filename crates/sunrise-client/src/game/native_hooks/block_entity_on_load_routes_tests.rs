@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use crate::game::remote::RemoteDimensionEntry;
     use crate::game::{
         Game,
         native_entity_refs::tests::{run_fresh_cases, with_game_role},
@@ -29,7 +30,7 @@ mod tests {
         fn block_entity_ticks(&self, _: &dyn Host, event: &mut BlockEntityTicksEvent<'_>) {
             event.ticks = true;
         }
-        fn block_entity_tick(&self, _: &mut dyn ServerHost, _: &mut BlockEntityTickEvent<'_>) {
+        fn block_entity_tick(&self, _: &mut BlockEntityTickEvent<'_>) {
             self.log.lock().unwrap().push(("tick", -1));
         }
         fn block_entity_load_additional(
@@ -476,7 +477,7 @@ mod tests {
                         portal_cooldown: 0,
                         sea_level: 63,
                     },
-                    false,
+                    RemoteDimensionEntry::Login,
                     sunrise_client::level_loading::Reason::Other,
                 );
                 let remote = game.remote.as_mut().unwrap();

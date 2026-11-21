@@ -21,9 +21,9 @@ use crate::Identifier;
 /// ```compile_fail
 /// mod_vocab::ServerboundPlayPacket::chat_session_update();
 /// ```
+// no wire: the local submission envelope carries an already-encoded vanilla body.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct ServerboundPlayPacket {
     /// Packet type, for example `minecraft:pong` or `minecraft:custom_payload`.
     pub id: Identifier,
@@ -39,9 +39,9 @@ impl ServerboundPlayPacket {
 }
 
 /// Why the client could not submit a play packet.
+// no wire: returned locally by the client packet service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum SendPacketError {
     /// There is no server connection.
     NotConnected,
@@ -84,12 +84,13 @@ pub enum SendPacketError {
 }
 
 /// Opaque identity of one connection's packet hold.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
+// no wire: only the issuing connection's local hold table resolves this ID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: the private field prevents mods constructing or destructuring the id
 pub struct HoldId(pub(crate) u64);
 impl HoldId {
     /// Construct an identity for the game implementation.
-    // hidden: game-side identity construction, matching the other opaque Wire ids
+    // hidden: game-side identity construction
     #[doc(hidden)]
     pub fn new(value: u64) -> Self {
         Self(value)
@@ -97,7 +98,8 @@ impl HoldId {
 }
 
 /// Why a hold operation was refused.
-#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+// no wire: returned locally by packet-hold operations.
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HoldError {
     /// No joined client world is available.
@@ -127,9 +129,9 @@ impl crate::NoBackend for HoldError {
 }
 
 /// Why a client mod's `disconnect` was refused.
+// no wire: returned locally by the client disconnect operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum DisconnectError {
     /// No server or world is joined: there is nothing to leave.
     Unavailable,
@@ -147,52 +149,5 @@ impl crate::NoBackend for DisconnectError {
     /// No game: nothing is joined.
     fn no_backend() -> Self {
         Self::Unavailable
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::wire::{Reader, Writer};
-    #[test]
-    fn hold_errors_keep_literal_ordinals_and_partial_send_fields() {
-        for (error, ordinal) in [
-            (HoldError::NoWorld, 0u32),
-            (HoldError::Unknown, 1),
-            (
-                HoldError::Limit {
-                    packets: 256,
-                    bytes: 1_048_576,
-                },
-                2,
-            ),
-            (
-                HoldError::Send {
-                    sent: 1,
-                    error: SendPacketError::Backpressure,
-                },
-                3,
-            ),
-        ] {
-            let mut writer = Writer::new();
-            writer.put(&error);
-            assert_eq!(&writer.bytes()[..4], &ordinal.to_le_bytes());
-            assert_eq!(
-                Reader::new(writer.bytes()).take::<HoldError>().unwrap(),
-                error
-            );
-        }
-        let mut writer = Writer::new();
-        writer.put(&HoldError::Send {
-            sent: 1,
-            error: SendPacketError::Backpressure,
-        });
-        assert_eq!(
-            writer.bytes(),
-            &[3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0]
-        );
-        let mut writer = Writer::new();
-        writer.put(&HoldId::new(4178));
-        assert_eq!(writer.bytes(), &[82, 16, 0, 0, 0, 0, 0, 0]);
     }
 }

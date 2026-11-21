@@ -11,10 +11,12 @@ pub trait Hooks {
     /// `WorldOpenFailed` or `WorldCloseFailed`. Once for each
     /// `level_load`. Don't read its blocks. Server-side.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_level_unload",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "LevelEvent.Unload",
         cancellable = false
     )]
-    fn level_unload();
+    fn level_unload(dimension: &str);
 }

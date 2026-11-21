@@ -1,36 +1,34 @@
 //! Exercise the real local-player movement caller with and without a native listener.
 use super::*;
 use crate::game::native_entity_refs::tests::with_client_game;
-use mod_api::{ClientHost, Hooks, MovementInputEvent};
+use mod_api::{ClientHost, Hooks, MovementInputUpdateEvent};
 use sunrise_client::motion::PlayerMotion;
 use winit::keyboard::KeyCode;
 
 struct Native;
 #[mod_api::__subscriptions]
 impl Hooks for Native {
-    fn movement_input(&self, _: &dyn ClientHost, event: &mut MovementInputEvent) {
-        if event.right_key {
-            event.forward_key = true;
-            event.sprint = false;
-        } else if event.left_key {
-            if !(event.forward_key && event.backward_key) {
-                event.forward = -0.5;
-            }
-            event.strafe = 0.25;
-            event.jump = !event.jump;
-            event.sneak = !event.sneak;
-            event.sprint = true;
-        } else if event.backward_key {
-            event.forward_key = true;
-            event.left_key = true;
-            event.right_key = true;
-            // Direction-key edits must win over these conflicting axis edits.
-            event.forward = 0.25;
-            event.strafe = 0.5;
-            event.sprint = true;
-        } else {
-            event.forward_key = true;
-            event.sprint = true;
+    fn movement_input_update(&self, _: &dyn ClientHost, event: &mut MovementInputUpdateEvent<'_>) {
+        let input = &mut *event.input;
+        let keys = &mut input.key_presses;
+        if keys.right {
+            keys.forward = true;
+            keys.jump = false;
+        } else if keys.left {
+            input.move_vector = [0.25, -0.5];
+        } else if keys.backward {
+            keys.forward = true;
+            keys.left = true;
+            keys.right = true;
+            keys.sprint = true;
+            input.move_vector = [0.5, 0.25];
+        } else if keys.jump {
+            input.move_vector = [f32::MAX, 0.25];
+            keys.sneak = true;
+        } else if !keys.forward {
+            keys.forward = true;
+            keys.sprint = true;
+            input.move_vector = [0.0, 1.0];
         }
     }
 }
@@ -69,56 +67,30 @@ fn tick(game: &mut Game<'_>) {
     }
 }
 
-fn matrix(mods: mod_api::Mods) {
-    mod_platform::testing::with_mods(mods, || {
+#[test]
+#[ignore = "daily"]
+fn native_movement_input_keys_axes_and_sprint() {
+    let mods = vec![mod_api::ModEntry::new("movement", Box::new(Native))];
+    mod_platform::testing::with_mods(mods.into(), || {
         with_client_game(|game| {
             let server = connect(game);
-            // A direction edit discards a controller's old angle and magnitude.
-            let keys = game.mod_movement_keys(Keys {
+            // Key-only edits don't replace the sampled controller vector.
+            let keys = game.update_movement_input(Keys {
+                right: true,
                 analog: Some([0.2, 0.8]),
                 ..Keys::default()
             });
-            assert!(keys.forward && keys.sprint);
-            assert_eq!(keys.direction(), [0.0, 1.0]);
-            assert!(keys.analog.is_none());
+            assert!(keys.forward && keys.right);
+            assert_eq!(keys.direction(), [0.2, 0.8]);
 
-            // Without a key edit, an independent controller vector remains intact.
-            let keys = game.mod_movement_keys(Keys {
-                forward: true,
+            // Invalid vectors don't change movement, but independent key edits still apply.
+            let keys = game.update_movement_input(Keys {
+                jump: true,
                 analog: Some([0.2, 0.8]),
                 ..Keys::default()
             });
             assert_eq!(keys.direction(), [0.2, 0.8]);
-
-            // Raw opposites remain distinct; changed keys win over both axes.
-            let keys = game.mod_movement_keys(Keys {
-                backward: true,
-                analog: Some([0.0, -0.7]),
-                ..Keys::default()
-            });
-            assert!(keys.forward && keys.backward && keys.left && keys.right);
-            assert_eq!(keys.direction(), [0.0, 0.0]);
-            assert!(keys.analog.is_none());
-
-            // Axis-only edits update just the corresponding packet directions.
-            let keys = game.mod_movement_keys(Keys {
-                left: true,
-                ..Keys::default()
-            });
-            assert_eq!(keys.direction(), [0.25, -0.5]);
-            assert!(!keys.forward && keys.backward && keys.left && !keys.right);
-            assert!(keys.jump && keys.shift && keys.sprint);
-            let keys = game.mod_movement_keys(Keys {
-                forward: true,
-                backward: true,
-                left: true,
-                ..Keys::default()
-            });
-            assert_eq!(keys.direction(), [0.25, 0.0]);
-            assert!(
-                keys.forward && keys.backward,
-                "unchanged axis keeps both keys"
-            );
+            assert!(keys.jump && keys.shift);
 
             // Consumer-visible acceptance: no physical input still moves the
             // local player; the final keys and eligible sprint reach the server.
@@ -165,20 +137,18 @@ fn matrix(mods: mod_api::Mods) {
                 assert!((replayed.position.z - position.z).abs() < 1.0e-10);
             }
 
+            // Both edits can stand at once, including all four direction flags being held.
             reset_player(game, 20);
             game.keys.insert(KeyCode::KeyS);
             tick(game);
-            assert_eq!(game.player.as_ref().unwrap().move_vector, [0.0, 0.0]);
-            assert_eq!(game.player.as_ref().unwrap().position.z, 8.0);
+            assert_eq!(game.player.as_ref().unwrap().move_vector, [0.5, 0.25]);
             assert_eq!(game.remote.as_ref().unwrap().last_input, 1 | 2 | 4 | 8 | 64);
+            // Vector-only edits don't affect what gets sent, even if the vector points backward.
             reset_player(game, 20);
             game.keys.insert(KeyCode::KeyA);
             tick(game);
             assert_eq!(game.player.as_ref().unwrap().move_vector, [0.25, -0.5]);
-            assert_eq!(
-                game.remote.as_ref().unwrap().last_input,
-                2 | 4 | 16 | 32 | 64
-            );
+            assert_eq!(game.remote.as_ref().unwrap().last_input, 4);
 
             // A mod's sprint request still uses the actual player's vanilla
             // crouching and slow-item eligibility, not only the hunger check.
@@ -193,22 +163,6 @@ fn matrix(mods: mod_api::Mods) {
             tick(game);
             assert!(!game.player.as_ref().unwrap().sprinting);
 
-            // Subscribed false clears an existing latch and cannot start from
-            // a pending double tap. KeyD selects this fixture listener's veto.
-            for already_sprinting in [false, true] {
-                reset_player(game, 20);
-                game.keys.insert(KeyCode::KeyD);
-                let player = game.player.as_mut().unwrap();
-                player.sprint_input.trigger_time = 5;
-                player.set_sprinting(already_sprinting).unwrap();
-                game.remote.as_mut().unwrap().was_sprinting = already_sprinting;
-                tick(game);
-                let player = game.player.as_ref().unwrap();
-                assert!(!player.sprinting);
-                assert_eq!(player.sprint_input.trigger_time, 0);
-                assert!(!game.remote.as_ref().unwrap().was_sprinting);
-                assert_eq!(game.remote.as_ref().unwrap().last_input, 1 | 8);
-            }
             server.shutdown();
         });
     });
@@ -216,8 +170,85 @@ fn matrix(mods: mod_api::Mods) {
 
 #[test]
 #[ignore = "daily"]
-fn native_movement_input_keys_axes_and_sprint() {
-    matrix(vec![mod_api::ModEntry::new("movement", Box::new(Native))].into());
+fn movement_input_passive_listener_preserves_sprint() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    struct Observe(Arc<AtomicBool>);
+    #[mod_api::__subscriptions]
+    impl Hooks for Observe {
+        fn movement_input_update(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut MovementInputUpdateEvent<'_>,
+        ) {
+            if event.input.key_presses.forward && !event.input.key_presses.sprint {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+    let saw_released_sprint = Arc::new(AtomicBool::new(false));
+    let mods = vec![mod_api::ModEntry::new(
+        "observer",
+        Box::new(Observe(saw_released_sprint.clone())),
+    )];
+    mod_platform::testing::with_mods(mods.into(), || {
+        with_client_game(|game| {
+            let server = connect(game);
+            reset_player(game, 20);
+            game.keys.insert(KeyCode::KeyW);
+            game.keys.insert(KeyCode::ControlLeft);
+            tick(game);
+            assert!(game.player.as_ref().unwrap().sprinting);
+            game.keys.remove(&KeyCode::ControlLeft);
+            tick(game);
+            assert!(saw_released_sprint.load(Ordering::Relaxed));
+            assert!(game.player.as_ref().unwrap().sprinting, "vanilla latch");
+            assert_eq!(game.remote.as_ref().unwrap().last_input, 1);
+            assert!(game.remote.as_ref().unwrap().was_sprinting);
+
+            reset_player(game, 20);
+            game.keys.insert(KeyCode::KeyW);
+            tick(game);
+            assert!(!game.player.as_ref().unwrap().sprinting);
+            game.keys.clear();
+            tick(game);
+            game.keys.insert(KeyCode::KeyW);
+            tick(game);
+            assert!(
+                game.player.as_ref().unwrap().sprinting,
+                "vanilla double tap"
+            );
+            server.shutdown();
+        });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn movement_input_sends_auto_jump_with_the_edited_keys() {
+    let mods = vec![mod_api::ModEntry::new("movement", Box::new(Native))];
+    mod_platform::testing::with_mods(mods.into(), || {
+        with_client_game(|game| {
+            let server = connect(game);
+            reset_player(game, 20);
+            // Right selects the listener's edits: add forward and clear jump.
+            game.keys.insert(KeyCode::KeyD);
+            game.keys.insert(KeyCode::Space);
+            game.player.as_mut().unwrap().auto_jump_time = 1;
+            tick(game);
+            let player = game.player.as_ref().unwrap();
+            assert!(player.was_auto_jump);
+            assert_eq!(player.move_vector, [-1.0, 0.0]);
+            assert_eq!(game.remote.as_ref().unwrap().last_input, 1 | 8 | 16);
+            tick(game);
+            assert!(!game.player.as_ref().unwrap().was_auto_jump);
+            assert_eq!(game.remote.as_ref().unwrap().last_input, 1 | 8);
+            server.shutdown();
+        });
+    });
 }
 
 #[test]
@@ -226,13 +257,12 @@ fn movement_input_without_listeners_keeps_vanilla_latch_double_tap_and_controlle
     mod_platform::testing::with_mods(Vec::new().into(), || {
         with_client_game(|game| {
             let server = connect(game);
-            let keys = game.mod_movement_keys(Keys {
+            let keys = game.update_movement_input(Keys {
                 forward: true,
                 analog: Some([0.2, 0.8]),
                 ..Keys::default()
             });
             assert_eq!(keys.direction(), [0.2, 0.8]);
-            assert!(!keys.sprint_suppressed);
             reset_player(game, 20);
             game.keys.insert(KeyCode::KeyW);
             game.keys.insert(KeyCode::ControlLeft);
@@ -269,30 +299,24 @@ fn movement_input_disabled_listener_keeps_vanilla_keys() {
         || {
             assert!(mod_api::__private::set_mod_enabled("movement", false));
             with_client_game(|game| {
-                let keys = game.mod_movement_keys(Keys {
+                let keys = game.update_movement_input(Keys {
                     forward: true,
                     analog: Some([0.2, 0.8]),
                     ..Keys::default()
                 });
                 assert_eq!(keys.direction(), [0.2, 0.8]);
-                assert!(!keys.sprint_suppressed);
                 assert!(!keys.sprint);
-                let keys = game.mod_movement_keys(Keys::default());
+                let keys = game.update_movement_input(Keys::default());
                 assert_eq!(keys.direction(), [0.0, 0.0]);
-                assert!(!keys.forward && !keys.sprint_suppressed);
+                assert!(!keys.forward && !keys.sprint);
                 assert!(mod_api::__private::set_mod_enabled("movement", true));
-                let keys = game.mod_movement_keys(Keys::default());
+                let keys = game.update_movement_input(Keys::default());
                 assert_eq!(keys.direction(), [0.0, 1.0]);
-                assert!(keys.forward && keys.sprint && !keys.sprint_suppressed);
-                let keys = game.mod_movement_keys(Keys {
-                    right: true,
-                    ..Keys::default()
-                });
-                assert!(keys.forward && keys.right && keys.sprint_suppressed);
+                assert!(keys.forward && keys.sprint);
                 assert!(mod_api::__private::set_mod_enabled("movement", false));
-                let keys = game.mod_movement_keys(Keys::default());
+                let keys = game.update_movement_input(Keys::default());
                 assert_eq!(keys.direction(), [0.0, 0.0]);
-                assert!(!keys.forward && !keys.sprint_suppressed);
+                assert!(!keys.forward && !keys.sprint);
             });
         },
     );

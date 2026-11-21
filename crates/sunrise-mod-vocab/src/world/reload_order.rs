@@ -5,10 +5,11 @@ use std::{
     collections::{BTreeMap, BinaryHeap},
 };
 
-/// A problem registering or ordering reload listeners.
+/// A problem registering or ordering reload listeners. Match the variants to
+/// inspect the involved IDs without parsing the diagnostic message.
+// no wire: reports a local reload dependency-graph failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum ReloadOrderError {
     /// A listener name has already been registered.
     DuplicateListener {

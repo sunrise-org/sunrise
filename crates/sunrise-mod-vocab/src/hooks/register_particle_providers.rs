@@ -68,10 +68,12 @@ is not visited. A type with no provider keeps its
 declarative motion, and live provider particles are dropped when resources reload, as a compiled
 controller's are."#]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         context = "registration",
         neoforge = "RegisterParticleProvidersEvent"
     )]
-    fn register_particle_providers();
+    fn register_particle_providers(providers: &mut dyn ParticleProviders);
 }

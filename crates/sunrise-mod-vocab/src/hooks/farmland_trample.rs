@@ -20,6 +20,7 @@ pub trait Hooks {
     /// the trample applies or not. With no listener, the lift, write and damage run in the same
     /// order, without a transaction.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "cancel",
@@ -28,7 +29,13 @@ pub trait Hooks {
         isolate = true,
         version = 3
     )]
-    fn farmland_trample();
+    fn farmland_trample(
+        entity: mod_api::LivingRef,
+        pos: BlockPos,
+        state: BlockState,
+        fall_distance: f64,
+        cancel: &mut bool,
+    );
 }
 
 /// Original upstream notes; the existing fork event above owns this moment.

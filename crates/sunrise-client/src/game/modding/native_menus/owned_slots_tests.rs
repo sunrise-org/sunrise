@@ -25,17 +25,6 @@ thread_local! {
 struct Part;
 #[mod_api::sunrise_part]
 impl MenuPart for Part {
-    fn screen(
-        &self,
-        _: &dyn mod_api::Host,
-        _: &mut mod_api::ScreenEvent<'_>,
-    ) -> Option<mod_api::Screen> {
-        Some(mod_api::Screen {
-            slots: vec![Some(mod_api::ScreenSlot::default()); 2],
-            ..Default::default()
-        })
-    }
-
     fn menu_still_valid(&self, _: &dyn mod_api::LoopContext, event: &mut MenuStillValidEvent<'_>) {
         if let Some(item) = event.opening_item {
             assert_eq!(item.hand, Hand::Off);
@@ -115,6 +104,20 @@ struct Listener {
 impl Hooks for Listener {
     fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
         r.menu_part(MOD_MENU, Part);
+        r.register_menu_screen(
+            MOD_MENU,
+            std::sync::Arc::new(
+                |_: &dyn mod_api::ClientHost, _: mod_api::MenuScreenOpen<'_>| {
+                    Some(mod_api::MenuScreen::new(mod_api::MenuScreenLayout {
+                        width: 176.0,
+                        height: 166.0,
+                        slots: vec![Some(mod_api::ScreenSlot::default()); 2],
+                        ..Default::default()
+                    }))
+                },
+            ),
+        )
+        .unwrap();
     }
 
     fn menu_closed(&self, host: &mut dyn ServerHost, event: &mut MenuClosedEvent<'_>) {
@@ -257,7 +260,7 @@ fn an_item_opened_menu_has_two_empty_owned_slots_with_individual_caps() {
             host.transaction(|host, tx| {
                 let place = ItemPlace::MenuSlot { menu, slot };
                 assert_eq!(place.insert(host, tx, &resource, 8), cap);
-                assert_eq!(place.stack(host).unwrap().count(), cap);
+                assert_eq!(place.with_stack(host, |stack| stack.count()), Some(cap));
                 Ok::<_, ()>(())
             })
             .unwrap();

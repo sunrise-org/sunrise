@@ -15,10 +15,12 @@ pub trait Hooks {
     /// run in a later pass. General entities, the dragon and end crystals add no outline queries.
     /// API @API:entity_outline@.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         version = 3,
         contract = "listen",
         neoforge = "none (NeoForge 26.3 has no glowing or team colour override)"
     )]
-    fn entity_outline();
+    fn entity_outline(entity_id: u32, kind: &str, outline: &mut Option<u32>);
 }

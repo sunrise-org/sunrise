@@ -8,13 +8,101 @@ mod book_tests;
 mod screen_tests;
 
 impl MenusRegistrar for PartRegistrar {
+    fn register_menu_screen(
+        &mut self,
+        menu: &str,
+        factory: Arc<dyn crate::MenuScreenFactory>,
+    ) -> Result<(), String> {
+        let result = (|| {
+            if mod_vocab::__private::parts_installation::parts_installed() {
+                return Err("registry is frozen");
+            }
+            let id = crate::Identifier::parse_namespaced(menu)
+                .ok_or("menu must be a namespaced identifier")?;
+            let stock = id.namespace() == "minecraft";
+            if !stock && !owns_namespace(self.mod_id, id.namespace()) {
+                return Err("the custom menu must be owned by the registering mod");
+            }
+            let rows = self.menu_screen_factories.entry(menu.into()).or_default();
+            if (!stock && !rows.is_empty()) || rows.contains_key(&self.mod_index) {
+                return Err("duplicate menu screen factory");
+            }
+            rows.insert(
+                self.mod_index,
+                MenuScreenRegistration {
+                    owner: self.mod_id,
+                    index: self.mod_index,
+                    factory,
+                    panicked: Default::default(),
+                },
+            );
+            Ok(())
+        })();
+        result.map_err(|reason| {
+            let message = format!("mod {} menu {menu:?}: {reason}", self.mod_id);
+            self.refused.push(message.clone());
+            message
+        })
+    }
+
+    fn menu_slot_exclusions(
+        &mut self,
+        menu: &str,
+        block: Option<&str>,
+        excluded: &[u16],
+    ) -> Result<(), String> {
+        let result = (|| {
+            if mod_vocab::__private::parts_installation::parts_installed() {
+                return Err("registry is frozen");
+            }
+            let menu_id = crate::Identifier::parse_namespaced(menu)
+                .ok_or("menu must be a namespaced identifier")?;
+            let block_id = block
+                .map(|block| {
+                    crate::Identifier::parse_namespaced(block)
+                        .filter(|id| id.namespace() != "minecraft")
+                        .ok_or("opener must be a namespaced mod block identifier")
+                })
+                .transpose()?;
+            if menu_id.namespace() == "minecraft" {
+                if !block_id
+                    .as_ref()
+                    .is_some_and(|id| owns_namespace(self.mod_id, id.namespace()))
+                {
+                    return Err(
+                        "a stock menu requires an opener block owned by the registering mod",
+                    );
+                }
+            } else if !owns_namespace(self.mod_id, menu_id.namespace()) {
+                return Err("the custom menu must be owned by the registering mod");
+            }
+            let scopes = self.menu_slot_exclusions.entry(menu.into()).or_default();
+            let scope = block.unwrap_or_default();
+            if scopes.contains_key(scope) {
+                return Err("duplicate menu slot exclusions");
+            }
+            let mut excluded = excluded.to_vec();
+            excluded.sort_unstable();
+            excluded.dedup();
+            scopes.insert(scope.into(), excluded.into_boxed_slice());
+            Ok(())
+        })();
+        result.map_err(|reason| {
+            let message = format!(
+                "mod {} menu {menu:?} opener {block:?}: {reason}",
+                self.mod_id,
+            );
+            self.refused.push(message.clone());
+            message
+        })
+    }
+
     fn menu_recipe_book(
         &mut self,
         menu: &str,
         book: &crate::RecipeBookTypeKey,
         recipe_type: &str,
         layout: crate::RecipeBookLayout,
-        screen: crate::Screen,
     ) -> Result<(), String> {
         let result: Result<(), String> = (|| {
             if mod_vocab::__private::parts_installation::parts_installed() {
@@ -39,23 +127,6 @@ impl MenusRegistrar for PartRegistrar {
                 return Err("explicit recipe type namespace required".into());
             }
             layout.validate(256)?;
-            layout.validate_screen(&screen)?;
-            if screen.recipe_book.as_ref() != Some(book) {
-                return Err("screen book differs from menu book".into());
-            }
-            if let Some(other) = self
-                .parts
-                .menus
-                .get(menu)
-                .into_iter()
-                .flatten()
-                .find(|other| other.mod_id != self.mod_id && lays_out_screen(&*other.part))
-            {
-                return Err(format!(
-                    "recipe-book screen conflicts with {} of mod {}",
-                    other.type_name, other.mod_id
-                ));
-            }
             self.menu_recipe_books.insert(
                 menu.into(),
                 MenuBookDeclaration {
@@ -63,7 +134,6 @@ impl MenusRegistrar for PartRegistrar {
                     book: book.clone(),
                     recipe_type: recipe_type.into(),
                     layout,
-                    screen,
                 },
             );
             Ok(())
@@ -75,34 +145,6 @@ impl MenusRegistrar for PartRegistrar {
         })
     }
     fn attach_menu_part(&mut self, menu: &str, kind: &'static str, part: Arc<dyn MenuPart>) {
-        if lays_out_screen(&*part) {
-            if let Some(book) = self.menu_recipe_books.get(menu)
-                && book.owner != self.mod_id
-            {
-                self.refused.push(format!(
-                    "{kind} of mod {} conflicts with the recipe-book screen on menu {menu:?} owned by mod {}",
-                    self.mod_id, book.owner
-                ));
-                return;
-            }
-            // One part owns a screen: a second would split its layout, drawing and clicks.
-            if let Some(other) = self
-                .parts
-                .menus
-                .get(menu)
-                .into_iter()
-                .flatten()
-                .find(|other| {
-                    lays_out_screen(&*other.part) && screens_shared(menu, other.mod_id, self.mod_id)
-                })
-            {
-                self.refused.push(format!(
-                    "{kind} of {} and {} of {} both lay out menu type {menu}'s screen",
-                    self.mod_id, other.type_name, other.mod_id
-                ));
-                return;
-            }
-        }
         self.attach(|p| &mut p.menus, kind, menu, part);
     }
 }

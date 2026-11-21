@@ -17,6 +17,8 @@ pub trait Hooks {
     /// a stale, refused or failed action rolls back the transaction. The action refuses opens.
     /// [`ServerHost::close_menu`] and [`MenuRef::close_container`] close only after commit.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_menu_clicked",
+        dispatch = "api_carrier",
         side = "server",
         contract = "cancel",
         scope = "menu",

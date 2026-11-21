@@ -370,8 +370,8 @@ const MOD_LINES_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The mods' `Registrar::crash_header` lines (`headers`) or `crash_section` lines, in registration
 /// order, as `(<mod id>: <label>, text)`, or `(<mod id>, text)` for a header. Each is asked once,
-/// under [`contain`], on a guest-sized thread of its own: this runs inside the panic hook, where a
-/// second panic would end the process before any catch could. A line that panics, traps or misses
+/// under [`contain`], on a dedicated worker: this runs inside the panic hook, where a second
+/// panic would end the process before any catch could. A line that panics, traps or misses
 /// [`MOD_LINES_WAIT`] reads `~~ERROR~~`; one that answers `None` is left out, as are the lines of
 /// the mod this thread's crash is attributed to. No mod line, no thread.
 fn mod_lines(headers: bool) -> Vec<(String, String)> {
@@ -389,21 +389,24 @@ fn mod_lines(headers: bool) -> Vec<(String, String)> {
         .map(|(owner, _, line)| (*owner, line.clone()))
         .collect();
     // A thread that doesn't start drops `send`: every line then reads as an error.
-    let _ = sunrise_guest_stack::spawn("Crash report lines".into(), move || {
-        for (owner, line) in asked {
-            let answer = contain(|| {
-                let _mod = enter_native_mod(ModCall {
-                    id: owner,
-                    hook: "crash_section",
-                    part: None,
+    let _ = std::thread::Builder::new()
+        .stack_size(sunrise_threads::GAME_THREAD_STACK_BYTES)
+        .name("Crash report lines".into())
+        .spawn(move || {
+            for (owner, line) in asked {
+                let answer = contain(|| {
+                    let _mod = enter_native_mod(ModCall {
+                        id: owner,
+                        hook: "crash_section",
+                        part: None,
+                    });
+                    line.value()
                 });
-                line.value()
-            });
-            if send.send(answer.ok()).is_err() {
-                break;
+                if send.send(answer.ok()).is_err() {
+                    break;
+                }
             }
-        }
-    });
+        });
     let deadline = std::time::Instant::now() + MOD_LINES_WAIT;
     let mut waiting = true;
     lines

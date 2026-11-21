@@ -3,7 +3,7 @@
 //! another section. `tools/test_chunk_entity_order_parity.py` compares the
 //! printed sequences with the real `PersistentEntitySectionManager`.
 use super::*;
-use crate::game::native_entity_refs::tests::with_game;
+use crate::game::native_entity_refs::tests::{collect_game_all_entities, with_game};
 
 fn doubles(values: [f64; 3]) -> Tag {
     Tag::List(
@@ -32,7 +32,7 @@ fn name(tag: &Tag) -> i32 {
 /// Every lookup member's name, in lookup order.
 fn lookup_order(game: &mut Game<'_>) -> Vec<i32> {
     let level = game.level(game.dim.id()).unwrap();
-    let members = game.level_all_entities(level).unwrap();
+    let members = collect_game_all_entities(game, level).unwrap();
     members
         .into_iter()
         .filter_map(|e| game.persist.uuids.get(&e.id()).copied())

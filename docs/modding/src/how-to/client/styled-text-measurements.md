@@ -16,11 +16,17 @@ width and its width, plus the block's `width` and `height` — all answered in s
 text wrapping at `max_width / scale`. It refuses invalid widths and scales and oversized layouts
 with a `TextLinesRefusal`. See [Screens](screens.md#labels-wrapped-text-without-a-widget).
 
-Construct an owned `Text` with its content, style and children. A bridge with a
-flat component representation can build a `TextForm` and call
-`Text::try_from(form)` once at its boundary; the host reads accept that validated
-`Text`, not JSON or engine text types. Both methods return a `TextFormError` if
-the supplied component cannot be represented at the engine boundary.
+Build an owned `Text` directly with `Text::literal`, `Text::translate` or
+`Text::new(TextContent::…)`. Use `with_style` to set the style and `append` to
+add an ordered child, then pass `&text` to the host read. The host validates the
+component and returns a `TextFormError` if it cannot cross the engine boundary.
+There is no intermediate form to build or validate.
+
+To inspect the immediate nested components, use `text.visit_children(|child| …)`.
+It lends appended children first, then any translation arguments, selector or NBT
+separator, or inline-object fallback, and finally the hover text or hover entity
+name. It does not recurse into those components. Read `children`, `content` or
+`style.hover` directly if you need to distinguish their roles.
 
 Width is the same styled and translated width used by the engine's tooltip
 layout. Wrapping follows `Font.split(FormattedText, width)`: it keeps styles,

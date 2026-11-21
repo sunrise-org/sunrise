@@ -66,8 +66,8 @@ pub trait GoalHost {
         actor: &Mob,
         world: &MobWorld<'_>,
     ) -> Option<mod_api::LivingRef>;
-    /// Tags of a mob currently lent to the tick.
-    fn mob_tags(&self, mob: &Mob) -> Option<Vec<String>>;
+    /// Saved tags borrowed from the host for a mob currently lent to the tick.
+    fn mob_tags(&self, mob: &Mob) -> Option<mod_api::EntityTags<'_>>;
     /// Display name of a mob currently lent to the tick.
     fn mob_name(&self, mob: &Mob, actor: &Mob, world: &MobWorld<'_>) -> String;
     /// Whether a mob currently lent to the tick has joined its level.

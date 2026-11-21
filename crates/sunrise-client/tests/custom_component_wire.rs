@@ -1,9 +1,10 @@
 extern crate sunrise_client_lib as sunrise_client;
 use sunrise_client::{item_sync, items::ItemStack, lan::guest::stack_to_network};
 use sunrise_core::nbt::Tag;
+use sunrise_core::vanilla_bytes::Writer;
 use sunrise_items::item_nbt::{item_from_nbt, item_to_nbt};
 use sunrise_protocol::{
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Reader},
     item::{DelimitedSlot, Hashed, Slot, Stack, Template, component, custom},
     registry::{Builtin, Dynamic, Ids, SyncedNames},
 };

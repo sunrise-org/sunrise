@@ -386,11 +386,16 @@ fn client_player_state_reads_its_own_copy_only() {
                 assert_eq!(other.is_swimming(host), None);
                 assert_eq!(other.air_supply(host), None);
                 assert_eq!(other.max_air_supply(host), None);
-                let slots = local.inventory_slots(host).unwrap();
-                assert_eq!(slots.len(), 1);
-                assert_eq!(slots[0].0, 5);
-                assert_eq!(slots[0].1.count(), 3);
-                assert_eq!(other_player.inventory_slots(host), None);
+                local
+                    .with_inventory(host, |view| {
+                        let mut slots = view.iter();
+                        let (slot, stack) = slots.next().unwrap();
+                        assert_eq!((slot, stack.count()), (5, 3));
+                        assert!(slots.next().is_none());
+                    })
+                    .unwrap();
+                assert_eq!(other_player.with_inventory(host, |_| ()), None);
+                assert_eq!(local.with_ender_chest(host, |_| ()), None);
             }
         });
     });

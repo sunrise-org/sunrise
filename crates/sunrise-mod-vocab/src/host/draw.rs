@@ -175,8 +175,8 @@ pub trait DrawContext {
     /// world too, its `spin` parts turning with the game time. What lies
     /// outside the box is cut off, and the scene has a depth of its own, so
     /// it never covers the screen's other drawing or is covered by it but in
-    /// the order drawn. Draw it from a screen's drawing hook
-    /// (`screen_draw`). A client's call; on a server it is refused.
+    /// the order drawn. Draw it from a client screen callback such as
+    /// one installed with [`crate::MenuScreen::with_draw`].
     ///
     /// The scene may live too: entities standing in it (`scene.entities`, the
     /// descriptions [`entity`](Self::entity) takes, prepared and drawn by the same
@@ -222,8 +222,8 @@ pub trait DrawContext {
     /// its type's renderer as in the world (a mod's `register_entity_renderers`
     /// renderer and `register_entity_layers` layers included, else the vanilla
     /// model), full bright, lit by `Lighting.ENTITY_IN_UI`'s two lights, with a
-    /// depth of its own and cut off at the box. A client's call from a drawing
-    /// hook (`screen_draw`, `gui_render_post`); on a server it is refused.
+    /// depth of its own and cut off at the box. A client's call, available
+    /// with [`crate::MenuScreen::with_draw`] or `gui_render_post`.
     fn entity(&mut self, entity: &GuiEntity, view: GuiEntityView) -> Result<(), GuiEntityError> {
         Err(GuiEntityError::Unavailable)
     }
@@ -232,9 +232,10 @@ pub trait DrawContext {
     /// Create's symmetry wand screen draws its wand and its mirror. Orthographic, in the frame
     /// `x` right, `y` up, `z` towards the viewer.
     ///
-    /// - An item is drawn as a slot draws it (its model's `gui` display transform, then
-    ///   `view.transform`, lit with the GUI light that model asks for: flat items side lit,
-    ///   block-like items front lit); its count, damage bar and cooldown are not drawn.
+    /// - The item stack is borrowed for this call. The item is drawn as a slot draws it (its
+    ///   model's `gui` display transform, then `view.transform`, lit with the GUI light that
+    ///   model asks for: flat items side lit, block-like items front lit); its count, damage bar
+    ///   and cooldown are not drawn.
     /// - A model is drawn full bright and shaded by face, as the blocks of a scene are.
     /// - Both subjects have a depth of their own, so a draw never intersects what the screen
     ///   drew before or after it, and later drawing covers it in call order. An item's faces meet
@@ -243,10 +244,10 @@ pub trait DrawContext {
     ///   is no z input. Both are cut by the clips opened with [`DrawContext::push_clip`], as
     ///   `fill` is.
     ///
-    /// A client's call from a drawing hook (`screen_draw`, `gui_render_post`); on a server it is
-    /// refused. Per call it draws the subject's baked quads, the cached model a slot's item
-    /// uses, with nothing on the tick path.
-    fn model_3d(&mut self, subject: Gui3dSubject, view: Gui3dView) -> Result<(), Gui3dError> {
+    /// A client's call, available with [`crate::MenuScreen::with_draw`] or
+    /// `gui_render_post`. Per call it draws the subject's baked quads, the cached
+    /// model a slot's item uses, with nothing on the tick path.
+    fn model_3d(&mut self, subject: Gui3dSubject<'_>, view: Gui3dView) -> Result<(), Gui3dError> {
         Err(Gui3dError::Unavailable)
     }
     /// `Screen.renderMenuBackground`: draws the tiled menu background (32x32) across `rect`
@@ -536,8 +537,8 @@ pub trait BlockEntityDrawContext {
         unimplemented!("BlockEntityDrawContext::draw_fluid_box")
     }
 }
-/// What `block_screen_effect_draw` draws with, one per hook call: quads in camera space, in
-/// blocks, with `+x` right, `+y` up and the camera at the origin looking down `-z`. It is the
+/// What a [`BlockScreenEffectRenderer`](crate::BlockScreenEffectRenderer) draws with: quads in
+/// camera space, in blocks, with `+x` right, `+y` up and the camera at the origin looking down `-z`. It is the
 /// space of `ScreenEffectRenderer`'s own quads, whose whole-view quad has corners at `(±1, ±1, -0.5)`,
 /// under the first-person hand's projection. Quads draw in the order given, after the level and
 /// the hand and before the GUI, alpha-blended with no depth test; give corners in order round the quad.

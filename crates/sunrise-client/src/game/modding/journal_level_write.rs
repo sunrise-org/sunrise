@@ -8,9 +8,9 @@ use super::native_level_signals::ReadLevel;
 use super::transactions::After;
 use mod_api::{
     AttachmentBatch, AttachmentStore, BlockEntityRef, BlockKey, BlockPos, BlockSide, BlockState,
-    BlockUpdateFlags, Compound, Direction, FeatureFlags, FluidState, ItemStack, LegacyRandomSource,
-    LevelHost, LevelRandomHost, LevelRef, LevelTicksHost, LevelWriteHost, LightLayer,
-    PartStateError, ParticleOptions, Tags,
+    BlockUpdateFlags, Compound, Direction, FeatureFlags, FluidState, ItemStack, LevelHost,
+    LevelRandomHost, LevelRef, LevelTicksHost, LevelWriteHost, LightLayer, PartStateError,
+    ParticleOptions, RandomDraw, Tags,
 };
 use sunrise_core::ticks::TickPriority;
 use sunrise_world::{
@@ -151,13 +151,9 @@ impl LevelRandomHost for JournalLevelWrite<'_, '_> {
     fn attachments(&mut self) -> &mut dyn AttachmentStore {
         self.game
     }
-    fn random(&mut self) -> Option<LegacyRandomSource> {
-        Some(super::api_values::random_to_api(&self.game.world.random))
-    }
-    fn set_random(&mut self, random: LegacyRandomSource) -> bool {
-        self.game
-            .journal_set_level_random(super::api_values::random_to_engine(&random));
-        true
+    fn lend_random(&mut self, draw: RandomDraw<'_>) {
+        let before = super::api_values::with_live_level_random(&mut self.game.world.random, draw);
+        self.game.journal_active_level_random(|_| before);
     }
 }
 

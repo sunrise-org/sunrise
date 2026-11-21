@@ -7,6 +7,8 @@ pub trait Hooks {
     /// `ScreenOpening::ModScreen` to open a mod's own screen instead, or
     /// `ScreenOpening::Vanilla` to open another vanilla screen instead.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "replace",
         out = "outcome",
@@ -14,5 +16,9 @@ pub trait Hooks {
         neoforge = "ScreenEvent.Opening",
         cancellable = true
     )]
-    fn screen_opening();
+    fn screen_opening(
+        current: &ScreenView<'_>,
+        new: &ScreenView<'_>,
+        outcome: &mut Option<Answered<ScreenOpening>>,
+    );
 }

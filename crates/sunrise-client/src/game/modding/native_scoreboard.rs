@@ -115,7 +115,7 @@ impl Game<'_> {
     pub(super) fn score_holder_key(&self, holder: &ScoreHolder) -> Option<String> {
         match holder {
             ScoreHolder::Name(name) => Some(name.clone()),
-            ScoreHolder::Player(player) => self.player_name(*player),
+            ScoreHolder::Player(player) => self.player_name(*player).map(str::to_owned),
             ScoreHolder::Entity(entity) => {
                 self.existing_holder_name(self.native_entity_target(*entity)?)
             }

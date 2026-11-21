@@ -17,11 +17,13 @@ pub trait Hooks {
     /// walking its tracker: don't spawn, remove or teleport entities from
     /// here. No player's state is swapped in. Server-side.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_player_stop_tracking",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         version = 2,
         neoforge = "PlayerEvent.StopTracking",
         cancellable = false
     )]
-    fn player_stop_tracking();
+    fn player_stop_tracking(player: u128, name: &str, entity: u32, uuid: u128, kind: &str);
 }

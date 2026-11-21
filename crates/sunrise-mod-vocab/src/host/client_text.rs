@@ -22,8 +22,8 @@ pub trait ClientTextClientHost {
     /// Available outside a draw, including client setup and tooltip-component
     /// sizing. Like `ClientTooltipComponent.getWidth(Font)`, this measures with
     /// the rendering client's active font, not a font chosen by the mod.
-    /// Build owned components with `Text`, or validate a flat `TextForm` with
-    /// `Text::try_from(form)`. Invalid component input returns its boundary error.
+    /// Build a [`Text`] component directly and lend it to this read. Invalid
+    /// components return the same boundary errors as `text_string`.
     #[access(ClientSetup)]
     fn text_width(&self, text: &Text) -> Result<i32, TextFormError>;
 

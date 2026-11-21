@@ -178,7 +178,10 @@ mod tests {
         assert_eq!(prepared.palette, [2]);
         assert_eq!(prepared.filters.len(), 1);
         edit.palette
-            .push(mod_api::BlockStateRecord::new(state.block(), u16::MAX).into());
+            .push(mod_api::__private::block_state_from_ordinal(
+                state.block(),
+                u16::MAX,
+            ));
         assert!(
             prepare(&edit).is_err(),
             "late bad palette state must refuse the whole prepared edit"

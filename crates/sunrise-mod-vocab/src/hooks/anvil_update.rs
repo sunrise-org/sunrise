@@ -4,19 +4,26 @@ pub trait Hooks {
     /// An anvil at `pos` made vanilla's result with a left input, for
     /// `player` (UUID) and `player_entity_id` (`AnvilUpdateEvent`, after
     /// `AnvilMenu.createResult`), whenever an input or the name changed:
-    /// `update` holds the inputs (the right one may be empty, for a rename),
-    /// the rename text and vanilla's result, and its `output`, `xp_cost`
-    /// and `material_cost` start at vanilla's for the mods to change; set
-    /// `cancel` for no result. The signed XP cost is preserved; a cost of
-    /// zero or less prevents taking the output, not a level refund. Negative
-    /// material costs are clamped to zero. Both sides: the server's menu,
-    /// and a server's client menu with the local player.
+    /// `inputs` lends the stacks, rename text and vanilla result; `edits`
+    /// starts with `Keep` and vanilla's costs. Set an output or edit the
+    /// costs without changing the inputs. Cancellation or an invalid
+    /// replacement clears the result and both costs. Both sides: the
+    /// server's menu and a server's client menu with the local player.
     #[hook(
+        dispatch = "flat",
         side = "both",
         contract = "cancel",
         out = "cancel",
         neoforge = "AnvilUpdateEvent",
-        cancellable = true
+        cancellable = true,
+        version = 2
     )]
-    fn anvil_update();
+    fn anvil_update(
+        player: u128,
+        player_entity_id: i32,
+        pos: [i32; 3],
+        inputs: &mod_api::item::menu::AnvilUpdateInputs<'_>,
+        edits: &mut mod_api::item::menu::AnvilUpdateEdits,
+        cancel: &mut bool,
+    );
 }

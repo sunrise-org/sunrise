@@ -8,8 +8,9 @@ use serde_json::Value;
 use std::{collections::BTreeSet, fs, path::Path};
 use sunrise_client::recipe_book::{BookType, RecipeIndex, Settings};
 use sunrise_core::nbt::Tag;
+use sunrise_core::vanilla_bytes::Writer;
 use sunrise_protocol::{
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Reader},
     packets::recipes::RecipeBookChangeSettings,
 };
 use sunrise_world::loot::PackOverlay;

@@ -11,6 +11,7 @@ pub trait Hooks {
     /// heal it to keep it alive; at health <= 0 its body is removed after 20 ticks.
     /// Armor stands, boats and other non-mob entities are not told.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "cancel",
@@ -18,5 +19,11 @@ pub trait Hooks {
         cancellable = true,
         version = 2
     )]
-    fn living_death();
+    fn living_death(
+        entity: u32,
+        kind: &str,
+        source: &HurtSource<'_>,
+        weapon: Option<&mod_api::ItemStack>,
+        cancel: &mut bool,
+    );
 }

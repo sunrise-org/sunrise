@@ -25,5 +25,5 @@ pub trait Hooks {
         target = "sunrise_client_lib::crafting::native_hooks::native_recipe_property_sets",
         neoforge = "RegisterRecipePropertiesEvent"
     )]
-    fn recipe_property_sets();
+    fn recipe_property_sets(additions: &mut Vec<RecipePropertyAddition>);
 }

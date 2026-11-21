@@ -4,13 +4,14 @@
 //! asked about it.
 use super::*;
 use crate::game::api_values::TryIntoApi;
+use crate::game::equip_host::{EquipHost, EquipSnapshot};
 use sunrise_client::mobs::equip::CanEquip;
 
 /// A stack converted for the parts of its item, ready for any number of `can_equip` questions.
 /// Empty when no part of the item listens (the component's answer stands and nothing is
 /// converted). A listening stack that cannot be prepared refuses the decision.
 pub(in crate::game) struct EquipStack {
-    reads: Vec<mod_api::EquipReadRow>,
+    reads: Vec<EquipSnapshot>,
     read_indices: std::collections::HashMap<u32, usize>,
     stack: Option<Box<mod_api::ItemStack>>,
     refused: bool,
@@ -73,31 +74,22 @@ impl Game<'_> {
         }
     }
 
-    fn capture_equip_read(&self, id: u32) -> Option<mod_api::EquipReadRow> {
+    fn capture_equip_read(&self, id: u32) -> Option<EquipSnapshot> {
         let entity = self.entity(id)?;
         let living = mod_api::LivingRef::new(entity);
-        let slots = [
-            mod_api::EquipmentSlot::MainHand,
-            mod_api::EquipmentSlot::OffHand,
-            mod_api::EquipmentSlot::Feet,
-            mod_api::EquipmentSlot::Legs,
-            mod_api::EquipmentSlot::Chest,
-            mod_api::EquipmentSlot::Head,
-            mod_api::EquipmentSlot::Body,
-            mod_api::EquipmentSlot::Saddle,
-        ];
-        Some(mod_api::EquipReadRow {
+        Some(EquipSnapshot {
+            entity,
             kind: self.entity_kind(entity),
             position: self.entity_position(entity),
             health: self.living_health(living),
             max_health: self.living_max_health(living),
             alive: self.living_alive(living),
             living: self.living(entity).is_some(),
+            // The prepared decision owns this snapshot so it can recheck before applying.
             equipment: std::array::from_fn(|i| {
-                self.living_equipment(living, slots[i])
-                    .and_then(|stack| stack.try_into_api().ok())
+                let stack = self.living_equipment_stack(living, mod_api::EquipmentSlot::ALL[i])?;
+                stack.project().try_into_api().ok()
             }),
-            ..mod_api::EquipReadRow::new(entity)
         })
     }
     pub(in crate::game) fn equip_can_apply(&self, prepared: &EquipStack, id: u32) -> bool {
@@ -174,7 +166,7 @@ impl Game<'_> {
         let Some(row) = row else {
             return false;
         };
-        let host = crate::game::equip_host::EquipHost { game: self, row };
+        let host = EquipHost { game: self, row };
         let native = crate::game::native_hooks::NativeHookHost { host: &host };
         let mut can_equip = data;
         native.native_can_equip(
@@ -318,8 +310,13 @@ mod tests {
             assert!(entity.kind(host).is_some());
             let _health = event.entity.health(host);
             let _alive = event.entity.alive(host);
-            let _equipment = event.entity.equipment(host, mod_api::EquipmentSlot::Head);
-            let _hand = event.entity.hand_item(host, mod_api::Hand::Main);
+            let _equipment =
+                event
+                    .entity
+                    .with_equipment(host, mod_api::EquipmentSlot::Head, |_| ());
+            let _hand = event
+                .entity
+                .with_hand_item(host, mod_api::Hand::Main, |_| ());
             self.0.fetch_add(1, Ordering::Relaxed);
             event.can_equip = event.slot == "feet";
         }

@@ -82,8 +82,9 @@ The slot trait `BlockEntityTickSlot` has two methods, and both do nothing by def
   ticks;
 - `fn after(&mut self, tick: &mut BlockEntityTick<'_, '_>)` runs just after it ticked.
 
-`before` sees only the block entities vanilla would tick: in a block-ticking chunk, inside the world border,
-live and not asleep. The cursor `tick` has:
+`before` sees live, awake ticker entries in block-ticking chunks inside the world border. Whether a mod
+block entity supports the block it is standing on is checked after `before`, just before invoking its ticker.
+The cursor `tick` has:
 
 | Member | What it is |
 | --- | --- |
@@ -94,7 +95,7 @@ live and not asleep. The cursor `tick` has:
 
 | `before` returns | Effect |
 | --- | --- |
-| `LoopFlow::Continue` | The entity ticks, once every other mod's slot also continues. |
+| `LoopFlow::Continue` | The entity can tick once every other mod's slot also continues and the entry still has a valid ticker. |
 | `LoopFlow::Skip` | The entity does not tick this tick, and no `after` runs for it. |
 | `LoopFlow::Stop` | No further entity ticks this tick. The work after the loop runs, such as shulker box lids. |
 
@@ -155,8 +156,10 @@ Its saved data is `entity.nbt`, its item slots `entity.items` and its menu data 
   rechecks and skips the replaced entity, so it doesn't tick as the old one).
 - Your slot value is made with `Default` on the loop's first run and kept. There is one per `Game`, the
   game state of one running server, which ticks every dimension in turn: read `tick.game.dim` to tell them apart.
-- A slot may add, remove or replace block entities. If it removes the visited one, or replaces it with another
-  `kind` or a mod block entity of another type, that one does not tick. One removed later in the list is passed over. One added ticks from the next pass.
+- A slot may add, remove or replace block entities. If it removes the visited one, replaces it with another
+  `kind` or a mod block entity of another type, or leaves a mod block entity on an incompatible block,
+  its tick and all `after` calls for that visit are skipped. One removed later in the list is passed over.
+  One added ticks from the next pass.
 - Calling `tick.game.tick_block_entities()` from inside a slot runs the game's own loop, without any slots,
   as a whole pass.
 - A panic in a slot is reported naming your mod and the loop: `in native mod <id>, hook loop

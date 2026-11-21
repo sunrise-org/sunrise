@@ -88,7 +88,12 @@ impl Hooks for Observer {
         drop(heard);
         let pending = PENDING.lock().unwrap().take();
         if let Some(entity) = pending {
-            *KIND_OF_PENDING.lock().unwrap() = Some(entity.kind(host).map(|key| key.id(host)));
+            *KIND_OF_PENDING.lock().unwrap() = Some(
+                entity
+                    .kind(host)
+                    .and_then(|key| key.id(host))
+                    .map(|name| name.as_str().to_owned()),
+            );
         }
         let answers = {
             let mut on_join = ON_JOIN.lock().unwrap();

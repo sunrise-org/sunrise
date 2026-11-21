@@ -65,49 +65,118 @@ impl ClientModifiers {
     }
 }
 
-/// A vanilla key mapping as the client holds it (`ClientHost::mapping`).
-#[derive(Clone, Debug)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct KeyMapping {
-    /// Whether it is held (`KeyMapping.isDown`).
-    pub down: bool,
-    /// The name of the key it is bound to, as Controls shows it (`KeyMapping.getTranslatedKeyMessage`).
-    pub label: Text,
+/// A resolved vanilla key mapping for one running client.
+///
+/// Resolve it with [`vanilla_key_mapping`](crate::prelude::ClientInputClientHost::vanilla_key_mapping)
+/// in `client_setup`. Keep it across rebinding, options replacement, and screen or world changes.
+/// A different client refuses it with [`MappingError::Stale`]; resolve the saved mapping name
+/// against that client. Persist the name, not this handle.
+// no wire: process-local client mapping handle
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct VanillaKeyMappingRef {
+    pub(super) client_generation: std::num::NonZeroU64,
+    pub(super) slot: usize,
 }
 
-/// Why `ClientHost::set_mapping_down` or `ClientHost::click_mapping` refused a mapping.
+/// A resolved mod key mapping in the current client's registration roster.
+///
+/// Resolve it with [`mod_key_mapping`](crate::prelude::ClientInputClientHost::mod_key_mapping)
+/// after registration, usually in `client_setup`. Rebinding, resetting and changing screens do not
+/// invalidate it. If the client or its ordered registration roster is replaced, discard the stale
+/// handle and resolve again. Persist the owner and id, not this handle.
+// no wire: process-local registered key mapping handle
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ModKeyMappingRef {
+    pub(super) registry_generation: std::num::NonZeroU64,
+    pub(super) slot: usize,
+}
+
+/// Why resolving or using a vanilla key mapping, or reading a translated mod key label, was refused.
+// no wire: refusal of a process-local client mapping operation
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum MappingError {
-    /// No player is in a world.
+    /// A gameplay write needs a player in a world.
     NoWorld,
-    /// No vanilla mapping has this name.
+    /// Resolution found no vanilla mapping with the given name.
     Unknown {
         /// The name asked for.
         key: String,
     },
-    /// A vanilla mapping a player does not play with: one outside the movement, gameplay and
-    /// inventory categories (`key.screenshot`, `key.fullscreen`, `key.chat`...).
+    /// The resolved mapping cannot be pressed as a movement, gameplay or inventory mapping
+    /// (`key.screenshot`, `key.fullscreen`, `key.chat`...).
     NotGameplay {
-        /// The name asked for.
+        /// The mapping's canonical name.
         key: String,
     },
     /// The mapping accepts a click but has no held state (`key.pickItem`).
     ClickOnly {
-        /// The name asked for.
+        /// The mapping's canonical name.
         key: String,
     },
+    /// The handle does not belong to the current client or no longer identifies a mapping.
+    Stale,
+    /// No client mapping backend is available in this host or phase.
+    Unavailable,
+    /// The mapping exists, but the client does not track a readable logical held state for it.
+    NoLogicalState,
+    /// The translated binding label could not be represented as API text.
+    Label(TextFormError),
+}
+
+impl AccessRefusal for MappingError {
+    fn unavailable() -> Self {
+        Self::Unavailable
+    }
+}
+
+impl NoBackend for MappingError {
+    fn no_backend() -> Self {
+        Self::Unavailable
+    }
+}
+
+impl From<TextFormError> for MappingError {
+    fn from(error: TextFormError) -> Self {
+        Self::Label(error)
+    }
+}
+
+impl std::fmt::Display for MappingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoWorld => f.write_str("no player is in a world"),
+            Self::Unknown { key } => write!(f, "unknown vanilla mapping {key:?}"),
+            Self::NotGameplay { key } => write!(f, "{key:?} is not a gameplay mapping"),
+            Self::ClickOnly { key } => write!(f, "{key:?} accepts clicks only"),
+            Self::Stale => f.write_str("stale vanilla mapping handle"),
+            Self::Unavailable => f.write_str("client mappings are unavailable"),
+            Self::NoLogicalState => {
+                f.write_str("the client does not track this mapping's held state")
+            }
+            Self::Label(error) => write!(f, "invalid mapping label: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for MappingError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Label(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 /// The metadata of a server play packet observed by `Hooks::client_packet`.
 ///
 /// Fields beyond the type id are exposed only for custom payloads. This is
 /// plain mod API data, not the game's decoded protocol enum.
+// no wire: this is a local envelope for already-encoded vanilla packet bytes.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct ClientPacket {
     /// The protocol type, such as `minecraft:ping` or `minecraft:custom_payload`.
     /// An id outside the protocol's packet table is reported as `sunrise:unknown`.
@@ -772,39 +841,6 @@ pub enum SoundState {
     Stopped,
 }
 
-/// A file-backed standalone model baked on every resource load.
-// exhaustive: mods build every form with a struct literal and the game matches them without a wildcard
-#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
-pub enum StandaloneModelForm {
-    /// Bake one dependency with the blockstate baker's negative XYZ quarter-turns.
-    Rotated {
-        /// Namespaced identifier used to resolve the resulting `ModelRef`.
-        id: String,
-        /// Source model identifier, not the result identifier.
-        model: String,
-        /// Quarter-turn counts in X, Y, Z order, modulo four.
-        turns: [u8; 3],
-        /// Keep textures aligned to the resulting face's world basis.
-        uvlock: bool,
-    },
-    /// Bake all dependencies unturned and concatenate their quads into one model.
-    Combined {
-        /// Namespaced identifier used to resolve the resulting `ModelRef`.
-        id: String,
-        /// Source model identifiers, in quad concatenation order.
-        parts: Vec<String>,
-    },
-}
-
-impl StandaloneModelForm {
-    /// The resulting model's identifier.
-    pub fn id(&self) -> &str {
-        match self {
-            Self::Rotated { id, .. } | Self::Combined { id, .. } => id,
-        }
-    }
-}
-
 // no wire: dispatch result retains a static owning-mod identity; not an owned transport record.
 /// A replace hook's answer, or a collect hook's entry, with the mod that gave it: the dispatch
 /// fills in `mod_id` (the answering mod's `[mod] id`), so no mod can answer for another.
@@ -876,13 +912,13 @@ pub enum ScreenTarget {
     DirectConnect,
 }
 
+// no wire: toggle geometry is chosen by the client screen factory.
 /// Where a mod menu's recipe-book toggle sits: `x` GUI pixels right of the menu's left edge and
 /// `y` below the line `from` names. Vanilla screens place theirs either way:
 /// `leftPos + 5, topPos + 34` is `x: 5.0, y: 34.0, from: Menu`, and
 /// `leftPos + 5, height / 2 - 49` is `x: 5.0, y: -49.0, from: ScreenCentre`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 // exhaustive: mods build it with a literal and the game reads every field
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct RecipeBookToggle {
     /// Pixels right of the menu's left edge.
     pub x: f32,
@@ -892,10 +928,10 @@ pub struct RecipeBookToggle {
     pub from: ToggleOrigin,
 }
 
+// no wire: the toggle's coordinate origin is used only by client layout.
 /// The line a recipe-book toggle's `y` counts from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 // exhaustive: the two lines vanilla's screens measure from, matched without a wildcard
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum ToggleOrigin {
     /// The menu's top edge.
     #[default]
@@ -1001,21 +1037,23 @@ impl ColoredLight {
     }
 }
 
-/// A menu type's screen, a mod's (`screen`): its size, where
-/// each of the container's slots is (`Slot.x`, `Slot.y`; none hides the
-/// slot, and so do slots past the list; for a block's menu the server's menu
-/// does not have a hidden slot either, so clicks and shift-clicks skip it), and the player inventory's first
-/// row (vanilla's is 84; the hotbar is 58 below it) and left column, from
-/// its top left.
+// no wire: screen geometry is constructed and consumed in the client window.
+/// Layout for a window's [`crate::MenuScreen`]: its size, where
+/// each of the container's slots is (`Slot.x`, `Slot.y`), and the player
+/// inventory's first row (vanilla's is 84; the hotbar is 58 below it) and
+/// left column, from its top left. The screen does not decide which slots
+/// take server clicks; see [`crate::MenusRegistrar::menu_slot_exclusions`].
 #[derive(Clone, Debug, Default, PartialEq)]
 // exhaustive: mods build it with a literal and the game reads every field
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct Screen {
-    /// Vanilla's container screens are 176 wide.
+pub struct MenuScreenLayout {
+    /// Positive finite width in GUI pixels. Vanilla's container screens are 176 wide.
     pub width: f32,
-    /// The screen's height in GUI pixels; vanilla's is 166.
+    /// Positive finite height in GUI pixels; vanilla's is 166.
     pub height: f32,
-    /// Each menu slot's top-left (x, y), or `None` to hide it.
+    /// Slot geometry at its original backing index. Every nonexcluded slot
+    /// needs geometry; `None` (including an omitted trailing entry) is valid
+    /// only for a registered exclusion. An excluded slot still has a physical
+    /// index; don't compact this list. There are no entries past the backing.
     pub slots: Vec<Option<ScreenSlot>>,
     /// The y of the player inventory's first row; vanilla's is 84.
     pub inventory_y: f32,
@@ -1028,15 +1066,15 @@ pub struct Screen {
     /// `None` uses `[8, height - 94]`, independently of inventory slot positions.
     /// Ignored when `own_labels` is true.
     pub inventory_label: Option<[f32; 2]>,
-    /// The mod draws the title and the "Inventory" label itself
-    /// (`screen_draw`); Sunrise leaves them out.
+    /// Sunrise leaves the title and inventory label for the screen's draw callback.
     pub own_labels: bool,
-    /// The mod draws its own background (`screen_draw`), so Sunrise
-    /// leaves out the plain panel and the slot frames.
+    /// Leave the background to the screen's draw callback, omitting the
+    /// default panel and slot frames.
     pub own_background: bool,
     /// The registered recipe book hosted beside this menu. Its declarations must
     /// target this menu; no panel is enabled until authoritative settings arrive.
-    /// Leaving this unset keeps the screen without a recipe book.
+    /// If the menu declares a book with `MenusRegistrar::menu_recipe_book`, this
+    /// field must name that book. Otherwise the book is optional and display-only.
     pub recipe_book: Option<crate::RecipeBookTypeKey>,
     /// Optional 20 × 18 recipe-book toggle position, from this menu's left and, per
     /// [`RecipeBookToggle::from`], its top or the window's centre.
@@ -1050,10 +1088,11 @@ pub struct Screen {
     pub recipe_book_big_result: bool,
 }
 
+// no wire: a slot's coordinates and empty icon are local screen presentation.
 /// One visible container slot, including vanilla's `Slot.getNoItemIcon`.
+/// Its index in [`MenuScreenLayout::slots`] is the menu's backing index.
 #[derive(Clone, Debug, Default, PartialEq)]
 // exhaustive: mods declare both geometry and the optional empty-slot sprite
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct ScreenSlot {
     /// Top-left in GUI pixels relative to the screen.
     pub position: [f32; 2],

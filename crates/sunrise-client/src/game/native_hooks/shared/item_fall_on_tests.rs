@@ -38,16 +38,16 @@ static LOAN_VALUE: mod_api::AttachmentType<i32> = mod_api::AttachmentType {
     sync: false,
 };
 
-use mod_api::RandomSource as _;
 use sunrise_core::random::RandomSource as _;
 
 struct LoanPart(std::sync::Arc<()>);
 #[mod_api::sunrise_part]
 impl BlockPart for LoanPart {
     fn fall_on(&self, host: &mut dyn LevelRandomHost, event: &mut FallOnEvent<'_>) {
-        let mut random = host.random().expect("authoritative landing random");
-        assert_eq!(random.next_int(), 1553932502);
-        assert!(host.set_random(random));
+        let draw = host
+            .with_random(|random| random.next_int())
+            .expect("authoritative landing random");
+        assert_eq!(draw, 1553932502);
         LOAN_VALUE
             .set(host.attachments(), mod_api::Holder::Level, 73)
             .unwrap();

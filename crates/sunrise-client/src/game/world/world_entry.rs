@@ -108,7 +108,8 @@ impl Game<'_> {
                 })
                 .unwrap_or_default();
             let data_source = self.pack.data_changes.clone();
-            let job = sunrise_guest_stack::builder()
+            let job = std::thread::Builder::new()
+                .stack_size(sunrise_threads::GAME_THREAD_STACK_BYTES)
                 .name("world-creation".into())
                 .spawn(move || {
                     sunrise_client::vanillagen::shared_data_from(

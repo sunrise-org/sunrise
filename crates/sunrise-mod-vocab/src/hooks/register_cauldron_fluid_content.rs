@@ -35,11 +35,13 @@ or that isn't an integer property, and a total of 0 or one that doesn't divide e
 number of levels. The rest of a mod's contents still apply. What a cauldron does when an item
 is used on it is not part of this hook."#]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "server",
         contract = "collect",
         out = "contents",
         context = "registration",
         neoforge = "RegisterCauldronFluidContentEvent"
     )]
-    fn register_cauldron_fluid_content();
+    fn register_cauldron_fluid_content(contents: &mut dyn CauldronFluidContents);
 }

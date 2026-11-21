@@ -11,5 +11,5 @@ pub trait Hooks {
         version = 3,
         target = "sunrise_client_lib::motion::native_living_jump"
     )]
-    fn living_jump();
+    fn living_jump(entity: u32, kind: &str, velocity: [f64; 3]);
 }

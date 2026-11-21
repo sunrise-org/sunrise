@@ -201,10 +201,8 @@ pub mod tests {
         );
         struct Table;
         impl mod_api::prelude::KeysBackend for Table {
-            fn block_entity_type_key_id(&self, key: BlockEntityTypeKey) -> String {
+            fn block_entity_type_key_id(&self, key: BlockEntityTypeKey) -> Option<&str> {
                 mod_vocab::__private::block_entity_type_name(key)
-                    .unwrap()
-                    .to_owned()
             }
         }
         impl Backend for Table {}
@@ -215,7 +213,7 @@ pub mod tests {
             }
         }
         mod_api::impl_host_areas!(Table);
-        assert_eq!(keys[0].id(&Table), "owner:press");
+        assert_eq!(keys[0].id(&Table), Some("owner:press"));
     }
 
     #[test]
@@ -240,8 +238,8 @@ pub mod tests {
             && (error.contains("invalid identifier") || error.contains("unowned namespace"))));
     }
 
-    /// The block entity of type `doubler:press_entity`, held by block `test:press`: it ticks, and
-    /// each tick adds a data slot.
+    /// The block entity of type `doubler:press_entity`, held by block `test:press`.
+    static PRESS_TICKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     pub(crate) struct Press;
     #[mod_api::sunrise_part]
     impl BlockPart for Press {
@@ -254,8 +252,8 @@ pub mod tests {
         fn block_entity_ticks(&self, _: &dyn Host, event: &mut BlockEntityTicksEvent<'_>) {
             event.ticks = true;
         }
-        fn block_entity_tick(&self, _: &mut dyn ServerHost, event: &mut BlockEntityTickEvent<'_>) {
-            event.entity.data.push(1);
+        fn block_entity_tick(&self, _: &mut BlockEntityTickEvent<'_>) {
+            PRESS_TICKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         fn block_entity_view_distance(
             &self,
@@ -284,16 +282,18 @@ pub mod tests {
     #[mod_api::sunrise_part]
     impl BlockEntityPart for Hoard {
         /// With data `[1]`, it replaces its own block with granite.
-        fn block_entity_tick(
-            &self,
-            host: &mut dyn ServerHost,
-            event: &mut BlockEntityTickEvent<'_>,
-        ) {
-            if event.entity.data == [1] {
-                let level = host.level("minecraft:overworld").unwrap();
+        fn block_entity_tick(&self, event: &mut BlockEntityTickEvent<'_>) {
+            if let Some((level, pos)) = event
+                .subject
+                .with_view(|entity| {
+                    (entity.data_slots() == [1]).then(|| (entity.level(), entity.position()))
+                })
+                .flatten()
+            {
+                let host = event.subject.host();
                 let state = BlockState::of(&host.block_states(), self.0, &[]).unwrap();
                 assert_eq!(
-                    level.set_block(host, event.pos, state, BlockUpdateFlags::KNOWN_SHAPE),
+                    level.set_block(host, pos, state, BlockUpdateFlags::KNOWN_SHAPE),
                     Ok(true)
                 );
             }
@@ -867,15 +867,31 @@ pub mod tests {
         // The ticker is asked by block: the type id is not a block.
         assert!(ticks("test:press"));
         assert!(!ticks("doubler:press_entity"));
+        mod_vocab::__private::resolve_block_entity_types(
+            [
+                "doubler:press_entity",
+                "doubler:hoard",
+                "test:pipe",
+                "test:greedy",
+                "test:item_overstates",
+                "test:press",
+            ],
+            |_| Some(()),
+        )
+        .unwrap();
+        struct Unused;
+        impl BlockEntityTickAccess for Unused {
+            fn with_view(&mut self, _: &mut dyn FnMut(BlockEntityView<'_>)) {
+                unreachable!()
+            }
+            fn host(&mut self) -> &mut dyn ServerHost {
+                unreachable!()
+            }
+        }
         let tick = |kind: &str| {
-            let mut entity = ModBlockEntity::new(kind.into(), Default::default());
-            dispatch_block_entity_tick(
-                &mut NoHost,
-                &mut BlockEntityTickReply::Changed,
-                [0, 64, 0],
-                &mut entity,
-            );
-            entity.data.len()
+            let kind = mod_vocab::__private::block_entity_type_key(kind).unwrap();
+            dispatch_block_entity_tick(kind, BlockEntityTickScope::new(&mut Unused));
+            PRESS_TICKS.swap(0, std::sync::atomic::Ordering::Relaxed)
         };
         // The tick is asked by the entity's type, which differs from its block's id.
         assert_eq!(tick("doubler:press_entity"), 1);

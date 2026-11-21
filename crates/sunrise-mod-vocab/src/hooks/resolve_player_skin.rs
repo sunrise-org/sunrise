@@ -11,11 +11,13 @@ pub trait Hooks {
     /// unchanged, replace it, or clear it. The final answer applies only to this
     /// frame. An absent, freed or non-64×64 dynamic texture keeps both vanilla values.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "collect",
         out = "selection",
         version = 1,
         neoforge = "none (vanilla AbstractClientPlayer.getSkin)"
     )]
-    fn resolve_player_skin();
+    fn resolve_player_skin(selection: &mut Option<mod_api::PlayerSkinOverride>);
 }

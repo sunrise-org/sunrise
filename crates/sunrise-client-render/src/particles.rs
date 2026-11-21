@@ -1080,12 +1080,9 @@ pub fn requested_count() -> u64 {
 /// `ParticleEngine` plus the sprite sets of `ParticleResources`.
 pub struct ParticleEngine {
     particles: Vec<Particle>,
-    /// The mods' registered render groups, indexed by their handle: each keeps its own live
-    /// particles, drawn after `particles`.
+    /// The mods' constructed render groups, indexed by their handle. Each keeps its definition
+    /// for sprite loads and its own live particles, drawn after `particles`.
     groups: Vec<groups::Group>,
-    /// The registered groups as this engine was built (`register_particle_groups`), which each
-    /// type's group handle indexes; resolved at every load.
-    group_defs: &'static [mod_api::ParticleGroup],
     pending: Vec<PendingParticle>,
     /// Particle spawns deferred until all live particles have ticked.
     spawned_in_tick: Option<Vec<(ParticleOptions, [f64; 3], [f64; 3])>>,
@@ -1224,10 +1221,18 @@ impl ParticleEngine {
         atlas: &HashMap<String, Rect>,
         translucent: &HashSet<String>,
     ) -> Self {
+        Self::with_group_factories(root, atlas, translucent, groups::registered())
+    }
+
+    fn with_group_factories(
+        root: &ResourceSource,
+        atlas: &HashMap<String, Rect>,
+        translucent: &HashSet<String>,
+        factories: &[groups::Factory],
+    ) -> Self {
         let mut engine = Self {
             particles: Vec::new(),
-            groups: groups::Group::all(groups::registered()),
-            group_defs: groups::registered(),
+            groups: groups::Group::all(factories),
             pending: Vec::new(),
             spawned_in_tick: None,
             random: LegacyRandom::new(0x7061_7274),
@@ -1320,8 +1325,8 @@ impl ParticleEngine {
     /// Gives each type a registered group lists the group's handle, once per load. A type no
     /// sprite set matches, or another group lists already, is logged and left out.
     fn resolve_groups(&mut self) {
-        for (handle, group) in self.group_defs.iter().enumerate() {
-            for name in &group.particles {
+        for (handle, group) in self.groups.iter().enumerate() {
+            for name in &group.definition.particles {
                 match self.mod_sets.get_mut(name) {
                     Some(set) if set.group.is_none() => set.group = Some(handle as u32),
                     Some(_) => log::warn!(
@@ -4499,7 +4504,7 @@ impl ParticleEngine {
         self.particles.iter().map(|p| (p, None)).chain(
             self.groups
                 .iter()
-                .flat_map(|g| g.particles.iter().map(|p| (p, Some(g.blend)))),
+                .flat_map(|g| g.particles.iter().map(|p| (p, Some(g.definition.blend)))),
         )
     }
 

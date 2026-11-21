@@ -73,9 +73,10 @@ pub trait ClientViewClientHost {
     #[access(ClientSetup)]
     fn project(&self, at: [f64; 3]) -> Option<[f32; 3]>;
     /// Side: client.
-    /// The local player's item use as the client sees it: the hand, ticks used and ticks left
-    /// (`isUsingItem`, `getUsedItemHand`, `getTicksUsingItem`, `getUseItemRemainingTicks`).
-    /// None when the player uses no item or no client world is open. Sends nothing.
+    /// The local player's ordinary item use as the client sees it: the hand, ticks used and
+    /// ticks left (`isUsingItem`, `getUsedItemHand`, `getTicksUsingItem`,
+    /// `getUseItemRemainingTicks`). None when the player uses no item or no client world is open.
+    /// Does not report input intercepted by [`crate::ClientItemUseBehavior`]. Sends nothing.
     #[access(ClientSetup)]
     fn local_item_use(&self) -> Option<ItemUse>;
     /// Side: client.

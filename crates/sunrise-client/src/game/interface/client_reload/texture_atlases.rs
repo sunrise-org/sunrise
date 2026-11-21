@@ -421,8 +421,8 @@ mod tests {
             let mut kept = self.0.lock().unwrap();
             kept.0 += 1;
             if kept.0 == 1 {
-                event.atlases.push(maps());
-                event.atlases.push(presets());
+                event.register(maps());
+                event.register(presets());
             }
         }
 

@@ -159,10 +159,26 @@ pub trait ScoreboardBackend {
     #[access(WorldOnly)]
     fn team_collision_rule(&self, team: TeamRef) -> Option<CollisionRule>;
     /// Side: server.
-    /// `PlayerTeam.getPlayers`: the members, as [`ScoreHolder::Name`] keys, in the team's own
-    /// order. Vanilla's is a hash set's, so no order is promised.
+    /// Visit `PlayerTeam.getPlayers` in the team's native Java hash set order, which
+    /// vanilla leaves unspecified. The visitor gets each holder key as a borrowed
+    /// `&str`, valid only during that callback, including names that do not resolve
+    /// to an online player. No result list is built and no names are copied.
+    ///
+    /// The visitor can make shared reads on the same host. Return `ControlFlow::Continue(())`
+    /// to keep visiting or `ControlFlow::Break(())` to stop. The visit returns
+    /// `Ok(ControlFlow::Break(()))` if stopped or `Ok(ControlFlow::Continue(()))` on
+    /// completion, including an empty team. [`TeamMembersReadError::Stale`] and
+    /// [`TeamMembersReadError::Unavailable`] are refusals: neither calls the visitor.
+    ///
+    /// To retain a name, make an owned copy in the visitor. For a scoreboard write,
+    /// collect the names you need, then use `ScoreHolder::Name(name)` with the mutable
+    /// host after the visit.
     #[access(WorldOnly)]
-    fn team_members(&self, team: TeamRef) -> Option<Vec<ScoreHolder>>;
+    fn team_visit_members(
+        &self,
+        team: TeamRef,
+        visit: &mut dyn FnMut(&str) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, TeamMembersReadError>;
 }
 /// The handles' writes of the `scoreboard` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

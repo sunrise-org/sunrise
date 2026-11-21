@@ -4,16 +4,16 @@ A mod opens a level of its own while the server runs and closes it again: an ins
 minigame arena, a pocket dimension per player. `host.runtime_levels()` has `open`, `unload`, `delete`
 and `is_open`.
 
+In `Hooks::register_commands`, bind an operator-only [server command](../entities/server-commands.md).
+Return `Some(1)` after `open` accepts the request or `None` if it refuses:
+
 ```rust,ignore
-fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>) -> Flow {
+event.commands.push(Command::op("openarena", 2).executes(|host, _, _| {
     let level = RuntimeLevel::new("mymod:pocket", RuntimeGenerator::Mod("mymod:arena".into()), 4242);
-    match host.runtime_levels().open("mymod:instance/ab12", level) {
-        Ok(handle) => { /* the level opens after this tick's levels have ticked */ }
-        Err(RuntimeLevelError::CapReached) => { /* the server keeps no more open */ }
-        Err(_) => {}
-    }
-    Flow::Cancel
-}
+    // On success the level opens after this tick's levels have ticked.
+    host.runtime_levels().open("mymod:instance/ab12", level).ok()?;
+    Some(1)
+}));
 ```
 
 ## What a level is made of

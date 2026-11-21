@@ -4,6 +4,7 @@ use super::{Game, remote::Remote};
 #[cfg(test)]
 use mod_api::prelude::*;
 use mod_api::{BlockBreakingState, BlockPos, ClientFrameStats, ClientServer, PlayerRef};
+use std::sync::Arc;
 
 impl Game<'_> {
     pub(super) fn native_session(&self) -> Option<&Remote> {
@@ -15,28 +16,22 @@ impl Game<'_> {
     /// The connected server, not a stale reconnect target. None outside a
     /// logged-in client world. External display names are not retained; memory
     /// connections have no address. Friend-invite secrets are redacted.
-    pub(super) fn native_client_server(&self) -> Option<ClientServer> {
+    pub(super) fn native_client_server(&self) -> Option<ClientServer<'_>> {
         let remote = self.native_session()?;
+        let integrated = self.integrated.as_ref();
         Some(ClientServer {
-            name: self
-                .integrated
-                .as_ref()
-                .map(|server| server.world_name.clone()),
-            address: (remote.session.address != "local")
-                .then(|| sunrise_client::net::shown_address(&remote.session.address)),
-            integrated_local: self.integrated.is_some(),
-            save_folder: self
-                .integrated
-                .as_ref()
-                .map(|server| server.save_folder.clone()),
+            name: integrated.map(|server| server.world_name.as_str()),
+            address: remote.display_address.as_deref(),
+            integrated_local: integrated.is_some(),
+            save_folder: integrated.map(|server| server.save_folder.as_str()),
         })
     }
 
-    /// The applied language code, not a pending options selection. None outside
-    /// a logged-in client world. Read is_paused for the applied pause state.
-    pub(super) fn native_client_language(&self) -> Option<String> {
+    /// A snapshot of the applied language code, not a pending options selection.
+    /// None outside a logged-in client world.
+    pub(super) fn native_client_language(&self) -> Option<Arc<str>> {
         self.native_session()?;
-        Some(sunrise_client::lang::code())
+        Some(sunrise_client::lang::code_snapshot())
     }
 
     /// `PlayerInfo.getLatency` of the local player in milliseconds, 0 before the server's first
@@ -280,6 +275,8 @@ pub(super) mod tests {
     #[test]
     #[ignore = "daily"]
     fn client_session_reads_follow_connection_language_and_frame_state() {
+        use sunrise_client::lang::{self, Language};
+
         with_client_game(|game| {
             assert_eq!(game.client_session().client_server(), None);
             assert_eq!(game.client_session().client_language(), None);
@@ -293,47 +290,59 @@ pub(super) mod tests {
                 "a memory guest does not own the server"
             );
 
-            game.remote.as_mut().unwrap().session.address = "127.0.0.1:25565".into();
-            let external = game.client_session().client_server().unwrap();
-            assert_eq!(external.address.as_deref(), Some("127.0.0.1:25565"));
-            assert_eq!(
-                external.name, None,
-                "Session.name is the player, not the server"
-            );
-            assert!(
-                !external.integrated_local,
-                "loopback does not mean integrated"
-            );
-            game.remote.as_mut().unwrap().session.address = "friend:private-invite".into();
-            assert_eq!(
-                game.client_session()
-                    .client_server()
-                    .unwrap()
-                    .address
-                    .as_deref(),
-                Some("Friend's world")
-            );
+            // Exercise the same display-address calculation as Remote construction without
+            // opening an extra network connection for either address.
+            for (address, display) in [
+                ("127.0.0.1:25565", "127.0.0.1:25565"),
+                ("friend:private-invite", "Friend's world"),
+            ] {
+                let remote = game.remote.as_mut().unwrap();
+                remote.session.address = address.into();
+                remote.display_address = Remote::display_address_for(&remote.session.address);
+                let external = game.client_session().client_server().unwrap();
+                assert_eq!(external.address, Some(display));
+                assert_eq!(
+                    external.name, None,
+                    "Session.name is the player, not the server"
+                );
+                assert!(
+                    !external.integrated_local,
+                    "an address does not determine ownership"
+                );
+            }
 
             game.settings.language = "fr_fr".into();
-            sunrise_client::lang::scoped(sunrise_client::lang::Language::of("es_es", []), || {
-                assert_eq!(
-                    game.client_session().client_language().as_deref(),
-                    Some("es_es")
-                );
-                sunrise_client::lang::scoped(
-                    sunrise_client::lang::Language::of("de_de", []),
-                    || {
-                        assert_eq!(
-                            game.client_session().client_language().as_deref(),
-                            Some("de_de")
-                        );
-                    },
-                );
-                assert_eq!(
-                    game.client_session().client_language().as_deref(),
-                    Some("es_es")
-                );
-            });
+            let _publication = lang::isolate_publication(Language::of("es_es", []));
+            let outer = game.client_session().client_language().unwrap();
+            assert_eq!(outer.as_ref(), "es_es");
+            let inner = {
+                let _nested = lang::isolate_publication(Language::of("en_us", []));
+                lang::set(Language::of("de_de", []));
+                let inner = game.client_session().client_language().unwrap();
+                assert_eq!(inner.as_ref(), "de_de");
+                lang::scoped(Language::of("ja_jp", []), || {
+                    assert_eq!(
+                        game.client_session().client_language().as_deref(),
+                        Some("ja_jp")
+                    );
+                });
+                assert_eq!(lang::code(), "de_de");
+                inner
+            };
+            assert_eq!(
+                inner.as_ref(),
+                "de_de",
+                "the snapshot outlives its publication"
+            );
+            assert_eq!(
+                game.client_session().client_language().as_deref(),
+                Some("es_es")
+            );
+            assert_eq!(
+                outer.as_ref(),
+                "es_es",
+                "publication does not mutate earlier snapshots"
+            );
             game.debug_charts.frame_times.reset();
             assert_eq!(
                 game.client_session()

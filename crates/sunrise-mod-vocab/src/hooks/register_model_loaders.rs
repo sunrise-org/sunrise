@@ -49,11 +49,13 @@ A model over 65,536 quads is refused whole, with a reason. A quad with a positio
 a texture key the model doesn't define, is skipped by itself with a reason. A `loader` no mod registered is
 logged as an error naming it and the model, which then draws only its elements."#]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "client",
         contract = "collect",
         out = "loaders",
         context = "registration",
         neoforge = "ModelEvent.RegisterLoaders"
     )]
-    fn register_model_loaders();
+    fn register_model_loaders(loaders: &mut Vec<String>);
 }

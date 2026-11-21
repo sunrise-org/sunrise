@@ -25,6 +25,25 @@ and never ask this hook. Server interaction checks remain reach-only.
 The existing family traversal order is retained; exact vanilla section and
 within-section insertion ordering is a separate engine correction.
 
+## Entity tags
+
+On the server, `entity.tags(host)` lends an `EntityTags<'_>` view of the entity's scoreboard
+tags (`Entity.entityTags()`), not its entity-type registry tags. A live entity without tags
+gives an empty view (`tags.is_empty()`); a stale handle, client or snapshot without live tags
+gives `None`. A goal can read its own mob's tags and the tags of other live mobs lent to the tick.
+
+Use `entity.tags(host).is_some_and(|tags| tags.contains("mymod:marked"))` for an exact match
+without allocating. View equality compares exact UTF-16 tag membership, ignoring order and
+repeated entries. `tags.iter_utf16()` still yields tags in saved order, so use
+`a.iter_utf16().eq(b.iter_utf16())` when the order matters. To keep the old `Vec<String>`
+equality, including replacement characters for unpaired surrogates, compare
+`a.iter_utf16().map(String::from_utf16_lossy).eq(b.iter_utf16().map(String::from_utf16_lossy))`.
+
+Use `String::from_utf16(units)` to reject unpaired surrogates, `String::from_utf16_lossy(units)`
+for the same replacement characters as `/tag ... list`, or `units.to_vec()` to keep the exact
+units after the host borrow ends. For the old replacement-character membership check, use
+`tags.iter_utf16().any(|units| String::from_utf16_lossy(units) == name)`.
+
 ## Goals
 
 `r.entity_part("minecraft:zombie", ZombieGoals)` attaches an `EntityPart` to one entity type, a mod's
@@ -121,7 +140,8 @@ let full = Robot::edit_state(host, robot, |_, charge| {
   (boats, minecarts, items, projectiles, armor stands...) and an unknown id refuse the load with
   `PartStateRefusal::EntityKind`, naming the type. `entity_part` itself checks no type.
 - The declaration is refused at the call as for block entities, copying on death included. Part
-  state is server-side.
+  state is server-side. Its registration errors, residency checks and state errors are
+  local values; only the attachment's state value is saved through its codec.
 
 ## Brain behaviors
 

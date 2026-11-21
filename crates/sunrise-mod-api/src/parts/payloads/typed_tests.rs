@@ -1,8 +1,8 @@
 use super::*;
 use crate::{
-    IPayloadContext, PayloadAccepted, PayloadBytes, PayloadCodec, PayloadContextError,
-    PayloadHandleError, PayloadSendError, PayloadToken, PayloadWork, PayloadWorkStatus, PlayerRef,
-    Text, VarInt, payload_schema, typed_payload_version,
+    IPayloadContext, PayloadAccepted, PayloadBytes, PayloadContextError, PayloadHandleError,
+    PayloadSendError, PayloadToken, PayloadWork, PayloadWorkStatus, PlayerRef, Text, Wire,
+    payload_schema, typed_payload_version,
 };
 use std::sync::Mutex;
 
@@ -17,12 +17,12 @@ fn frozen(registrar: &PartRegistrar) -> mod_vocab::__private::game::Payloads {
         .into()
 }
 
-#[derive(Debug, PartialEq, PayloadCodec)]
+#[derive(Debug, PartialEq, Wire)]
 struct Counter {
-    counter: VarInt,
+    counter: u8,
 }
 
-#[derive(Debug, PartialEq, PayloadCodec)]
+#[derive(Debug, PartialEq, Wire)]
 struct Other {
     counter: i32,
 }
@@ -175,6 +175,12 @@ impl IPayloadContext for Unreached {
     ) -> Result<u32, PayloadSendError> {
         unreachable!()
     }
+    fn finish_configuration_task(
+        &mut self,
+        _: crate::ConfigurationTaskRef,
+    ) -> Result<(), crate::ConfigurationTaskError> {
+        Err(crate::ConfigurationTaskError::WrongContext)
+    }
     fn disconnect(&mut self, _: Text) {
         unreachable!()
     }
@@ -186,68 +192,116 @@ impl IPayloadContext for Unreached {
     }
 }
 
-#[derive(Debug, PartialEq, PayloadCodec)]
+#[derive(Debug, PartialEq, Wire)]
 struct Labelled {
-    counter: VarInt,
+    counter: i32,
     labels: Vec<String>,
     chain: Chain,
 }
 
-#[derive(Debug, PartialEq, PayloadCodec)]
+#[derive(Debug, PartialEq, Wire)]
 struct Chain(Option<Box<Chain>>);
 
 #[test]
-fn a_malformed_body_is_refused_by_name_before_the_handler_runs() {
-    static SEEN: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+fn valid_and_malformed_wire_bodies_are_handled_in_both_directions() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let clients = seen.clone();
+    let servers = seen.clone();
     let mut registrar = PartRegistrar::new("test");
     (&mut registrar as &mut dyn Registrar)
         .payload_handlers()
         .registrar("1")
-        .play_to_server_typed(
+        .play_bidirectional_typed(
             PayloadId("test:labelled".into()),
-            |value: Labelled, _: &mut dyn IPayloadContext| {
-                SEEN.lock().unwrap().push(value.counter.0);
+            move |value: Labelled, _| {
+                servers
+                    .lock()
+                    .unwrap()
+                    .push((PayloadDirection::ToServer, value));
+                Ok(())
+            },
+            move |value: Labelled, _| {
+                clients
+                    .lock()
+                    .unwrap()
+                    .push((PayloadDirection::ToClient, value));
                 Ok(())
             },
         );
-    let receiver = frozen(&registrar)
-        .handler(
-            "test:labelled",
-            PayloadProtocol::Play,
-            PayloadDirection::ToServer,
-        )
-        .unwrap();
+    let table = frozen(&registrar);
+    // Little-endian i32 7, one length-prefixed UTF-8 label, no recursive child.
+    let valid = [7, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, b'a', 0];
     let nested = |levels: usize| {
-        let mut body = vec![7, 0];
+        let mut body = vec![7, 0, 0, 0, 0, 0, 0, 0];
         body.extend(std::iter::repeat_n(1, levels));
         body.push(0);
         body
     };
-    for (body, error) in [
-        // A label count of -1.
-        (vec![7, 0xff, 0xff, 0xff, 0xff, 0x0f], "NegativeLength"),
-        // 4097 labels, one past the list bound, before any is reserved.
-        (vec![7, 0x81, 0x20], "LengthOverLimit"),
-        // 33 boxed options: nesting level 65.
-        (nested(33), "TooDeep"),
-        (vec![7, 0, 0, 0xaa], "Trailing"),
-    ] {
-        let refused = receiver
-            .handle(PayloadBytes(body), &mut Unreached)
-            .unwrap_err();
-        let PayloadHandleError::Failed(refused) = refused;
-        assert!(refused.contains("test:labelled"), "{refused}");
-        assert!(refused.contains(error), "{refused}");
+    for direction in [PayloadDirection::ToServer, PayloadDirection::ToClient] {
+        let receiver = table
+            .handler("test:labelled", PayloadProtocol::Play, direction)
+            .unwrap();
+        for body in [
+            // 4097 labels, one past the list bound.
+            vec![7, 0, 0, 0, 1, 0x10, 0, 0],
+            // Each next link adds an option and a box to the depth.
+            nested(33),
+            [valid.as_slice(), &[0xaa]].concat(),
+            valid[..5].to_vec(),
+        ] {
+            let PayloadHandleError::Failed(refused) = receiver
+                .handle(PayloadBytes(body), &mut Unreached)
+                .unwrap_err();
+            assert!(refused.contains("test:labelled"), "{refused}");
+        }
+        assert!(seen.lock().unwrap().is_empty());
+        receiver
+            .handle(PayloadBytes(valid.to_vec()), &mut Unreached)
+            .unwrap();
+        let expected = Labelled {
+            counter: 7,
+            labels: vec!["a".into()],
+            chain: Chain(None),
+        };
+        assert_eq!(&*seen.lock().unwrap(), &[(direction, expected)]);
+        seen.lock().unwrap().clear();
     }
-    assert!(SEEN.lock().unwrap().is_empty());
-    // Level 64 is the deepest a value goes.
-    receiver
-        .handle(PayloadBytes(nested(32)), &mut Unreached)
-        .unwrap();
-    receiver
-        .handle(PayloadBytes(vec![7, 0, 0]), &mut Unreached)
-        .unwrap();
-    assert_eq!(*SEEN.lock().unwrap(), [7, 7]);
+}
+
+#[test]
+fn ordinary_only_wire_forms_refuse_registration_before_a_channel_exists() {
+    fn refused<T: crate::wire::Wire + 'static>(
+        view: &mut crate::PayloadRegistrar<'_>,
+        id: &'static str,
+    ) -> &'static str {
+        let channel = view.play_to_server_typed::<T>(PayloadId(id.into()), ignore);
+        let token = channel.token();
+        assert_eq!(token.id.0, id);
+        assert_eq!(token.load, 0, "{id}");
+        id
+    }
+
+    let mut registrar = PartRegistrar::new("test");
+    let mut payloads = (&mut registrar as &mut dyn Registrar).payload_handlers();
+    let mut view = payloads.registrar("1");
+    let ids = [
+        refused::<crate::ModelPart>(&mut view, "test:model"),
+        refused::<crate::Text>(&mut view, "test:text"),
+        refused::<Option<&'static str>>(&mut view, "test:interned"),
+        refused::<Option<serde_json::Value>>(&mut view, "test:json"),
+        refused::<crate::LegacyRandomSource>(&mut view, "test:converted"),
+        refused::<crate::LevelKey>(&mut view, "test:level_key"),
+        refused::<crate::LevelDimension>(&mut view, "test:dimension"),
+        refused::<Option<crate::Identifier>>(&mut view, "test:identifier"),
+        refused::<crate::SpawnerKey>(&mut view, "test:spawner"),
+        refused::<crate::CustomSpawners>(&mut view, "test:spawners"),
+    ];
+    drop(view);
+    assert!(registrar.parts.payloads.is_none());
+    assert_eq!(registrar.refused.len(), ids.len());
+    for (refused, id) in registrar.refused.iter().zip(ids) {
+        assert!(refused.contains(id), "{refused}");
+    }
 }
 
 #[test]

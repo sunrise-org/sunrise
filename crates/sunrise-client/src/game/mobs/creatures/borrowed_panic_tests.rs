@@ -23,6 +23,8 @@ enum Family {
 }
 #[derive(Debug)]
 struct PanicToken(u64);
+const LEVEL_SEED: i64 = 0x5eed;
+
 struct Probe {
     family: Family,
     calls: AtomicUsize,
@@ -48,12 +50,11 @@ impl Probe {
 impl Probe {
     fn progress(&self, family: Family, target: bool, host: &mut dyn mod_api::LevelRandomHost) {
         if self.family == family && target && self.armed.load(Ordering::SeqCst) {
-            // Seed at the actual callback boundary, independent of earlier vanilla draws.
-            assert!(host.set_random(mod_api::LegacyRandomSource::new(0x5eed)));
-            let mut expected = LegacyRandom::new(0x5eed);
+            // The fixture's pre-hook vanilla rolls (ambient, egg cooldown and knockback)
+            // use each mob's own stream. This is the first draw from the seeded level.
             assert_eq!(
                 host.with_random(|random| random.next_long()),
-                Some(expected.next_long())
+                Some(LegacyRandom::new(LEVEL_SEED).next_long())
             );
             VALUE.set(host.attachments(), Holder::Level, 314).unwrap();
             eprintln!("BORROWED_NATIVE_PROGRESS:{family:?}");
@@ -491,7 +492,7 @@ fn run_output(family: Family, output: Output) {
                     }
                     let writes = game.world.path_writes.clone();
                     game.world.random =
-                        sunrise_core::random::LevelRandom::for_level(LegacyRandom::new(0x5eed));
+                        sunrise_core::random::LevelRandom::for_level(LegacyRandom::new(LEVEL_SEED));
                     let guest_health = if matches!(output, Output::Guest | Output::Mixed) {
                         game.lan.as_ref().unwrap().hub.guests[0].health
                     } else {
@@ -533,7 +534,7 @@ fn run_output(family: Family, output: Output) {
                             | Family::Landing
                     );
                     let expected_value = if progressed { 314 } else { 42 };
-                    let mut expected_random = LegacyRandom::new(0x5eed);
+                    let mut expected_random = LegacyRandom::new(LEVEL_SEED);
                     if progressed {
                         expected_random.next_long();
                     }

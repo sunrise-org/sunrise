@@ -51,11 +51,7 @@ fn use_effects_component_recipe_decodes_defaults_bounds_and_matches() {
             ))
             .unwrap(),
         );
-        ResolvedRecipe {
-            name: format!("fixture:{name}"),
-            resolved: file.clone(),
-            file,
-        }
+        ResolvedRecipe::fixture(format!("fixture:{name}"), file)
     };
     let mut sources = ResolvedSources::default();
     for (name, patch, strict) in valid {

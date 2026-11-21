@@ -1610,18 +1610,16 @@ mod tests {
                 event: &mut mod_api::RegisterCommandsEvent<'_>,
             ) {
                 if self.offered.load(Ordering::Relaxed) {
+                    let ran = self.ran.clone();
                     event
                         .commands
-                        .push(mod_api::Command::new("fnmod [n:integer]"));
+                        .push(mod_api::Command::new("fnmod [n:integer]").executes(
+                            move |_, _, _| {
+                                ran.fetch_add(1, Ordering::Relaxed);
+                                Some(1)
+                            },
+                        ));
                 }
-            }
-            fn run_mod_command(
-                &self,
-                _: &mut dyn mod_api::ServerHost,
-                _: &mut mod_api::RunModCommandEvent<'_>,
-            ) -> mod_api::Flow {
-                self.ran.fetch_add(1, Ordering::Relaxed);
-                mod_api::Flow::Cancel
             }
         }
         let offered = Arc::new(AtomicBool::new(true));

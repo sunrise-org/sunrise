@@ -20,13 +20,15 @@ A mod's spawner is a key it owns, and the `custom_spawner_tick(dimension, key, s
 
 Sunrise ticks vanilla's spawners where it always has: the trader, patrol, cat and siege spawners in the custom spawner block (vanilla's own order differs, and moving it is a separate parity change) and the phantom spawner with the stats, after the mobs. A mod's spawners tick after them in list order, so the position of the `Phantom` entry in the list does not move it. Listeners run on replayed ticks, so they are pure functions of their inputs."#]
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         host = "read",
         neoforge = "ModifyCustomSpawnersEvent",
         cancellable = false
     )]
-    fn modify_custom_spawners();
+    fn modify_custom_spawners(dimension: &str, spawners: &mut mod_api::CustomSpawners);
 
     /// `CustomSpawner.tick` for a spawner a mod added with `modify_custom_spawners`: the level
     /// `dimension` ticks the spawner `key`, once per tick in the list's order, with
@@ -38,9 +40,10 @@ Sunrise ticks vanilla's spawners where it always has: the trader, patrol, cat an
     /// check per tick. Beyond NeoForge: a key and this hook stand in for the `CustomSpawner`
     /// object. Server-side.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "ModifyCustomSpawnersEvent"
     )]
-    fn custom_spawner_tick();
+    fn custom_spawner_tick(dimension: &str, key: mod_api::SpawnerKey, spawn_enemies: bool);
 }

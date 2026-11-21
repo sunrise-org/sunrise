@@ -85,7 +85,8 @@ mod tests {
     use super::super::native_entity_refs::tests::{run_fresh_cases, with_client_game};
     use super::{SendPacketError, ServerboundPlayPacket};
     use mod_api::Identifier;
-    use sunrise_protocol::{buf::Writer, connection::Pipe};
+    use sunrise_core::vanilla_bytes::Writer;
+    use sunrise_protocol::connection::Pipe;
 
     /// A joined flag cannot manufacture a physical transport. Packet codec,
     /// reservation, and framing cases live in net::mod_packet_tests.

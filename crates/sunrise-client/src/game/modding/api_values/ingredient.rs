@@ -1,4 +1,4 @@
-//! Ingredient conversions retain concrete predicates and slot displays.
+//! Ingredient conversions retain the binding to the same defining mod and preserve slot displays.
 use super::*;
 impl TryIntoApi for crate::crafting::Ingredient {
     type Api = mod_api::Ingredient;
@@ -21,14 +21,14 @@ impl TryIntoApi for crate::crafting::Ingredient {
 impl TryIntoEngine for mod_api::Ingredient {
     type Engine = crate::crafting::Ingredient;
     type Error = StackWriteError;
-    fn try_into_engine(&self, _items: &Items) -> Result<Self::Engine, Self::Error> {
+    fn try_into_engine(&self, items: &Items) -> Result<Self::Engine, Self::Error> {
         let mut ingredient = crate::crafting::Ingredient {
             compiled: None,
-            component_defaults: _items.component_defaults.clone(),
+            component_defaults: items.component_defaults.clone(),
             shown: self
                 .display
                 .as_ref()
-                .and_then(|display| crate::crafting::Ingredient::resolve_display(display, _items)),
+                .and_then(|display| crate::crafting::Ingredient::resolve_display(display, items)),
             items: self.items.clone(),
             order: self.order.clone(),
             custom: self.custom.clone(),
@@ -41,14 +41,14 @@ impl TryIntoEngine for mod_api::Ingredient {
                     Ok::<_, StackWriteError>((
                         shape.clone(),
                         kids.iter()
-                            .map(|k| k.try_into_engine(_items))
+                            .map(|k| k.try_into_engine(items))
                             .collect::<Result<_, _>>()?,
                     ))
                 })
                 .transpose()?,
         };
         ingredient
-            .prepare_components(_items)
+            .prepare_components(items)
             .ok_or(StackWriteError::UnknownItem)?;
         Ok(ingredient)
     }

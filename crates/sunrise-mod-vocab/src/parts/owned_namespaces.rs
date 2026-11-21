@@ -114,33 +114,6 @@ pub(crate) fn submit_declaration<D: Declaration>(
     })
 }
 
-impl crate::RegistrationContext {
-    /// Refuse this mod's registration with a diagnostic, without panicking.
-    /// The first reason wins. Reasons exceeding 4096 UTF-8 bytes are truncated
-    /// at a character boundary; shorter reasons are preserved verbatim.
-    /// All this mod's declarations from this registration are discarded, including
-    /// later declarations, without adding their validation errors to the report.
-    /// Other mods' declarations are unchanged. Returning from `Hooks::register` immediately
-    /// is recommended.
-    pub fn refuse(&self, reason: &str) {
-        let mut reason_slot = self.self_refusal.lock().unwrap_or_else(|p| p.into_inner());
-        if reason_slot.is_none() {
-            *reason_slot = Some(super::registration_refusal::bounded_text(reason).to_owned());
-        }
-    }
-
-    /// Report a loading problem that doesn't stop this mod: a missing optional integration,
-    /// a setting it corrected. `key` is a translation key in the mod's own `lang/` files and
-    /// `args` its `%s` arguments; the Mods screen shows it in the player's language, and the
-    /// log names the key. The first 16 warnings are kept, each cut as `refuse` cuts.
-    pub fn warn(&self, key: &str, args: &[&str]) {
-        let mut warnings = self.warnings.lock().unwrap_or_else(|p| p.into_inner());
-        if warnings.len() < super::registration_refusal::MAX_LOADING_WARNINGS {
-            warnings.push(super::registration_refusal::LoadingMessage::new(key, args));
-        }
-    }
-}
-
 /// The engine consumes block/item declaration ownership refusals before loading
 /// resources.
 // hidden: engine admission plumbing, re-exported through __private for the loader.

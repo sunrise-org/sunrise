@@ -146,13 +146,7 @@ impl Game<'_> {
                 }
             }
         }
-        let mut writer = mod_api::wire::Writer::new();
-        writer.limit(sync::MAX_CATALOG_BYTES);
-        writer.put(&declarations);
-        if writer.error().is_some() {
-            return Err(Refusal::TooLarge);
-        }
-        let bytes = writer.into_bytes();
+        let bytes = sync::encode_catalogue(&declarations)?;
         if !self.mod_book_menu_unchanged(&before) {
             return Err(Refusal::Changed);
         }

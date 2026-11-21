@@ -1120,7 +1120,8 @@ impl RecipeIndex {
                 return;
             }
             let kind = v["type"].as_str().unwrap_or_default();
-            let special = mod_api::__private::parts_installation::crafting_recipe(kind).is_some()
+            let special = mod_api::__private::parts_installation::recipe_serializer(kind)
+                .is_some_and(|(recipe_type, _)| recipe_type == "minecraft:crafting")
                 || kind.starts_with("minecraft:crafting_special_")
                 || kind == "minecraft:crafting_decorated_pot"
                 // A brewing recipe has no recipe book display of its own

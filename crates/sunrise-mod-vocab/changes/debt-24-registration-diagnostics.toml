@@ -1,0 +1,3 @@
+ids = ["behaviour:registration_rollback"]
+why = "Warnings and self-refusals are recorded directly for the mod running Hooks::register instead of being collected from the context afterward. Limits, translation, and rollback are unchanged."
+migrate = "No change needed: in Hooks::register, cx.warn(key, args) stays cx.warn(key, args), and cx.refuse(reason) stays cx.refuse(reason). Return after refusing registration."

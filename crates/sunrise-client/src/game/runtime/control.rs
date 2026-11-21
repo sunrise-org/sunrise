@@ -868,7 +868,7 @@ impl Game<'_> {
             "release" => {
                 self.keys.clear();
                 self.physical_keys.clear();
-                self.native_input.mappings.set_all_up();
+                self.mod_keys.set_all_up();
                 self.modifiers = winit::keyboard::ModifiersState::empty();
                 // Sneak and sprint pressed through `key` live in the toggle
                 // mappings: release them as their key's release would (a

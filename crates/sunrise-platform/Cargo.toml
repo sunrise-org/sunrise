@@ -16,7 +16,6 @@ server-files = ["dep:sunrise-server-files", "dep:sunrise-java-properties"]
 mod-build = ["dep:sunrise-mod-api-gen"]
 
 [dependencies]
-sunrise-guest-stack = { path = "../sunrise-guest-stack" }
 sunrise-mod-api-gen = { path = "../sunrise-mod-api-gen", optional = true }
 sunrise-core = { path = "../sunrise-core" }
 sunrise-system = { path = "../sunrise-system" }

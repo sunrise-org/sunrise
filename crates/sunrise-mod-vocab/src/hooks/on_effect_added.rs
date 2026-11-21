@@ -39,13 +39,17 @@ pub trait Hooks {
         active_effects: &[EffectKey],
         changes: &mut Vec<EffectTickChange>,
         keep: &mut bool,
+        #[engine] tick_count: i32,
+        #[engine] make_call: impl FnOnce(EffectKey, i32) -> ApplyEffectTickCall<'_>,
     );
     /// `MobEffect.onEffectAdded`: `LivingEntity.addEffect` gave `entity`
     /// the content mod's effect `effect`, which it didn't have. Server-side.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_on_effect_added",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "none (vanilla MobEffect.onEffectAdded; NeoForge adds no event or extension for it)"
     )]
-    fn on_effect_added();
+    fn on_effect_added(effect: EffectKey, entity: Option<i32>, amplifier: i32);
 }

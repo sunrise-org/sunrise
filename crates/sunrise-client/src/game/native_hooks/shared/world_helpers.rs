@@ -1,4 +1,10 @@
 use super::*;
+use crate::game::host::draw::GameDrawContext;
+use mod_api::{
+    ClientHost, DrawContext, GuiLayerWrapContext,
+    content::crash::{ModCall, enter_native_mod},
+};
+use sunrise_client::gui_layers::{self, GuiLayerBody, VanillaGuiLayer};
 
 #[allow(dead_code)]
 impl Game<'_> {
@@ -106,60 +112,6 @@ impl Game<'_> {
             self.clear_client_particles();
         }
     }
-    /// Draws one vanilla HUD layer between the mods' hooks: first the mods' layers
-    /// placed below it (`draw_mod_gui_layers`), then `native_gui_layer_pre` (which
-    /// may hide it), the layer, then `native_gui_layer_post`. `None` when a mod hid
-    /// the layer.
-    pub(in crate::game) fn gui_layer<R>(
-        &mut self,
-        layer: &str,
-        batch: &mut HudBatch,
-        draw: impl FnOnce(&mut Self, &mut HudBatch) -> R,
-    ) -> Option<R> {
-        self.draw_mod_gui_layers(Some(layer), batch);
-        let mut canceled = false;
-        self.native_gui_layer_pre(layer, batch, &mut canceled);
-        let drawn = (!canceled).then(|| draw(self, batch));
-        self.native_gui_layer_post(layer, batch);
-        drawn
-    }
-    /// `GuiLayerManager.renderInner` for the mods' layers (`native_register_gui_layers`) not
-    /// drawn yet this frame and placed below vanilla layer `until`, or for all that are left
-    /// with `None`, at the HUD's end. Each fires `native_gui_layer_pre` (which may hide it),
-    /// `native_gui_layer_draw`, then `native_gui_layer_post`, as a vanilla layer does. So a
-    /// vanilla layer that is not drawn this frame keeps its place: the mods' layers around it
-    /// draw at the next layer that is. Nothing while the HUD is hidden, and nothing to look up
-    /// when no mod registered a layer.
-    pub(in crate::game) fn draw_mod_gui_layers(
-        &mut self,
-        until: Option<&str>,
-        batch: &mut HudBatch,
-    ) {
-        let order = sunrise_client::gui_layers::order();
-        let Some(next) = self.hud_layer_next.filter(|_| order.has_mod_layers()) else {
-            return;
-        };
-        let end = match until {
-            Some(layer) => match order.position(layer) {
-                Some(at) => at,
-                None => return,
-            },
-            None => order.len(),
-        };
-        for at in next..end {
-            let Some(layer) = order.mod_layer(at) else {
-                continue;
-            };
-            let mut canceled = false;
-            self.native_gui_layer_pre(layer, batch, &mut canceled);
-            if !canceled {
-                self.native_gui_layer_draw(layer, batch);
-            }
-            self.native_gui_layer_post(layer, batch);
-        }
-        // Past `until` itself: it is drawn next, by `gui_layer`.
-        self.hud_layer_next = Some(next.max(end + usize::from(until.is_some())));
-    }
     /// Whether a box in `corner` shows: F3's debug screen takes both top
     /// corners (its left and right columns), and a bottom corner while one
     /// of its charts is drawn there.
@@ -208,5 +160,138 @@ impl Game<'_> {
         }
         self.screen_state.observed = self.observed_now();
         self.shown_init_post();
+    }
+}
+
+// The vanilla paint procedure belongs to the caller's frame, not the frozen layer order.
+type VanillaGuiDraw<'p, 'g> = dyn FnMut(&mut Game<'g>, &mut HudBatch) + 'p;
+
+struct GuiLayerWrapFrame<'a, 'p, 'g> {
+    game: &'a mut Game<'g>,
+    batch: &'a mut HudBatch,
+    previous: &'a GuiLayerBody,
+    vanilla: Option<&'a mut VanillaGuiDraw<'p, 'g>>,
+}
+
+impl GuiLayerWrapContext for GuiLayerWrapFrame<'_, '_, '_> {
+    fn host(&self) -> &dyn ClientHost {
+        &*self.game
+    }
+
+    fn with_draw(&mut self, draw: &mut dyn FnMut(&mut dyn DrawContext)) {
+        draw(&mut GameDrawContext::new(self.game, self.batch));
+    }
+
+    fn draw_previous(&mut self) {
+        self.game
+            .draw_gui_layer_body(self.batch, self.previous, self.vanilla.as_deref_mut());
+    }
+}
+
+impl<'g> Game<'g> {
+    /// Draws a vanilla slot where the HUD calls for it, first flushing inserted layers below it.
+    /// A replacement or wrapper inherits those same paint conditions and the layer's hooks.
+    pub(in crate::game) fn gui_layer(
+        &mut self,
+        layer: VanillaGuiLayer,
+        batch: &mut HudBatch,
+        draw: &mut dyn FnMut(&mut Game<'g>, &mut HudBatch),
+    ) {
+        self.draw_mod_gui_layers(Some(layer), batch);
+        self.run_gui_layer(
+            layer.id(),
+            batch,
+            gui_layers::order().map_or(&GuiLayerBody::Vanilla, |order| {
+                &order.slots()[order.position(layer)].body
+            }),
+            Some(draw),
+        );
+    }
+
+    /// Draws inserted layers not drawn yet this frame, below `until` or to the end with `None`.
+    /// A skipped vanilla layer keeps its place; its neighbours draw at the next paint site.
+    /// Inserted layers don't draw while the HUD is hidden.
+    pub(in crate::game) fn draw_mod_gui_layers(
+        &mut self,
+        until: Option<VanillaGuiLayer>,
+        batch: &mut HudBatch,
+    ) {
+        let Some(next) = self.hud_layer_next else {
+            return;
+        };
+        let Some(order) = gui_layers::order() else {
+            return;
+        };
+        let slots = order.slots();
+        let end = until.map_or(slots.len(), |layer| order.position(layer));
+        // An earlier anchor can still paint later (e.g. deferred subtitles). Don't redraw slots.
+        for slot in &slots[next.min(end)..end] {
+            if slot.vanilla_anchor().is_none() {
+                self.run_gui_layer(slot.id(), batch, &slot.body, None);
+            }
+        }
+        // Past `until` itself: its paint site draws it, not the cursor.
+        self.hud_layer_next = Some(next.max(end + usize::from(until.is_some())));
+    }
+
+    fn run_gui_layer(
+        &mut self,
+        id: &str,
+        batch: &mut HudBatch,
+        body: &GuiLayerBody,
+        vanilla: Option<&mut VanillaGuiDraw<'_, 'g>>,
+    ) {
+        let mut canceled = false;
+        self.native_gui_layer_pre(id, batch, &mut canceled);
+        if canceled {
+            return;
+        }
+        self.draw_gui_layer_body(batch, body, vanilla);
+        self.native_gui_layer_post(id, batch);
+    }
+
+    fn draw_gui_layer_body(
+        &mut self,
+        batch: &mut HudBatch,
+        body: &GuiLayerBody,
+        vanilla: Option<&mut VanillaGuiDraw<'_, 'g>>,
+    ) {
+        match body {
+            GuiLayerBody::Vanilla => {
+                // Only a vanilla slot can contain this node; its paint site lends the closure.
+                if let Some(draw) = vanilla {
+                    draw(self, batch);
+                }
+            }
+            GuiLayerBody::Native { owner, draw } => {
+                let _guard = owner.map(|id| {
+                    enter_native_mod(ModCall {
+                        id,
+                        hook: "gui_layer_callback",
+                        part: None,
+                    })
+                });
+                draw(self, &mut GameDrawContext::new(self, batch));
+            }
+            GuiLayerBody::Wrapped {
+                owner,
+                wrap,
+                previous,
+            } => {
+                let _guard = owner.map(|id| {
+                    enter_native_mod(ModCall {
+                        id,
+                        hook: "gui_layer_wrapper",
+                        part: None,
+                    })
+                });
+                wrap(&mut GuiLayerWrapFrame {
+                    game: self,
+                    batch,
+                    previous,
+                    vanilla,
+                });
+            }
+        }
     }
 }

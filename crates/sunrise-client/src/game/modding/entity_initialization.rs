@@ -70,7 +70,7 @@ impl Game<'_> {
             Holder::Entity(id) => {
                 let Some(kind) = self
                     .entity(id)
-                    .and_then(|entity| self.entity_kind(entity).map(|kind| kind.id(self)))
+                    .and_then(|entity| self.entity_kind(entity)?.id(self))
                 else {
                     return;
                 };

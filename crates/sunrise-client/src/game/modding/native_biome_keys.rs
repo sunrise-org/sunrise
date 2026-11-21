@@ -7,10 +7,10 @@ impl Game<'_> {
     pub(in crate::game) fn biome_key_id(
         &self,
         key: mod_api::BiomeKey,
-    ) -> Result<String, mod_api::BiomeKeyError> {
+    ) -> Result<&str, mod_api::BiomeKeyError> {
         let maps = self
             .loaded_data_maps()
             .map_err(|_| mod_api::BiomeKeyError::Unavailable)?;
-        maps.biome_keys.id(key).map(str::to_owned)
+        maps.biome_keys.id(key)
     }
 }

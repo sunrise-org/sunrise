@@ -1,0 +1,117 @@
+# The listener signatures and nominal event types stay the same; only the
+# fields of those events and the versioned hook contracts change. The surface
+# gate rejects unchanged IDs in `ids`, so the affected entry points are listed here:
+# method:Hooks::anvil_update       type:AnvilUpdateEvent
+# method:Hooks::anvil_craft_pre    type:AnvilCraftPreEvent
+# method:Hooks::anvil_craft_post   type:AnvilCraftPostEvent
+# method:Hooks::grindstone_place   type:GrindstonePlaceEvent
+# method:Hooks::grindstone_take    type:GrindstoneTakeEvent
+ids = [
+    "hook:anvil_update",
+    "hook:anvil_update.update",
+    "hook:anvil_update.inputs",
+    "hook:anvil_update.edits",
+    "type:AnvilUpdateEvent.update",
+    "type:AnvilUpdateEvent.inputs",
+    "type:AnvilUpdateEvent.edits",
+    "type:item::menu::AnvilUpdate",
+    "type:item::menu::AnvilUpdate.left",
+    "type:item::menu::AnvilUpdate.right",
+    "type:item::menu::AnvilUpdate.name",
+    "type:item::menu::AnvilUpdate.vanilla",
+    "type:item::menu::AnvilUpdate.output",
+    "type:item::menu::AnvilUpdate.xp_cost",
+    "type:item::menu::AnvilUpdate.material_cost",
+    "handle:item::menu::AnvilUpdate::new",
+    "handle:item::menu::AnvilUpdate::answer",
+    "type:item::menu::AnvilVanilla",
+    "type:item::menu::AnvilVanilla.output",
+    "type:item::menu::AnvilVanilla.xp_cost",
+    "type:item::menu::AnvilVanilla.material_cost",
+    "type:item::stations::AnvilResult",
+    "type:item::stations::AnvilResult.result",
+    "type:item::stations::AnvilResult.cost",
+    "type:item::stations::AnvilResult.repair_item_count_cost",
+    "type:item::stations::AnvilResult.only_renaming",
+    "type:item::menu::AnvilUpdateInputs",
+    "type:item::menu::AnvilUpdateInputs.left",
+    "type:item::menu::AnvilUpdateInputs.right",
+    "type:item::menu::AnvilUpdateInputs.name",
+    "type:item::menu::AnvilUpdateInputs.vanilla_output",
+    "type:item::menu::AnvilUpdateInputs.vanilla_xp_cost",
+    "type:item::menu::AnvilUpdateInputs.vanilla_material_cost",
+    "type:item::menu::AnvilUpdateEdits",
+    "type:item::menu::AnvilUpdateEdits.output",
+    "type:item::menu::AnvilUpdateEdits.xp_cost",
+    "type:item::menu::AnvilUpdateEdits.material_cost",
+    "hook:anvil_craft_pre",
+    "hook:anvil_craft_pre.craft",
+    "hook:anvil_craft_pre.inputs",
+    "type:AnvilCraftPreEvent.craft",
+    "type:AnvilCraftPreEvent.inputs",
+    "hook:anvil_craft_post",
+    "hook:anvil_craft_post.craft",
+    "hook:anvil_craft_post.inputs",
+    "type:AnvilCraftPostEvent.craft",
+    "type:AnvilCraftPostEvent.inputs",
+    "type:item::menu::AnvilCraft",
+    "type:item::menu::AnvilCraft.left",
+    "type:item::menu::AnvilCraft.right",
+    "type:item::menu::AnvilCraft.output",
+    "type:item::menu::AnvilCraftInputs",
+    "type:item::menu::AnvilCraftInputs.left",
+    "type:item::menu::AnvilCraftInputs.right",
+    "type:item::menu::AnvilCraftInputs.output",
+    "hook:grindstone_place",
+    "hook:grindstone_place.place",
+    "hook:grindstone_place.inputs",
+    "hook:grindstone_place.edits",
+    "type:GrindstonePlaceEvent.place",
+    "type:GrindstonePlaceEvent.inputs",
+    "type:GrindstonePlaceEvent.edits",
+    "type:item::menu::GrindstonePlace",
+    "type:item::menu::GrindstonePlace.top",
+    "type:item::menu::GrindstonePlace.bottom",
+    "type:item::menu::GrindstonePlace.vanilla_output",
+    "type:item::menu::GrindstonePlace.output",
+    "type:item::menu::GrindstonePlace.xp",
+    "type:item::menu::GrindstonePlaceInputs",
+    "type:item::menu::GrindstonePlaceInputs.top",
+    "type:item::menu::GrindstonePlaceInputs.bottom",
+    "type:item::menu::GrindstonePlaceInputs.vanilla_output",
+    "type:item::menu::GrindstonePlaceEdits",
+    "type:item::menu::GrindstonePlaceEdits.output",
+    "type:item::menu::GrindstonePlaceEdits.xp",
+    "hook:grindstone_take",
+    "hook:grindstone_take.take",
+    "hook:grindstone_take.inputs",
+    "hook:grindstone_take.edits",
+    "type:GrindstoneTakeEvent.take",
+    "type:GrindstoneTakeEvent.inputs",
+    "type:GrindstoneTakeEvent.edits",
+    "type:item::menu::GrindstoneTake",
+    "type:item::menu::GrindstoneTake.top",
+    "type:item::menu::GrindstoneTake.bottom",
+    "type:item::menu::GrindstoneTake.xp",
+    "type:item::menu::GrindstoneTake.new_top",
+    "type:item::menu::GrindstoneTake.new_bottom",
+    "type:item::menu::GrindstoneTakeInputs",
+    "type:item::menu::GrindstoneTakeInputs.top",
+    "type:item::menu::GrindstoneTakeInputs.bottom",
+    "type:item::menu::GrindstoneTakeEdits",
+    "type:item::menu::GrindstoneTakeEdits.xp",
+    "type:item::menu::GrindstoneTakeEdits.new_top",
+    "type:item::menu::GrindstoneTakeEdits.new_bottom",
+]
+why = "Anvil and grindstone hooks lend read-only inputs rather than asking listeners to edit whole records. Only permitted answers are staged and checked at apply; the anvil's two take hooks see the same pre-take snapshot."
+migrate = """
+Keep the existing `Hooks` callbacks. The old records are no longer built or serialized: read `event.inputs` and write only `event.edits` where present. The new inputs and edits are callback-scoped, not Wire records. Clone individual stacks (use `.cloned()` for an optional borrowed stack) or copy the fields you need to retain or encode after dispatch.
+
+- `anvil_update` (`AnvilUpdateEvent<'_>`): replace `event.update.left`, `.right` and `.name` with `event.inputs.left`, `.right` and `.name`. The left stack is already borrowed; the right stack and name are already optional references. Replace `event.update.vanilla.output`, `.xp_cost` and `.material_cost` with `event.inputs.vanilla_output`, `.vanilla_xp_cost` and `.vanilla_material_cost`. Read or write `event.update.xp_cost` and `.material_cost` through `event.edits.xp_cost` and `.material_cost`, initially vanilla's costs. Read the current output with `match &event.edits.output { StackResult::Keep => event.inputs.vanilla_output, StackResult::Set(stack) => stack.as_ref() }`. To replace the output, use `event.edits.output = StackResult::Set(Some(stack))`; to clear it, use `StackResult::Set(None)`. Use `StackResult::Keep` to restore vanilla's output after an earlier listener changed it. Cancel with `event.cancelled` or `Flow::Cancel` as before. Cancellation or an invalid replacement clears the result and both costs; a cost-only edit does not revalidate vanilla's output.
+- Remove `AnvilUpdate::new` and `AnvilUpdate::answer`: the game now supplies `item::menu::AnvilUpdateInputs<'_>` and `item::menu::AnvilUpdateEdits` and applies the edits itself. For an `item::stations::AnvilResult` used to inspect the vanilla answer, read `result`, `cost` and `repair_item_count_cost` as `event.inputs.vanilla_output`, `.vanilla_xp_cost` and `.vanilla_material_cost`; for the edited answer, use the current-output match and the costs above. There is no public `only_renaming` replacement.
+- `anvil_craft_pre` and `anvil_craft_post` (`AnvilCraftPreEvent<'_>` and `AnvilCraftPostEvent<'_>`): replace `event.craft` with `event.inputs` (`&item::menu::AnvilCraftInputs<'_>`). Read `event.craft.left.as_ref()`, `event.craft.right.as_ref()` and `&event.craft.output` as `event.inputs.left`, `.right` and `.output`. Both server callbacks borrow the same pre-take stacks. Pre still accepts `event.cancelled` or `Flow::Cancel` to veto the whole take: the result stays in its slot, inputs, cursor, inventory and levels are restored or unchanged, no item is dropped or anvil worn, and Post does not run. Post is a notice after the take's effects.
+- `grindstone_place` (`GrindstonePlaceEvent<'_>`): replace reads of `event.place.top`, `.bottom` and `.vanilla_output` with the corresponding optional references in `event.inputs` (`item::menu::GrindstonePlaceInputs<'_>`). Replace reads and writes of `event.place.output` and `.xp` with `event.edits.output` and `.xp` (`item::menu::GrindstonePlaceEdits`). Leave output at `None` to keep vanilla's result and award, or set `Some(valid_stack)` and leave XP at `-1` for vanilla's award or set a nonnegative amount. Cancel to clear the result. Cancellation, an invalid replacement, uncancelled XP below `-1`, a stale decision or a failing listener leaves no result and rolls back listener writes.
+- `grindstone_take` (`GrindstoneTakeEvent<'_>`): read `event.take.top` and `.bottom` as `event.inputs.top` and `.bottom` (`item::menu::GrindstoneTakeInputs<'_>`). Read and write `event.take.xp`, `.new_top` and `.new_bottom` through `event.edits` (`item::menu::GrindstoneTakeEdits`). XP starts at the place override or `-1` for vanilla's award. Each remainder starts at `None` to empty its slot; use `Some(valid_stack)` to leave a stack. Cancellation still keeps the result taken but skips experience, sound and input replacement. Invalid remainders (even on cancellation), uncancelled XP below `-1`, a stale decision or a failing listener refuse the whole click and restore the result, inputs, cursor, inventory and drops. Both cancellation and refusal roll back listener writes.
+
+Rebuild and repack against the new hook versions: 2 for `anvil_update`, `anvil_craft_pre` and `anvil_craft_post`, and 3 for `grindstone_place` and `grindstone_take`.
+"""

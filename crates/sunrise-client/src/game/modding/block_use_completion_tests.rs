@@ -470,7 +470,7 @@ fn block_use_original_shrink_and_damage_values() {
 #[test]
 #[ignore = "daily"]
 fn block_use_listener_replacements_keep_original_on_both_routes() {
-    crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
+    crate::game::native_entity_refs::tests::run_with_game_stack(|| {
         struct Replace(Arc<AtomicUsize>);
         #[mod_api::__subscriptions]
         impl mod_api::Hooks for Replace {

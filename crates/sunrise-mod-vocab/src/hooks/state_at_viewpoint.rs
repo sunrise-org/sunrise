@@ -13,6 +13,8 @@ pub trait Hooks {
     /// part on any block the subscription check skips the asks; otherwise each block read costs
     /// one table lookup. Diverges from upstream: new hook.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "collect",
         out = "seen",
@@ -20,5 +22,10 @@ pub trait Hooks {
         key = "state",
         neoforge = "IBlockExtension.getStateAtViewpoint, IBlockStateExtension.getStateAtViewpoint"
     )]
-    fn state_at_viewpoint();
+    fn state_at_viewpoint(
+        state: BlockState,
+        pos: BlockPos,
+        viewpoint: [f64; 3],
+        seen: &mut BlockState,
+    );
 }

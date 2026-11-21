@@ -394,7 +394,7 @@ pub(super) fn areas_source(root: &Path) -> Result<String, String> {
     }
     // A partial read backend advertises the backend but can only answer some of it.
     // Forward the named methods, and let the API's standard no-backend value handle
-    // the rest. Infallible key metadata retains the usual fail-loud default.
+    // the rest.
     let mut choices = String::new();
     let mut partial_impls = String::new();
     let mut read_names = std::collections::BTreeSet::new();
@@ -421,15 +421,12 @@ pub(super) fn areas_source(root: &Path) -> Result<String, String> {
                 } else {
                     format!("self, {args}")
                 };
-                let refused = refusal(&entry.sig, name)?
-                    .map(|value| {
-                        if args.is_empty() {
-                            format!("{sig} {{ {value} }}")
-                        } else {
-                            format!("{sig} {{ let _ = ({args},); {value} }}")
-                        }
-                    })
-                    .unwrap_or_default();
+                let value = refusal(&entry.sig, name)?;
+                let refused = if args.is_empty() {
+                    format!("{sig} {{ {value} }}")
+                } else {
+                    format!("{sig} {{ let _ = ({args},); {value} }}")
+                };
                 writeln!(partial_impls, "$crate::__partial_read!([$($provided)*] {name} {sig} {{ Self::{name}({call_args}) }} {{ {refused} }});").unwrap();
             }
             partial_impls.push_str("}\n");
@@ -514,8 +511,8 @@ pub(super) fn areas_source(root: &Path) -> Result<String, String> {
 /// Generate every area impl explicitly. Full-path calls plus a hard recursion lint
 /// refuse a missing inherent implementation instead of inheriting a trait default.
 pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
-    // The gated methods with no refusal-shaped `Result`: a refused call unwinds out of them
-    // (#3123).
+    // The gated methods with neither a typed refusal nor an optional callback:
+    // a refused call unwinds out of them (#3123).
     let mut unwinding = std::collections::BTreeSet::new();
     let refusals = refusal_errors(root)?;
     let mut code = String::from(
@@ -555,9 +552,17 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                     ) {
                         return Err(format!("{name}: unknown access level {level}"));
                     }
-                    let read_stack = entry.attrs.iter().any(|a| a.path().is_ident("read_stack"));
-                    let (setup, args, checked_write) =
-                        boundary_arguments(&entry.sig, name, read_stack)?;
+                    let keeps_api_inputs = entry
+                        .attrs
+                        .iter()
+                        .any(|a| a.path().is_ident("forward_api_inputs"));
+                    let (setup, args, checked_write) = if keeps_api_inputs {
+                        (String::new(), signature_args(&entry.sig, name)?, false)
+                    } else {
+                        let read_stack =
+                            entry.attrs.iter().any(|a| a.path().is_ident("read_stack"));
+                        boundary_arguments(&entry.sig, name, read_stack)?
+                    };
                     let static_call = entry.attrs.iter().any(|a| a.path().is_ident("static_call"));
                     let view_args = args.clone();
                     let args = if static_call {
@@ -576,14 +581,16 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                     } else {
                         format!("{target}::{name}({args})")
                     };
-                    let crosses_output = match &entry.sig.output {
-                        syn::ReturnType::Type(_, ty) => boundary_value(ty),
-                        syn::ReturnType::Default => false,
+                    let keeps_api_output = entry
+                        .attrs
+                        .iter()
+                        .any(|a| a.path().is_ident("forward_api_output"));
+                    let converted_output = match &entry.sig.output {
+                        syn::ReturnType::Type(_, ty) if !keeps_api_output => Some(ty.as_ref()),
+                        _ => None,
                     };
-                    let text_output = match &entry.sig.output {
-                        syn::ReturnType::Type(_, ty) => text_value(ty),
-                        syn::ReturnType::Default => false,
-                    };
+                    let crosses_output = converted_output.is_some_and(boundary_value);
+                    let text_output = converted_output.is_some_and(text_value);
                     let text_result = result_error(&entry.sig.output)
                         .is_some_and(|error| outer_type(error, "TextFormError"));
                     let call = if text_output {
@@ -598,9 +605,10 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                         // Writes with converted Text arguments call an infallible engine
                         // body. Read backends return Result so converting API-owned
                         // aggregate fields can refuse without losing a boundary error.
-                        let text_input = entry.sig.inputs.iter().any(
-                            |arg| matches!(arg, syn::FnArg::Typed(arg) if text_value(&arg.ty)),
-                        );
+                        let text_input = !keeps_api_inputs
+                            && entry.sig.inputs.iter().any(
+                                |arg| matches!(arg, syn::FnArg::Typed(arg) if text_value(&arg.ty)),
+                            );
                         let read = entry
                             .sig
                             .receiver()
@@ -643,16 +651,21 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                     } else {
                         call
                     };
-                    let typed_access_error = refusal_shaped(&entry.sig.output, &refusals);
-                    if typed_access_error.is_none() {
-                        unwinding.insert(format!("{}::{name}", area.stem));
-                    }
-                    let access = if let Some(error) = typed_access_error {
+                    let decline = entry
+                        .attrs
+                        .iter()
+                        .any(|attr| attr.path().is_ident("decline_unavailable"));
+                    let access = if decline {
+                        format!(
+                            "if !mod_api::__private::access_allowed({name:?}, mod_api::__private::LoadAccess::{level}) {{ return; }}"
+                        )
+                    } else if let Some(error) = refusal_shaped(&entry.sig.output, &refusals) {
                         let error = error.to_token_stream();
                         format!(
                             "if !mod_api::__private::access_allowed({name:?}, mod_api::__private::LoadAccess::{level}) {{ return Err(<{error} as mod_api::AccessRefusal>::unavailable()); }}"
                         )
                     } else {
+                        unwinding.insert(format!("{}::{name}", area.stem));
                         format!(
                             "mod_api::__private::check_access({name:?}, mod_api::__private::LoadAccess::{level});"
                         )
@@ -705,10 +718,12 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                         "living_health" => Some(("living.entity()", "self.row.health")),
                         "living_max_health" => Some(("living.entity()", "self.row.max_health")),
                         "living_alive" => Some(("living.entity()", "self.row.alive")),
-                        "living_equipment" => Some(("living.entity()", "self.equipment(slot)")),
+                        "living_equipment" => {
+                            Some(("living.entity()", "self.with_equipment(slot, read)"))
+                        }
                         "living_hand_item" => Some((
                             "living.entity()",
-                            "self.equipment(match hand { Hand::Main => EquipmentSlot::MainHand, Hand::Off => EquipmentSlot::OffHand })",
+                            "self.with_equipment(crate::game::native_living_refs::hand_slot(hand), read)",
                         )),
                         _ => None,
                     };
@@ -794,10 +809,9 @@ fn refusal_shaped<'a>(
 /// only shrinks: `tools/ci/check_unwinding_methods.py` refuses a line added since the base.
 const UNWINDING_METHODS: &str = "crates/sunrise-mod-api-gen/unwinding-methods.txt";
 
-/// A gated method that returns no `Result` with a refusal error (a type with a `AccessRefusal`
-/// impl, whose `unavailable()` the forwarder returns) can only refuse a wrong-phase
-/// call by unwinding. A new one is refused unless it is listed; a listed one that has gained a
-/// refusal, or is gone, must leave the list.
+/// Without a typed refusal or a callback it can decline to invoke, a gated method can only
+/// refuse a wrong-phase call by unwinding. A new one is refused unless it is listed; a listed
+/// one that has gained a refusal or is gone must leave the list.
 fn check_unwinding(
     root: &Path,
     unwinding: &std::collections::BTreeSet<String>,
@@ -849,11 +863,6 @@ fn boundary_value(ty: &Type) -> bool {
             "RecipeTemplate",
             "RecipeTrimPattern",
             "FireworkShapeIngredient",
-            "AnvilResult",
-            "AnvilCraft",
-            "AnvilUpdate",
-            "GrindstonePlace",
-            "GrindstoneTake",
             "ParticleOptions",
         ],
     )
@@ -869,6 +878,16 @@ fn contains_value(ty: &Type, names: &[&str]) -> bool {
                 .last()
                 .is_some_and(|segment| self.1.contains(&segment.ident.to_string().as_str()));
             syn::visit::visit_type_path(self, path);
+        }
+
+        fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+            if matches!(&segment.arguments, syn::PathArguments::Parenthesized(_))
+                && (segment.ident == "Fn" || segment.ident == "FnMut" || segment.ident == "FnOnce")
+            {
+                // The callee converts values before invoking the unchanged callback.
+                return;
+            }
+            syn::visit::visit_path_segment(self, segment);
         }
     }
     let mut values = Values(false, names);
@@ -1026,41 +1045,39 @@ fn signature_args(sig: &syn::Signature, name: &str) -> Result<String, String> {
         .join(", "))
 }
 
-/// How a read answers where there is no backend to ask: its typed refusal, or `None` where only
-/// a `String` forwards.
-fn refusal(sig: &syn::Signature, name: &str) -> Result<Option<&'static str>, String> {
+/// A backend read's typed answer where there is no backend to ask.
+fn refusal(sig: &syn::Signature, name: &str) -> Result<&'static str, String> {
     let syn::ReturnType::Type(_, ty) = &sig.output else {
         return Err(format!("{name}: a backend read returns a value"));
     };
     let syn::Type::Path(path) = &**ty else {
-        return Err(format!(
-            "{name}: the goal view cannot refuse its return type"
-        ));
+        return Err(format!("{name}: cannot refuse its backend return type"));
     };
     let last = path.path.segments.last().map(|seg| seg.ident.to_string());
-    Ok(match last.as_deref() {
-        Some("Option") => Some("None"),
-        Some("bool") => Some("false"),
-        // A read that answers `Result`: its refusal is the error a host without a backend answers.
-        Some("Result") => Some("Err(NoBackend::no_backend())"),
-        Some("u64" | "u32" | "i32" | "u16" | "u8" | "usize") => Some("0"),
-        // A registry key's metadata: a read the goal view only forwards.
-        Some("String") => None,
-        _ => {
-            return Err(format!(
-                "{name}: the goal view cannot refuse its return type"
-            ));
-        }
-    })
+    match last.as_deref() {
+        Some("Option") => Ok("None"),
+        Some("bool") => Ok("false"),
+        Some("Result") => Ok("Err(NoBackend::no_backend())"),
+        Some("u64" | "u32" | "i32" | "u16" | "u8" | "usize") => Ok("0"),
+        _ => Err(format!("{name}: cannot refuse its backend return type")),
+    }
 }
 
 /// `entity_position(entity)` on a backend is also `EntityRef::position(self, host)`: the handle
 /// a method is of, when its first argument is one and its name starts with the handle's.
+/// `#[manual_handle]` opts out only from this inherent wrapper, not backend routing.
 fn handle_method(
     entry: &Entry,
     tier: Tier,
     handles: &BTreeMap<String, String>,
 ) -> Result<Option<(String, String)>, String> {
+    if entry
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("manual_handle"))
+    {
+        return Ok(None);
+    }
     let name = entry.name.as_str();
     let mut inputs = entry.sig.inputs.iter();
     let mutable = matches!(inputs.next(), Some(FnArg::Receiver(r)) if r.mutability.is_some());
@@ -1127,8 +1144,6 @@ fn handle_method(
     let call = format!("{name}(self{args})");
     let body = if returns("Option") {
         format!("{backend}(host)?.{call}")
-    } else if handle.ends_with("Key") && returns("String") {
-        format!("{backend}(host).expect(\"registry key metadata requires a game host\").{call}")
     } else if returns("bool") {
         format!("{backend}(host).map(|backend| backend.{call}).unwrap_or(false)")
     } else if returns("CommandResult") {
@@ -1149,8 +1164,8 @@ fn handle_method(
     )))
 }
 
-/// The unions, the handles' methods and the hidden backends' side of the host, and the goal view.
-pub(super) fn generate(root: &Path) -> Result<(String, String), String> {
+/// The unions, the handles' methods and the hidden backends' side of the host.
+pub(super) fn generate(root: &Path) -> Result<String, String> {
     let areas = load(root)?;
     let api_source = fs::read_to_string(root.join("crates/sunrise-mod-vocab/src/lib.rs"))
         .map_err(|e| e.to_string())?;
@@ -1184,8 +1199,6 @@ pub(super) fn generate(root: &Path) -> Result<(String, String), String> {
             .collect::<Vec<_>>()
             .join(" + ")
     };
-    let mut reads: Vec<(&Area, Tier, &Entry)> = Vec::new();
-    let mut host_methods: Vec<(&Area, &Entry)> = Vec::new();
     let mut methods = String::new();
     let mut by_handle = BTreeMap::<String, String>::new();
     for area in &areas {
@@ -1195,11 +1208,6 @@ pub(super) fn generate(root: &Path) -> Result<(String, String), String> {
                     && let Some((handle, code)) = handle_method(entry, *tier, &types.handles)?
                 {
                     by_handle.entry(handle).or_default().push_str(&code);
-                }
-                if matches!(tier, Tier::Backend | Tier::ClientBackend) {
-                    reads.push((area, *tier, entry));
-                } else if *tier == Tier::Host && area.stem != "services" {
-                    host_methods.push((area, entry));
                 }
             }
         }
@@ -1236,8 +1244,23 @@ pub(super) fn generate(root: &Path) -> Result<(String, String), String> {
         "// @generated by cargo run -p xtask -- mod-api; do not edit.\nuse super::*;\n{imports}/// Services supplied by the game to trait mods.\n/// Each method's default panics with its name, so a test double implements only what its test calls; the game implements every one.\n/// The backend accessors are the exception: they default to None, so a double without a backend answers every handle's typed refusal.\n/// Its methods are declared by area in `host/<area>.rs`; `use mod_api::prelude::*` names every area trait.\npub trait Host: {host_supers} {{\n#[doc(hidden)] fn backend(&self) -> Option<BackendRef<'_>> {{ None }}\n#[doc(hidden)] fn capability_providers(&self) -> &'static dyn CapabilityProviders {{ &InstalledProviders }}\n}}\n/// What only the server's hooks are given: writes to the world.\npub trait ServerHost: Host + {server_supers} {{\n#[doc(hidden)] fn backend_mut(&mut self) -> Option<BackendMutRef<'_>> {{ None }}\n}}\n/// What only the client's hooks are given: the client's own services.\npub trait ClientHost: Host + {client_supers} {{\n#[doc(hidden)] fn client_backend_mut(&mut self) -> Option<ClientBackendMutRef<'_>> {{ None }}\n}}\n{sides}#[doc(hidden)] pub trait Backend: {backend_supers} {{}}\n#[doc(hidden)] pub trait BackendMut: {backend_mut_supers} {{}}\n#[doc(hidden)] pub trait ClientBackendMut: {client_backend_mut_supers} {{}}\n{methods}"
     );
     syn::parse_file(&host).map_err(|e| format!("generated Host: {e}"))?;
-    let goal_view = goal_view(&areas, &reads, &host_methods)?;
-    Ok((host, goal_view))
+    Ok(host)
+}
+
+pub(super) fn generate_goal_view(root: &Path) -> Result<String, String> {
+    let areas = load(root)?;
+    let mut reads = Vec::new();
+    let mut host_methods = Vec::new();
+    for area in &areas {
+        for (tier, entries) in &area.tiers {
+            if matches!(tier, Tier::Backend | Tier::ClientBackend) {
+                reads.extend(entries.iter().map(|entry| (area, *tier, entry)));
+            } else if *tier == Tier::Host && area.stem != "services" {
+                host_methods.extend(entries.iter().map(|entry| (area, entry)));
+            }
+        }
+    }
+    goal_view(&areas, &reads, &host_methods)
 }
 
 /// The goal view's generated impls (#1077): the backend ones forward the snapshot-backed
@@ -1276,26 +1299,19 @@ fn goal_view(
                     && GOAL_VIEW_ENTITY_ARGS
                         .contains(&ty.path.segments[0].ident.to_string().as_str())
         );
-        // How a forwarded read answers a host without a backend: the typed refusal, or the empty
-        // string of a metadata read.
+        // How a forwarded read answers a host without a backend: its typed refusal.
         let forwarded = match refusal {
-            Some("None") => ".flatten()".to_string(),
+            "None" => ".flatten()".to_string(),
             // A `Result` read's no-backend answer is its error type's own `NoBackend` value,
             // wrapped back in the `Err`.
-            Some(refusal) if refusal.starts_with("Err(") => {
+            refusal if refusal.starts_with("Err(") => {
                 ".unwrap_or_else(|| Err(mod_api::NoBackend::no_backend()))".to_string()
             }
-            Some(refusal) => format!(".unwrap_or({refusal})"),
-            None => ".unwrap_or_default()".to_string(),
+            refusal => format!(".unwrap_or({refusal})"),
         };
         let body = if GOAL_VIEW_READS.contains(&name) {
             format!("self.r_{name}({args})")
         } else if entity_data {
-            let Some(refusal) = refusal else {
-                return Err(format!(
-                    "{name}: the goal view cannot refuse its return type"
-                ));
-            };
             if args.is_empty() {
                 refusal.to_string()
             } else if args.contains(',') {
@@ -1490,6 +1506,17 @@ mod tests {
     }
 
     #[test]
+    fn native_read_callbacks_forward_without_boundary_conversion() {
+        let read = entry(
+            "fn visit(&self, at: BlockSide, visitor: &mut dyn FnMut(&ItemResource, u64) -> std::ops::ControlFlow<()>) -> Result<(), StorageReadError>;",
+        );
+        let (setup, args, checked_write) = boundary_arguments(&read.sig, "visit", false).unwrap();
+        assert!(setup.is_empty());
+        assert_eq!(args, "at, visitor");
+        assert!(!checked_write);
+    }
+
+    #[test]
     fn borrowed_stacks_are_read_without_write_validation_outside_checked_writes() {
         let read = entry("fn item_resource_damageable(&self, stack: &ItemStack) -> bool;");
         let (setup, args, checked_write) = boundary_arguments(&read.sig, "read", false).unwrap();
@@ -1558,13 +1585,33 @@ mod tests {
         assert!(code.contains(
             "backend_mut_of(host).map_or_else(|| Err(crate::NoBackend::no_backend()), |backend| backend.level_attempt(self))"
         ));
-        // A key's name is read with an owned answer.
-        let key = entry("fn block_key_id(&self, key: BlockKey) -> String;");
+        // The registry name borrows the host and is absent without a backend.
+        let key = entry("fn block_key_id(&self, key: BlockKey) -> Option<&str>;");
         let (handle, code) = handle_method(&key, Tier::Backend, &handles)
             .unwrap()
             .unwrap();
         assert_eq!(handle, "BlockKey");
-        assert!(code.contains("backend_of(host).expect("));
+        assert!(code.contains("pub fn id (self , host : & dyn Host) -> Option < & str >"));
+        assert!(code.contains("backend_of(host)?.block_key_id(self)"));
+    }
+
+    #[test]
+    fn registry_key_reads_cannot_generate_an_infallible_string() {
+        let method = entry("fn block_key_id(&self, key: BlockKey) -> String;");
+        let handles = handles("pub struct BlockKey;");
+        let error = handle_method(&method, Tier::Backend, &handles).unwrap_err();
+        assert!(error.starts_with("block_key_id:"));
+
+        let area = Area {
+            stem: "keys".into(),
+            camel: "Keys".into(),
+            tiers: BTreeMap::new(),
+            tables: BTreeMap::new(),
+        };
+        assert_eq!(
+            goal_view(&[], &[(&area, Tier::Backend, &method)], &[]),
+            Err("block_key_id: cannot refuse its backend return type".into())
+        );
     }
 
     #[test]

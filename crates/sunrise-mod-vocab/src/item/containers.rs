@@ -91,14 +91,16 @@ impl ModBlockEntity {
     }
     /// The block entity's immutable type id (`mymod:machine`).
     ///
-    /// ```compile_fail
-    /// let mut entity = sunrise_client_render::containers::ModBlockEntity::default();
-    /// entity.id = "other:machine".into();
+    /// Mods cannot assign the private `id` field:
+    /// ```compile_fail,E0616
+    /// let mut entity = mod_api::ModBlockEntity::default();
+    /// entity.id = String::from("other:machine");
     /// ```
     ///
-    /// ```compile_fail
-    /// let mut entity = sunrise_client_render::containers::ModBlockEntity::default();
-    /// entity.id().push_str("_changed");
+    /// Even with mutable access to the entity, `id()` returns a shared `&str`:
+    /// ```compile_fail,E0596
+    /// let entity = &mut mod_api::ModBlockEntity::default();
+    /// entity.id().make_ascii_uppercase();
     /// ```
     pub fn id(&self) -> &str {
         &self.id

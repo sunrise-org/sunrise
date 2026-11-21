@@ -10,6 +10,7 @@ impl Game<'_> {
         lan: bool,
         realm: bool,
     ) -> Result<()> {
+        self.reset_client_item_use();
         self.realm_session = realm;
         self.lan_session = lan;
         self.reset_tutorial();
@@ -122,7 +123,6 @@ impl Game<'_> {
         self.container = None;
         self.carried = None;
         self.using = None;
-        self.end_mod_use();
         self.clicks.miss_time = 0;
         // A new LocalPlayer has no effects: the server sends what it has
         // (ClientboundUpdateMobEffectPacket on placement).
@@ -176,6 +176,7 @@ impl Game<'_> {
         self.remote = Some(Remote {
             selector_metadata_supported: true,
             professions: self.client_professions()?,
+            display_address: Remote::display_address_for(&session.address),
             session,
             brand: "unknown".into(),
             recipe_viewer: Default::default(),
@@ -342,6 +343,7 @@ impl Game<'_> {
     }
     /// Prepare a client session and remote state to receive packets from a studio replay.
     pub(in crate::game) fn init_remote_for_replay(&mut self) -> Result<()> {
+        self.reset_client_item_use();
         self.realm_session = false;
         self.lan_session = false;
         self.reset_tutorial();
@@ -403,7 +405,6 @@ impl Game<'_> {
         self.container = None;
         self.carried = None;
         self.using = None;
-        self.end_mod_use();
 
         self.set_mode_id(0);
         self.experience = Experience {
@@ -434,6 +435,7 @@ impl Game<'_> {
         self.remote = Some(Remote {
             selector_metadata_supported: true,
             professions: self.client_professions()?,
+            display_address: Remote::display_address_for(&session.address),
             session,
             brand: "sunrise-studio".into(),
             recipe_viewer: Default::default(),
@@ -726,7 +728,7 @@ impl Game<'_> {
     pub(in crate::game) fn enter_remote_dimension(
         &mut self,
         spawn: &play::SpawnInfo,
-        keep_world: bool,
+        entry: RemoteDimensionEntry,
         reason: sunrise_client::level_loading::Reason,
     ) {
         // Every level has the sea level its server says (`CommonPlayerSpawnInfo.seaLevel`): the
@@ -748,13 +750,20 @@ impl Game<'_> {
         r.state_id = 0;
         // handleRespawn keeps the ClientLevel only for the same level key:
         // two levels sharing a dimension type are still two levels.
-        let same = keep_world && r.heard_level.as_deref() == Some(spawn.dimension.as_str());
-        let transition_screen = sunrise_client_render::dimension_transition::select(
-            mod_api::__private::dimension_key(&spawn.dimension),
-            r.heard_level
-                .as_deref()
-                .map(mod_api::__private::dimension_key),
-        );
+        let same = matches!(
+            entry,
+            RemoteDimensionEntry::Respawn | RemoteDimensionEntry::DeathRespawn
+        ) && r.heard_level.as_deref() == Some(spawn.dimension.as_str());
+        // An open LevelLoadingScreen keeps its presentation, even if it is vanilla.
+        // New screens for login and death do not receive transition keys.
+        let transition_from = if matches!(entry, RemoteDimensionEntry::Respawn)
+            && !r.level_load.is_active()
+            && r.heard_level.is_some()
+        {
+            Some(r.level_key)
+        } else {
+            None
+        };
         if !same {
             self.forget_all_remote_columns();
         }
@@ -783,8 +792,10 @@ impl Game<'_> {
         }
         // startWaitingForNewLevel: `LevelLoadTracker.startClientLoad` and the
         // `LevelLoadingScreen`.
+        let transition_factory = transition_from.and_then(|from| {
+            sunrise_client_render::dimension_transition::select(r.level_key, from)
+        });
         r.level_load.start_client_load(client_millis(), reason);
-        r.level_load.set_transition_screen(transition_screen);
         // A replacement LocalPlayer has a fresh ambient mood and sendPosition baseline.
         self.ambience.moodiness = 0.0;
         r.position_sender = Default::default();
@@ -887,5 +898,24 @@ impl Game<'_> {
             self.initialize_entity(Holder::Player(profile), "minecraft:player");
         }
         self.finish_remote_level();
+        if let Some((owner, factory)) = transition_factory {
+            use mod_api::content::crash::{ModCall, enter_native_mod};
+            use sunrise_client_render::dimension_transition::ActiveTransitionScreen;
+
+            let presentation = {
+                let _owner = enter_native_mod(ModCall {
+                    id: owner,
+                    hook: "dimension_transition_factory",
+                    part: None,
+                });
+                factory.create(self, reason.into())
+            };
+            if let Some(r) = self.remote.as_mut() {
+                r.level_load.set_transition_screen(ActiveTransitionScreen {
+                    owner,
+                    presentation,
+                });
+            }
+        }
     }
 }

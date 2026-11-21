@@ -16,5 +16,5 @@ pub trait Hooks {
         version = 2,
         target = "sunrise_client_lib::lan::hub::native_player_tab_list_name_format"
     )]
-    fn player_tab_list_name_format();
+    fn player_tab_list_name_format(player: u128, name: &str, display_name: &mut Option<Text>);
 }

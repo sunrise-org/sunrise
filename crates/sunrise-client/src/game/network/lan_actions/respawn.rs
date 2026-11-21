@@ -290,7 +290,7 @@ impl Game<'_> {
         }
         // PlayerRespawnEvent, at the end of PlayerList.respawn: the player is
         // placed, in their respawn level, with their state swapped in so the
-        // helpers reach them (as for native_run_mod_command).
+        // helpers reach them (as for a command executor).
         let Some(host) = self.lan.as_ref() else {
             return;
         };

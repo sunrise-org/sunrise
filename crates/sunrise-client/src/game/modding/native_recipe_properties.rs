@@ -47,27 +47,15 @@ impl Game<'_> {
         let tags = self
             .native_tag_items()
             .filter(|items| items.tags_loaded(sunrise_items::items::TagRegistry::Item))
-            .map(|items| {
-                // Match the registry that binds ItemKeys, not the raw pack entries: absent
-                // optional names must not count as members or leave gaps in their indices.
-                let registry: HashSet<&str> = self
+            .and_then(|items| {
+                // Only members in this generation's item registry can be exposed.
+                let registry = self
                     .items()
                     .registry_order
                     .iter()
                     .map(AsRef::as_ref)
                     .collect();
-                items
-                    .item_tag_order
-                    .iter()
-                    .map(|(tag, members)| {
-                        let ordered = members
-                            .iter()
-                            .filter(|id| registry.contains(id.as_str()))
-                            .cloned()
-                            .collect();
-                        (tag.clone(), ordered)
-                    })
-                    .collect()
+                mod_api::__private::BoundItemTags::bind(&items.item_tag_order, &registry)
             });
         let context = Arc::make_mut(&mut self.loop_context);
         context.set_recipe_properties(Arc::new(sets));

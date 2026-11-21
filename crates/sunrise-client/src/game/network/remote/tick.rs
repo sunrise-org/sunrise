@@ -868,19 +868,12 @@ impl Game<'_> {
         if self.integrated.is_none() && self.server_address().is_some() {
             keys.analog = None;
         }
-        let keys = self.mod_movement_keys(keys);
-        let input = u8::from(keys.forward)
-            | u8::from(keys.backward) << 1
-            | u8::from(keys.left) << 2
-            | u8::from(keys.right) << 3
-            | u8::from(keys.jump) << 4
-            | u8::from(keys.shift) << 5
-            | u8::from(keys.sprint) << 6;
+        let mut packet_keys = self.update_movement_input(keys);
         // LocalPlayer.applyInput and aiStep: watching through another
         // entity, the player does not move itself; its keys still reach the
         // server, whose sneak check lets go of the camera.
         let keys = if self.controls_camera() {
-            keys
+            packet_keys
         } else {
             Keys::default()
         };
@@ -986,6 +979,8 @@ impl Game<'_> {
                 block_registries: None,
             }
             .controlled_simulation_tick_with_sprint_window(keys, sprint_window)?;
+            // LocalPlayer.aiStep's makeJump adds a key press to this tick's input.
+            packet_keys.jump |= player.was_auto_jump;
         } else {
             // LivingEntity.baseTick counts hurtTime down for a dead or riding
             // player too (controlled_simulation_tick does it otherwise): left
@@ -1160,10 +1155,16 @@ impl Game<'_> {
                 data: 0,
             }));
         }
-        // LocalPlayer.sendChanges sends `input.keyPresses`, which an auto-jump's `makeJump` set to
-        // jump for this tick: the jump key goes as held in the tick the client jumps.
-        let auto_jumped = self.player.as_ref().is_some_and(|p| p.was_auto_jump);
-        Ok(Some(input | u8::from(auto_jumped) << 4))
+        // LocalPlayer.sendChanges sends the final key presses, not the move vector.
+        Ok(Some(
+            u8::from(packet_keys.forward)
+                | u8::from(packet_keys.backward) << 1
+                | u8::from(packet_keys.left) << 2
+                | u8::from(packet_keys.right) << 3
+                | u8::from(packet_keys.jump) << 4
+                | u8::from(packet_keys.shift) << 5
+                | u8::from(packet_keys.sprint) << 6,
+        ))
     }
     /// `ClientClockManager.tick`: the clock moves on by the game time that
     /// passed since its last tick, at its rate. A game time the server sets

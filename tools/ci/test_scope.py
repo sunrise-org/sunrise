@@ -28,10 +28,8 @@ from tools.ci.rust_changes import changed_paths  # noqa: E402
 SUNRISE_CLIENT = [
     # The build script and the native hook tests read the hook targets' sources.
     "crates/sunrise-client-render/src", "crates/sunrise-world/src", "crates/sunrise-items/src",
-    "crates/sunrise-guest-stack/src/guest_stack_constants.rs",
     "docs/api/launch-reference.md", "docs/sunrise-ctl-commands.md", "docs/modding/examples/src/worldgen.rs",
     "docs/parity/block-entity-client-ticks.jsonl", "docs/parity/random-chance-seeded.jsonl",
-    "packaging/executable_link.rs", "packaging/windows/exe.rs",
     "research-lock.json", "tests/fixture_support/item_resource_properties.rs", "tests/fixtures",
 ]
 # The generator scans these to write the mod API and the host boundary: its own sources, the vocabulary, the
@@ -41,7 +39,7 @@ MOD_API_GEN = [
     "crates/sunrise-client-render", "crates/sunrise-core/src", "crates/sunrise-items",
     "crates/sunrise-mod-api", "crates/sunrise-mod-api-macros/src/lib.rs", "crates/sunrise-mod-package/src",
     "crates/sunrise-mod-render", "crates/sunrise-mod-runtime/src", "crates/sunrise-mod-vocab/behaviours",
-    "crates/sunrise-mod-vocab/src", "crates/sunrise-world", "packaging/executable_link.rs",
+    "crates/sunrise-mod-vocab/src", "crates/sunrise-world",
     "tools/layering/mod_vocab_state.json",
 ]
 READERS = {
@@ -63,10 +61,8 @@ READERS = {
     # The daily Character comparator reads the original public-JDK API helper.
     "sunrise-core": ["tools/JavaCharacterTables.java"],
     "sunrise-game": ["packaging/windows/exe.rs"],
-    # Shared source-only module discovery reads the game's declarations and vocabulary export fragments.
+    # The ignored-test inventory reads the game's modules and the vocabulary's export fragments.
     "sunrise-game-discovery": ["crates/sunrise-client/src", "crates/sunrise-mod-vocab/src"],
-    # The shared guest-stack tests read the sources that use its constants, and the jobs they wait on.
-    "sunrise-guest-stack": ["crates/sunrise-client/src", "crates/sunrise-threads/src"],
     "sunrise-mod-api": MOD_API_GEN,
     # Its daily stable-release test drives the release gate's Python through the real surface differ.
     "sunrise-mod-api-gen": [
@@ -92,7 +88,6 @@ READERS = {
     "sunrise-release-sign": ["tools/ci/sign_native_build.sh", "tools/ci/sign_release.sh"],
     "sunrise-server": [
         "crates/sunrise-theme/fonts", "crates/sunrise-theme/icons", "docs/api/server-reference.md",
-        "packaging/executable_link.rs",
     ],
     "sunrise-shader-api": ["docs/api/shaders-reference.md", "docs/api/shaders-reference-0.2.md"],
     # Commands (tokens, icons, package), not tests: listed so the scan finds nothing unexplained.

@@ -8,10 +8,11 @@ pub trait Hooks {
     /// last, as `doBrew` ends: after `brewing_complete`, the brew sound and
     /// the ingredient's remainder dropping. Server-side.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "PotionBrewEvent.Post",
         cancellable = false
     )]
-    fn potion_brew_post();
+    fn potion_brew_post(pos: [i32; 3], stacks: &mut [Option<ItemStack>; 5]);
 }

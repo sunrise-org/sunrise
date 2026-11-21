@@ -28,14 +28,6 @@ fn checked_records_have_declared_field_bytes() {
         LevelKey::try_from("example:moon".to_owned()).unwrap(),
         ("example:moon".to_owned(),),
     );
-    fields(
-        FileToIdConverter::new("recipes", ".json").unwrap(),
-        ("recipes".to_owned(), ".json".to_owned()),
-    );
-    fields(
-        ReloadResourceError::from((id("example:bad"), "broken".to_owned())),
-        (id("example:bad"), "broken".to_owned()),
-    );
     fields(JavaString(vec![65, 0xd800, 90]), (vec![65u16, 0xd800, 90],));
     let mut nbt = Compound::new();
     nbt.insert("answer".into(), Tag::Int(42));
@@ -60,7 +52,7 @@ fn checked_records_have_declared_field_bytes() {
         (FluidStack::new(FluidKey::from_slot(0).unwrap(), 1),),
     );
     let block = BlockKey::from_slot(0).unwrap();
-    let state: BlockState = BlockStateRecord::new(block, 9).into();
+    let state: BlockState = crate::__private::block_state_from_ordinal(block, 9);
     fields(state, (block, 9u16));
     fields(BlockStateRange::new(state, 3).unwrap(), (state, 3u32));
     fields(
@@ -211,28 +203,6 @@ fn handle_records_have_declared_field_bytes() {
     );
     fields(InstanceGroupRef::from_parts(37, 9).unwrap(), (37u64, 9u32));
     fields(RenderPipelineRef::from_parts(41, 5).unwrap(), (41u64, 5u32));
-    fields(AttachmentHolder::Entity(entity), (0u32, entity));
-    fields(AttachmentHolder::Player(player), (1u32, player));
-    fields(
-        AttachmentHolder::BlockEntity(BlockEntityRef {
-            level,
-            position: [7, -8, 9],
-            generation: 83,
-        }),
-        (
-            2u32,
-            BlockEntityRef {
-                level,
-                position: [7, -8, 9],
-                generation: 83,
-            },
-        ),
-    );
-    fields(
-        AttachmentHolder::Chunk(ChunkRef::new(level, [3, -4])),
-        (3u32, ChunkRef::new(level, [3, -4])),
-    );
-    fields(AttachmentHolder::Level(level), (4u32, level));
 }
 
 #[test]
@@ -270,10 +240,6 @@ fn payload_enum_cases_have_declared_field_bytes() {
     );
     fields(TicketOwner::Block([1, -2, 3]), (0u32, [1i32, -2, 3]));
     fields(TicketOwner::Entity(0x1234), (1u32, 0x1234u128));
-    fields(Holder::Entity(17), (0u32, 17u32));
-    fields(Holder::Player(23), (1u32, 23u128));
-    fields(Holder::BlockEntity([1, -2, 3]), (2u32, [1i32, -2, 3]));
-    fields(Holder::Chunk([7, -9]), (3u32, [7i32, -9]));
     fields(
         LevelDimension::Custom(LevelKey::try_from("example:moon".to_owned()).unwrap()),
         (3u32, LevelKey::try_from("example:moon".to_owned()).unwrap()),
@@ -312,7 +278,7 @@ impl Drop for Keys {
 }
 
 #[test]
-fn snapshot_and_reload_records_have_declared_field_bytes() {
+fn snapshot_records_have_declared_field_bytes() {
     let _keys = Keys::new();
     let block = BlockKey::from_slot(0).unwrap();
     fields(
@@ -341,57 +307,6 @@ fn snapshot_and_reload_records_have_declared_field_bytes() {
     fields(DamageContainer::from(values.clone()), (values,));
     let revision = crate::item::containers::ModRevision::from_snapshot(31, 47);
     fields(revision, (31u64, 47u64));
-    let files = std::collections::BTreeMap::from([(id("example:recipe"), vec![3u8, 5, 7])]);
-    fields(
-        crate::world::reload::ReloadFiles::new(files.clone()),
-        (files.clone(),),
-    );
-    let (server,): (crate::world::reload::ReloadFiles,) = decode(ServerReloadContext::new(
-        crate::world::reload::ReloadFiles::new(files.clone()),
-    ));
-    assert_eq!(server.0, files);
-    let (client,): (crate::world::reload::ReloadFiles,) = decode(ClientReloadContext::new(
-        crate::world::reload::ReloadFiles::new(files.clone()),
-    ));
-    assert_eq!(client.0, files);
-    fields(
-        AttachmentPolicy {
-            copy_on_death: true,
-            sync: false,
-        },
-        (true, false),
-    );
-    fields(
-        AttachmentForm {
-            encoded: Some(Compound::new()),
-            policy: AttachmentPolicy {
-                copy_on_death: false,
-                sync: true,
-            },
-            write: AttachmentWrite::Set,
-        },
-        (
-            Some(Compound::new()),
-            AttachmentPolicy {
-                copy_on_death: false,
-                sync: true,
-            },
-            AttachmentWrite::Set,
-        ),
-    );
-    let token = AttachmentWriteToken::from(
-        sunrise_mod_runtime::attachments::index::AttachmentOwner::from_parts(
-            AttachmentHolder::Entity(EntityRef::new(WorldEpoch::new(43), 29)),
-            71,
-        ),
-    );
-    fields(
-        token,
-        (
-            AttachmentHolder::Entity(EntityRef::new(WorldEpoch::new(43), 29)),
-            71u64,
-        ),
-    );
 }
 
 fn decode<T: Wire, F: Wire>(value: T) -> F {
@@ -402,113 +317,7 @@ fn decode<T: Wire, F: Wire>(value: T) -> F {
 }
 
 #[test]
-fn registration_and_attribute_records_have_declared_field_bytes() {
-    fields(
-        PackageInfo::new(
-            "example".into(),
-            "1.2.3".into(),
-            PackageKind::Code,
-            Side::Both,
-            vec!["example".into()],
-            vec![PackageDependency::new(
-                "library".into(),
-                "^1".into(),
-                crate::DependencyKind::Optional,
-                crate::DependencyOrder::After,
-                crate::Side::Both,
-                None,
-                None,
-            )],
-        ),
-        (
-            "example".to_owned(),
-            "1.2.3".to_owned(),
-            PackageKind::Code,
-            Side::Both,
-            vec!["example".to_owned()],
-            // Nested tuples flatten into one field list.
-            (
-                vec![PackageDependency::new(
-                    "library".into(),
-                    "^1".into(),
-                    crate::DependencyKind::Optional,
-                    crate::DependencyOrder::After,
-                    crate::Side::Both,
-                    None,
-                    None,
-                )],
-                PackageDetails::default(),
-            ),
-        ),
-    );
-    fields(PropertyValue::Integer(3), (1u32, 3i64));
-    let dependency = PackageDependency::new(
-        "library".into(),
-        "^1".into(),
-        crate::DependencyKind::Optional,
-        crate::DependencyOrder::After,
-        crate::Side::Both,
-        None,
-        None,
-    );
-    fields(
-        dependency.clone(),
-        (
-            "library".to_owned(),
-            "^1".to_owned(),
-            crate::DependencyKind::Optional,
-            crate::DependencyOrder::After,
-            crate::Side::Both,
-            (None::<String>, None::<String>),
-        ),
-    );
-    // Independently check actual enum discriminants, not just a round trip
-    // through the same enum codec: Optional = 1, After = 0, Both = 1.
-    let mut bytes = Writer::new();
-    bytes.put(&dependency);
-    let raw = Reader::decode::<(
-        String,
-        String,
-        u32,
-        u32,
-        u32,
-        (Option<String>, Option<String>),
-    )>(bytes.bytes())
-    .unwrap();
-    assert_eq!(
-        raw,
-        (
-            "library".to_owned(),
-            "^1".to_owned(),
-            1u32,
-            0u32,
-            1u32,
-            (None::<String>, None::<String>)
-        )
-    );
-    let details = PackageDetails {
-        name: "Example".into(),
-        icon_path: Some("icon.png".into()),
-        properties: [("ratio".into(), PropertyValue::Float(0.5))].into(),
-        ..Default::default()
-    };
-    fields(
-        details.clone(),
-        (
-            (
-                "Example".to_owned(),
-                String::new(),
-                Vec::<String>::new(),
-                String::new(),
-                None::<String>,
-            ),
-            (
-                None::<String>,
-                Some("icon.png".to_owned()),
-                details.properties.clone(),
-            ),
-        ),
-    );
+fn spawner_and_attribute_records_have_declared_field_bytes() {
     let spawners = vec![
         SpawnerEntry::Builtin(SpawnerKind::Cat),
         SpawnerEntry::Mod(SpawnerKey::new("example:spawn").unwrap()),
@@ -545,10 +354,6 @@ fn registration_and_attribute_records_have_declared_field_bytes() {
         },
         (vec![(id("minecraft:sharpness"), 3u32)], true),
     );
-    let (rows,): (Vec<(AttachmentWriteToken, Vec<u8>)>,) = decode(AttachmentBatch::from(
-        sunrise_mod_runtime::attachments::AttachmentBatch::<AttachmentHolder>::empty(),
-    ));
-    assert!(rows.is_empty());
     fields(
         ItemPlace::Mod {
             provider: "example:bag",
@@ -609,42 +414,6 @@ fn particle_record_has_declared_field_bytes() {
             ),
         ),
     );
-    let kind = BlockEntityTypeKey::from_slot(0).unwrap();
-    fields(BlockEntityPartError::VanillaType { kind }, (0u32, kind));
-    fields(
-        BlockEntityPartError::Duplicate {
-            kind,
-            part: "example::Machine",
-        },
-        (1u32, kind, "example::Machine".to_owned()),
-    );
-}
-
-#[test]
-fn saved_attachment_batch_fields_keep_scoped_identity_and_nbt() {
-    use sunrise_mod_runtime::attachments::{
-        AttachmentBatch as Batch, AttachmentEntry,
-        index::{AttachmentOwner, AttachmentSnapshot},
-    };
-    let holder = AttachmentHolder::Entity(EntityRef::new(WorldEpoch::new(43), 29));
-    let mut saved = Compound::new();
-    saved.insert("value".into(), Tag::Int(123));
-    let row = AttachmentOwner::from_parts(holder, 71).into_row(std::sync::Arc::new(
-        AttachmentEntry::from_saved(saved.clone()),
-    ));
-    let batch = AttachmentBatch::from(Batch::new(std::sync::Arc::new(
-        AttachmentSnapshot::from_rows(vec![row]),
-    )));
-    let (rows,): (Vec<(AttachmentWriteToken, Vec<u8>)>,) = decode(batch);
-    assert_eq!(rows.len(), 1);
-    let (token, bytes) = rows.into_iter().next().unwrap();
-    let (identity, generation): (AttachmentHolder, u64) = decode(token);
-    assert_eq!(identity, holder);
-    assert_eq!(generation, 71);
-    let (tag, used) =
-        sunrise_core::nbt::read_network(&bytes, sunrise_core::nbt::Limits::default()).unwrap();
-    assert_eq!(used, bytes.len());
-    assert_eq!(tag, Tag::Compound(saved));
 }
 
 #[test]
@@ -652,10 +421,6 @@ fn remaining_enum_payload_fields_keep_tags_and_widths() {
     fields(
         NeighbourUpdate::NeighboursExcept(Direction::North),
         (2u32, Direction::North),
-    );
-    fields(
-        AttachmentRowError::Value(AttachmentError::Decode),
-        (0u32, AttachmentError::Decode),
     );
     fields(Tag::Byte(-7), (1u32, -7i8));
     fields(Tag::Short(-1234), (2u32, -1234i16));
@@ -686,8 +451,6 @@ fn newtype_widths_and_unit_enum_tags_match_their_encodings() {
     fields(crate::__private::biome_id(11), (11u32,));
     fields(crate::__private::mod_color_resolver(13), (13u32,));
     fields(BlockUpdateFlags(17), (17u32,));
-    fields(PackageKind::Code, (0u32,));
-    fields(Side::Both, (1u32,));
     fields(Reduction::Armor, (1u8,));
     fields(SpawnerKind::Patrol, (1u32,));
     fields(Direction::North, (2u32,));
@@ -784,9 +547,6 @@ fn every_item_place_case_has_declared_tag_and_field_types() {
         },
         (13u32, 0x1234u128, parent),
     );
-    // The other four holder cases are exercised in handle_records above.
-    fields(AttachmentHolder::Level(level), (4u32, level));
-    fields(AttachmentRowError::StaleHolder, (1u32,));
 }
 
 #[test]
@@ -831,7 +591,7 @@ fn every_direction_and_equipment_case_has_declared_tag_type() {
 }
 
 #[test]
-fn every_reduction_spawner_package_and_neighbour_case_has_declared_tag_type() {
+fn reduction_spawner_side_dimension_and_neighbour_cases_keep_their_tags() {
     for (value, tag) in [
         (Reduction::Invulnerability, 0u8),
         (Reduction::Armor, 1),
@@ -851,10 +611,9 @@ fn every_reduction_spawner_package_and_neighbour_case_has_declared_tag_type() {
     ] {
         fields(value, (tag,));
     }
-    fields(PackageKind::Code, (0u32,));
-    fields(PackageKind::Content, (1u32,));
     fields(Side::Client, (0u32,));
     fields(Side::Both, (1u32,));
+    fields(Side::Server, (2u32,));
     fields(LevelDimension::Overworld, (0u32,));
     fields(LevelDimension::Nether, (1u32,));
     fields(LevelDimension::End, (2u32,));
@@ -919,43 +678,7 @@ fn every_game_mode_pose_animation_and_connection_case_has_declared_tag_type() {
 }
 
 #[test]
-fn every_attachment_error_and_write_case_has_declared_tag_type() {
-    for (value, tag) in [
-        (AttachmentError::MissingHolder, 0u32),
-        (AttachmentError::TypeMismatch, 1),
-        (AttachmentError::Decode, 2),
-        (AttachmentError::Encode, 3),
-        (AttachmentError::InvalidNamespace, 4),
-        (AttachmentError::InvalidCopyPolicy, 5),
-        (AttachmentError::InvalidSyncPolicy, 6),
-    ] {
-        fields(value, (tag,));
-    }
-    fields(AttachmentError::HolderBusy, (7u32,));
-    fields(
-        AttachmentError::UnsupportedHolder("dragonpart"),
-        (8u32, "dragonpart"),
-    );
-    fields(
-        AttachmentError::Undeclared {
-            package_id: "test_pkg".into(),
-            attachment_id: "test_pkg:mana".into(),
-        },
-        (9u32, "test_pkg".to_owned(), "test_pkg:mana".to_owned()),
-    );
-    fields(AttachmentRowError::HolderBusy, (2u32,));
-    fields(
-        AttachmentRowError::UnsupportedHolder("dragonpart"),
-        (3u32, "dragonpart"),
-    );
-    fields(AttachmentWrite::Decoded, (0u32,));
-    fields(AttachmentWrite::Default, (1u32,));
-    fields(AttachmentWrite::Set, (2u32,));
-}
-
-#[test]
-fn original_player_identity_and_attachment_selector_cross_the_boundary() {
+fn original_player_identity_has_declared_field_bytes() {
     let original = crate::__private::game::original_player_ref(0x1234_5678);
     fields(original, (0x1234_5678u64,));
-    fields(Holder::OriginalPlayer(0x1234_5678), (5u32, 0x1234_5678u64));
 }

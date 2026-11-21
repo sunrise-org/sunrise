@@ -8,7 +8,10 @@
 //! are generated. Implement the same-named inherent `Game` method, without a `native_` prefix.
 //! Hook entry points keep their `native_` names.
 //!
-//! Each hook has its own file, each declaration a bodiless `fn name();` with its rustdoc.
+//! Each hook has its own file: a bodiless `fn name(parameters);` with its rustdoc. List the
+//! parameters in vocabulary types, before they become event fields, a reply, or a cancellation.
+//! Do not repeat the receiver or a phase context in the parameter list. Only a parameter used by
+//! the engine but not by the listener is marked `#[engine]`, such as a level hook's tick queue.
 //! Separate files hold draw contexts and general notes. The declaration traits are:
 //!
 //! - `Hooks`: `#[hook(side = "...", contract = "...", ...)]`, one per moment the game tells mods about.
@@ -31,7 +34,9 @@
 //! | `neoforge`, `fabric`, `paper` | the counterpart's name, or a list of them, for the rustdoc and the gap lists |
 //! | `cancellable` | whether the NeoForge counterpart event is cancellable (documentation, not the contract) |
 //! | `version` | the hook's contract version; left out when it is 1 |
-//! | `target` | the game function that fires it; left out when it is `Game::native_<name>` in `native_hooks/<area>.rs` |
+//! | `target` | the function that fires the hook; defaults to `Game::native_<name>` in the `native_hooks` module with the same filename as the declaration |
+//! | `receiver` | a game target borrows `&mut self` by default; `"read"` borrows `&self`, `"associated"` has no receiver |
+//! | `dispatch` | a game target takes the generated engine carrier by default; existing flat, already-converted (`"api_carrier"`), and direct bindings name their shape explicitly |
 //!
 //! Every hook needs `///` lines: they are the rustdoc of its trait method, and a hook without them
 //! is refused. `HookId` values are process-local dispatch indexes, not persistent API identities.
@@ -44,5 +49,8 @@
 //! The JSON catalog (`native-hooks.json`,
 //! `tools/native-hook-fragments/`) is retired and a file there fails the build.
 //!
-//! The game function a hook names starts as `let _ = (every, parameter);`; `cargo run -p xtask --
-//! mod-api` fills in the dispatch call.
+//! A new game hook takes its generated `fire::<Name>Call` carrier, built from these declarations
+//! and the generator's engine value and draw mappings. A hook with no event parameters needs no
+//! carrier. Start the method body with `let _ = call;` (or `let _ = (every, parameter);` with
+//! additional inputs); `cargo run -p xtask -- mod-api` fills in the call to the typed `fire_*`
+//! adapter. A mismatch fails to compile at that call.

@@ -35,9 +35,10 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use sunrise_core::vanilla_bytes::Writer;
 use sunrise_protocol::{
     PROTOCOL_VERSION,
-    buf::{Reader, Writer},
+    buf::Reader,
     connection::{ConnWriter, Connection, Counters},
     crypto::offline_uuid,
     entity_data, ids,

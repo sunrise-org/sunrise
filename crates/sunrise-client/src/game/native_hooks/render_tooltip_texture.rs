@@ -40,7 +40,7 @@ mod render_tooltip_texture_tests {
                 (0xf0100010, 0x505000ff, 0x5028007f)
             );
             match event.stack {
-                Some(stack) if stack.item().id(host) == "minecraft:stick" => {
+                Some(stack) if stack.item().id(host) == Some("minecraft:stick") => {
                     *event.texture = Some(Identifier::parse("lobby:gold").unwrap());
                 }
                 Some(_) => {}

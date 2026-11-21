@@ -163,12 +163,12 @@ impl StackedOnOther {
         }
     }
 }
-/// What a listener does to a stack the click found.
+/// Whether a listener keeps the original stack or replaces it.
 #[derive(Clone, Debug, Default, PartialEq)]
 // exhaustive: a stack is left alone or replaced, nothing else
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum StackResult {
-    /// Leave the stack as the click found it.
+    /// Leave the original stack unchanged.
     #[default]
     Keep,
     /// Replace the stack: `None` empties it.
@@ -190,113 +190,109 @@ pub struct StackedOnOtherResult {
     /// The clicked slot after the click.
     pub clicked: StackResult,
 }
-/// What `AnvilUpdateEvent` asks about once `createResult` made vanilla's
-/// result with a left input, and what the mods may change: the `output`,
-/// its level `cost` and `material_cost`, the units of `right` used (0 or
-/// more than it holds: all of it), each starting at vanilla's.
+/// The inputs and vanilla result of `AnvilMenu.createResult`, borrowed for
+/// the `anvil_update` callback. Edits by earlier listeners do not change these values.
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct AnvilUpdate {
-    pub left: ItemStack,
-    pub right: Option<ItemStack>,
-    /// The rename box's text, `None` when the client sent none.
-    pub name: Option<String>,
-    /// Vanilla's result for these inputs (`getVanillaResult`), whatever
-    /// the mods set.
-    pub vanilla: AnvilVanilla,
-    pub output: Option<ItemStack>,
-    /// Signed level cost, preserved as set by `AnvilUpdateEvent.setXpCost`.
-    /// A negative cost prevents taking the result (as does zero), not a level refund.
-    pub xp_cost: i32,
-    pub material_cost: i32,
+// exhaustive: the game builds it with a literal; mods only read it
+// no wire: borrows the converted stacks and rename text for the hook call.
+pub struct AnvilUpdateInputs<'a> {
+    /// The stack in the left input slot. The hook is not asked without one.
+    pub left: &'a ItemStack,
+    /// The stack in the right input slot, if present.
+    pub right: Option<&'a ItemStack>,
+    /// The rename box's text, `None` if the client sent none.
+    pub name: Option<&'a str>,
+    /// The result calculated by vanilla, if any.
+    pub vanilla_output: Option<&'a ItemStack>,
+    /// The level cost calculated by vanilla.
+    pub vanilla_xp_cost: i32,
+    /// The number of material items vanilla would charge from the right slot.
+    pub vanilla_material_cost: i32,
 }
-/// `AnvilUpdateEvent.VanillaResult`: the output, level cost and material
-/// cost `createResult` made.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct AnvilVanilla {
-    pub output: Option<ItemStack>,
-    pub xp_cost: i32,
-    pub material_cost: i32,
-}
-impl AnvilUpdate {
-    /// The question about `vanilla`, the result `createResult` made from
-    /// these inputs and name: the output, level cost and material cost
-    /// start at its own.
-    pub fn new(
-        left: ItemStack,
-        right: Option<ItemStack>,
-        name: Option<String>,
-        vanilla: &crate::item::stations::AnvilResult,
-    ) -> Self {
-        let vanilla = AnvilVanilla {
-            output: vanilla.result.clone(),
-            xp_cost: vanilla.cost,
-            material_cost: i32::try_from(vanilla.repair_item_count_cost).unwrap_or(i32::MAX),
-        };
-        Self {
-            left,
-            right,
-            name,
-            output: vanilla.output.clone(),
-            xp_cost: vanilla.xp_cost,
-            material_cost: vanilla.material_cost,
-            vanilla,
-        }
-    }
 
-    /// The mods' answer, in place of `result`: a cancel leaves no result at
-    /// cost 0; otherwise their output, signed level cost and nonnegative
-    /// material cost. A changed output is no longer only a rename.
-    pub fn answer(self, cancel: bool, result: &mut crate::item::stations::AnvilResult) {
-        if cancel {
-            *result = crate::item::stations::AnvilResult::default();
-            return;
-        }
-        result.only_renaming &= self.output == self.vanilla.output;
-        result.cost = self.xp_cost;
-        result.repair_item_count_cost = self.material_cost.max(0) as u32;
-        result.result = self.output;
-    }
+/// The shared answer to `anvil_update`. It starts at `Keep` and vanilla's costs.
+/// The game applies the final edits after dispatch; cancellation or an invalid
+/// replacement leaves no output and zero costs.
+#[derive(Clone, Debug, PartialEq)]
+// exhaustive: the game builds it with a literal
+// no wire: staged edits are applied in-process at the end of the hook call.
+pub struct AnvilUpdateEdits {
+    /// Keep vanilla's output, or set a replacement. `Set(None)` clears it.
+    /// A replacement differing from vanilla must be a valid stack.
+    pub output: StackResult,
+    /// Signed level cost. Zero or a negative value prevents taking the result,
+    /// even in creative, and never refunds levels.
+    pub xp_cost: i32,
+    /// Units consumed from the right slot. Negative values clamp to zero;
+    /// zero or a value exceeding the stack consumes all of it on take.
+    pub material_cost: i32,
 }
-/// What `GrindstoneEvent.OnPlaceItem` asks about once the inputs changed,
-/// and what the mods may set: an `output` (none until a mod sets one) and,
-/// with it, `xp` (-1 for vanilla's experience). `vanilla_output` is the
-/// vanilla's result, to read; set `output` to replace it.
+/// The inputs and vanilla result of `GrindstoneMenu.createResult`, borrowed for
+/// the `grindstone_place` callback. Edits by earlier listeners do not change these values.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct GrindstonePlace {
-    pub top: Option<ItemStack>,
-    pub bottom: Option<ItemStack>,
-    pub vanilla_output: Option<ItemStack>,
+// no wire: borrows the converted stacks for the hook call.
+pub struct GrindstonePlaceInputs<'a> {
+    /// The stack in the top input slot, if present.
+    pub top: Option<&'a ItemStack>,
+    /// The stack in the bottom input slot, if present.
+    pub bottom: Option<&'a ItemStack>,
+    /// The result calculated by vanilla, if any.
+    pub vanilla_output: Option<&'a ItemStack>,
+}
+
+/// The shared answer to `grindstone_place`, initially no override and `-1` XP.
+/// The game validates the final answer before applying it.
+#[derive(Clone, Debug, PartialEq)]
+// exhaustive: the game builds it with a literal
+// no wire: staged edits are applied in-process at the end of the hook call.
+pub struct GrindstonePlaceEdits {
+    /// Leave vanilla's result and experience with `None`, or replace the result with a
+    /// valid stack. To clear the result, cancel the hook instead.
     pub output: Option<ItemStack>,
+    /// Experience to award when the replacement is taken. `-1` uses vanilla's award;
+    /// values below `-1` are refused unless cancelled.
     pub xp: i32,
 }
-/// A grindstone result taken, as `GrindstoneEvent.OnTakeItem` reports it:
-/// the inputs, the experience (-1 for vanilla's, or what OnPlaceItem set)
-/// and what the inputs hold afterwards (empty, as vanilla's).
+/// The input stacks before the grindstone result was taken, borrowed for the
+/// `grindstone_take` callback. Edits by earlier listeners do not change this snapshot.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct GrindstoneTake {
-    pub top: Option<ItemStack>,
-    pub bottom: Option<ItemStack>,
+// no wire: borrows the converted pre-take stacks for the hook call.
+pub struct GrindstoneTakeInputs<'a> {
+    /// The stack in the top input slot before the take, if present.
+    pub top: Option<&'a ItemStack>,
+    /// The stack in the bottom input slot before the take, if present.
+    pub bottom: Option<&'a ItemStack>,
+}
+
+/// The shared answer to `grindstone_take`. Both remainders start at `None`
+/// and the game validates the final answer before applying any of it.
+#[derive(Clone, Debug, PartialEq)]
+// exhaustive: the game builds it with a literal
+// no wire: staged edits are applied in-process at the end of the hook call.
+pub struct GrindstoneTakeEdits {
+    /// Experience to award, initially what `grindstone_place` set or `-1` for
+    /// vanilla's award. Set a nonnegative amount to override it. Values below
+    /// `-1` are refused unless the take is cancelled.
     pub xp: i32,
+    /// A valid replacement for the top input, or `None` to empty the slot.
     pub new_top: Option<ItemStack>,
+    /// A valid replacement for the bottom input, or `None` to empty the slot.
     pub new_bottom: Option<ItemStack>,
 }
-/// An anvil craft as `AnvilCraftEvent` reports it: the inputs and the result
-/// taken, before the crafting changed anything.
+/// The anvil inputs and result before the take. Both `anvil_craft_pre` and
+/// `anvil_craft_post` borrow this same snapshot for their callback.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct AnvilCraft {
-    pub left: Option<ItemStack>,
-    pub right: Option<ItemStack>,
-    pub output: ItemStack,
+// no wire: borrows the pre-take snapshot for this hook call.
+pub struct AnvilCraftInputs<'a> {
+    /// The stack in the left slot before the take, if present.
+    pub left: Option<&'a ItemStack>,
+    /// The stack in the right slot before the take, if present.
+    pub right: Option<&'a ItemStack>,
+    /// The result stack that was taken.
+    pub output: &'a ItemStack,
 }
 
 /// One of a menu's own (non-player) containers: the key a `menu_slot_rules` ask names its slot's
@@ -315,40 +311,38 @@ pub enum MenuContainer {
     Grid,
     /// A crafting grid's result slot.
     Result,
-    /// The player's inventory, which an ask can be about but the context does not copy
-    /// ([`MenuSlotContext::slot`] reads nothing there).
+    /// The player's inventory. A rule can be asked about one of its slots, but
+    /// [`MenuSlotContext::slot`] does not read them.
     Player,
 }
-/// Who and where a `menu_slot_rules` ask is about: the menu's player, its block entity and
-/// its own containers' slots. The game fills it the same way on the server and on the client's
-/// prediction, once per click plan; mods read it.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// The menu's player, its block entity and a read-only view of its staged slots for one
+/// `menu_slot_rules` ask, on either the server or the predicting client. Read only the slots
+/// needed to answer the rule; the view cannot outlive the ask.
+// no wire: this view borrows the click planner's staged slots.
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct MenuSlotContext {
+pub struct MenuSlotContext<'a> {
     /// The UUID of the player whose menu it is; None where no player is known.
     pub player: Option<u128>,
     /// The block entity the menu belongs to; None when the menu is not a block's
     /// (opened by a mod with no block, a vehicle's, the player's own inventory).
     pub pos: Option<[i32; 3]>,
-    /// The menu's own containers' slots as they stand when the click plans, read only (not
-    /// the player's inventory): one entry per [`MenuContainer`] in its order (`Main`, `Grid`,
-    /// `Result`), each in that container's slot order. Read one with [`Self::slot`].
-    pub slots: Vec<Vec<Option<ItemStack>>>,
+    read: &'a dyn Fn(MenuContainer, usize) -> Option<ItemStack>,
 }
-impl MenuSlotContext {
-    /// A context of `player`, the block entity at `pos` and the containers' `slots`, one entry
-    /// per [`MenuContainer`] in its order.
+impl<'a> MenuSlotContext<'a> {
+    /// Lend a read of the menu's staged slots, with the player and block position of this ask.
+    /// The reader returns `None` for empty, absent or unrepresentable slots, including every
+    /// player inventory slot.
     pub fn new(
         player: Option<u128>,
         pos: Option<[i32; 3]>,
-        slots: Vec<Vec<Option<ItemStack>>>,
+        read: &'a dyn Fn(MenuContainer, usize) -> Option<ItemStack>,
     ) -> Self {
-        Self { player, pos, slots }
+        Self { player, pos, read }
     }
-    /// What slot `index` of `container` holds, keyed as the ask names its own slot; None when
-    /// it is empty or the menu has no such slot.
-    pub fn slot(&self, container: MenuContainer, index: usize) -> Option<&ItemStack> {
-        self.slots.get(container as usize)?.get(index)?.as_ref()
+
+    /// Read one slot at its backing index, converting just that stack to an API value.
+    /// Returns `None` if it is empty, absent, cannot be represented, or belongs to `Player`.
+    pub fn slot(&self, container: MenuContainer, index: usize) -> Option<ItemStack> {
+        (self.read)(container, index)
     }
 }

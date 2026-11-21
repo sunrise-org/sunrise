@@ -6,11 +6,11 @@ use crate::{ItemStack, ModelError, ModelRef};
 /// What [`DrawContext::model_3d`](crate::DrawContext::model_3d) draws.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: an item or a model are the only things a screen can ask to have drawn in 3D; a new kind of subject is a new method, so a mod may match without a wildcard
-#[derive(sunrise_mod_api_macros::Wire)]
-pub enum Gui3dSubject {
-    /// An item as `item_stack` draws it in a slot, without its count or decorations: its model's
-    /// `gui` display transform first, then the view's `transform`.
-    Item(ItemStack),
+// no wire: the item stack is borrowed for an in-process draw.
+pub enum Gui3dSubject<'a> {
+    /// A stack borrowed for the draw. The item is drawn as in a slot, without its count or
+    /// decorations: its model's `gui` display transform first, then the view's `transform`.
+    Item(&'a ItemStack),
     /// A resolved standalone model (`RenderAssets::model`): its 0 to 1 cube about its centre,
     /// drawn full bright and shaded by face, as the blocks of a scene are.
     Model(ModelRef),

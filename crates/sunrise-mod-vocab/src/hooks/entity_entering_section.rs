@@ -65,10 +65,16 @@ the move updates them, and `local_player` on the client. Other Host operations a
 are borrowed. There is no automatic mutation deferral: listeners must not move or remove the entity while its
 write is in progress."#]
     #[hook(
+        dispatch = "flat",
         side = "both",
         contract = "listen",
         neoforge = "EntityEvent.EnteringSection",
         cancellable = false
     )]
-    fn entity_entering_section();
+    fn entity_entering_section(
+        entity: EntityRef,
+        old_section: [i32; 3],
+        new_section: [i32; 3],
+        chunk_changed: bool,
+    );
 }

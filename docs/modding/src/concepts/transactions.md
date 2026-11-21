@@ -44,6 +44,11 @@ The journal covers writes through capability handlers to these storages:
 | Entity inventory | Chest or hopper minecart, chest boat, chested donkey, mule or llama inventory |
 | Item entity | Stack; an emptied entity remains until the outermost commit removes it |
 
+An abort restores recorded player storage even if the player died, is in another level, or
+is no longer the acting player when the transaction closes. This includes fake players.
+The player need not be available through a mod's handle at that point. Restoring these
+writes does not itself undo the death or move the player between levels.
+
 At the outermost commit, default `ITEMS` and item `STORAGE` writes to vanilla containers
 and engine-managed mod slots publish their implicit change notifications.
 Other deferred effects include jukebox playback, cauldron and composter block updates and
@@ -134,11 +139,11 @@ whose commit triggered them. Explicit mod notices issued during a transaction ru
 
 `ItemPlace::EntitySlot { entity, slot }` addresses an entity inventory slot, like
 NeoForge's `Capabilities.Item.ENTITY`. Read and write it like any other item place.
-Reading or writing a minecart's slots unpacks its loot table without a player,
-as vanilla's `getChestVehicleItem` does.
+A read uses the resident slots, or the vehicle's live menu slots if open. It does not unpack
+pending loot or load chunks. Writes to a minecart's slots unpack its loot table without a player.
 
 The player `set_inventory_slot`, `set_ender_chest_slot`, `give_stack` and
-`set_persistent_data` writes use the open transaction journal. Aborting restores
+`set_persistent_data_key` writes use the open transaction journal. Aborting restores
 the old values; equipment effects and given-stack overflow wait for root commit.
 
 These writes reach a player in another level than the hook's: their inventory and data

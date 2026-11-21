@@ -3,7 +3,7 @@
 //! data packs and mods' files as a mod's own data maps are, and installed on
 //! the world's behaviours for fire spread, weathering, scraping and waxing.
 use super::Game;
-use super::native_data_maps::{DataMapType, DataMaps, MapRegistries, WorldRegistries};
+use super::native_data_maps::{DataMapType, MapRegistries, WorldRegistries, load_json_maps};
 use std::sync::Arc;
 use sunrise_world::level::BlockMaps;
 
@@ -25,8 +25,15 @@ fn load(
         id: id.to_owned(),
         registry: "minecraft:block".to_owned(),
     });
-    let maps = DataMaps::load(&types, overlay, registries);
-    let values = |id| maps.json_values("minecraft:block", id);
+    let maps = load_json_maps(&types, overlay, registries);
+    let blocks = maps.get("minecraft:block");
+    let values = |id: &str| {
+        blocks
+            .and_then(|maps| maps.get(id))
+            .into_iter()
+            .flatten()
+            .map(|(entry, value)| (entry.as_str(), value))
+    };
     let block_maps =
         BlockMaps::from_values(values(MAPS[0]), values(MAPS[1]), values(MAPS[2]), rank);
     (!block_maps.is_empty()).then(|| Arc::new(block_maps))

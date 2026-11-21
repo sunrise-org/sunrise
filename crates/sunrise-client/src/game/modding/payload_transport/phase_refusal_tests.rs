@@ -81,6 +81,12 @@ impl IPayloadContext for Context<'_, '_> {
     ) -> Result<u32, mod_api::PayloadSendError> {
         unreachable!()
     }
+    fn finish_configuration_task(
+        &mut self,
+        _: mod_api::ConfigurationTaskRef,
+    ) -> Result<(), mod_api::ConfigurationTaskError> {
+        Err(mod_api::ConfigurationTaskError::WrongContext)
+    }
     fn disconnect(&mut self, _: mod_api::Text) {
         unreachable!("the handler never disconnects")
     }

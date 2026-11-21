@@ -1,4 +1,3 @@
-// game-module-visibility: pub(crate)
 //! Mods' bars and lines on the startup loading screen (`RegistrationContext::progress` and
 //! `message`, NeoForge's `StartupNotificationManager`): kept here, drawn under the stage bar by
 //! the startup menu, or logged on a dedicated server, which has no screen.
@@ -20,7 +19,6 @@ const MAX_LINES: usize = 32;
 const MAX_TEXT: usize = 256;
 
 struct Bar {
-    id: u32,
     label: String,
     done: u32,
     steps: u32,
@@ -28,10 +26,14 @@ struct Bar {
     logged: u64,
 }
 
+struct Meter {
+    screen: Arc<ModProgress>,
+    bar: Arc<Mutex<Bar>>,
+}
+
 #[derive(Default)]
 struct State {
-    next: u32,
-    bars: Vec<Bar>,
+    bars: Vec<Arc<Mutex<Bar>>>,
     lines: VecDeque<(String, Instant)>,
 }
 
@@ -58,16 +60,19 @@ pub(crate) fn shown() -> (Vec<(String, f32)>, Vec<String>) {
         .unwrap_or_default()
 }
 
-/// `text` cut to [`MAX_TEXT`] bytes, on one line.
-fn one_line(text: &str) -> String {
-    let mut end = text.len().min(MAX_TEXT);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end]
+/// `text` cut to [`MAX_TEXT`] bytes, on one line, without allocating.
+fn one_line(text: &str) -> impl Iterator<Item = char> + Clone + '_ {
+    text[..text.floor_char_boundary(MAX_TEXT)]
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
+}
+
+fn log_line(line: impl Iterator<Item = char> + Clone) {
+    let line = std::fmt::from_fn(|f| {
+        line.clone()
+            .try_for_each(|c| std::fmt::Write::write_char(f, c))
+    });
+    log::info!("{line}");
 }
 
 impl ModProgress {
@@ -93,6 +98,7 @@ impl ModProgress {
             .rev()
             .take(SHOWN_BARS)
             .map(|bar| {
+                let bar = bar.lock().unwrap_or_else(|p| p.into_inner());
                 let done = if bar.steps == 0 {
                     0.0
                 } else {
@@ -110,92 +116,98 @@ impl ModProgress {
             .collect();
         (bars, lines)
     }
-
-    /// Change bar `id` and, on a dedicated server, log each tenth of its steps it passes.
-    fn update(&self, id: u32, change: impl FnOnce(&mut Bar)) {
-        let mut state = self.state();
-        let Some(bar) = state.bars.iter_mut().find(|bar| bar.id == id) else {
-            return;
-        };
-        change(bar);
-        bar.done = bar.done.min(bar.steps);
-        let mut percentage = None;
-        if self.dedicated && bar.steps > 0 {
-            let tenths = u64::from(bar.done) * 10 / u64::from(bar.steps);
-            if tenths > bar.logged {
-                bar.logged = tenths;
-                percentage = Some((bar.label.clone(), tenths * 10));
-            }
-        }
-        drop(state);
-        if let Some((label, percent)) = percentage {
-            log::info!("{label}: {percent}%");
-        }
-    }
 }
 
 impl mod_api::StartupScreen for ModProgress {
-    fn open(&self, label: String, steps: u32) -> Result<u32, mod_api::StartupProgressError> {
-        let label = one_line(&label);
+    fn open(
+        self: Arc<Self>,
+        label: &str,
+        steps: u32,
+    ) -> Result<Box<dyn mod_api::ProgressMeter>, mod_api::StartupProgressError> {
         let mut state = self.state();
         if state.bars.len() >= MAX_BARS {
             return Err(mod_api::StartupProgressError::TooManyBars);
         }
-        if self.dedicated {
-            log::info!("{label}");
-        }
-        loop {
-            state.next = state.next.wrapping_add(1).max(1);
-            if !state.bars.iter().any(|bar| bar.id == state.next) {
-                break;
-            }
-        }
-        let id = state.next;
-        state.bars.push(Bar {
-            id,
-            label,
+        let label = one_line(label);
+        let bar = Arc::new(Mutex::new(Bar {
+            label: label.clone().collect(),
             done: 0,
             steps,
             logged: 0,
-        });
-        Ok(id)
-    }
-    fn step(&self, bar: u32) {
-        self.update(bar, |bar| bar.done = bar.done.saturating_add(1));
-    }
-    fn set(&self, bar: u32, done: u32) {
-        self.update(bar, |bar| bar.done = done);
-    }
-    fn label(&self, bar: u32, label: String) {
-        let label = one_line(&label);
-        let mut state = self.state();
-        let Some(bar) = state.bars.iter_mut().find(|entry| entry.id == bar) else {
-            return;
-        };
-        if bar.label == label {
-            return;
-        }
-        bar.label = label;
-        let logged = self.dedicated.then(|| bar.label.clone());
+        }));
+        state.bars.push(bar.clone());
         drop(state);
-        if let Some(label) = logged {
-            log::info!("{label}");
-        }
-    }
-    fn close(&self, bar: u32) {
-        self.state().bars.retain(|kept| kept.id != bar);
-    }
-    fn message(&self, text: String) {
-        let text = one_line(&text);
         if self.dedicated {
-            log::info!("{text}");
+            log_line(label);
+        }
+        Ok(Box::new(Meter { screen: self, bar }))
+    }
+
+    fn message(&self, text: &str) {
+        let text = one_line(text);
+        if self.dedicated {
+            log_line(text);
             return;
         }
         let mut state = self.state();
-        state.lines.push_back((text, Instant::now()));
+        state.lines.push_back((text.collect(), Instant::now()));
         if state.lines.len() > MAX_LINES {
             state.lines.pop_front();
         }
+    }
+}
+
+impl Meter {
+    /// Update just this bar, without scanning or locking the screen's list.
+    fn update(&self, change: impl FnOnce(u32) -> u32) {
+        let mut bar = self.bar.lock().unwrap_or_else(|p| p.into_inner());
+        bar.done = change(bar.done).min(bar.steps);
+        if self.screen.dedicated && bar.steps > 0 {
+            let tenths = u64::from(bar.done) * 10 / u64::from(bar.steps);
+            if tenths > bar.logged {
+                bar.logged = tenths;
+                let label = bar.label.clone();
+                drop(bar);
+                log::info!("{label}: {}%", tenths * 10);
+            }
+        }
+    }
+}
+
+impl mod_api::ProgressMeter for Meter {
+    fn step(&self) {
+        self.update(|done| done.saturating_add(1));
+    }
+
+    fn set(&self, done: u32) {
+        self.update(|_| done);
+    }
+
+    fn label(&self, text: &str) {
+        let label = one_line(text);
+        let mut bar = self.bar.lock().unwrap_or_else(|p| p.into_inner());
+        if label.clone().eq(bar.label.chars()) {
+            return;
+        }
+        bar.label.clear();
+        bar.label.extend(label.clone());
+        drop(bar);
+        if self.screen.dedicated {
+            log_line(label);
+        }
+    }
+
+    fn message(&self, text: &str) {
+        mod_api::StartupScreen::message(self.screen.as_ref(), text);
+    }
+}
+
+impl Drop for Meter {
+    fn drop(&mut self) {
+        self.screen
+            .state()
+            .bars
+            .retain(|kept| !Arc::ptr_eq(kept, &self.bar));
     }
 }
 
@@ -206,44 +218,42 @@ mod tests {
 
     #[test]
     fn multibyte_labels_stop_at_the_last_complete_character() {
-        let screen = ModProgress::new(false);
-        screen.open(format!("{}界", "é".repeat(127)), 1).unwrap();
-        let bars = screen.shown(Instant::now()).0;
-        assert_eq!(bars[0].0, "é".repeat(127));
-        screen.message("é".repeat(128));
+        let screen = Arc::new(ModProgress::new(false));
+        let bar = screen
+            .clone()
+            .open(&format!("{}界", "é".repeat(127)), 1)
+            .unwrap();
+        assert_eq!(screen.shown(Instant::now()).0[0].0, "é".repeat(127));
+        bar.label(&"é".repeat(129));
+        assert_eq!(screen.shown(Instant::now()).0[0].0, "é".repeat(128));
+        bar.message(&"é".repeat(128));
         assert_eq!(screen.shown(Instant::now()).1, ["é".repeat(128)]);
     }
 
     #[test]
-    fn sixty_fifth_bar_is_refused_and_ids_do_not_alias_after_wrap() {
-        let screen = ModProgress::new(false);
-        let first = screen.open("first".into(), 1).unwrap();
-        screen.state().next = u32::MAX;
-        let second = screen.open("second".into(), 1).unwrap();
-        assert_eq!(first, 1);
-        assert_eq!(second, 2);
-        for _ in 2..64 {
-            screen.open("kept".into(), 1).unwrap();
-        }
-        let before = screen.shown(Instant::now()).0;
-        assert_eq!(
-            screen.open("refused".into(), 1),
+    fn sixty_fifth_bar_is_refused_until_a_meter_is_dropped() {
+        let screen = Arc::new(ModProgress::new(false));
+        let mut meters: Vec<_> = (0..64)
+            .map(|_| screen.clone().open("kept", 1).unwrap())
+            .collect();
+        assert!(matches!(
+            screen.clone().open("refused", 1),
             Err(mod_api::StartupProgressError::TooManyBars)
-        );
-        assert_eq!(screen.state().bars.len(), 64);
-        screen.step(0);
-        screen.close(0);
-        assert_eq!(screen.shown(Instant::now()).0, before);
-        screen.close(first);
-        screen.open("replacement".into(), 1).unwrap();
+        ));
+        drop(meters.pop());
+        meters.push(screen.clone().open("replacement", 1).unwrap());
+        assert!(matches!(
+            screen.clone().open("refused", 1),
+            Err(mod_api::StartupProgressError::TooManyBars)
+        ));
     }
 
     #[test]
     fn zero_step_bar_remains_finite_and_clamped() {
-        let screen = ModProgress::new(false);
-        let bar = screen.open("empty".into(), 0).unwrap();
-        screen.step(bar);
-        screen.set(bar, u32::MAX);
+        let screen = Arc::new(ModProgress::new(false));
+        let bar = screen.clone().open("empty", 0).unwrap();
+        bar.step();
+        bar.set(u32::MAX);
         assert_eq!(screen.shown(Instant::now()).0, [("empty".into(), 0.0)]);
     }
 
@@ -251,7 +261,7 @@ mod tests {
     fn thirty_third_message_keeps_the_newest_lines_and_expires() {
         let screen = ModProgress::new(false);
         for n in 0..33 {
-            screen.message(format!("message {n}"));
+            screen.message(&format!("message {n}"));
         }
         assert_eq!(screen.state().lines.len(), 32);
         let now = Instant::now();
@@ -263,46 +273,51 @@ mod tests {
     }
 
     #[test]
-    fn bars_read_their_steps_newest_first_and_leave_when_closed() {
-        let screen = ModProgress::new(false);
+    fn bars_read_their_steps_newest_first_and_leave_when_dropped() {
+        let screen = Arc::new(ModProgress::new(false));
+        let first = screen.clone().open("Baking\nmodels", 10).unwrap();
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                scope.spawn(|| {
+                    first.step();
+                    first.step();
+                });
+            }
+        });
         let now = Instant::now;
-        let first = screen.open("Baking\nmodels".into(), 10).unwrap();
-        for _ in 0..4 {
-            screen.step(first);
-        }
         assert_eq!(
             screen.shown(now()).0,
             [("Baking models".to_owned(), 0.4_f32)]
         );
-        screen.set(first, 99);
+        first.set(99);
         assert_eq!(screen.shown(now()).0[0].1, 1.0);
-        // A fifth bar at once: the oldest is not drawn until a newer one closes.
-        let more: Vec<u32> = (0..4)
-            .map(|i| screen.open(format!("bar {i}"), 2).unwrap())
+        // Other bars with the same label still refer to distinct meters.
+        let mut more: Vec<_> = (0..4)
+            .map(|_| screen.clone().open("Models", 2).unwrap())
             .collect();
-        let labels = |screen: &ModProgress| -> Vec<String> {
-            screen
-                .shown(now())
-                .0
-                .into_iter()
-                .map(|(label, _)| label)
-                .collect()
-        };
-        assert_eq!(labels(&screen), ["bar 3", "bar 2", "bar 1", "bar 0"]);
-        screen.close(more[3]);
+        more[2].step();
         assert_eq!(
-            labels(&screen),
-            ["bar 2", "bar 1", "bar 0", "Baking models"]
+            screen.shown(now()).0,
+            [
+                ("Models".to_owned(), 0.0),
+                ("Models".to_owned(), 0.5),
+                ("Models".to_owned(), 0.0),
+                ("Models".to_owned(), 0.0),
+            ]
         );
-        for bar in more.into_iter().chain([first]) {
-            screen.close(bar);
-        }
+        // Dropping the updated bar leaves all its namesakes and reveals the older bar.
+        drop(more.remove(2));
+        assert_eq!(
+            screen.shown(now()).0,
+            [
+                ("Models".to_owned(), 0.0),
+                ("Models".to_owned(), 0.0),
+                ("Models".to_owned(), 0.0),
+                ("Baking models".to_owned(), 1.0),
+            ]
+        );
+        drop(more);
+        drop(first);
         assert!(screen.shown(now()).0.is_empty());
-        // Steps on a closed bar do nothing.
-        screen.step(first);
-        screen.message("Hello".into());
-        let at = now();
-        assert_eq!(screen.shown(at).1, ["Hello"]);
-        assert!(screen.shown(at + LINE_TIME).1.is_empty());
     }
 }

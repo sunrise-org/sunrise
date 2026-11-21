@@ -622,9 +622,16 @@ impl sunrise_client::mobs::finalize::FinalizeLevel for PassLevel<'_, '_, '_> {
     }
 }
 impl SpawnLevel for GameLevel<'_, '_> {
-    fn placement_check(&self, entity: &str, reason: Reason, at: [i32; 3], vanilla: bool) -> bool {
+    fn placement_check(
+        &self,
+        entity: &str,
+        reason: Reason,
+        at: [i32; 3],
+        default_result: bool,
+        random: &mut dyn mod_api::RandomSource,
+    ) -> bool {
         if !mod_api::__private::listened(mod_api::HookId::MobSpawnPlacementCheck) {
-            return vanilla;
+            return default_result;
         }
         let mut result = SpawnCheck::Default;
         self.game.native_mob_spawn_placement_check(
@@ -633,16 +640,17 @@ impl SpawnLevel for GameLevel<'_, '_> {
                 kind: entity,
                 reason,
                 pos: BlockPos::new(at[0], at[1], at[2]),
-                default_result: vanilla,
+                default_result,
                 level: self.level_ref(),
                 spawner: self.spawner,
+                random,
                 result: &mut result,
             },
         );
         match result {
             SpawnCheck::Succeed => true,
             SpawnCheck::Fail => false,
-            _ => vanilla,
+            _ => default_result,
         }
     }
     fn within_world_border(&self, x: i32, z: i32) -> bool {

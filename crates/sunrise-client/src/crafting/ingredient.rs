@@ -5,31 +5,24 @@ mod components;
 mod display;
 #[path = "ingredient/matching.rs"]
 mod matching;
-use super::native_hooks::native_ingredient;
+#[path = "ingredient/stack.rs"]
+mod stack;
 use super::{ItemStack, Items};
-use crate::native_stack_hooks::ingredient_test as native_ingredient_test;
 use display::display_stacks;
-use mod_api::__private::{WalkedIngredient, dedup_keep_order, resolved_items};
 pub use mod_api::item::crafting::{IngredientRule, Shape};
+use mod_api::{
+    __private::{WalkedIngredient, ingredient_parser::CustomIds},
+    IngredientPredicate,
+};
 use serde_json::Value;
 use std::collections::HashSet;
-use sunrise_world::native_load_context::LoadContext;
-/// Where `Ingredient::resolve` leaves the hook's answer inside the occurrence
-/// it resolved. Written and read only here; the loads that own the sources
-/// never send or save it.
-const RESOLVED_ITEMS: &str = "sunrise:resolved_items";
 
 /// The kind an ingredient object names: `neoforge:ingredient_type` in
 /// current NeoForge, `type` in older packs.
-fn ingredient_kind(o: &serde_json::Map<String, Value>) -> Option<&str> {
+pub(super) fn ingredient_kind(o: &serde_json::Map<String, Value>) -> Option<&str> {
     o.get("neoforge:ingredient_type")
         .or_else(|| o.get("type"))?
         .as_str()
-}
-
-/// A mod's own kind: a namespaced type that is not minecraft's.
-fn is_custom(kind: &str) -> bool {
-    kind.contains(':') && !kind.starts_with("minecraft:")
 }
 
 /// A set of accepted items (expanded from an item, list or tag), and the
@@ -41,9 +34,8 @@ pub struct Ingredient {
     pub items: HashSet<String>,
     /// Default-stack display/simple-match order; may be empty for non-simple kinds.
     pub order: Vec<String>,
-    /// A mod's own kind, for matching at craft time: the kind and its
-    /// NBT compound, as the load-time hook saw them (`native_ingredient_test`).
-    pub custom: Option<(String, sunrise_core::nbt::Compound)>,
+    /// The predicate bound to this occurrence by the mod that defined it.
+    pub custom: Option<IngredientPredicate>,
     /// NeoForge's shapes, with their children parsed: matching a concrete
     /// stack asks each child its own `test` (a mod's kind among them),
     /// as on NeoForge — the flat list above only names items.
@@ -136,130 +128,16 @@ impl Ingredient {
             component_defaults: Default::default(),
         }
     }
-    /// Asks the `ingredient` hook once for each mod kind in `v`, nested ones
-    /// included, and leaves each answer with its occurrence for `parse`: the
-    /// one place the hook is called, so every table that reads the recipes
-    /// shares the same answers. A file's own answer is dropped first, so data
-    /// cannot forge one. `true`: `v` changed.
-    // hidden: the load's half of the ingredient hook, not part of the mod surface
-    #[doc(hidden)]
-    pub fn resolve(v: &mut Value, context: &LoadContext) -> bool {
-        match v {
-            Value::Array(entries) => entries
-                .iter_mut()
-                .fold(false, |changed, e| Self::resolve(e, context) | changed),
-            Value::Object(o) => {
-                let mut changed = o.remove(RESOLVED_ITEMS).is_some();
-                let kind = ingredient_kind(o).map(str::to_owned);
-                match kind.as_deref() {
-                    Some("neoforge:compound" | "neoforge:intersection") => {
-                        for key in ["children", "ingredients"] {
-                            if let Some(children) = o.get_mut(key) {
-                                changed |= Self::resolve(children, context);
-                            }
-                        }
-                    }
-                    Some("neoforge:difference") => {
-                        for key in ["base", "subtracted"] {
-                            if let Some(part) = o.get_mut(key) {
-                                changed |= Self::resolve(part, context);
-                            }
-                        }
-                    }
-                    Some("neoforge:custom_display") => {
-                        if let Some(base) = o.get_mut("base") {
-                            changed |= Self::resolve(base, context);
-                        }
-                    }
-                    Some("neoforge:components" | "neoforge:block_tag") => {}
-                    Some(k) if is_custom(k) => {
-                        let mut list = Vec::new();
-                        if mod_api::__private::listened(mod_api::HookId::Ingredient)
-                            && let Ok(data) = crate::json_nbt::json_to_compound(o)
-                        {
-                            native_ingredient(context, k, &data, &mut list);
-                        }
-                        dedup_keep_order(&mut list);
-                        o.insert(RESOLVED_ITEMS.to_owned(), list.into());
-                        changed = true;
-                    }
-                    Some(_) => {}
-                    // A brewing slot's item predicate wraps its ingredient.
-                    None => {
-                        if let Some(item) = o.get_mut("item") {
-                            changed |= Self::resolve(item, context);
-                        }
-                    }
-                }
-                changed
-            }
-            _ => false,
-        }
-    }
-    /// Every mod kind named in `v`, nested ones included, with whether
-    /// `resolve` already left an empty answer for it. Walks the same shapes
-    /// `resolve` does.
-    pub fn custom_kinds(v: &Value) -> Vec<(String, bool)> {
-        let mut found = Vec::new();
-        Self::collect_custom_kinds(v, &mut found);
-        found
-    }
-    fn collect_custom_kinds(v: &Value, found: &mut Vec<(String, bool)>) {
-        match v {
-            Value::Array(entries) => entries
-                .iter()
-                .for_each(|e| Self::collect_custom_kinds(e, found)),
-            Value::Object(o) => {
-                let parts: &[&str] = match ingredient_kind(o) {
-                    Some("neoforge:compound" | "neoforge:intersection") => {
-                        &["children", "ingredients"]
-                    }
-                    Some("neoforge:difference") => &["base", "subtracted"],
-                    Some("neoforge:custom_display") => &["base"],
-                    Some("neoforge:components" | "neoforge:block_tag") => &[],
-                    Some(k) if is_custom(k) => {
-                        let empty = o
-                            .get(RESOLVED_ITEMS)
-                            .and_then(Value::as_array)
-                            .is_some_and(Vec::is_empty);
-                        found.push((k.to_owned(), empty));
-                        &[]
-                    }
-                    Some(_) => &[],
-                    None => &["item"],
-                };
-                for key in parts {
-                    if let Some(part) = o.get(*key) {
-                        Self::collect_custom_kinds(part, found);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    /// Drops every answer `resolve` left anywhere in `v`: what a load sends
-    /// or shows is the files' own JSON. `true`: `v` changed.
-    // hidden: the load's half of the ingredient hook, not part of the mod surface
-    #[doc(hidden)]
-    pub fn forget_answers(v: &mut Value) -> bool {
-        match v {
-            Value::Array(entries) => entries
-                .iter_mut()
-                .fold(false, |changed, e| Self::forget_answers(e) | changed),
-            Value::Object(o) => {
-                let mut changed = o.remove(RESOLVED_ITEMS).is_some();
-                for part in o.values_mut() {
-                    changed |= Self::forget_answers(part);
-                }
-                changed
-            }
-            _ => false,
-        }
-    }
+    /// Parse a built-in ingredient without answers from a recipe load.
     pub fn parse(v: &Value, items: &Items) -> Option<Self> {
-        // A mod's own kind: `resolve` asked the hook once at load and left
-        // the item list it matches with the occurrence; one no load
-        // resolved fails the file.
+        Self::parse_with(v, items, &|_, _| None)
+    }
+
+    pub(super) fn parse_with(
+        v: &Value,
+        items: &Items,
+        custom: CustomIds<'_, IngredientPredicate>,
+    ) -> Option<Self> {
         let walked = WalkedIngredient::walk(
             v,
             &items.item_tag_order,
@@ -281,7 +159,7 @@ impl Ingredient {
                         .collect(),
                 )
             },
-            &resolved_items,
+            custom,
             &components::json_patch,
         );
         let walked = walked?;
@@ -293,13 +171,8 @@ impl Ingredient {
         }
         Self::of_walked(walked, items)
     }
-    /// The walk of an item ingredient's answer: NeoForge's standard shapes
-    /// keep their children, and a mod's own kind keeps its kind and NBT metadata,
-    /// since the load-time list only names items and matching a concrete
-    /// stack (its components) is the match-time hook's.
-    fn of_walked(walked: WalkedIngredient, items: &Items) -> Option<Self> {
-        // The shapes' children walk the same way; a child no wrapper
-        // answers fails the file.
+    /// Preserve the standard shapes and the predicate bound to each custom leaf.
+    fn of_walked(walked: WalkedIngredient<IngredientPredicate>, items: &Items) -> Option<Self> {
         let children = match walked.children {
             Some((shape, kids)) => Some((
                 shape,

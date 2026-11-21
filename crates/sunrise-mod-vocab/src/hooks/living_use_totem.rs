@@ -10,6 +10,7 @@ pub trait Hooks {
     /// hears a server player's totem that did save them, after this. The host is the hit's (`HitHost`): its blocks, random and own
     /// attachments, level sounds, and the own random of the entities the hit lends.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "cancel",
@@ -19,5 +20,12 @@ pub trait Hooks {
         version = 3,
         target = "sunrise_client::game::native_hooks::living_use_totem::HitLevel<'_>::native_living_use_totem"
     )]
-    fn living_use_totem();
+    fn living_use_totem(
+        entity: i32,
+        kind: &str,
+        source: &HurtSource<'_>,
+        hand: Hand,
+        item: &str,
+        cancel: &mut bool,
+    );
 }

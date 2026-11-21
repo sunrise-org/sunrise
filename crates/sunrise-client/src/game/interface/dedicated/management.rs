@@ -814,7 +814,7 @@ impl Game<'_> {
                 (None, Some(name)) => g.name.eq_ignore_ascii_case(name),
                 (None, None) => false,
             })?;
-        Some((guest.uuid, guest.address.ip().to_string()))
+        Some((guest.uuid, guest.ip_address().to_owned()))
     }
 
     /// `UserBanDto.toUserBan`: the player found, the source "Management server" unless one is given; the ban

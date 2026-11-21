@@ -32,7 +32,7 @@ fn reload_resolves_parts_against_reloaded_tags() {
     mod_platform::__private::install(mods);
     super::native_entity_refs::tests::with_game(|game| {
         let stone_key = mod_platform::__private::part_tests::block_key("stone");
-        let name = stone_key.id(game);
+        let name = stone_key.id(game).expect("stone is registered").to_owned();
         let dir = std::env::temp_dir().join(format!("sunrise-key-tags-{}", std::process::id()));
         game.session_lock = Some(sunrise_client::save::SessionLock::acquire(&dir).unwrap());
         assert_eq!(game.block_in_tag(stone_key, "test:reload"), Some(false));
@@ -66,7 +66,7 @@ fn reload_resolves_parts_against_reloaded_tags() {
         // A successful empty publication clears the previous world's served registries too.
         assert!(sunrise_client::datapack_net::served().is_none());
         game.run_native_advancement_grants();
-        assert_eq!(stone_key.id(game), name);
+        assert_eq!(stone_key.id(game), Some(name.as_str()));
         assert_eq!(
             stone_key,
             mod_platform::__private::part_tests::block_key("minecraft:stone")

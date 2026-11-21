@@ -31,11 +31,17 @@ each change to it, not once a tick. A copy that is removed, replaced by another 
 a client ticker or whose chunk unloads is not called again from that tick on, and its handle no longer reads
 once it is removed, replaced or unloaded: stop what you keep for it then. It never runs on a server."##]
     #[hook(
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         scope = "block_entity",
         key = "entity",
         neoforge = "none (vanilla BlockEntityTicker from EntityBlock.getTicker with the client level; NeoForge adds no event)"
     )]
-    fn block_entity_client_tick();
+    fn block_entity_client_tick(
+        pos: [i32; 3],
+        block_entity: BlockEntityRef,
+        state: BlockState,
+        entity: &ModBlockEntity,
+    );
 }

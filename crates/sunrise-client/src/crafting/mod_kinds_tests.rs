@@ -1,6 +1,9 @@
 //! Literal registered-kind fixtures used by crafting menu tests.
 use super::*;
-use std::sync::Mutex;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 use sunrise_world::native_load_context as engine;
 type Calls = Arc<Mutex<Vec<Vec<u32>>>>;
 struct Kind {
@@ -8,14 +11,14 @@ struct Kind {
     input: mod_api::ItemKey,
     output: mod_api::ItemKey,
     rest: mod_api::ItemKey,
+    byproducts: mod_api::TagKey,
     calls: Calls,
+    decodes: Arc<AtomicUsize>,
 }
 impl mod_api::CraftingRecipeKind for Kind {
     type Value = u32;
-    fn codec(&self) -> Option<mod_api::CraftingRecipeCodec<u32>> {
-        Some(mod_api::CraftingRecipeCodec::wire())
-    }
     fn decode(&self, json: &str) -> Result<u32, String> {
+        self.decodes.fetch_add(1, Ordering::Relaxed);
         let value: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
         value["rest"]
             .as_u64()
@@ -69,7 +72,8 @@ impl mod_api::CraftingRecipeKind for Kind {
         let mut out = vec![None; grid.cells.len()];
         if *value == 3 {
             out[4] = context.default_remainder(4);
-            let mut custom = mod_api::ItemStack::new(self.rest, 2).unwrap();
+            let &key = context.items_in_tag(self.byproducts)?.first()?;
+            let mut custom = mod_api::ItemStack::new(key, 2)?;
             custom.set_damage(23);
             out[0] = Some(custom);
             assert!(context.default_remainder(5).is_none());
@@ -87,6 +91,7 @@ impl mod_api::CraftingRecipeKind for Kind {
 struct Mod {
     shape: Option<(u32, u32)>,
     calls: Calls,
+    decodes: Arc<AtomicUsize>,
 }
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for Mod {
@@ -96,7 +101,9 @@ impl mod_api::Hooks for Mod {
             input: r.item_key("test:input"),
             output: r.item_key("test:output"),
             rest: r.item_key("test:rest"),
+            byproducts: r.tag_key("test:byproducts"),
             calls: self.calls.clone(),
+            decodes: self.decodes.clone(),
         };
         r.register_crafting_recipe_serializer("literal", kind);
     }
@@ -109,24 +116,7 @@ pub(crate) fn with_shape_recipe(
     shape: Option<(u32, u32)>,
     f: impl FnOnce(Recipes, Calls),
 ) {
-    let calls: Calls = Default::default();
-    let mods = vec![mod_api::ModEntry::new(
-        "test",
-        Box::new(Mod {
-            shape,
-            calls: calls.clone(),
-        }),
-    )];
-    mod_platform::testing::with_mods(mods.into(), || {
-        let entries = [mod_api::ModEntry::new(
-            "test",
-            Box::new(Mod {
-                shape,
-                calls: calls.clone(),
-            }),
-        )];
-        mod_platform::__private::part_tests::install_parts_fixture(&entries).unwrap();
-        mod_api::__private::resolve_items(["test:input", "test:output", "test:rest"]).unwrap();
+    with_literal_kind(shape, |calls, _| {
         let mut recipes = Recipes::empty();
         recipes.mod_crafting = true;
         recipes.crafting.push((
@@ -140,6 +130,94 @@ pub(crate) fn with_shape_recipe(
         f(recipes, calls);
     });
 }
+
+fn with_literal_kind(shape: Option<(u32, u32)>, f: impl FnOnce(Calls, &AtomicUsize)) {
+    let calls: Calls = Default::default();
+    let decodes = Arc::new(AtomicUsize::new(0));
+    let entry = || {
+        mod_api::ModEntry::new(
+            "test",
+            Box::new(Mod {
+                shape,
+                calls: calls.clone(),
+                decodes: decodes.clone(),
+            }),
+        )
+    };
+    let mods = vec![entry()];
+    let entries = [entry()];
+    mod_platform::testing::with_mods(mods.into(), || {
+        mod_platform::__private::part_tests::install_parts_fixture(&entries).unwrap();
+        mod_api::__private::resolve_items(["test:input", "test:output", "test:rest"]).unwrap();
+        f(calls, &decodes);
+    });
+}
+
+#[test]
+fn custom_recipes_decode_once_per_source_generation() {
+    with_literal_kind(None, |_, decodes| {
+        let id = "test:literal";
+        let load = crate::test_resources::server_load();
+        let context = load.captured_loop_context(engine::LoopSide::Server);
+        let root = tempfile::tempdir().unwrap();
+        let items = Items::empty();
+        let resolve = |rest| {
+            ResolvedSources::resolve(
+                vec![
+                    (
+                        "before".into(),
+                        serde_json::json!({"type":"minecraft:crafting_special_repairitem"}),
+                    ),
+                    (
+                        id.into(),
+                        serde_json::json!({"type":"test:literal", "rest":rest}),
+                    ),
+                ],
+                &load,
+            )
+            .unwrap()
+        };
+        let project = |sources: &ResolvedSources| {
+            Recipes::from_resolved(root.path(), &items, &PackOverlay::NONE, sources).unwrap()
+        };
+        let written = |recipes: &Recipes| {
+            let Some(Recipe::Mod(recipe)) = recipes.recipe(id) else {
+                panic!("missing registered recipe");
+            };
+            recipe.written().unwrap()
+        };
+        let mut grid = [const { None }; 9];
+        grid[0] = Some(ItemStack::new("test:input", 1));
+        let expected = Some(ItemStack::new("test:output", 3));
+
+        let sources = resolve(1);
+        assert_eq!(decodes.load(Ordering::Relaxed), 0, "no decode in resolve");
+        let first = project(&sources);
+        let second = project(&sources);
+        assert_eq!(decodes.load(Ordering::Relaxed), 1);
+        for recipes in [&first, &second] {
+            assert_eq!(recipes.craft(&context, &grid, 3), expected);
+            assert_eq!(written(recipes), r#"{"rest":1}"#);
+        }
+
+        let next_sources = resolve(3);
+        assert_eq!(decodes.load(Ordering::Relaxed), 1);
+        let next = project(&next_sources);
+        assert_eq!(decodes.load(Ordering::Relaxed), 2);
+        assert_eq!(written(&next), r#"{"rest":3}"#);
+        assert_eq!(next.craft(&context, &grid, 3), None);
+        assert_eq!(first.craft(&context, &grid, 3), expected);
+        assert_eq!(written(&first), r#"{"rest":1}"#);
+        grid[4] = Some(ItemStack::new("test:input", 2));
+        assert_eq!(next.craft(&context, &grid, 3), expected);
+
+        let refused = resolve(99);
+        assert!(project(&refused).recipe(id).is_none());
+        assert!(project(&refused).recipe(id).is_none());
+        assert_eq!(decodes.load(Ordering::Relaxed), 3, "refusal was cached");
+    });
+}
+
 #[test]
 fn rectangular_kind_mixes_component_aware_defaults_custom_and_empty_cells() {
     with_shape_recipe(3, Some((2, 3)), |recipes, calls| {
@@ -151,7 +229,17 @@ fn rectangular_kind_mixes_component_aware_defaults_custom_and_empty_cells() {
             )),
             [],
         );
-        let context = load.captured_loop_context(engine::LoopSide::Server);
+        let mut context = load.captured_loop_context(engine::LoopSide::Server);
+        context.set_item_tags(mod_api::__private::BoundItemTags::bind(
+            &[(
+                "test:byproducts".into(),
+                vec!["test:rest".into(), "test:input".into()],
+            )]
+            .into(),
+            &["test:input", "test:output", "test:rest"]
+                .into_iter()
+                .collect(),
+        ));
         let mut grid = vec![None; 9];
         grid[0] = Some(ItemStack::new("test:input", 7));
         let mut input = ItemStack::new("test:input", 3);
@@ -251,9 +339,6 @@ fn registered_kind_written_value_syncs_only_to_sunrise_clients() {
 struct EmptyKind(mod_api::ItemKey);
 impl mod_api::CraftingRecipeKind for EmptyKind {
     type Value = ();
-    fn codec(&self) -> Option<mod_api::CraftingRecipeCodec<()>> {
-        Some(mod_api::CraftingRecipeCodec::wire())
-    }
     fn decode(&self, _: &str) -> Result<(), String> {
         Ok(())
     }

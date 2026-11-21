@@ -16,11 +16,13 @@ pub trait Hooks {
     /// id; if it is gone, or an empty frame being broken now holds an item, nothing
     /// breaks and nothing is removed.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_hanging_break",
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "cancel",
         cancellable = true,
         neoforge = "none (vanilla hanging entity breaking; NeoForge adds no event or extension for it); AttackEntityEvent fires for players only"
     )]
-    fn hanging_break();
+    fn hanging_break(player: Option<u128>, kind: &str, pos: [i32; 3], cancel: &mut bool);
 }

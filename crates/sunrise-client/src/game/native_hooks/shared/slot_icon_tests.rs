@@ -11,25 +11,36 @@ fn empty_slot_draws_icon_but_a_filled_slot_does_not() {
         crate::game::native_entity_refs::tests::with_client_game(|game| {
             let icon = "container/slot/shield";
             assert!(game.gui.atlas.sprites.contains_key(icon));
+            let generation = seed_native_menu(game, 1, "test:menu");
             game.screen = Screen::Inventory;
             game.container = Some((1, 2, 3));
             game.mod_screen = Some(OpenNativeScreen {
+                menu: OpenNativeMenu {
+                    key: (1, 2, 3),
+                    window: 1,
+                    generation,
+                    name: "test:menu".into(),
+                    block: Some("test:block".into()),
+                    pos: None,
+                    mod_type: None,
+                    data: Vec::new(),
+                },
                 layout_revision: 0,
                 slot_moves: Default::default(),
-                key: (1, 2, 3),
-                window: 1,
-                menu: "test:menu".into(),
-                block: Some("test:block".into()),
-                screen: mod_api::Screen {
-                    slots: vec![Some(mod_api::ScreenSlot {
-                        position: [8.0, 18.0],
-                        no_item_icon: Some(icon.into()),
-                    })],
-                    ..Default::default()
-                },
-                mod_type: None,
-                data: Vec::new(),
-                extra: None,
+                shown: true,
+                screen: mod_api::__private::OwnedMenuScreen::new(
+                    "test",
+                    0,
+                    mod_api::MenuScreen::new(mod_api::MenuScreenLayout {
+                        width: 176.0,
+                        height: 166.0,
+                        slots: vec![Some(mod_api::ScreenSlot {
+                            position: [8.0, 18.0],
+                            no_item_icon: Some(icon.into()),
+                        })],
+                        ..Default::default()
+                    }),
+                ),
             });
             let mut actual = HudBatch::scratch([128, 128]);
             game.draw_slot_item(&mut actual, None, 300, &None, 8.0, 18.0);
@@ -52,7 +63,7 @@ fn empty_slot_draws_icon_but_a_filled_slot_does_not() {
             });
             let mut with_icon = HudBatch::scratch([128, 128]);
             game.draw_slot_item(&mut with_icon, None, 300, &filled, 8.0, 18.0);
-            game.mod_screen.as_mut().unwrap().screen.slots[0]
+            game.mod_screen.as_mut().unwrap().layout_mut().slots[0]
                 .as_mut()
                 .unwrap()
                 .no_item_icon = None;
@@ -64,14 +75,13 @@ fn empty_slot_draws_icon_but_a_filled_slot_does_not() {
 }
 
 struct IconScreen(Arc<AtomicBool>);
-#[mod_api::sunrise_part]
-impl mod_api::MenuPart for IconScreen {
-    fn screen(
+impl mod_api::MenuScreenFactory for IconScreen {
+    fn create(
         &self,
-        _: &dyn mod_api::Host,
-        _: &mut mod_api::ScreenEvent<'_>,
-    ) -> Option<mod_api::Screen> {
-        Some(mod_api::Screen {
+        _: &dyn mod_api::ClientHost,
+        _: mod_api::MenuScreenOpen<'_>,
+    ) -> Option<mod_api::MenuScreen> {
+        Some(mod_api::MenuScreen::new(mod_api::MenuScreenLayout {
             width: 176.0,
             height: 166.0,
             slots: vec![Some(mod_api::ScreenSlot {
@@ -86,7 +96,7 @@ impl mod_api::MenuPart for IconScreen {
                 ),
             })],
             ..Default::default()
-        })
+        }))
     }
 }
 struct IconMod(Arc<AtomicBool>);
@@ -102,7 +112,17 @@ impl mod_api::Hooks for IconMod {
                 ..Default::default()
             },
         );
-        r.menu_part("minecraft:generic_9x1", IconScreen(self.0.clone()));
+        r.menu_slot_exclusions(
+            "minecraft:generic_9x1",
+            Some("icon_open:machine"),
+            &[1, 2, 3, 4, 5, 6, 7, 8],
+        )
+        .unwrap();
+        r.register_menu_screen(
+            "minecraft:generic_9x1",
+            Arc::new(IconScreen(self.0.clone())),
+        )
+        .unwrap();
     }
     fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
         event
@@ -150,6 +170,7 @@ fn unknown_slot_icon_refuses_screen_at_open_with_diagnostic() {
             root.prepared().to_owned(),
             crate::game::execution_role::ExecutionRole::Client,
             |game| {
+                seed_native_menu(game, 1, "minecraft:generic_9x1");
                 let pos = (1, 64, 2);
                 game.world
                     .chunks
@@ -161,12 +182,13 @@ fn unknown_slot_icon_refuses_screen_at_open_with_diagnostic() {
                     .default_state("icon_open:machine")
                     .unwrap();
                 game.world.set(pos.0, pos.1, pos.2, block).unwrap();
-                game.open_native_screen(pos, Some(pos), 1, "minecraft:generic_9x1", None);
+                assert!(game.open_native_screen(pos, Some(pos), 9, None));
                 assert!(game.mod_screen.is_some(), "valid icon must open the screen");
                 DIAGNOSTICS.0.lock().unwrap().clear();
                 unknown.store(true, Ordering::Relaxed);
                 // A panic fails this test; no catch_unwind masks it.
-                game.open_native_screen(pos, Some(pos), 2, "minecraft:generic_9x1", None);
+                seed_native_menu(game, 2, "minecraft:generic_9x1");
+                assert!(!game.open_native_screen(pos, Some(pos), 9, None));
                 assert!(
                     game.mod_screen.is_none(),
                     "unknown icon must refuse, not retain the prior screen"

@@ -1,72 +1,12 @@
 use super::*;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use sunrise_world::native_load_context::{DataLoadOrigin, LoadContext, LoadInputs, LoopSide};
-thread_local! { static LIVE: Cell<bool> = const { Cell::new(true) }; static CALLS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) }; }
-fn matching(
-    _: &sunrise_world::native_load_context::LoopContext,
-    kind: &str,
-    _: &sunrise_core::nbt::Compound,
-    stack: &ItemStack,
-    accept: &mut bool,
-) {
-    if kind == "empty_fixture:predicate" {
-        CALLS.with_borrow_mut(|calls| calls.push(kind.to_owned()));
-        *accept = stack.item.as_ref() == "minecraft:stone" && stack.damage == 7;
-    }
-    if kind.starts_with("placement_guard:") {
-        CALLS.with_borrow_mut(|calls| calls.push(kind.to_owned()));
-        *accept = false;
-        if kind == "placement_guard:changes_context" {
-            LIVE.set(false);
-        }
-    }
-}
-fn install() {
-    static INSTALL: std::sync::Once = std::sync::Once::new();
-    INSTALL.call_once(|| {
-        assert!(crate::native_stack_hooks::install(
-            crate::native_stack_hooks::StackHooks {
-                ingredient_test: matching,
-                enchantments: |_, _, _| {},
-                attributes: |_, _| {}
-            }
-        ));
-    });
-}
-#[test]
-fn a_changed_context_interrupts_a_compound_before_the_next_custom_leaf() {
-    install();
-    let load = LoadContext::new(
-        DataLoadOrigin::ServerDataLoad,
-        std::sync::Arc::new(LoadInputs::new(Default::default(), Default::default())),
-        [],
-    );
-    let context = load.loop_context(LoopSide::Server, []);
-    let child = |kind: &str| {
-        let mut value = Ingredient::of(vec!["fixture:item".into()]);
-        value.custom = Some((kind.into(), Default::default()));
-        value
-    };
-    let mut ingredient = Ingredient::of(vec!["fixture:item".into()]);
-    ingredient.children = Some((
-        Shape::Compound,
-        vec![
-            child("placement_guard:changes_context"),
-            child("placement_guard:must_not_run"),
-        ],
-    ));
-    assert_eq!(
-        ingredient.test_in_guarded(&context, &ItemStack::new("fixture:item", 1), &|| LIVE.get()),
-        None
-    );
-    CALLS.with_borrow(|calls| assert_eq!(calls, &["placement_guard:changes_context"]));
-}
+thread_local! { static CALLS: Cell<usize> = const { Cell::new(0) }; }
 
 fn empty_ingredient_recipes_retain_predicates_but_not_placement() {
     use crate::crafting::{Recipes, ResolvedSources};
     use serde_json::json;
     use sunrise_world::loot::PackOverlay;
-    install();
     let load = LoadContext::new(
         DataLoadOrigin::ServerDataLoad,
         std::sync::Arc::new(LoadInputs::new(Default::default(), Default::default())),
@@ -308,15 +248,25 @@ fn empty_ingredient_load_diagnostics_distinguish_errors_and_warnings() {
     }
 }
 
-struct ListenerIngredient(&'static [&'static str]);
+struct ListenerIngredient(&'static str, &'static [&'static str]);
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for ListenerIngredient {
     fn ingredient(
         &self,
         _: &dyn mod_api::DataLoadContext,
         event: &mut mod_api::IngredientEvent<'_>,
-    ) {
-        event.items.extend(self.0.iter().map(|i| i.to_string()));
+    ) -> Option<mod_api::IngredientDefinition> {
+        let kind = event.kind;
+        if kind != self.0 {
+            return None;
+        }
+        Some(mod_api::IngredientDefinition::new(
+            self.1.iter().map(|id| id.to_string()).collect(),
+            |_, stack| {
+                CALLS.set(CALLS.get() + 1);
+                stack.item_id() == "minecraft:stone" && stack.damage() == Some(7)
+            },
+        ))
     }
 }
 
@@ -371,10 +321,20 @@ fn unclaimed_custom_kind_refuses_load_but_an_empty_answer_only_warns() {
         logs[0].1.contains("data/fixture/recipe/needs_mod.json"),
         "{logs:?}"
     );
+    // An unrelated subscriber does not claim this kind.
+    let (recipes, logs) = run(vec![mod_api::ModEntry::new(
+        "unrelated",
+        Box::new(ListenerIngredient("other:kind", &[])),
+    )]);
+    let unrelated = recipes.err().unwrap().to_string();
+    assert_eq!(unrelated, error);
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].0, log::Level::Error);
+
     // A listener with an empty answer: kept, with a warning naming both.
     let (recipes, logs) = run(vec![mod_api::ModEntry::new(
         "empty",
-        Box::new(ListenerIngredient(&[])),
+        Box::new(ListenerIngredient("absent:kind", &[])),
     )]);
     assert_eq!(recipes.unwrap().crafting.len(), 1);
     assert!(logs.iter().any(|(level, text)| *level == log::Level::Warn
@@ -384,7 +344,7 @@ fn unclaimed_custom_kind_refuses_load_but_an_empty_answer_only_warns() {
     // A listener with items: loads as before, silently.
     let (recipes, logs) = run(vec![mod_api::ModEntry::new(
         "items",
-        Box::new(ListenerIngredient(&["minecraft:stick"])),
+        Box::new(ListenerIngredient("absent:kind", &["minecraft:stick"])),
     )]);
     assert_eq!(recipes.unwrap().crafting.len(), 1);
     assert!(logs.is_empty());
@@ -394,7 +354,6 @@ fn cooking_indexes_empty_predicate_descendants_once_in_registration_order() {
     use crate::crafting::Recipes;
     use serde_json::json;
     use sunrise_world::loot::PackOverlay;
-    install();
     let load = LoadContext::new(
         DataLoadOrigin::ServerDataLoad,
         std::sync::Arc::new(LoadInputs::new(Default::default(), Default::default())),
@@ -438,7 +397,7 @@ fn cooking_indexes_empty_predicate_descendants_once_in_registration_order() {
         .unwrap();
         let mut stack = ItemStack::new("minecraft:stone", 1);
         stack.damage = damage;
-        CALLS.with_borrow_mut(Vec::clear);
+        CALLS.set(0);
         assert_eq!(
             recipes
                 .cook(&context, "minecraft:smelting", &stack)
@@ -446,7 +405,7 @@ fn cooking_indexes_empty_predicate_descendants_once_in_registration_order() {
                 .id,
             expected
         );
-        CALLS.with_borrow(|calls| assert_eq!(calls.len(), 1));
+        assert_eq!(CALLS.get(), 1);
     }
 }
 
@@ -456,7 +415,7 @@ fn empty_ingredient_recipes_retain_predicates_but_not_placement_with_a_listener(
     mod_platform::testing::with_mods(
         vec![mod_api::ModEntry::new(
             "empty",
-            Box::new(ListenerIngredient(&[])),
+            Box::new(ListenerIngredient("empty_fixture:predicate", &[])),
         )]
         .into(),
         empty_ingredient_recipes_retain_predicates_but_not_placement,
@@ -469,7 +428,7 @@ fn cooking_indexes_empty_predicate_descendants_once_in_registration_order_with_a
     mod_platform::testing::with_mods(
         vec![mod_api::ModEntry::new(
             "empty",
-            Box::new(ListenerIngredient(&[])),
+            Box::new(ListenerIngredient("empty_fixture:predicate", &[])),
         )]
         .into(),
         cooking_indexes_empty_predicate_descendants_once_in_registration_order,

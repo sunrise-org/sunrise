@@ -111,23 +111,17 @@ mod tests {
             )
         };
         assert_eq!(
-            make(OwningLoad::Startup)
-                .setting("reader", "count")
-                .as_deref(),
+            make(OwningLoad::Startup).setting("reader", "count"),
             Some("3")
         );
         std::fs::write(reader.join("count"), "7").unwrap();
         assert_eq!(
-            make(OwningLoad::Later)
-                .setting("reader", "count")
-                .as_deref(),
+            make(OwningLoad::Later).setting("reader", "count"),
             Some("7")
         );
         // Another initial consumer still has the registration publication.
         assert_eq!(
-            make(OwningLoad::Startup)
-                .setting("reader", "count")
-                .as_deref(),
+            make(OwningLoad::Startup).setting("reader", "count"),
             Some("3")
         );
         assert_eq!(make(OwningLoad::Later).setting("reader", "absent"), None);
@@ -143,6 +137,6 @@ mod tests {
         }
         let fallback =
             OwningLoad::Startup.context(DataLoadOrigin::ClientPreload, inputs, &["reader"], None);
-        assert_eq!(fallback.setting("reader", "count").as_deref(), Some("7"));
+        assert_eq!(fallback.setting("reader", "count"), Some("7"));
     }
 }

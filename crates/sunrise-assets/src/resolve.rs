@@ -194,7 +194,11 @@ impl ModelLibrary {
     /// model; a cyclic chain is rejected, as native discovery excludes it.
     /// The returned model can outlive this library without copying its elements.
     pub fn resolve(&self, name: &str) -> Result<ResolvedCuboidModel> {
-        self.resolve_name(name, None)
+        self.resolve_name(name, None, false)
+    }
+    /// Resolve the model and all of its parents without substituting the missing model.
+    pub fn resolve_required(&self, name: &str) -> Result<ResolvedCuboidModel> {
+        self.resolve_name(name, None, true)
     }
     /// Whether `name` and every parent it reaches are models of this library,
     /// with no cycle: `resolve` puts the missing model in for any other.
@@ -229,15 +233,23 @@ impl ModelLibrary {
         name: &str,
         child: &BTreeMap<String, TextureSlot>,
     ) -> Result<ResolvedCuboidModel> {
-        self.resolve_name(name, Some(child))
+        self.resolve_name(name, Some(child), false)
     }
     fn resolve_name(
         &self,
         name: &str,
         child: Option<&BTreeMap<String, TextureSlot>>,
+        required: bool,
     ) -> Result<ResolvedCuboidModel> {
         let next = Some(identifier(name)?);
-        self.resolve_chain(Vec::new(), Vec::new(), next, &BTreeMap::new(), child, 0)
+        self.resolve_chain(
+            Vec::new(),
+            Vec::new(),
+            next,
+            &BTreeMap::new(),
+            child,
+            (0, required),
+        )
     }
     /// `chain` and `names` start with models that are not in the library (a
     /// composite child); `next` is the parent to follow. `fallback` slots lose
@@ -249,7 +261,7 @@ impl ModelLibrary {
         mut next: Option<String>,
         fallback: &BTreeMap<String, TextureSlot>,
         child: Option<&BTreeMap<String, TextureSlot>>,
-        depth: u8,
+        (depth, required): (u8, bool),
     ) -> Result<ResolvedCuboidModel> {
         if depth > MAX_LOADER_DEPTH {
             return Err(error("composite models nest too deeply"));
@@ -259,7 +271,11 @@ impl ModelLibrary {
             if !visited.insert(name.clone()) {
                 return Err(error("cyclic model parent"));
             }
-            let model = self.models.get(&name).unwrap_or(&self.missing);
+            let model = match self.models.get(&name) {
+                Some(model) => model,
+                None if required => return Err(error(&format!("unknown model {name}"))),
+                None => &self.missing,
+            };
             chain.push(Arc::clone(model));
             names.push(name);
             next = model.parent.clone();
@@ -325,7 +341,7 @@ impl ModelLibrary {
                         child_model.parent.clone(),
                         &inherited,
                         None,
-                        depth + 1,
+                        (depth + 1, required),
                     )?);
                 }
                 Some(ResolvedLoader::Composite(resolved))

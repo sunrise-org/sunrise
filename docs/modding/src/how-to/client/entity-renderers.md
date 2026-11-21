@@ -45,6 +45,7 @@ impl EntityRenderer for Bolt {
 | `orb_value` | An experience orb's value (`ExperienceOrb.DATA_VALUE`); none for any other entity. |
 | `painting` | A painting's own frame (`PaintingRenderState`, below); none for any other entity. |
 | `item_frame` | An item frame or glow item frame's own frame (`ItemFrameRenderState`, below); none for any other entity. |
+| `attachments` | A general entity's last published generation of synced attachments (below); none for other families. |
 
 The pose stack starts at the entity's interpolated position, in blocks, and is not turned. `draw`
 also has the partial tick, the game time and the entity's light. What `submit` draws replaces the
@@ -70,8 +71,10 @@ impl EntityRenderer for Missile {
         entity: &EntityRenderState,
         draw: &mut dyn BlockEntityDrawContext,
     ) -> Result<(), String> {
-        let attachments = entity.attachments.as_ref().ok_or("expected a general entity")?;
-        let fuel = attachments.get(&FUEL).map_err(|error| format!("{error:?}"))?;
+        let fuel = match &entity.attachments {
+            Some(snapshot) => snapshot.get(&FUEL).map_err(|error| format!("{error:?}"))?,
+            None => None,
+        };
         draw.translate([0.0, fuel.copied().unwrap_or_default() as f32, 0.0]);
         // Submit the missile's model at this pose.
         Ok(())
@@ -79,10 +82,19 @@ impl EntityRenderer for Missile {
 }
 ```
 
-A row is eligible for extraction after its first attachment snapshot arrives. A field that could
-not fit into the bounded render snapshot reads as `None`; it does not stop the row from being
-submitted. `yaw`, `pitch` and `age` are interpolated to the frame. The pose stack starts at the row's
-interpolated position.
+A general entity is eligible for extraction after its first whole attachment generation is
+published, even if that generation is empty. The engine publishes at spawn or sync, and a frame
+keeps its captured generation regardless of later updates. If the full generation is over the
+render budget, the client logs the refusal and keeps the last published generation, if there is
+one. If there is none, the entity does not draw until a later sync yields a whole generation
+that fits. Use a draw default when `get` returns `Ok(None)` for a missing key.
+The first typed read can allocate to decode the value. Two snapshots compare by key and canonical
+NBT value, not by their identity, compound iteration order, or decode cache.
+
+`EntityRenderState`, its family-specific state types, and `EntityRenderAttachments` are native
+render input, not `Wire` payloads. The attachment's save and sync codecs still apply. `yaw`,
+`pitch` and `age` are interpolated to the frame. The pose stack starts at the row's interpolated
+position.
 
 ### A living entity's frame
 
@@ -141,9 +153,14 @@ A living renderer replaces the type's whole renderer: its model and its vanilla 
 items, a worn head), as a NeoForge `LivingEntityRenderer` does. Vanilla's turn, scale and death
 tip-over aren't applied for it: the pose stack starts at the feet, not turned, so the renderer turns by
 `body_rot` and scales by `scale` itself. Around it the entity keeps everything else:
-`render_living_pre` (a cancel skips the renderer), the layers mods added to the type, with no posed
-parts ([entity layers](entity-layers.md)), `render_living_post`, and the frame's later passes (name
-tag, leash, flames, shadow), in the order the type's own model has ([model drawing](model-drawing.md)).
+`render_living_pre` (a cancel skips the renderer), the layers mods added to the type
+([entity layers](entity-layers.md)), `render_living_post`, and the frame's later passes (name tag,
+leash, flames, shadow), in the order the type's own model has ([model drawing](model-drawing.md)).
+Living Pre borrows the selected vanilla or pack body in bind pose, independently of whether the
+registered renderer runs. Its visibility edits apply only if that body draws. When the
+replacement succeeds, no such pose was produced: registered layers still run in order and they
+and Post receive `model: None`, not the unused bind pose. If the replacement fails, the regular
+draw can still supply the final body pose.
 
 ## Register it
 

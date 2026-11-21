@@ -64,8 +64,7 @@ fn recipes_place_in_a_mod_crafting_grid_as_in_the_table() {
 
 /// `menu_slot_rules` on a mod crafting menu: an ask about a grid slot names `Grid` and indexes
 /// inside the grid, the result's names `Result`, and either context reads a grid slot and the
-/// result. The parts' copy of the slots is built once for the asks of a plan, and again only
-/// after the menu changes.
+/// result from the staged menu.
 #[test]
 fn slot_rules_read_a_mod_grid_slot_and_the_result() {
     use mod_api::MenuContainer::{Grid, Result};
@@ -76,7 +75,7 @@ fn slot_rules_read_a_mod_grid_slot_and_the_result() {
         Option<(String, u32)>,
     );
     #[derive(Default)]
-    struct GridRules(std::cell::RefCell<Vec<Asked>>, std::cell::Cell<u32>);
+    struct GridRules(std::cell::RefCell<Vec<Asked>>);
     impl SlotRules for GridRules {
         fn listens(&self, menu: &str) -> bool {
             menu == "test:station"
@@ -91,10 +90,6 @@ fn slot_rules_read_a_mod_grid_slot_and_the_result() {
             _: &mut bool,
             _: &mut u32,
         ) {
-            context.snapshot.unwrap().get_or_init(|| {
-                self.1.set(self.1.get() + 1);
-                mod_api::MenuSlotContext::default()
-            });
             let read = |container, index| {
                 let stack = context.slot(container, index)?;
                 Some((stack.item.to_string(), stack.count))
@@ -125,13 +120,87 @@ fn slot_rules_read_a_mod_grid_slot_and_the_result() {
                 (0, Result, planks.clone(), sticks.clone()),
             ]
         );
-        assert_eq!(rules.1.get(), 1);
         station.set_slot(env, 1, None);
         station.slot_rules(env, 5, &stack("stick", 1).unwrap());
         assert_eq!(
             rules.0.borrow()[2],
             (4, Grid, None, Some(("minecraft:oak_button".to_owned(), 1)))
         );
-        assert_eq!(rules.1.get(), 2);
+    });
+}
+
+#[test]
+fn slot_rule_answers_follow_the_grid_slots_that_were_read() {
+    use mod_api::MenuContainer::Grid;
+    use std::cell::Cell;
+
+    struct NeedsIngredient(Cell<u32>);
+    impl SlotRules for NeedsIngredient {
+        fn listens(&self, menu: &str) -> bool {
+            menu == "test:station"
+        }
+        fn rule(
+            &self,
+            _: &str,
+            _: usize,
+            _: &ItemStack,
+            context: SlotContext<'_>,
+            _: &mut bool,
+            may_pickup: &mut bool,
+            _: &mut u32,
+        ) {
+            self.0.set(self.0.get() + 1);
+            *may_pickup = context.slot(Grid, 0).is_some();
+        }
+    }
+
+    bare_env(|env| {
+        let mut live = Menu::new(mod_crafting_table());
+        let held = stack("stone", 1).unwrap();
+        live.load_slot(2, Some(held.clone()));
+        let mut preview = live.clone();
+        let rules = NeedsIngredient(Cell::new(0));
+        let answers = RuleAnswers::default();
+        let planning = PlanningRules {
+            rules: Some(&rules),
+            answers: &answers,
+        };
+        let run = |menu: &mut Menu, rules: &dyn SlotRules| {
+            let env = Env {
+                slot_rules: Some(rules),
+                ..*env
+            };
+            menu.planned(Asked::default(), |menu| {
+                let before = menu.slot_rules(&env, 2, &held).1;
+                // Changing an unread slot keeps the same answer for this question.
+                menu.load_slot(4, stack("dirt", 1));
+                let unrelated = menu.slot_rules(&env, 2, &held).1;
+                // An empty slot the part read gains the ingredient it needed.
+                menu.load_slot(1, stack("oak_planks", 1));
+                let with_ingredient = menu.slot_rules(&env, 2, &held).1;
+                [before, unrelated, with_ingredient]
+            })
+            .0
+        };
+        assert_eq!(run(&mut preview, &planning), [false, false, true]);
+        assert_eq!(rules.0.get(), 2);
+        let replay = StoredRules(&answers);
+        assert_eq!(run(&mut live, &replay), [false, false, true]);
+        assert_eq!(answers.missed(), 0);
+
+        let env = Env {
+            slot_rules: Some(&replay),
+            ..*env
+        };
+        live.planned(Asked::default(), |menu| {
+            // A grid not seen in planning keeps the slot's own vanilla answer.
+            menu.load_slot(1, stack("dirt", 1));
+            assert!(menu.slot_rules(&env, 2, &held).1);
+            // The miss must not mask the stored refusal when the original grid returns.
+            menu.load_slot(1, None);
+            assert!(!menu.slot_rules(&env, 2, &held).1);
+        });
+        assert_eq!(answers.missed(), 1);
+        assert_eq!(rules.0.get(), 2, "apply only replays the recorded answers");
     });
 }

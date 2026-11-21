@@ -7,7 +7,11 @@
 use super::hash::{sha512_hex, sha512_of};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 /// The folder of a package that holds its runtime files.
 pub const RUNTIME_DIR: &str = "runtime";
@@ -135,43 +139,54 @@ impl RuntimeTable {
 }
 
 /// A package's runtime files, each checked against its hash when the package was opened. Reads
-/// serve these bytes and never hash again.
+/// borrow the retained bytes and never hash again. Clones share the verified data.
 #[derive(Clone, Debug)]
-pub struct RuntimeData {
-    files: BTreeMap<String, Arc<[u8]>>,
+pub struct RuntimeData(Arc<RuntimeContents>);
+
+#[derive(Debug)]
+struct RuntimeContents {
+    // Stored separately to lend all the sorted names as a slice. Indices match `files`.
+    names: Vec<String>,
+    files: Vec<RuntimeFile>,
     digest: String,
-    /// The package folder, when the package is one: the files sit in `<dir>/runtime/`.
-    dir: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+pub(super) struct RuntimeFile {
+    pub(super) bytes: Box<[u8]>,
+    pub(super) path: Option<PathBuf>,
 }
 
 impl RuntimeData {
-    pub(super) fn new(
-        files: BTreeMap<String, Arc<[u8]>>,
-        digest: String,
-        dir: Option<PathBuf>,
-    ) -> Self {
-        Self { files, digest, dir }
+    /// `files` arrives in name order from the checked [`RuntimeTable`].
+    pub(super) fn new(files: Vec<(String, RuntimeFile)>, digest: String) -> Self {
+        let (names, files) = files.into_iter().unzip();
+        Self(Arc::new(RuntimeContents {
+            names,
+            files,
+            digest,
+        }))
     }
 
-    /// The file `name` below `runtime/`, `None` for a name the manifest does not list.
-    pub fn file(&self, name: &str) -> Option<Arc<[u8]>> {
-        self.files.get(name).cloned()
-    }
-
-    /// Where the file sits on disk, for a package that is a folder. `None` for a name the
-    /// manifest does not list, and for a `.smod` archive, which has no file to point at.
-    pub fn path(&self, name: &str) -> Option<PathBuf> {
-        self.files.contains_key(name).then_some(())?;
-        Some(self.dir.as_ref()?.join(RUNTIME_DIR).join(name))
+    /// The verified bytes of `name` below `runtime/` and, for a package folder, its live disk
+    /// path. `None` for a name the manifest does not list; an archive's path is always `None`.
+    pub fn file(&self, name: &str) -> Option<(&[u8], Option<&Path>)> {
+        let at = self
+            .0
+            .names
+            .binary_search_by(|listed| listed.as_str().cmp(name))
+            .ok()?;
+        let file = &self.0.files[at];
+        Some((&file.bytes, file.path.as_deref()))
     }
 
     /// The names of the files, in order.
-    pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.files.keys().map(String::as_str)
+    pub fn names(&self) -> &[String] {
+        &self.0.names
     }
 
     /// [`RuntimeTable::digest`] of the table these files were checked against.
     pub fn digest(&self) -> &str {
-        &self.digest
+        &self.0.digest
     }
 }

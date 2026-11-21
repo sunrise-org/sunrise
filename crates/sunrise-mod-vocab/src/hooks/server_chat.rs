@@ -13,6 +13,7 @@ pub trait Hooks {
     /// A component deeper than 512 nodes refuses capture or the whole writeback;
     /// no event field is applied if any Text field fails conversion.
     #[hook(
+        dispatch = "api_carrier",
         side = "server",
         contract = "cancel",
         out = "cancel",

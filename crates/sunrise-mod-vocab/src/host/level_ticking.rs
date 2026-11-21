@@ -37,19 +37,6 @@ pub trait LevelTickingBackend {
     /// and borrows the pending-entity set without copying it or allocating a memo table.
     #[access(WorldOnly)]
     fn level_should_tick_blocks_at(&self, level: LevelRef, pos: [i32; 3]) -> Option<bool>;
-    /// Side: server.
-    /// The random of the server level `level` names: vanilla's `Level.random`
-    /// (`level.getRandom()`), the one its explosions, block drops and other
-    /// level draws use, so a mod's draws move vanilla's later ones as a Java
-    /// mod's do. A parked level (the Nether while the server ticks the
-    /// Overworld) answers with its own stream. This is a copy of it as it
-    /// stands: draw with `LevelRef::with_random`, which stores the stream
-    /// back, so the draws move the level's own. `None` on a client of a
-    /// server, for a stale handle and for a level not open: the Nether and
-    /// the End open when someone first goes there and close after 300 ticks
-    /// with nobody in them (`close_idle_levels`).
-    #[access(WorldOnly)]
-    fn level_random(&self, level: LevelRef) -> Option<LegacyRandomSource>;
 }
 /// The handles' writes of the `level_ticking` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
@@ -71,9 +58,9 @@ pub trait LevelTickingBackendMut {
     #[access(WorldOnly)]
     fn level_block_random_tick(&mut self, level: LevelRef, pos: [i32; 3]) -> bool;
     /// Side: server.
-    /// Replace the random of the server level `level` names with `random`,
-    /// a stream `native_level_random` gave and the mod drew from. False where
-    /// that gives `None`.
+    /// Lend the named level's live stream to `draw`. Run no callback when the level is
+    /// unavailable. See [`LevelRef::with_random`].
     #[access(WorldOnly)]
-    fn level_set_random(&mut self, level: LevelRef, random: LegacyRandomSource) -> bool;
+    #[decline_unavailable]
+    fn with_level_random(&mut self, level: LevelRef, draw: RandomDraw<'_>);
 }

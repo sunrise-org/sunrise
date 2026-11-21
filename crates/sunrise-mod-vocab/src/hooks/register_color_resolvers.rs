@@ -58,10 +58,12 @@ blocks blend over, so a resolver keeps no mutable state and gets no `Host`. Its 
 one section only: a resource or pack reload, a biome colour refresh and a block change all mesh the section again
 and ask the resolver again."#]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         context = "registration",
         neoforge = "RegisterColorHandlersEvent.ColorResolvers"
     )]
-    fn register_color_resolvers();
+    fn register_color_resolvers(resolvers: &mut dyn ColorResolvers);
 }

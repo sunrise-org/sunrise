@@ -90,48 +90,57 @@ pub trait BlockStatesServerHost {
 pub trait BlockStatesBackend {
     /// Side: both. The age read by `BlockStates::weathering_age`.
     #[access(Metadata)]
-    fn block_weathering_age(&self, state: BlockStateRecord) -> Option<WeatheringAge>;
+    #[forward_api_inputs]
+    fn block_weathering_age(&self, state: BlockState) -> Option<WeatheringAge>;
     /// Side: both. The state read by `BlockStates::next_weathering_stage`.
     #[access(Metadata)]
-    fn block_next_weathering_stage(&self, state: BlockStateRecord) -> Option<BlockState>;
+    #[forward_api_inputs]
+    fn block_next_weathering_stage(&self, state: BlockState) -> Option<BlockState>;
     /// Side: both. The state read by `BlockStates::previous_weathering_stage`.
     #[access(Metadata)]
-    fn block_previous_weathering_stage(&self, state: BlockStateRecord) -> Option<BlockState>;
+    #[forward_api_inputs]
+    fn block_previous_weathering_stage(&self, state: BlockState) -> Option<BlockState>;
     /// Side: both. The state read by `BlockStates::waxed`.
     #[access(Metadata)]
-    fn block_state_waxed(&self, state: BlockStateRecord) -> Option<BlockState>;
+    #[forward_api_inputs]
+    fn block_state_waxed(&self, state: BlockState) -> Option<BlockState>;
     /// Side: both. The state read by `BlockStates::unwaxed`.
     #[access(Metadata)]
-    fn block_state_unwaxed(&self, state: BlockStateRecord) -> Option<BlockState>;
+    #[forward_api_inputs]
+    fn block_state_unwaxed(&self, state: BlockState) -> Option<BlockState>;
     /// Side: both.
     /// Borrow the canonical block name through the block metadata resource.
     #[access(Metadata)]
     fn block_metadata_name(&self, block: BlockKey) -> Result<&str, BlockStateError>;
     /// Side: both.
-    /// Borrow a property's serialized value from the block metadata resource.
+    /// Borrow the serialized property value for this `BlockState` from immutable block metadata.
     #[access(Metadata)]
+    #[forward_api_inputs]
     fn block_metadata_property(
         &self,
-        state: BlockStateRecord,
+        state: BlockState,
         name: &str,
     ) -> Result<Option<&str>, BlockStateError>;
     /// Side: both.
-    /// Change a property through the block metadata resource.
+    /// Return a `BlockState` with one property changed, without a world write.
     #[access(Metadata)]
+    #[forward_api_inputs]
+    #[forward_api_output]
     fn block_metadata_with(
         &self,
-        state: BlockStateRecord,
+        state: BlockState,
         name: &str,
         value: &str,
-    ) -> Result<BlockStateRecord, BlockStateError>;
+    ) -> Result<BlockState, BlockStateError>;
     /// Side: both.
-    /// Apply partial properties through the block metadata resource.
+    /// Return a `BlockState` by applying partial constraints to the block's default.
     #[access(Metadata)]
+    #[forward_api_output]
     fn block_metadata_of(
         &self,
         block: BlockKey,
         properties: &[StateConstraint],
-    ) -> Result<BlockStateRecord, BlockStateError>;
+    ) -> Result<BlockState, BlockStateError>;
     /// Side: both.
     /// `BlockState.canBeReplaced()`: whether placing a block where this state stands
     /// replaces it (air, grass, water, snow layers). None for an unknown state.
@@ -223,9 +232,9 @@ pub trait BlockStatesBackend {
     #[access(Metadata)]
     fn block_states_of(&self, block: BlockKey) -> Option<BlockStateRange>;
     /// Side: both.
-    /// The properties of a resolved block, copied for the mod as plain data.
+    /// The properties of a resolved block, borrowed from the tables.
     #[access(Metadata)]
-    fn block_state_definition(&self, block: BlockKey) -> Option<Vec<StateProperty>>;
+    fn block_state_definition(&self, block: BlockKey) -> Option<StateProperties<'_>>;
     /// Side: both.
     /// Match against the existing command registry definitions without allocating on the call.
     #[access(Metadata)]
@@ -236,10 +245,10 @@ pub trait BlockStatesBackend {
         constraints: &[StateConstraint],
     ) -> Option<Result<bool, StateMatchError>>;
     /// Side: both.
-    /// A registered fluid's world default and legal properties, or TankOnly.
-    /// None means the owning host has no resolved registry.
+    /// A registered fluid's world default and borrowed legal properties, or TankOnly.
+    /// None for an unknown key or unavailable registry.
     #[access(Metadata)]
-    fn fluid_state_definition(&self, fluid: FluidKey) -> Option<FluidDefinition>;
+    fn fluid_state_definition(&self, fluid: FluidKey) -> Option<FluidDefinition<'_>>;
     /// Side: both.
     /// A registered fluid's level-independent type properties.
     /// None means the owning host has no resolved registry or `fluid` isn't in it.
@@ -252,7 +261,7 @@ pub trait BlockStatesBackend {
     /// fluid, an amount above 8, a zero amount for anything but the empty fluid, or a source
     /// that isn't full) and without a resolved registry.
     #[access(Metadata)]
-    fn fluid_legacy_block(&self, state: FluidState) -> Option<BlockStateId>;
+    fn fluid_legacy_block(&self, state: FluidState) -> Option<BlockState>;
     /// Side: both.
     /// Validate partial property constraints in input order with indexed errors.
     /// An unavailable or tank-only definition returns NoWorldState.

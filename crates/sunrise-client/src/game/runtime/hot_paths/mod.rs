@@ -24,9 +24,11 @@ mod commands;
 mod fanout;
 mod mods;
 mod ticks;
+mod views;
 mod world;
 
 pub use fanout::{HotPathsMods, note_hot_paths_listener_call};
+pub use views::hot_paths_next_block_entity;
 
 /// Where the measured workloads report.
 pub(super) struct Recorder {
@@ -64,11 +66,16 @@ impl Recorder {
         checksum: impl FnOnce(T) -> Result<C>,
     ) -> Result<()> {
         let label = CString::new(name)?;
+        let alloc = sunrise_threads::alloc_count::ON.then(sunrise_threads::alloc_count::here);
         let started = Instant::now();
         sunrise_threads::callgrind::start();
         let done = work();
         sunrise_threads::callgrind::stop(&label);
         let wall = started.elapsed();
+        let alloc = alloc.map(|before| {
+            let after = sunrise_threads::alloc_count::here();
+            (after.allocs - before.allocs, after.bytes - before.bytes)
+        });
         let mut hash = DefaultHasher::new();
         checksum(done)?.hash(&mut hash);
         writeln!(
@@ -79,6 +86,8 @@ impl Recorder {
                 "operations": operations,
                 "checksum": format!("{:016x}", hash.finish()),
                 "wall_ns": wall.as_nanos() as u64,
+                "allocations": alloc.map(|(calls, _)| calls),
+                "allocated_bytes": alloc.map(|(_, bytes)| bytes),
             })
         )?;
         self.out.flush()?;
@@ -107,6 +116,9 @@ impl Game<'_> {
         self.reset_entity_residency();
         self.native_lifecycle
             .begin_open(mod_api::Authority::DedicatedServer);
+        if let Ok(mode) = std::env::var("SUNRISE_BLOCK_ENTITY_VIEW_BENCH") {
+            return self.hot_block_entity_view(&mut recorder, &mode);
+        }
         match HotPathsMods::from_env()? {
             HotPathsMods::None => {
                 self.hot_ticks(&mut recorder)?;

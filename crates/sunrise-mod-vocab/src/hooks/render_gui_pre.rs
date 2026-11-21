@@ -8,11 +8,13 @@ pub trait Hooks {
     /// while a server dialog or the connection screen covers the window.
     /// Client-side.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "cancel",
         out = "canceled",
         neoforge = "RenderGuiEvent.Pre",
         cancellable = true
     )]
-    fn render_gui_pre();
+    fn render_gui_pre(canceled: &mut bool);
 }

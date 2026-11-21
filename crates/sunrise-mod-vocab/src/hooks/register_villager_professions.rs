@@ -6,11 +6,13 @@ pub trait Hooks {
     /// NeoForge adds a profession through `RegisterEvent` on `Registries.VILLAGER_PROFESSION`;
     /// this hook declares it as data, so only the registration moment corresponds.
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "server",
         contract = "collect",
         out = "professions",
         context = "registration",
         neoforge = "RegisterEvent"
     )]
-    fn register_villager_professions();
+    fn register_villager_professions(professions: &mut dyn VillagerProfessions);
 }

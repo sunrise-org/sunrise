@@ -1,6 +1,6 @@
 //! A mod's general entity rows on the window (#792, stage 5): each row the server shows, with its
 //! first synced fields here (`game/network/remote/general.rs`), drawn by the renderer a mod
-//! registered for its type (`register_entity_renderers`), with a frozen copy of the row's synced
+//! registered for its type (`register_entity_renderers`), with the row's shared, frozen synced
 //! attachments. A general type has no look of its own: without a renderer, or
 //! with one that failed until the next resource load, its rows draw nothing.
 use super::native_entity_renderers::EntityRendererTable;
@@ -12,7 +12,7 @@ use sunrise_client::mesher::Vertex;
 
 /// `EntityRenderState` for a general row: its identity, age and pose at the frame's `partial`
 /// tick, interpolated from the tick before as `Entity.getYRot(partial)` does, with no family's
-/// fields.
+/// fields. The frame clones only the attachment generation's Arc; it never consults the live holder.
 fn render_state(id: u32, row: &RemoteGeneral, partial: f32) -> mod_api::EntityRenderState {
     let lerp = |from: f32, to: f32| from + partial * (to - from);
     mod_api::__private::built::EntityRenderState {
@@ -148,18 +148,9 @@ mod tests {
     /// family's fields.
     #[test]
     fn a_rows_state_is_interpolated_to_the_frame() {
-        let row = super::super::remote::general::RemoteGeneral {
-            join: sunrise_client::join_seq::JoinSeq::next(),
-            type_slot: 0,
-            uuid: 1,
-            position: [0.0; 3],
-            previous: [0.0; 3],
-            rotation: [90.0, 20.0],
-            previous_rotation: [0.0, -20.0],
-            age: 40,
-            shown: true,
-            render_attachments: None,
-        };
+        let mut row = super::RemoteGeneral::new(0, 1, [0.0; 3], [90.0, 20.0]);
+        row.previous_rotation = [0.0, -20.0];
+        row.age = 40;
         let state = render_state(9, &row, 0.25);
         assert_eq!(state.id, 9);
         assert_eq!(state.age, 40.25);

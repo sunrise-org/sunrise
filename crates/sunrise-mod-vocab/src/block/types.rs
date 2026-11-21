@@ -7,128 +7,33 @@ use crate::*;
 // exhaustive: its field is private, so only registration creates a key
 pub struct BlockKey(pub(crate) u32);
 
-/// A block state as the game's state table numbers it (`Block.BLOCK_STATE_REGISTRY`'s id): what
-/// worldgen providers and fluid queries answer. Valid for the running game only; never save it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-// exhaustive: a state id is its number
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct BlockStateId(pub u32);
-
 /// A block entity type requested at registration. Its slot remains stable for the process.
 // no wire: decoding validates the u32 slot with BlockEntityTypeKey::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: only the load-owned table creates keys
 pub struct BlockEntityTypeKey(pub(crate) u32);
 
-/// What a block entity tick writes back.
-// exhaustive: the wire protocol has exactly two snapshot write-back choices.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
-pub enum BlockEntityTickReply {
-    /// Validate and apply the full payload, as ticks do by default.
-    #[default]
-    Changed,
-    /// Discard this Part's payload edits without encoding, decoding or applying
-    /// its reply snapshot. Earlier Parts' accepted `Changed` edits survive.
-    /// When every Part answers `Unchanged`, the original entity and revision
-    /// survive only while its original placeholder remains, with no tick-only
-    /// dirty, container or comparator effects. Independent Host writes retain
-    /// their own effects.
-    Unchanged,
-}
-
-// no wire: borrowed host or registrar backend; access stays scoped to the owning call.
-/// A hook's mutable block entity payload, with a read-only type identity.
-/// The private handle cannot be constructed or taken out by a mod.
-///
-/// ```compile_fail
-/// use mod_api::{BlockEntityTickEvent, ModBlockEntity};
-/// fn replace(event: &mut BlockEntityTickEvent<'_>) {
-///     *event.entity = ModBlockEntity::default();
-/// }
-/// ```
-///
-/// ```compile_fail
-/// use mod_api::BlockEntityTickEvent;
-/// fn take(event: &mut BlockEntityTickEvent<'_>) {
-///     let _ = std::mem::take(&mut event.entity);
-/// }
-/// ```
-///
-/// ```compile_fail
-/// use mod_api::{BlockEntityTickEvent, ModBlockEntity};
-/// fn access(event: &mut BlockEntityTickEvent<'_>) {
-///     let _: &mut ModBlockEntity = event.entity.entity;
-/// }
-/// ```
-// exhaustive: its fields are private, so mods cannot build or destructure it
+// no wire: borrowed payload, scoped to the owning call.
+/// A menu hook's mutable detached payload, with a read-only type identity.
+// exhaustive: only the game constructs this checked view.
 pub struct ModBlockEntityView<'a> {
     pub(crate) entity: &'a mut ModBlockEntity,
-    tick_listener: bool,
-    tick_original: Option<(
-        crate::item::containers::ModBlockEntityFields,
-        crate::item::containers::ModRevision,
-        Option<Compound>,
-    )>,
 }
 
 impl<'a> ModBlockEntityView<'a> {
-    // hidden: a game-side helper lending the checked view to a hook
+    // hidden: the game supplies the detached payload for a menu hook.
     #[doc(hidden)]
     pub fn new(entity: &'a mut ModBlockEntity) -> Self {
-        Self {
-            entity,
-            tick_listener: false,
-            tick_original: None,
-        }
+        Self { entity }
     }
-    /// Id.
+
+    /// The block entity's immutable type id.
     pub fn id(&self) -> &str {
         self.entity.id()
     }
 
-    /// Begin one tick listener's lazy payload checkpoint.
-    // hidden: the generated listener dispatch brackets each tick listener with this; mods never call it
-    #[doc(hidden)]
-    pub fn __begin_tick_listener(&mut self) {
-        self.tick_listener = true;
-    }
-
-    /// Accept this listener's edits, or restore the preceding accepted payload.
-    // hidden: the generated listener dispatch brackets each tick listener with this; mods never call it
-    #[doc(hidden)]
-    pub fn __finish_tick_listener(&mut self, reply: BlockEntityTickReply) {
-        self.tick_listener = false;
-        if let Some((fields, revision, client_update_fields)) = self.tick_original.take()
-            && reply == BlockEntityTickReply::Unchanged
-        {
-            self.entity.fields = fields;
-            self.entity.revision = revision;
-            self.entity.client_update_fields = client_update_fields;
-        }
-    }
-
-    fn checkpoint_tick_listener(&mut self) {
-        if self.tick_listener && self.tick_original.is_none() {
-            self.tick_original = Some((
-                self.entity.fields.clone(),
-                self.entity.revision,
-                self.entity.client_update_fields.clone(),
-            ));
-        }
-    }
-    /// Replace the one-shot fields the block's next change sends clients; an empty compound
-    /// clears them. They go over what `block_entity_update_tag` gives (or alone, without
-    /// one) in the single packet every current viewer gets, and are gone. Call
-    /// `block_entity_sync` to send them: until a change reaches a viewer they wait, however
-    /// many chunks are sent, and they end with the block entity. They are for a one-shot
-    /// effect, not state: nothing saves, clones or compares them, and the revision stays.
-    /// A client merges them into its copy's `nbt` as any update field, where they stay until
-    /// sent again: a changing value, such as a counter, tells one effect from the next.
-    /// Fields that would take the packet past what a client reads (2 MiB of network NBT) are
-    /// dropped with a warning, and the change goes without them. A transaction that rolls the
-    /// block entity back also drops a batch queued before it.
+    /// Queue one-shot fields in the block entity's next update to its viewers.
     pub fn set_client_update_fields(&mut self, fields: Compound) {
-        self.checkpoint_tick_listener();
         self.entity.client_update_fields = Some(fields);
     }
 }
@@ -142,7 +47,6 @@ impl std::ops::Deref for ModBlockEntityView<'_> {
 
 impl std::ops::DerefMut for ModBlockEntityView<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.checkpoint_tick_listener();
         self.entity
     }
 }

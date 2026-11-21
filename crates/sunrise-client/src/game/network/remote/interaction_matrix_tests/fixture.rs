@@ -79,46 +79,12 @@ pub fn use_item_on_block(_: HostSide<'_>, event: &mut mod_api::UseItemOnBlockEve
     Flow::Cancel
 }
 
-pub struct Control;
-#[mod_api::sunrise_part]
-impl mod_api::BlockPart for Control {}
-#[mod_api::sunrise_part]
-impl mod_api::BlockEntityPart for Control {
-    fn block_entity_tick(
-        &self,
-        _: &mut dyn mod_api::ServerHost,
-        event: &mut mod_api::BlockEntityTickEvent<'_>,
-    ) {
-        let mut state = STATE.lock().unwrap();
-        if event.entity.data.len() == 6 {
-            // A malformed table is left in place, so the test fails on its
-            // own assertion with the case named, not with a listener panic.
-            let Some(controls) = controls(&event.entity.data) else {
-                return;
-            };
-            state.0 = controls;
-            state.1.clear();
-            event.entity.data.clear();
-        } else {
-            event.entity.data = state.1.iter().map(|&byte| i32::from(byte)).collect();
-        }
-    }
+pub(super) fn begin(controls: [u8; 6]) {
+    let mut state = STATE.lock().unwrap();
+    state.0 = controls;
+    state.1.clear();
 }
 
-/// Two switches (0..=2), then four answers (0..=6); anything else is refused.
-fn controls(data: &[i32]) -> Option<[u8; 6]> {
-    let mut controls = [0; 6];
-    for (index, (slot, value)) in controls.iter_mut().zip(data).enumerate() {
-        let limit = if index < 2 { 2 } else { 6 };
-        *slot = u8::try_from(*value).ok().filter(|v| *v <= limit)?;
-    }
-    Some(controls)
-}
-
-pub fn register(registrar: &mut dyn mod_api::Registrar) {
-    let kind = registrar
-        .block_entity_type("interaction_control")
-        .blocks(&[])
-        .build();
-    registrar.block_entity_part(&kind, Control).unwrap();
+pub(super) fn finish() -> Vec<u8> {
+    std::mem::take(&mut STATE.lock().unwrap().1)
 }

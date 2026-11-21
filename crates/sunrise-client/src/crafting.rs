@@ -9,8 +9,12 @@ use crate::{
     items::{ItemStack, Items},
     particles::{DYE_FIREWORK_COLORS, FireworkExplosion, FireworkShape},
 };
-use sunrise_core::nbt::{JavaString, Tag};
-use sunrise_world::native_load_context::LoopContext;
+use mod_api::IngredientPredicate;
+use sunrise_core::{
+    identifier::Identifier,
+    nbt::{JavaString, Tag},
+};
+use sunrise_world::native_load_context::{LoadContext, LoopContext};
 use sunrise_world::{component_patch::Patch, loot::PackOverlay};
 mod snapshots;
 pub use snapshots::{
@@ -33,7 +37,7 @@ use shapeless_matching::matches_all;
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 /// `PlacementInfo`: the ingredients to find and, per recipe slot, the index
@@ -1404,21 +1408,52 @@ pub struct ResolvedRecipe {
     pub name: String,
     /// The file as written, but with its `type` canonicalized to
     /// `namespace:path` (`recipe_sources::decode_type`): what mods and clients see.
-    pub file: Arc<Value>,
-    /// The file with the `ingredient` hook's answers in place, for the tables
-    /// to parse. The file itself when it names no mod kind.
-    pub resolved: Arc<Value>,
+    file: Arc<Value>,
+    // Address tokens of occurrences in `file`. The document stays frozen,
+    // so a token is only compared to addresses in that same live document.
+    answers: HashMap<usize, IngredientAnswer>,
 }
 
-/// The recipes one load reads, each mod ingredient resolved exactly once
-/// (`Ingredient::resolve`): the tables and the network copy of a server load
-/// all read this, so the `ingredient` hook hears each occurrence once per load.
+struct IngredientAnswer {
+    items: Vec<String>,
+    predicate: IngredientPredicate,
+}
+
+impl ResolvedRecipe {
+    pub(crate) fn file(&self) -> &Value {
+        &self.file
+    }
+
+    /// Parse an occurrence borrowed from this recipe's original file, not
+    /// a copy. Only occurrences resolved during this load have hook answers.
+    pub(crate) fn parse_ingredient(&self, value: &Value, items: &Items) -> Option<Ingredient> {
+        Ingredient::parse_with(value, items, &|value, _| {
+            let answer = self.answers.get(&std::ptr::from_ref(value).addr())?;
+            Some((answer.items.clone(), answer.predicate.clone()))
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture(name: String, file: Arc<Value>) -> Self {
+        Self {
+            name,
+            file,
+            answers: HashMap::new(),
+        }
+    }
+}
+
+/// The recipes one load reads, each mod ingredient resolved exactly once.
+/// The tables and the network copy share the answers kept with this load.
 #[derive(Default)]
 pub struct ResolvedSources {
     pub recipes: Vec<ResolvedRecipe>,
     // Both tables use the items of this owning load. Parse station rules once,
     // whether the crafting projection or the station tables are built first.
-    stations: std::sync::OnceLock<Vec<Option<crate::stations::ParsedStationRecipe>>>,
+    stations: OnceLock<Vec<Option<crate::stations::ParsedStationRecipe>>>,
+    // Only custom entries get a slot, keyed by source position. An initialized
+    // None is a decoder refusal.
+    mod_recipes: OnceLock<HashMap<usize, OnceLock<Option<mod_kinds::ModRecipe>>>>,
     /// What mods added to the recipe property sets, asked once per load.
     pub property_additions: PropertyAdditions,
     /// Recipes `resolve_collecting` refused, by name and reason; the strict
@@ -1495,8 +1530,8 @@ impl ResolvedSources {
                 .map(|recipe| {
                     crate::stations::ParsedStationRecipe::parse(
                         qualified(&recipe.name),
-                        &recipe.resolved,
-                        items,
+                        recipe.file(),
+                        |value| recipe.parse_ingredient(value, items),
                     )
                 })
                 .collect()
@@ -1563,87 +1598,131 @@ impl ResolvedSources {
         mut sources: Vec<(String, Value)>,
         context: &sunrise_world::native_load_context::LoadContext,
     ) -> Result<Self> {
-        sources.retain(|(name, value)| Ingredient::validate_persistence(value, name));
-        let listened = mod_api::__private::listened(mod_api::HookId::Ingredient);
-        let recipes = sources
-            .into_iter()
-            .map(|(name, file)| -> std::result::Result<ResolvedRecipe, (String, String)> {
-                let refused = |reason: String| (name.clone(), reason);
-                if let Some(serializer) = file["type"].as_str() {
-                    mod_kinds::recipe_type(&name, serializer).map_err(refused)?;
-                }
-                let mut resolved = file.clone();
-                let parsed_here = resolved["type"]
-                    .as_str()
-                    .is_some_and(|t| VANILLA_RECIPE_SERIALIZERS.contains(&t));
-                // Answers a file carries are forgeries; an unlisted slot
-                // would otherwise keep one.
-                let mut changed = Ingredient::forget_answers(&mut resolved);
-                if parsed_here {
-                    for key in INGREDIENT_KEYS {
-                        if let Some(slot) = resolved.get_mut(key) {
-                            changed |= Ingredient::resolve(slot, context);
-                        }
+        fn collect_answers(
+            name: &str,
+            value: &Value,
+            listener: Option<&LoadContext>,
+            answers: &mut HashMap<usize, IngredientAnswer>,
+        ) -> std::result::Result<(), String> {
+            let object = match value {
+                Value::Array(entries) => {
+                    for entry in entries {
+                        collect_answers(name, entry, listener, answers)?;
                     }
-                    for key in INGREDIENT_MAPS {
-                        for slot in resolved
-                            .get_mut(key)
-                            .and_then(Value::as_object_mut)
-                            .into_iter()
-                            .flat_map(|map| map.values_mut())
-                        {
-                            changed |= Ingredient::resolve(slot, context);
-                        }
-                    }
+                    return Ok(());
                 }
-                if parsed_here {
-                    let kinds: Vec<_> = INGREDIENT_KEYS
-                        .iter()
-                        .filter_map(|key| resolved.get(*key))
-                        .chain(
-                            INGREDIENT_MAPS
-                                .iter()
-                                .filter_map(|key| resolved.get(*key)?.as_object())
-                                .flat_map(|map| map.values()),
+                Value::Object(object) => object,
+                _ => return Ok(()),
+            };
+            let parts: &[&str] = match ingredient::ingredient_kind(object) {
+                Some("neoforge:compound" | "neoforge:intersection") => &["children", "ingredients"],
+                Some("neoforge:difference") => &["base", "subtracted"],
+                Some("neoforge:custom_display") => &["base"],
+                Some("neoforge:components" | "neoforge:block_tag") => &[],
+                Some(kind) if kind.contains(':') && !kind.starts_with("minecraft:") => {
+                    if Identifier::parse_namespaced(kind).is_none() {
+                        return Err(recipe_refused(
+                            name,
+                            &format!("invalid ingredient kind {kind}"),
+                        ));
+                    }
+                    let unanswered = || {
+                        recipe_refused(
+                            name,
+                            &format!("ingredient kind {kind} was not answered by any mod"),
                         )
-                        .flat_map(Ingredient::custom_kinds)
-                        .collect();
-                    if !listened && let Some((kind, _)) = kinds.first() {
-                        return Err(refused(recipe_refused(
-                            &name,
-                            &format!("ingredient kind {kind} is not registered by any mod"),
-                        )));
-                    }
-                    for (kind, _) in kinds.iter().filter(|(_, empty)| *empty) {
+                    };
+                    let context = listener.ok_or_else(unanswered)?;
+                    let data = crate::json_nbt::json_to_compound(object).map_err(|error| {
+                        recipe_refused(name, &format!("ingredient kind {kind}: {error}"))
+                    })?;
+                    let mut definition = None;
+                    native_hooks::native_ingredient(context, kind, &data, &mut definition);
+                    let definition = definition.ok_or_else(unanswered)?;
+                    // Only dispatch creates Answered, from the installed subscriber table.
+                    let owner = mod_api::__private::mod_index(definition.mod_id)
+                        .expect("ingredient dispatch names an installed mod");
+                    let (mut items, predicate) = mod_api::__private::bind_ingredient_predicate(
+                        definition.mod_id,
+                        owner,
+                        definition.answer,
+                    );
+                    mod_api::__private::dedup_keep_order(&mut items);
+                    if items.is_empty() {
                         log::warn!(
                             "recipes: {name}: ingredient kind {kind} matched no items; the recipe cannot be placed"
                         );
                     }
+                    answers.insert(
+                        std::ptr::from_ref(value).addr(),
+                        IngredientAnswer { items, predicate },
+                    );
+                    &[]
                 }
-                let file = Arc::new(file);
-                let resolved = if changed {
-                    Arc::new(resolved)
-                } else {
-                    Arc::clone(&file)
-                };
-                Ok(ResolvedRecipe {
-                    name,
-                    file,
-                    resolved,
-                })
-            })
-            .collect::<Vec<std::result::Result<_, (String, String)>>>();
-        let mut failures = Vec::new();
-        let recipes = recipes
-            .into_iter()
-            .filter_map(|recipe| recipe.map_err(|failure| failures.push(failure)).ok())
-            .collect();
-        Ok(Self {
-            recipes,
-            failures,
-            property_additions: PropertyAdditions::ask(context),
-            ..Self::default()
-        })
+                Some(kind) if !kind.starts_with("minecraft:") => {
+                    return Err(recipe_refused(
+                        name,
+                        &format!("invalid ingredient kind {kind}"),
+                    ));
+                }
+                Some(_) => &[],
+                // A brewing slot's item predicate wraps its ingredient.
+                None => {
+                    if let Some(kind) = object
+                        .get("neoforge:ingredient_type")
+                        .or_else(|| object.get("type"))
+                    {
+                        return Err(recipe_refused(
+                            name,
+                            &format!("invalid ingredient kind {kind}"),
+                        ));
+                    }
+                    &["item"]
+                }
+            };
+            for part in parts.iter().filter_map(|key| object.get(*key)) {
+                collect_answers(name, part, listener, answers)?;
+            }
+            Ok(())
+        }
+
+        sources.retain(|(name, value)| Ingredient::validate_persistence(value, name));
+        let listener = mod_api::__private::listened(mod_api::HookId::Ingredient).then_some(context);
+        let mut resolved = Self::default();
+        for (name, file) in sources {
+            let file = Arc::new(file);
+            let mut answers = HashMap::new();
+            if let Some(serializer) = file["type"].as_str() {
+                if let Err(failure) = mod_kinds::recipe_type(&name, serializer) {
+                    resolved.failures.push((name, failure));
+                    continue;
+                }
+                if VANILLA_RECIPE_SERIALIZERS.contains(&serializer) {
+                    let mut slots = INGREDIENT_KEYS
+                        .iter()
+                        .filter_map(|key| file.get(*key))
+                        .chain(
+                            INGREDIENT_MAPS
+                                .iter()
+                                .filter_map(|key| file.get(*key)?.as_object())
+                                .flat_map(|map| map.values()),
+                        );
+                    if let Err(failure) = slots
+                        .try_for_each(|slot| collect_answers(&name, slot, listener, &mut answers))
+                    {
+                        resolved.failures.push((name, failure));
+                        continue;
+                    }
+                }
+            }
+            resolved.recipes.push(ResolvedRecipe {
+                name,
+                file,
+                answers,
+            });
+        }
+        resolved.property_additions = PropertyAdditions::ask(context);
+        Ok(resolved)
     }
 }
 
@@ -1718,15 +1797,23 @@ impl Recipes {
         let mut cooking = Vec::new();
         let mut by_type: HashMap<String, Vec<crate::crafting::RecipeSnapshot>> = HashMap::new();
         let mut meta = HashMap::new();
-        for (
-            ResolvedRecipe {
-                name,
-                file: json,
-                resolved,
-            },
-            station,
-        ) in sources.recipes.iter().zip(sources.station_recipes(items))
+        let mod_recipes = sources.mod_recipes.get_or_init(|| {
+            sources
+                .recipes
+                .iter()
+                .enumerate()
+                .filter(|(_, recipe)| custom_type(&recipe.file).is_some())
+                .map(|(position, _)| (position, OnceLock::new()))
+                .collect()
+        });
+        for (position, (recipe, station)) in sources
+            .recipes
+            .iter()
+            .zip(sources.station_recipes(items))
+            .enumerate()
         {
+            let name = &recipe.name;
+            let json = &recipe.file;
             let mut entry = None;
             if let Some(kind) = json["type"].as_str() {
                 let id = if name.contains(':') {
@@ -1748,8 +1835,8 @@ impl Recipes {
                     }
                 }
             }
-            if custom_type(json).is_some() {
-                if let Some(recipe) = mod_kinds::decode(name, json)
+            if let Some(slot) = mod_recipes.get(&position) {
+                if let Some(recipe) = slot.get_or_init(|| mod_kinds::decode(name, json)).clone()
                     && let Some(entry) = entry
                 {
                     if entry.kind == "minecraft:crafting" {
@@ -1765,16 +1852,16 @@ impl Recipes {
             if !VANILLA_RECIPE_SERIALIZERS.contains(&kind) {
                 continue;
             }
-            if let Err(error) = Ingredient::validate_recipe(resolved, items) {
+            let v = recipe.file();
+            if let Err(error) = Ingredient::validate_recipe(v, items) {
                 failures.push((name.clone(), recipe_refused(name, &error)));
                 continue;
             }
-            let v = &**resolved;
             let text = |k: &str| v[k].as_str().unwrap_or("").to_owned();
             meta.insert(name.clone(), (text("category"), text("group")));
             let failure = std::cell::RefCell::new(None::<String>);
             let ingredient = |value: &Value| {
-                let parsed = Ingredient::parse(value, items);
+                let parsed = recipe.parse_ingredient(value, items);
                 if parsed.is_none() {
                     *failure.borrow_mut() = Some(format!("invalid ingredient: {value}"));
                 }
@@ -1910,10 +1997,7 @@ impl Recipes {
                 "minecraft:crafting_special_firework_star" => special((|| {
                     let mut shapes = Vec::new();
                     for (shape, value) in v["shapes"].as_object()? {
-                        shapes.push((
-                            FireworkShape::from_name(shape),
-                            Ingredient::parse(value, items)?,
-                        ));
+                        shapes.push((FireworkShape::from_name(shape), ingredient(value)?));
                     }
                     Some(Special::FireworkStar {
                         dye: ing("dye")?,
@@ -2502,17 +2586,9 @@ mod tests {
     /// snapshot carries the same cells and result as crafting.
     #[test]
     fn recipes_of_type_lists_only_what_the_game_parsed() {
-        let recipe = |s: &str| {
-            let file = Arc::new(serde_json::from_str::<Value>(s).unwrap());
-            (file.clone(), file)
-        };
         let named = |name: &str, s: &str| {
-            let (file, resolved) = recipe(s);
-            ResolvedRecipe {
-                name: format!("mymod:{name}"),
-                file,
-                resolved,
-            }
+            let file = Arc::new(serde_json::from_str::<Value>(s).unwrap());
+            ResolvedRecipe::fixture(format!("mymod:{name}"), file)
         };
         let mut sources = ResolvedSources {
             recipes: vec![
@@ -2555,11 +2631,7 @@ mod tests {
         mod_platform::testing::with_recipe_types(&["example:machine"], || {
             let named = |name: &str, json: &str| {
                 let file = Arc::new(serde_json::from_str::<Value>(json).unwrap());
-                ResolvedRecipe {
-                    name: name.into(),
-                    resolved: file.clone(),
-                    file,
-                }
+                ResolvedRecipe::fixture(name.into(), file)
             };
             let mut sources = ResolvedSources {
                 recipes: vec![
@@ -2598,7 +2670,10 @@ mod tests {
                 "{error}"
             );
             sources.recipes.remove(1);
-            sources.stations = Default::default();
+            let sources = ResolvedSources {
+                recipes: sources.recipes,
+                ..ResolvedSources::default()
+            };
             let recipes =
                 Recipes::from_resolved(&root, &items, &PackOverlay::NONE, &sources).unwrap();
             let stations = crate::stations::StationRecipes::from_sources(&root, &items, &sources);
@@ -2679,11 +2754,7 @@ mod tests {
         let template = r#"{"id":"minecraft:diamond","count":2,"components":{"minecraft:custom_data":{"rule":1}}}"#;
         let named = |name: &str, json: String| {
             let file = Arc::new(serde_json::from_str::<Value>(&json).unwrap());
-            ResolvedRecipe {
-                name: name.into(),
-                resolved: file.clone(),
-                file,
-            }
+            ResolvedRecipe::fixture(name.into(), file)
         };
         let sources = ResolvedSources {
             recipes: vec![
@@ -2789,11 +2860,7 @@ mod tests {
                     let mut v: Value = serde_json::from_str(json).unwrap();
                     v["type"] = format!("minecraft:{kind}").into();
                     let file = Arc::new(v);
-                    ResolvedRecipe {
-                        name: format!("test:{kind}"),
-                        resolved: file.clone(),
-                        file,
-                    }
+                    ResolvedRecipe::fixture(format!("test:{kind}"), file)
                 })
                 .collect(),
             ..ResolvedSources::default()

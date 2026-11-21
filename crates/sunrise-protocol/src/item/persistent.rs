@@ -160,10 +160,8 @@ fn transient_value(kind: i32, value: &Component) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        buf::{Codec, Writer},
-        item::Template,
-    };
+    use crate::{buf::Codec, item::Template};
+    use sunrise_core::vanilla_bytes::Writer;
 
     struct Registry;
     impl Names for Registry {

@@ -2,10 +2,11 @@
 //! `ServerboundSeenAdvancementsPacket` and `ClientboundAwardStatsPacket`.
 use crate::{
     Result,
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Reader},
     packet,
 };
 use sunrise_core::nbt::Tag;
+use sunrise_core::vanilla_bytes::Writer;
 
 /// `DisplayInfo` of an advancement as sent.
 #[derive(Clone, Debug, PartialEq)]

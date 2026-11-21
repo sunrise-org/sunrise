@@ -46,16 +46,18 @@ impl Game<'_> {
             .handle(registry, entry)
     }
 
-    /// The fields of the entry a handle names, after the handle's session and generation check.
+    /// Visit the entry a handle names, after the handle's session and generation check.
     pub(super) fn level_datapack_read(
         &self,
         level: LevelRef,
         handle: &mod_api::DatapackHandle,
-    ) -> Result<Vec<(String, mod_api::DatapackValue)>, mod_api::DatapackReadError> {
+        visit: &mut dyn FnMut(&mod_api::DatapackEntry),
+    ) -> Result<(), mod_api::DatapackReadError> {
         let set = self
             .level_datapack_set(level)
             .ok_or(mod_api::DatapackReadError::UnknownRegistry)?;
-        Ok(set.get(handle)?.values.clone())
+        visit(set.get(handle)?);
+        Ok(())
     }
 }
 
@@ -116,10 +118,13 @@ mod tests {
                     let handle = game
                         .level_datapack_handle(level, "example:spell", "addon:fire")
                         .unwrap();
-                    assert_eq!(
-                        game.level_datapack_read(level, &handle),
-                        Ok(vec![("power".into(), DatapackValue::Int(7))])
-                    );
+                    let mut visits = 0;
+                    game.level_datapack_read(level, &handle, &mut |entry| {
+                        assert_eq!(entry.values, [("power".to_owned(), DatapackValue::Int(7))]);
+                        visits += 1;
+                    })
+                    .unwrap();
+                    assert_eq!(visits, 1);
                     assert_eq!(
                         game.level_datapack_handle(level, "example:missing", "addon:fire"),
                         Err(E::UnknownRegistry)
@@ -130,17 +135,20 @@ mod tests {
                     );
                     game.mods.datapack_registries =
                         Some(std::sync::Arc::new(first.reload(candidate()).unwrap()));
+                    let mut visited_refusal = false;
+                    let mut unexpected_visit = |_: &DatapackEntry| visited_refusal = true;
                     assert_eq!(
-                        game.level_datapack_read(level, &handle),
+                        game.level_datapack_read(level, &handle, &mut unexpected_visit),
                         Err(E::StaleGeneration)
                     );
                     game.mods.datapack_registries = Some(std::sync::Arc::new(
                         DatapackRegistrySet::first(candidate(), 124),
                     ));
                     assert_eq!(
-                        game.level_datapack_read(level, &handle),
+                        game.level_datapack_read(level, &handle, &mut unexpected_visit),
                         Err(E::WrongSession)
                     );
+                    assert!(!visited_refusal);
                 });
             },
         );

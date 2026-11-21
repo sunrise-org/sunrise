@@ -9,7 +9,7 @@ use sunrise_world::{registry::BlockRegistry, worldgen::placement::PlacementQuery
 pub(in crate::game) struct WorkerResources {
     pub index: Arc<Index>,
     pub metadata: &'static Blocks,
-    air: BlockState,
+    pub(super) air: BlockState,
     air_blocks: [Option<BlockKey>; 3],
 }
 impl WorkerResources {

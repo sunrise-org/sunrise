@@ -91,7 +91,7 @@ pub struct Joined {
     pub uuid: u128,
     pub name: String,
     /// The profile's properties (skin textures, in online mode).
-    pub properties: Vec<sunrise_protocol::packets::login::Property>,
+    pub properties: Vec<sunrise_core::profile::AccountProperty>,
     pub info: ClientInformation,
     pub brand: String,
     pub sender: PlayerSender,
@@ -354,13 +354,13 @@ impl NetConfig {
 /// waits for it: until it answers (or when it fails) the owner is listed
 /// without properties, as before.
 pub struct OwnerProfile {
-    properties: std::sync::OnceLock<Vec<sunrise_protocol::packets::login::Property>>,
-    fetch: Mutex<Receiver<Vec<sunrise_protocol::packets::login::Property>>>,
+    properties: std::sync::OnceLock<Vec<sunrise_core::profile::AccountProperty>>,
+    fetch: Mutex<Receiver<Vec<sunrise_core::profile::AccountProperty>>>,
 }
 
 impl OwnerProfile {
     pub fn new(
-        fetch: impl FnOnce() -> Vec<sunrise_protocol::packets::login::Property> + Send + 'static,
+        fetch: impl FnOnce() -> Vec<sunrise_core::profile::AccountProperty> + Send + 'static,
     ) -> Self {
         let (send, receive) = channel();
         let _ = std::thread::Builder::new()
@@ -375,7 +375,7 @@ impl OwnerProfile {
     }
     /// The owner's properties once fetched; empty while the fetch is out
     /// or when it failed. Never blocks.
-    pub fn properties(&self) -> &[sunrise_protocol::packets::login::Property] {
+    pub fn properties(&self) -> &[sunrise_core::profile::AccountProperty] {
         if let Some(properties) = self.properties.get() {
             return properties;
         }
@@ -848,13 +848,16 @@ impl Lan {
         let (client, server) = sunrise_protocol::connection::Pipe::pair();
         let shared = self.shared.clone();
         // Mod configuration payload handlers run on this thread.
-        sunrise_guest_stack::spawn("sunrise-local-conn".into(), move || {
-            if let Err(e) = conn::serve_local(server, shared)
-                && std::env::var_os("SUNRISE_NET_DEBUG").is_some()
-            {
-                log::warn!("[lan] local: {e}");
-            }
-        })?;
+        std::thread::Builder::new()
+            .stack_size(sunrise_threads::GAME_THREAD_STACK_BYTES)
+            .name("sunrise-local-conn".into())
+            .spawn(move || {
+                if let Err(e) = conn::serve_local(server, shared)
+                    && std::env::var_os("SUNRISE_NET_DEBUG").is_some()
+                {
+                    log::warn!("[lan] local: {e}");
+                }
+            })?;
         Ok(client)
     }
     /// Everything the connection threads reported since the last call.
@@ -1069,10 +1072,13 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>, stop: &AtomicBool) {
                 };
                 shared.wait(&counted, &stream);
                 // Mod configuration payload handlers run on this thread.
-                let _ = sunrise_guest_stack::spawn("sunrise-lan-conn".into(), move || {
-                    WAITING.set(Some(counted.2));
-                    handle(stream, addr, counted);
-                });
+                let _ = std::thread::Builder::new()
+                    .stack_size(sunrise_threads::GAME_THREAD_STACK_BYTES)
+                    .name("sunrise-lan-conn".into())
+                    .spawn(move || {
+                        WAITING.set(Some(counted.2));
+                        handle(stream, addr, counted);
+                    });
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(25));

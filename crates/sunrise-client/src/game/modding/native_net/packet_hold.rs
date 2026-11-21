@@ -3,7 +3,8 @@ use super::Game;
 use mod_api::{HoldError, HoldId, SendPacketError, ServerboundPlayPacket};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
-use sunrise_protocol::{buf::Writer, packets::play::Serverbound as S};
+use sunrise_core::vanilla_bytes::Writer;
+use sunrise_protocol::packets::play::Serverbound as S;
 
 const PACKETS: usize = 256;
 const BYTES: usize = 1_048_576;

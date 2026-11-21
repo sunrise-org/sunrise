@@ -1,0 +1,19 @@
+ids = [
+    "type:StreamSpec.prebuffer_ms",
+    "handle:StreamSpec::with_prebuffer_ms",
+    "type:SpecFault.Prebuffer",
+    "type:AudioStreamState.Buffering",
+    "trait:AudioStreamSource",
+    "method:AudioStreamSource::buffered_ms",
+    "handle:AudioStreamRef::buffered_ms",
+]
+why = "An async stream plays the first available frame without waiting for a watermark. A dry ring or a dry pull read plays silence without ending the stream. Playing means open and placed, not necessarily audible."
+migrate = """
+Remove `spec.prebuffer_ms` settings, `.with_prebuffer_ms(ms)`, imports of `AUDIO_STREAM_PREBUFFER_MIN_MS` \
+and `AUDIO_STREAM_PREBUFFER_MAX_MS`, and `SpecFault::Prebuffer` match arms. Delete \
+`AudioStreamRef::buffered_ms()` polling and remove `buffered_ms` from any `AudioStreamSource` implementation. \
+Remove the `AudioStreamState::Buffering` branch; `Playing` now includes a muted or dry stream that is open \
+and placed. If a network producer needs a jitter buffer, keep it with the producer and push whole frames \
+when ready. The async queue still holds a fixed one second of source PCM (`AUDIO_STREAM_RING_MAX_MS`), \
+which is a capacity, not a playback threshold. Drop or retry the suffix that `push` did not accept. \
+For PCM your mod generates on demand, supply an `AudioStream` instead of scheduling pushes."""

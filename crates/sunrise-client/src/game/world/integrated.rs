@@ -50,10 +50,10 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 pub(super) const NO_ANSWER: &str =
     "the integrated server stopped or did not answer within 10 s (the game log says which)";
 
-/// The server thread holds its `Game` by value and runs every tick on it.
-/// It reserves what every guest-capable thread does under the engine's stack policy.
+/// The minimum stack for the integrated server, which holds its `Game` by value
+/// and runs every tick on it.
 fn server_thread_stack_floor() -> usize {
-    sunrise_guest_stack::reservation()
+    sunrise_threads::GAME_THREAD_STACK_BYTES
 }
 
 /// The server thread's stack size: [`server_thread_stack_floor`], or what `RUST_MIN_STACK` asks for
@@ -475,13 +475,13 @@ impl Game<'_> {
                 Arc::new(OwnerProfile::new(move || {
                     sunrise_client::skins::fetch_own_properties(id)
                         .into_iter()
-                        .map(|(name, value, signature)| {
-                            sunrise_protocol::packets::login::Property {
+                        .map(
+                            |(name, value, signature)| sunrise_core::profile::AccountProperty {
                                 name,
                                 value,
                                 signature,
-                            }
-                        })
+                            },
+                        )
                         .collect()
                 }))
             }),
@@ -1556,16 +1556,16 @@ pub(super) mod tests {
         assert!(text.contains("in native mod example:posted, hook server_tick"));
     }
 
-    /// The server thread keeps guest headroom, and a larger `RUST_MIN_STACK` still
-    /// reaches it (#2430).
+    /// The integrated server keeps its stack floor and honors a larger
+    /// `RUST_MIN_STACK` override (#2430).
     #[test]
-    fn the_server_thread_stack_keeps_guest_headroom_and_larger_overrides() {
+    fn integrated_server_stack_honors_its_floor_and_larger_overrides() {
         let minimum = 136 * 1024 * 1024;
         assert_eq!(super::stack_for(None), minimum);
         assert_eq!(
             super::stack_for(Some("1048576")),
             minimum,
-            "smaller asks keep guest headroom"
+            "smaller values keep the integrated server floor"
         );
         assert_eq!(super::stack_for(Some("268435456")), 256 * 1024 * 1024);
         assert_eq!(super::stack_for(Some("16777216")), minimum);
@@ -1714,20 +1714,13 @@ pub(super) mod tests {
             });
             let local = game.client_session().client_server().unwrap();
             assert!(local.integrated_local);
-            assert_eq!(local.name.as_deref(), Some("First world"));
+            assert_eq!(local.name, Some("First world"));
             assert_eq!(local.address, None);
-            assert_eq!(local.save_folder.as_deref(), Some("first_world"));
+            assert_eq!(local.save_folder, Some("first_world"));
             game.integrated.as_mut().unwrap().world_name = "Renamed world".into();
-            assert_eq!(
-                game.client_session()
-                    .client_server()
-                    .unwrap()
-                    .name
-                    .as_deref(),
-                Some("Renamed world")
-            );
             let renamed = game.client_session().client_server().unwrap();
-            assert_eq!(renamed.save_folder, local.save_folder);
+            assert_eq!(renamed.name, Some("Renamed world"));
+            assert_eq!(renamed.save_folder, Some("first_world"));
             game.integrated.take();
             let guest = game.client_session().client_server().unwrap();
             assert!(!guest.integrated_local);

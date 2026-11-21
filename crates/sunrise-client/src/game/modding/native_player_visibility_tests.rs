@@ -256,7 +256,7 @@ fn hide_level_and_nickname_read_back() {
         assert_eq!(a.hidden(game), Ok(None));
 
         assert!(a.set_nickname(game, Some("Cap")));
-        assert_eq!(a.nickname(game), Ok(Some("Cap".to_owned())));
+        assert_eq!(a.nickname(game), Ok(Some("Cap")));
         assert_eq!(b.nickname(game), Ok(None));
         assert!(a.set_nickname(game, None));
         assert_eq!(a.nickname(game), Ok(None));
@@ -282,10 +282,10 @@ fn an_unpublished_single_player_world_reads_the_stored_hide_level() {
         assert!(owner.hide(game, Some(2)));
         assert!(owner.set_nickname(game, Some("Cap")));
         assert_eq!(owner.hidden(game), Ok(Some(2)));
-        assert_eq!(owner.nickname(game), Ok(Some("Cap".to_owned())));
+        assert_eq!(owner.nickname(game), Ok(Some("Cap")));
         game.serving = Some(super::integrated::Serving::fixture(25565));
         assert_eq!(owner.hidden(game), Ok(Some(2)));
-        assert_eq!(owner.nickname(game), Ok(Some("Cap".to_owned())));
+        assert_eq!(owner.nickname(game), Ok(Some("Cap")));
     });
 }
 

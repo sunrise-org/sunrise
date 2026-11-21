@@ -11,6 +11,8 @@ pub trait Hooks {
     /// requirement (false for scaffolding, true for other block items).
     /// Dispatch is by `item` id; this event has no held-stack components.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "both",
         contract = "replace",
         scope = "item",
@@ -19,5 +21,5 @@ pub trait Hooks {
         target = "sunrise_client::game::native_hooks::must_survive::GameLevel<'_>::native_must_survive",
         neoforge = "none (vanilla BlockItem.mustSurvive)"
     )]
-    fn must_survive();
+    fn must_survive(item: &str, answer: &mut Option<bool>);
 }

@@ -1,28 +1,42 @@
-//! Client mods' audio streams (`open_audio_stream`): the game opens them on the mixer's own pool and
+//! The game opens client mods' pull and push audio streams on the mixer's separate pool and
 //! places the entity-following ones each frame.
 use super::Game;
-use mod_api::{AudioRefusal, AudioStreamRef, StreamSpec};
+use mod_api::{AudioRefusal, AudioStream, AudioStreamRef, StreamSpec};
 
-/// The mod whose call this is, whichever target it runs on: the host marks it for a native mod's
-/// hook. A call from no mod has no per-mod cap to count against and
+/// The host marks the calling native mod while its hook runs. A call outside a mod's scope
 /// opens nothing.
 fn calling_mod() -> Result<&'static str, AudioRefusal> {
     mod_api::content::crash::current_native_mod().ok_or(AudioRefusal::Unavailable)
 }
 
 impl Game<'_> {
-    /// Opens a stream for the calling mod, on the mixer's pool for mods' audio. Err on a server,
-    /// without a sound output, for a spec out of range and past the 32 streams a mod or the 64
-    /// all mods may hold.
+    /// Opens a stream the mixer pulls from on its worker.
     pub(in crate::game) fn open_audio_stream(
         &self,
         spec: &StreamSpec,
+        source: Box<dyn AudioStream>,
+    ) -> Result<AudioStreamRef, AudioRefusal> {
+        self.open_mod_audio_stream(spec, Some(source))
+    }
+
+    /// Opens a stream an async producer pushes into.
+    pub(in crate::game) fn open_push_audio_stream(
+        &self,
+        spec: &StreamSpec,
+    ) -> Result<AudioStreamRef, AudioRefusal> {
+        self.open_mod_audio_stream(spec, None)
+    }
+
+    fn open_mod_audio_stream(
+        &self,
+        spec: &StreamSpec,
+        source: Option<Box<dyn AudioStream>>,
     ) -> Result<AudioStreamRef, AudioRefusal> {
         if !self.native_window() {
             return Err(AudioRefusal::OnServer);
         }
         self.audio
-            .open_stream(calling_mod()?, spec)
+            .open_stream(calling_mod()?, spec, source)
             .map(AudioStreamRef::new)
     }
     /// Places every entity-following stream at its entity, or leaves it unplaced where the client

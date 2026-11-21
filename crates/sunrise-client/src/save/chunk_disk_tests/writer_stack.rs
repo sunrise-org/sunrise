@@ -1,22 +1,36 @@
 use super::*;
+use std::sync::OnceLock;
+use std::thread::{self, ThreadId};
+
+#[derive(Debug)]
+struct WriterThread {
+    id: ThreadId,
+    #[cfg(target_os = "linux")]
+    stack_bytes: Option<usize>,
+}
 
 #[derive(Default)]
 struct StackProbe {
-    stack: Arc<std::sync::OnceLock<std::result::Result<(), &'static str>>>,
+    writer: Arc<OnceLock<WriterThread>>,
 }
 
 #[mod_api::sunrise_mod]
 impl Hooks for StackProbe {
     fn chunk_data_save(&self, _: &dyn ChunkDiskHost, _: &mut ChunkDataSaveEvent<'_>) {
-        self.stack
-            .set(sunrise_guest_stack::check_current())
-            .unwrap();
+        self.writer
+            .set(WriterThread {
+                id: thread::current().id(),
+                #[cfg(target_os = "linux")]
+                stack_bytes: sunrise_threads::unwind::StackBounds::current()
+                    .map(|bounds| bounds.hi - bounds.lo),
+            })
+            .expect("the save hook ran more than once");
     }
 }
 
 #[test]
 #[ignore = "daily"]
-fn asynchronous_chunk_save_hook_runs_with_a_guest_stack() {
+fn asynchronous_chunk_save_hook_runs_on_the_region_writer() {
     // Subscribed saves consult a process-wide lease. A parallel test must not block this save.
     const CHILD: &str = "SUNRISE_REGION_WRITER_STACK_CHILD";
     if std::env::var_os(CHILD).is_none() {
@@ -24,7 +38,7 @@ fn asynchronous_chunk_save_hook_runs_with_a_guest_stack() {
             .args([
                 "--ignored",
                 "--exact",
-                "save::chunk_disk_tests::writer_stack::asynchronous_chunk_save_hook_runs_with_a_guest_stack",
+                "save::chunk_disk_tests::writer_stack::asynchronous_chunk_save_hook_runs_on_the_region_writer",
             ])
             .env(CHILD, "1")
             .status()
@@ -32,11 +46,22 @@ fn asynchronous_chunk_save_hook_runs_with_a_guest_stack() {
         assert!(status.success());
         return;
     }
+    let caller = thread::current().id();
     let probe = StackProbe::default();
-    let stack = probe.stack.clone();
+    let writer = probe.writer.clone();
     let mods = vec![mod_api::ModEntry::new("stack_probe", Box::new(probe))].into();
     save_chunk(mods);
-    assert_eq!(stack.get(), Some(&Ok(())));
+    let writer = writer.get().expect("the save hook did not run");
+    assert_ne!(writer.id, caller, "the save hook ran on the calling thread");
+    #[cfg(target_os = "linux")]
+    {
+        const EXPECTED_STACK_FLOOR: usize = 136 * 1024 * 1024;
+        let bytes = writer.stack_bytes.expect("could not read the writer stack");
+        assert!(
+            bytes >= EXPECTED_STACK_FLOOR,
+            "the writer stack was {bytes} bytes, below {EXPECTED_STACK_FLOOR}"
+        );
+    }
 }
 
 fn save_chunk(mods: mod_api::Mods) -> i32 {

@@ -19,11 +19,12 @@ pub trait Hooks {
     /// them to one join-order walk), so a part attached to `minecraft:zombie`
     /// hears no tick from this hook. Server-side.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         scope = "entity",
         key = "kind",
         neoforge = "none (vanilla Entity.tick has no part-scoped counterpart; NeoForge's EntityTickEvent is the global pre/post pair)"
     )]
-    fn general_entity_tick();
+    fn general_entity_tick(kind: &str, entity: mod_api::EntityRef);
 }

@@ -28,10 +28,16 @@ geometry at the next stage it reaches instead, depth tested as usual: a shader p
 the sky, terrain, water or weather itself, and improved transparency for the translucent and
 weather stages. Nothing is dropped, and the order between stages is kept."#]
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         neoforge = "RenderLevelStageEvent",
         cancellable = false
     )]
-    fn render_level_stage();
+    fn render_level_stage(
+        stage: mod_api::RenderLevelStage,
+        view: &mod_api::WorldRenderView,
+        draw: &mut dyn WorldDrawContext,
+    );
 }

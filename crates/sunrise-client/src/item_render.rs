@@ -14,6 +14,7 @@ mod glint_atlas;
 #[cfg(test)]
 mod glint_tests;
 pub mod gui;
+mod registered_special;
 mod special;
 #[cfg(test)]
 mod special_parts_tests;
@@ -26,17 +27,24 @@ use crate::{
     mesher::{CULL_BACK, Vertex},
 };
 use glam::{Mat3, Mat4, Vec3};
+use mod_api::{ClientHost, ItemDisplayContext, ItemKey, SpecialModelContext, SpecialModelTints};
+pub use registered_special::{
+    BakedSpecialGeometry, BakedSpecialModel, SpecialModelFactories, install_special_model_factories,
+};
+use registered_special::{FACTORIES, StackAncestor};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::{Arc, Mutex},
+    num::NonZeroU32,
+    ops::ControlFlow,
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::{Arc, Mutex, atomic::AtomicBool},
 };
 use sunrise_assets::{
     item_bake::{BakedItemModel, SpriteLookup, SpriteMask, bake_item_model, bake_sprite_layer},
     item_model::{
-        ClientItem, Context, DisplayContext, FoilType, ItemEnv, ItemModels, LayerContent,
-        LayerTransform, LevelState, OwnerState, PreparedParts, SpecialContent, SpecialModel,
-        StackView,
+        ClientItem, Context, DisplayContext, FoilType, ItemEnv, ItemModels, Layer, LayerContent,
+        LayerTransform, LevelState, OwnerState, SpecialModel, StackView,
     },
     model::Direction,
     resolve::{MISSING_MODEL, ModelLibrary},
@@ -159,6 +167,39 @@ impl ItemSink for Vec<ItemQuad> {
     }
 }
 
+/// Client drawing services in addition to the asset resolver's host services.
+pub trait ItemDrawEnv: ItemEnv {
+    /// The host and validated input for a registered special draw. Unavailable input refuses
+    /// this layer only, not the renderer.
+    fn special_model_input(
+        &self,
+        _model: &BakedSpecialModel,
+        _stack: &StackView,
+        _context: &Context<'_>,
+    ) -> Option<SpecialModelInput<'_>> {
+        None
+    }
+
+    /// Resolve a mod-submitted stack and its display context at the engine boundary.
+    fn special_model_stack(
+        &self,
+        _stack: &mod_api::ItemStack,
+        _display: ItemDisplayContext,
+    ) -> Option<(StackView, DisplayContext)> {
+        None
+    }
+}
+
+/// The game services and stack identity the special renderer reads during this draw.
+pub struct SpecialModelInput<'a> {
+    pub host: &'a dyn ClientHost,
+    pub item: ItemKey,
+    pub count: NonZeroU32,
+    pub context: SpecialModelContext,
+}
+
+impl ItemDrawEnv for sunrise_assets::item_model::NoEnv {}
+
 /// Data special renderers read from the game (registries, skins).
 pub trait SpecialHost {
     /// The banner atlas texture of a banner pattern (`entity/banner/<asset>`).
@@ -190,16 +231,37 @@ pub enum LayerGeometry {
         argument: Value,
     },
 }
+/// Tints computed for an ordinary layer, or the palette supplied by a special renderer.
+#[derive(Clone, Debug)]
+pub enum LayerTints {
+    Owned(Vec<i32>),
+    Special(SpecialModelTints),
+}
+impl LayerTints {
+    fn at(&self, index: i32) -> u32 {
+        match self {
+            // `getLayerColorSafe`: an untinted quad or a missing palette entry draws white.
+            Self::Owned(tints) => tints
+                .get(index as usize)
+                .map_or(u32::MAX, |&tint| argb(tint)),
+            Self::Special(SpecialModelTints::Uniform(tint)) => *tint,
+            Self::Special(SpecialModelTints::Indexed(tints)) => {
+                tints.get(index as usize).copied().unwrap_or(u32::MAX)
+            }
+            Self::Special(_) => u32::MAX,
+        }
+    }
+}
 /// `ItemStackRenderState.LayerRenderState`.
 #[derive(Clone, Debug)]
 pub struct LayerRender {
     pub geometry: LayerGeometry,
-    pub tints: Vec<i32>,
+    pub tints: LayerTints,
     pub foil: FoilType,
     /// `applyTransform`: the display transform, then the local transform.
     pub matrix: Mat4,
     /// `particleMaterial` (atlas sprite name).
-    pub particle: String,
+    pub particle: Arc<str>,
     pub uses_block_light: bool,
     /// Untransformed extents (quad corners or the special model's parts).
     pub extents: Arc<Vec<Vec3>>,
@@ -224,6 +286,13 @@ pub struct ItemRenderState {
     /// A third-person held-item submission's opaque ARGB multiplier, never cached with the model.
     held_tint: Option<u32>,
 }
+
+#[derive(Default)]
+struct RenderLayerFlags {
+    oversized_in_gui: bool,
+    animated: bool,
+}
+
 impl ItemRenderState {
     /// Apply a held-item Part's RGB answer to this draw only, preserving model alpha.
     pub fn set_held_tint(&mut self, rgb: u32) {
@@ -341,7 +410,7 @@ impl ItemRenderState {
             let LayerGeometry::Quads(baked) = &layer.geometry else {
                 return false;
             };
-            if layer.foil != FoilType::None {
+            if layer.foil != FoilType::None || matches!(&layer.tints, LayerTints::Special(_)) {
                 return false;
             }
             let Some(stored) = skin.models.item(baked, skin.frame) else {
@@ -374,18 +443,10 @@ impl ItemRenderState {
                 else {
                     continue;
                 };
-                let color = if run.tint_index >= 0 {
-                    layer
-                        .tints
-                        .get(run.tint_index as usize)
-                        .copied()
-                        .unwrap_or(-1)
-                } else {
-                    -1
-                };
-                let color = self.held_tint.map_or(argb(color), |tint| {
-                    crate::hud_layout::multiply(argb(color), tint)
-                });
+                let color = layer.tints.at(run.tint_index);
+                let color = self
+                    .held_tint
+                    .map_or(color, |tint| crate::hud_layout::multiply(color, tint));
                 let colors = AXES.map(|d| shaded(color, normals.face(d), lights));
                 let frame = &mut *skin.frame;
                 frame.jobs.push(SkinJob {
@@ -514,17 +575,7 @@ fn submit_quads(
         let Some(r) = rect else {
             continue;
         };
-        // `getLayerColorSafe`: an untinted quad, or a tint index past the
-        // tints, draws white.
-        let color = if q.tint_index >= 0 {
-            layer
-                .tints
-                .get(q.tint_index as usize)
-                .copied()
-                .unwrap_or(-1)
-        } else {
-            -1
-        };
+        let color = layer.tints.at(q.tint_index);
         let pos = q.positions.map(|p| m.transform_point3(Vec3::from(p)));
         let uv =
             q.uv.map(|[u, v]| [r.u0 + (r.u1 - r.u0) * u, r.v0 + (r.v1 - r.v0) * v]);
@@ -564,7 +615,7 @@ fn submit_quads(
                     q.uv.map(|[u, v]| [r.u0 + (r.u1 - r.u0) * u, r.v0 + (r.v1 - r.v0) * v])
                 }),
             normal: normals.face(q.facing),
-            color: argb(color),
+            color,
             foil,
             light_emission: q.light_emission,
             cull_back: true,
@@ -692,6 +743,8 @@ pub struct ItemRenderer {
     sprites: FileSprites,
     baked: Mutex<HashMap<String, Arc<BakedItemModel>>>,
     extents: Mutex<HashMap<String, Arc<Vec<Vec3>>>>,
+    special_failures: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    special_generation: Arc<()>,
     /// GUI items already drawn: the HUD vertices of a static item at a GUI position
     /// (`gui::draw`), which are the same every frame it stays there.
     pub(crate) gui_drawn: Mutex<HashMap<gui::DrawnKey, Arc<[crate::hud::HudVertex]>>>,
@@ -710,9 +763,12 @@ pub struct ItemRenderer {
     glint_atlas: Mutex<HashMap<String, Rect>>,
 }
 
-/// Every `items/**/*.json` client item definition, by identifier. Through
-/// Resolved resource names preserve nested item identifiers.
-fn load_definitions(root: &ResourceSource) -> BTreeMap<String, ClientItem> {
+/// Every winning `items/**/*.json` client item definition, by identifier. An error or panic
+/// while decoding or baking omits the definition rather than looking in a lower pack.
+fn load_definitions(
+    root: &ResourceSource,
+    decode: impl Fn(&str) -> Result<ClientItem, sunrise_assets::DecodeError>,
+) -> BTreeMap<String, ClientItem> {
     let mut out = BTreeMap::new();
     for namespace in root.namespaces("assets") {
         let prefix = format!("assets/{namespace}/items/");
@@ -726,12 +782,28 @@ fn load_definitions(root: &ResourceSource) -> BTreeMap<String, ClientItem> {
             let Ok(text) = root.read_to_string(&name) else {
                 continue;
             };
-            match ClientItem::from_json(&text) {
-                Ok(item) => {
+            match catch_unwind(AssertUnwindSafe(|| decode(&text))) {
+                Ok(Ok(item)) => {
                     out.insert(format!("{namespace}:{id}"), item);
                 }
-                Err(error) => {
-                    log::warn!("Sunrise: item definition {namespace}:{id} not loaded: {error}")
+                Ok(Err(error)) => {
+                    log::warn!("Sunrise: item definition {namespace}:{id} not loaded: {error}");
+                }
+                Err(panic) => {
+                    // An arbitrary native panic payload can itself panic when dropped.
+                    let reason = match panic.downcast::<String>() {
+                        Ok(message) => std::borrow::Cow::Owned(*message),
+                        Err(panic) => match panic.downcast::<&'static str>() {
+                            Ok(message) => std::borrow::Cow::Borrowed(*message),
+                            Err(panic) => {
+                                std::mem::forget(panic);
+                                std::borrow::Cow::Borrowed("unknown panic payload")
+                            }
+                        },
+                    };
+                    log::warn!(
+                        "Sunrise: item definition {namespace}:{id} not loaded; decode or bake panicked: {reason}"
+                    );
                 }
             }
         }
@@ -772,13 +844,13 @@ impl ItemRenderer {
         )
     }
     /// Reuse the immutable models prepared with the block resources at `root`.
-    /// Defer item-only validation failures until after item definitions are loaded.
+    /// Decode special item definitions against this library and its pack sprites.
     pub fn load_with_library(
         root: &ResourceRoot,
         library: std::result::Result<Arc<ModelLibrary>, String>,
         item_data: &sunrise_world::item_defaults::ItemData,
     ) -> crate::Result<Self> {
-        Self::load_tables(root, library, true, item_data, None)
+        Self::load_tables(root, library, true, item_data, None, FACTORIES.get())
     }
     /// What a dedicated server reads: the item prototypes (the stacks'
     /// default components) and ids, without the client item definitions,
@@ -789,7 +861,7 @@ impl ItemRenderer {
         library: std::result::Result<Arc<ModelLibrary>, String>,
         item_data: &sunrise_world::item_defaults::ItemData,
     ) -> crate::Result<Self> {
-        Self::load_tables(root, library, false, item_data, None)
+        Self::load_tables(root, library, false, item_data, None, None)
     }
     pub fn load_with_library_and_entity_models(
         root: &sunrise_assets::resource_source::ResourceRoot,
@@ -797,7 +869,14 @@ impl ItemRenderer {
         document: &crate::mobs::EntityModelDocument,
         item_data: &sunrise_world::item_defaults::ItemData,
     ) -> crate::Result<Self> {
-        Self::load_tables(root, library, true, item_data, Some(document))
+        Self::load_tables(
+            root,
+            library,
+            true,
+            item_data,
+            Some(document),
+            FACTORIES.get(),
+        )
     }
     fn load_tables(
         root: &ResourceRoot,
@@ -805,16 +884,9 @@ impl ItemRenderer {
         drawn: bool,
         item_data: &sunrise_world::item_defaults::ItemData,
         entity_models: Option<&crate::mobs::EntityModelDocument>,
+        factories: Option<&SpecialModelFactories>,
     ) -> crate::Result<Self> {
         let prototypes = Arc::clone(item_data.prototypes()?);
-        let models = ItemModels {
-            definitions: if drawn {
-                load_definitions(root.source())
-            } else {
-                BTreeMap::new()
-            },
-            prototypes,
-        };
         // CIT models and glint textures only affect drawing. A server still
         // needs item prototypes and ids, but never these resource-pack assets.
         let (library, cit) = if drawn {
@@ -860,20 +932,31 @@ impl ItemRenderer {
                 Some(out)
             })
             .unwrap_or_default();
-        Ok(Self {
+        let mut renderer = Self {
             glint_atlas: Mutex::default(),
             item_ids,
-            models,
+            models: ItemModels {
+                definitions: BTreeMap::new(),
+                prototypes,
+            },
             library,
             sprites: FileSprites::new(root.source().clone()),
             baked: Mutex::default(),
             extents: Mutex::default(),
+            special_failures: Mutex::default(),
+            special_generation: Arc::new(()),
             gui_drawn: Mutex::default(),
             parts,
             skull_textures,
             grass,
             cit,
-        })
+        };
+        if drawn {
+            renderer.models.definitions = load_definitions(root.source(), |text| {
+                renderer.decode_definition(text, factories)
+            });
+        }
+        Ok(renderer)
     }
     /// `ModelBakery` item baking, cached per model.
     pub fn bake(&self, model: &str) -> Arc<BakedItemModel> {
@@ -938,168 +1021,6 @@ impl ItemRenderer {
         }
         out
     }
-    /// A special model renderer's answer `parts` for a model node of `base`, prepared to draw:
-    /// `base` and each part's model baked, once, when the answer is accepted, so a draw looks
-    /// nothing up by name. A part naming a model the packs don't have refuses them all, and the
-    /// layer draws the missing model.
-    pub fn prepare_parts(
-        &self,
-        base: &str,
-        parts: &[sunrise_assets::item_model::SpecialPart],
-    ) -> PreparedParts {
-        let part = |model: &str, tints, pose| {
-            let geometry = self.bake(model);
-            PreparedPart {
-                content: PreparedContent::Model {
-                    extents: self.quad_extents(model, &geometry),
-                    geometry,
-                    tints,
-                },
-                pose,
-            }
-        };
-        let unknown = parts.iter().find_map(|p| match &p.content {
-            SpecialContent::Model(model) if !self.library.resolves(model) => Some(model),
-            _ => None,
-        });
-        let parts = match unknown {
-            Some(unknown) => {
-                warn_unknown_part_once(unknown);
-                vec![part(
-                    MISSING_MODEL,
-                    Vec::new(),
-                    sunrise_assets::math::Mat4::IDENTITY,
-                )]
-            }
-            None => parts
-                .iter()
-                .map(|p| match &p.content {
-                    SpecialContent::Model(model) => part(model, p.tints.clone(), p.pose),
-                    SpecialContent::Stack { stack, display } => PreparedPart {
-                        content: PreparedContent::Stack {
-                            stack: stack.clone(),
-                            display: *display,
-                        },
-                        pose: p.pose,
-                    },
-                })
-                .collect(),
-        };
-        PreparedParts(Arc::new(PreparedSpecial {
-            base: self.bake(base),
-            parts,
-        }))
-    }
-    /// The layers of a prepared answer (`LayerContent::Parts`), one for each model part and the
-    /// layers of each stack part's own resolve: the part's own model's quads, posed under the
-    /// layer's transform, with the base model's display transform, particle and GUI light. A
-    /// stack part's layers keep their own foil, tints and display transform, and sit under the
-    /// part's pose. Returns the state's animation flag, or `None` (with `layers` as they were)
-    /// when a stack part is refused: it meets a stack that is already being expanded above it, or
-    /// the draw has expanded [`mod_api::MAX_NESTED_STACK_PARTS`].
-    fn push_parts(
-        &self,
-        layers: &mut Vec<LayerRender>,
-        display: DisplayContext,
-        (foil, transform, display_transform): (
-            FoilType,
-            sunrise_assets::math::Mat4,
-            LayerTransform,
-        ),
-        prepared: &PreparedParts,
-        (outer, owner, level, seed, env): (
-            &StackView,
-            Option<&OwnerState>,
-            Option<&LevelState>,
-            i32,
-            &dyn ItemEnv,
-        ),
-    ) -> Option<bool> {
-        let Some(prepared) = prepared.0.downcast_ref::<PreparedSpecial>() else {
-            // Only `prepare_parts` makes them.
-            return Some(false);
-        };
-        let base = &prepared.base;
-        let start = layers.len();
-        let mut animated = false;
-        for part in &prepared.parts {
-            // Under `applyTransform`'s half-block offset, so a part's pose is about the model's
-            // corner, as its elements are.
-            let matrix = glam_matrix(&base.layer_matrix(
-                display_transform,
-                display,
-                &transform.mul(&part.pose),
-            ));
-            match &part.content {
-                PreparedContent::Model {
-                    geometry,
-                    extents,
-                    tints,
-                } => layers.push(LayerRender {
-                    geometry: LayerGeometry::Quads(geometry.clone()),
-                    tints: tints.clone(),
-                    foil,
-                    matrix,
-                    uses_block_light: base.uses_block_light,
-                    particle: sprite_name(&base.particle.sprite).to_owned(),
-                    extents: extents.clone(),
-                    display,
-                }),
-                PreparedContent::Stack { stack, display } => {
-                    let Some(inner) =
-                        self.expand_stack(outer, stack, *display, (owner, level, seed, env))
-                    else {
-                        layers.truncate(start);
-                        return None;
-                    };
-                    animated |= inner.animated;
-                    layers.extend(inner.layers.into_iter().map(|mut layer| {
-                        layer.matrix = matrix * layer.matrix;
-                        layer
-                    }));
-                }
-            }
-        }
-        Some(animated)
-    }
-    /// The resolve of the stack part `stack` of an answer drawn for `outer`, or `None` when it is
-    /// refused (see [`Self::push_parts`]).
-    fn expand_stack(
-        &self,
-        outer: &StackView,
-        stack: &StackView,
-        display: DisplayContext,
-        (owner, level, seed, env): (Option<&OwnerState>, Option<&LevelState>, i32, &dyn ItemEnv),
-    ) -> Option<ItemRenderState> {
-        let pushed = NESTING.with_borrow_mut(|n| {
-            if n.expanded >= mod_api::MAX_NESTED_STACK_PARTS
-                || n.chain.contains(stack)
-                || (n.chain.is_empty() && outer == stack)
-            {
-                return None;
-            }
-            n.expanded += 1;
-            let root = n.chain.is_empty();
-            if root {
-                n.chain.push(outer.clone());
-            }
-            n.chain.push(stack.clone());
-            Some(root)
-        });
-        let Some(root) = pushed else {
-            warn_refused_nesting_once(&stack.item);
-            return None;
-        };
-        let state = self.resolve_with_rule(stack, display, owner, level, seed, env, None);
-        let refused = NESTING.with_borrow_mut(|n| {
-            n.chain.pop();
-            if root {
-                n.chain.pop();
-            }
-            n.refused
-        });
-        (!refused).then_some(state)
-    }
     /// `ItemModelResolver.updateForTopItem`.
     pub fn resolve(
         &self,
@@ -1108,7 +1029,7 @@ impl ItemRenderer {
         owner: Option<&OwnerState>,
         level: Option<&LevelState>,
         seed: i32,
-        env: &dyn ItemEnv,
+        env: &dyn ItemDrawEnv,
     ) -> ItemRenderState {
         self.resolve_with_rule(stack, display, owner, level, seed, env, None)
     }
@@ -1123,7 +1044,7 @@ impl ItemRenderer {
         owner: Option<&OwnerState>,
         level: Option<&LevelState>,
         seed: i32,
-        env: &dyn ItemEnv,
+        env: &dyn ItemDrawEnv,
         rule: Option<usize>,
     ) -> ItemRenderState {
         let ctx = Context {
@@ -1132,11 +1053,57 @@ impl ItemRenderer {
             level,
             seed,
         };
-        let _depth = ResolveDepth::enter();
-        let resolved = self.models.resolve(stack, &ctx, env);
-        let mut animated = false;
-        let mut layers = Vec::with_capacity(resolved.layers.len());
-        for layer in resolved.layers {
+        let mut layers = Vec::new();
+        let mut remaining = mod_api::MAX_NESTED_STACK_PARTS;
+        let flags = self
+            .append_render_layers(
+                &mut layers,
+                &StackAncestor {
+                    stack,
+                    parent: None,
+                },
+                &ctx,
+                env,
+                rule,
+                &mut remaining,
+            )
+            .continue_value()
+            .unwrap_or_default();
+        ItemRenderState {
+            display,
+            layers,
+            oversized_in_gui: flags.oversized_in_gui,
+            animated: flags.animated,
+            cit_glint: None,
+            hdr_tier: 0,
+            hdr_light: 0,
+            held_tint: None,
+        }
+    }
+
+    /// Append into the top-level state even when resolving a nested stack. Nested refusals
+    /// unwind to the outer special layer's checkpoint; only that layer emits a missing model.
+    fn append_render_layers(
+        &self,
+        layers: &mut Vec<LayerRender>,
+        ancestor: &StackAncestor<'_>,
+        ctx: &Context<'_>,
+        env: &dyn ItemDrawEnv,
+        rule: Option<usize>,
+        remaining: &mut usize,
+    ) -> ControlFlow<(), RenderLayerFlags> {
+        let stack = ancestor.stack;
+        let mut flags = RenderLayerFlags::default();
+        if stack.count <= 0 || stack.item == "minecraft:air" {
+            return ControlFlow::Continue(flags);
+        }
+        let display = ctx.display;
+        let missing = || {
+            let baked = self.bake(MISSING_MODEL);
+            let extents = self.quad_extents(MISSING_MODEL, &baked);
+            (LayerGeometry::Quads(baked.clone()), baked, extents)
+        };
+        let mut visit = |layer: Layer, layer_stack: &StackView| {
             let (geometry, baked, extents) = match layer.content {
                 LayerContent::Model { model } => {
                     let (baked, extents) = rule
@@ -1156,11 +1123,7 @@ impl ItemRenderer {
                     let extents = self.quad_extents(&key, &baked);
                     (LayerGeometry::Quads(baked.clone()), baked, extents)
                 }
-                LayerContent::Missing => {
-                    let baked = self.bake(MISSING_MODEL);
-                    let extents = self.quad_extents(MISSING_MODEL, &baked);
-                    (LayerGeometry::Quads(baked.clone()), baked, extents)
-                }
+                LayerContent::Missing => missing(),
                 LayerContent::Special {
                     base,
                     model,
@@ -1170,55 +1133,43 @@ impl ItemRenderer {
                     let extents = self.special_extents(&model);
                     (LayerGeometry::Special { model, argument }, baked, extents)
                 }
-                LayerContent::Parts(prepared) => {
-                    // What a mod drew may change with every draw, so no GUI item is kept.
-                    animated = true;
-                    let drawn = self.push_parts(
-                        &mut layers,
-                        display,
-                        (layer.foil, layer.transform, layer.display_transform),
-                        &prepared,
-                        (stack, owner, level, seed, env),
-                    );
-                    if drawn.is_none() {
-                        // A refused stack part refuses the answer whole, and every answer that
-                        // nests it: only the outermost draws the missing model, in place of the
-                        // answer's parts.
-                        let nested = NESTING.with_borrow_mut(|n| {
-                            let nested = n.depth > 1;
-                            n.refused = nested;
-                            nested
-                        });
-                        if nested {
-                            break;
-                        }
-                        let baked = self.bake(MISSING_MODEL);
-                        layers.push(LayerRender {
-                            extents: self.quad_extents(MISSING_MODEL, &baked),
-                            geometry: LayerGeometry::Quads(baked.clone()),
-                            tints: Vec::new(),
-                            foil: layer.foil,
-                            matrix: glam_matrix(&baked.layer_matrix(
-                                layer.display_transform,
-                                display,
-                                &layer.transform,
-                            )),
-                            uses_block_light: baked.uses_block_light,
-                            particle: sprite_name(&baked.particle.sprite).to_owned(),
-                            display,
-                        });
-                    } else if drawn == Some(true) {
-                        animated = true;
+                LayerContent::RegisteredSpecial { model } => {
+                    // Every draw can give a different result; never keep a static GUI image.
+                    flags.animated = true;
+                    // Vanilla's bundle model can produce a layer for its selected stack.
+                    let selected = StackAncestor {
+                        stack: layer_stack,
+                        parent: Some(ancestor),
+                    };
+                    let source = if std::ptr::eq(stack, layer_stack) {
+                        ancestor
+                    } else {
+                        &selected
+                    };
+                    if self
+                        .append_registered_special(
+                            layers,
+                            &model,
+                            (layer.foil, layer.transform, layer.display_transform),
+                            ctx,
+                            env,
+                            source,
+                            remaining,
+                        )
+                        .is_continue()
+                    {
+                        return ControlFlow::Continue(());
                     }
-                    continue;
+                    if ancestor.parent.is_some() {
+                        return ControlFlow::Break(());
+                    }
+                    missing()
                 }
             };
-            if layer.foil != FoilType::None {
-                animated = true;
-            }
+            flags.animated |= layer.foil != FoilType::None;
             layers.push(LayerRender {
                 geometry,
-                tints: layer.tints,
+                tints: LayerTints::Owned(layer.tints),
                 foil: layer.foil,
                 matrix: glam_matrix(&baked.layer_matrix(
                     layer.display_transform,
@@ -1226,21 +1177,17 @@ impl ItemRenderer {
                     &layer.transform,
                 )),
                 uses_block_light: baked.uses_block_light,
-                particle: sprite_name(&baked.particle.sprite).to_owned(),
+                particle: Arc::from(sprite_name(&baked.particle.sprite)),
                 extents,
                 display,
             });
-        }
-        ItemRenderState {
-            display,
-            layers,
-            oversized_in_gui: resolved.oversized_in_gui,
-            animated,
-            cit_glint: None,
-            hdr_tier: 0,
-            hdr_light: 0,
-            held_tint: None,
-        }
+            ControlFlow::Continue(())
+        };
+        flags.oversized_in_gui = self
+            .models
+            .visit_layers(stack, ctx, env, LayerTransform::Model, &mut visit)?
+            .unwrap_or_default();
+        ControlFlow::Continue(flags)
     }
     /// `GrassColor.get` over the loaded colormap.
     pub fn grass_color(&self, temperature: f64, downfall: f64) -> i32 {
@@ -1292,92 +1239,6 @@ fn corners(baked: &BakedItemModel) -> Vec<Vec3> {
         }
     }
     out
-}
-/// A special model renderer's answer as [`ItemRenderer::prepare_parts`] baked it.
-struct PreparedSpecial {
-    /// The model node's `base`: its display transforms, particle and GUI light.
-    base: Arc<BakedItemModel>,
-    parts: Vec<PreparedPart>,
-}
-struct PreparedPart {
-    content: PreparedContent,
-    pose: sunrise_assets::math::Mat4,
-}
-enum PreparedContent {
-    /// A model, baked once.
-    Model {
-        geometry: Arc<BakedItemModel>,
-        extents: Arc<Vec<Vec3>>,
-        tints: Vec<i32>,
-    },
-    /// A stack, resolved when the item is drawn, so what it draws moves with its own models.
-    Stack {
-        stack: StackView,
-        display: DisplayContext,
-    },
-}
-/// The stacks being expanded by this thread's draw, outermost first, and how many stack parts
-/// the draw has expanded: a stack met again while it is expanding is a cycle, and a draw expands
-/// at most [`mod_api::MAX_NESTED_STACK_PARTS`], both refusing the whole answer.
-#[derive(Default)]
-struct Nesting {
-    chain: Vec<StackView>,
-    expanded: usize,
-    /// Resolves in progress on this thread; the budget starts again when the outermost ends.
-    depth: u32,
-    /// Set by a nested resolve that met a refused stack part, until the outermost answer
-    /// takes it: the refusal reaches every answer above it.
-    refused: bool,
-}
-thread_local! {
-    static NESTING: std::cell::RefCell<Nesting> = std::cell::RefCell::default();
-}
-/// Counts a resolve of this thread in progress; the budget resets when the last one ends.
-struct ResolveDepth;
-impl ResolveDepth {
-    fn enter() -> Self {
-        NESTING.with_borrow_mut(|n| n.depth += 1);
-        Self
-    }
-}
-impl Drop for ResolveDepth {
-    fn drop(&mut self) {
-        NESTING.with_borrow_mut(|n| {
-            n.depth -= 1;
-            if n.depth == 0 {
-                n.expanded = 0;
-            }
-        });
-    }
-}
-/// Says once per model id that a mod's special model renderer drew a model the packs don't have.
-fn warn_unknown_part_once(model: &str) {
-    static SEEN: Mutex<std::collections::BTreeSet<String>> =
-        Mutex::new(std::collections::BTreeSet::new());
-    if SEEN
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(model.to_owned())
-    {
-        log::warn!(
-            "Sunrise: a special model renderer drew the model {model}, which no pack has; the item draws the missing model"
-        );
-    }
-}
-/// Says once per item that a special model renderer's stack part was refused as a cycle or past
-/// the budget.
-fn warn_refused_nesting_once(item: &str) {
-    static SEEN: Mutex<std::collections::BTreeSet<String>> =
-        Mutex::new(std::collections::BTreeSet::new());
-    if SEEN
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(item.to_owned())
-    {
-        log::warn!(
-            "Sunrise: a special model renderer's stack part of {item} is a cycle or past the nesting budget; the item draws the missing model"
-        );
-    }
 }
 /// A `sunrise-assets` (row-major, JOML-exact) matrix as glam's.
 pub fn glam_matrix(m: &sunrise_assets::math::Mat4) -> Mat4 {
@@ -1738,7 +1599,7 @@ mod tests {
             ]))
         };
         let models = |full: &str| {
-            let loaded = load_definitions(&source(full));
+            let loaded = load_definitions(&source(full), ClientItem::from_json);
             assert!(!loaded.contains_key("loadtest:other"));
             let mut models = Vec::new();
             loaded["loadtest:cell"].model.dependencies(&mut models);
@@ -1881,7 +1742,9 @@ mod tests {
         writer.finish().unwrap();
         let source = ResourceSource::archive(&jar).unwrap();
         fs::remove_file(&jar).unwrap();
-        assert!(load_definitions(&source).contains_key("example:nested/mask"));
+        assert!(
+            load_definitions(&source, ClientItem::from_json).contains_key("example:nested/mask")
+        );
         let sprites = FileSprites::new(source.clone());
         let mask = sprites.mask("example:item/mask").unwrap();
         assert_eq!((mask.width, mask.height), (1, 1));
@@ -1963,10 +1826,10 @@ mod tests {
                     },
                     argument: Value::Null,
                 },
-                tints: Vec::new(),
+                tints: LayerTints::Owned(Vec::new()),
                 foil: FoilType::None,
                 matrix: Mat4::from_translation(Vec3::new(0.0, 2.0, 0.0)),
-                particle: String::new(),
+                particle: Arc::from(""),
                 uses_block_light: false,
                 display: DisplayContext::Ground,
                 extents: Arc::new(vec![
@@ -2123,7 +1986,10 @@ mod tests {
         let empty = r#"{"model":{"type":"minecraft:empty"}}"#;
         fs::write(definitions.join("top.json"), empty)?;
         fs::write(definitions.join("postman/head.json"), empty)?;
-        let loaded = load_definitions(&ResourceSource::directory(root.clone()));
+        let loaded = load_definitions(
+            &ResourceSource::directory(root.clone()),
+            ClientItem::from_json,
+        );
         let _ = fs::remove_dir_all(&root);
         assert!(loaded.contains_key("sunrise:top"));
         assert!(loaded.contains_key("sunrise:postman/head"));

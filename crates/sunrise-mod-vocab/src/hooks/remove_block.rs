@@ -10,6 +10,7 @@ pub trait Hooks {
     /// The normal setBlock effects and flags 3 (+64 when moved by a piston)
     /// apply to the written state. The level is read-only during this call.
     #[hook(
+        receiver = "read",
         side = "server",
         version = 2,
         contract = "replace",

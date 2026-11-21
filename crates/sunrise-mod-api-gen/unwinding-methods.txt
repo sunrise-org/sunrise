@@ -1,7 +1,8 @@
-# Gated Host methods (#[access]) whose return type has no refusal-shaped Result, one `area::method` per line.
-# A wrong-phase call to one refuses by unwinding (docs/modding/src/how-to/native-mods.md, "Refused calls").
-# The list only shrinks: sunrise-mod-api-gen refuses a gated method that is neither Result-shaped nor here, and a
-# line whose method has gained a refusal; tools/ci/check_unwinding_methods.py refuses a line added since the base.
+# Gated Host methods (#[access]) that refuse a wrong-phase call by unwinding, one `area::method` per line.
+# See docs/modding/src/how-to/native-mods.md, "Refused calls".
+# The list only shrinks: sunrise-mod-api-gen rejects a method that has no typed refusal or optional callback
+# and is not listed here, and a line whose method has gained a refusal. tools/ci/check_unwinding_methods.py
+# rejects a line added since the base.
 advancements::advancement
 block_entities::block_entity
 block_entities::block_entity_data
@@ -90,23 +91,12 @@ boss_bars::boss_bar_value
 boss_bars::boss_bar_visible
 boss_bars::boss_bars
 boss_bars::create_boss_bar
-client_input::claim_items
-client_input::click_mapping
 client_input::clipboard_text
-client_input::consume_click
 client_input::cursor
-client_input::is_down
-client_input::mapping
-client_input::mapping_state
 client_input::millis
-client_input::mod_key
 client_input::modifiers
 client_input::playing
-client_input::poll
-client_input::reset_mod_key
 client_input::set_clipboard_text
-client_input::set_mapping_down
-client_input::set_mod_key
 client_narrator::narrate
 client_options::audio_options
 client_options::chat_options
@@ -182,8 +172,6 @@ config::tick_times
 config::translate
 config::world_data_files
 config::world_dir
-configuration_tasks::configuration_fail
-configuration_tasks::configuration_finish
 configuration_tasks::configuration_has_channel
 configuration_tasks::configuration_send_payload
 data_maps::data_map_entries
@@ -422,7 +410,6 @@ items::container_insert
 items::container_insert_kind
 items::container_kind_amount
 items::container_kind_space
-items::container_listing
 items::container_set_stack_limit
 items::container_size
 items::container_stack
@@ -441,7 +428,6 @@ items::entity_automation_size
 items::entity_container_size
 items::entity_equipment_size
 items::entity_type_in_tag
-items::game_edit_stack
 items::game_extract
 items::game_insert
 items::game_on_crafted_by
@@ -566,10 +552,7 @@ level_effects::level_global_level_event
 level_effects::level_level_event
 level_effects::level_play_sound
 level_effects::level_send_particles
-level_entities::level_all_entities
 level_entities::level_award_experience
-level_entities::level_entities_in
-level_entities::level_online_players
 level_entities::level_pop_resource
 level_entities::level_ray_trace_entities
 level_entities::level_spawn_item
@@ -626,8 +609,6 @@ level_ticking::level_block_random_tick
 level_ticking::level_block_tick
 level_ticking::level_entity_ticking
 level_ticking::level_in_place
-level_ticking::level_random
-level_ticking::level_set_random
 level_ticking::level_should_tick_blocks_at
 level_time::level_clock_marker_time
 level_time::level_clock_time
@@ -862,7 +843,6 @@ mod_state::attachment_query
 mod_state::attachment_validate_write
 mod_state::attachments
 mod_state::cancel_task
-mod_state::schedule_task
 mod_state::transaction_close
 mod_state::transaction_current
 mod_state::transaction_depth
@@ -918,7 +898,6 @@ player_interaction::player_within_entity_reach
 player_inventory::player_drop_stack
 player_inventory::player_ender_chest
 player_inventory::player_give_stack
-player_inventory::player_inventory
 player_inventory::player_inventory_slots
 player_inventory::player_selected_slot
 player_inventory::player_set_ender_chest_slot
@@ -975,7 +954,6 @@ player_session::player_permission_level
 player_session::player_persistent_data
 player_session::player_profile
 player_session::player_set_nickname
-player_session::player_set_persistent_data
 player_session::player_text_filtering
 player_sleep::player_counts_for_sleep
 player_sleep::player_set_sleep_ignored
@@ -1094,7 +1072,6 @@ scoreboard::team_display_name
 scoreboard::team_friendly_fire
 scoreboard::team_join
 scoreboard::team_leave
-scoreboard::team_members
 scoreboard::team_name
 scoreboard::team_name_tag_visibility
 scoreboard::team_prefix
@@ -1124,7 +1101,6 @@ screens::open_inventory
 screens::preset_editor
 screens::preset_editor_dimensions
 screens::screen_exclusion
-screens::screen_extra_data
 screens::screen_hovered_item
 screens::screen_pos
 screens::screen_slot

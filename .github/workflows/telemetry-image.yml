@@ -10,7 +10,6 @@ on:
       - crates/sunrise-addresses/**
       - crates/sunrise-bench/**
       - crates/sunrise-core/**
-      - crates/sunrise-guest-stack/**
       - crates/sunrise-hooks/**
       - crates/sunrise-perf-format/**
       - crates/sunrise-platform/**

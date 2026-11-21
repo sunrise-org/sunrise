@@ -1,4 +1,4 @@
-//! Operations on a joining connection, reached through ConfigurationConnection.
+//! Operations reached through ConfigurationConnection and ConfigurationTaskContext.
 #![allow(unused_variables)]
 use crate::*;
 
@@ -12,22 +12,14 @@ pub trait ConfigurationTasksServerHost {
         connection: ConfigurationConnection,
         channel: &PayloadId,
     ) -> bool;
-    /// Side: server. Send on the current configuration task's registered channel.
+    /// Side: server. Queue a send on the registered configuration channel of the exact
+    /// running task instance, not whichever task is current on the connection. Prefer
+    /// [`ConfigurationTaskContext::send_payload`] in start and tick callbacks.
     #[access(WorldOnly)]
     fn configuration_send_payload(
         &mut self,
-        connection: ConfigurationConnection,
+        instance: ConfigurationTaskRef,
         channel: &PayloadId,
         bytes: PayloadBytes,
     ) -> Result<(), ConfigurationTaskError>;
-    /// Side: server. Finish only the current task's exact type.
-    #[access(WorldOnly)]
-    fn configuration_finish(
-        &mut self,
-        connection: ConfigurationConnection,
-        task_type: &Identifier,
-    ) -> Result<(), ConfigurationTaskError>;
-    /// Side: server. Fail only this connection's configuration.
-    #[access(WorldOnly)]
-    fn configuration_fail(&mut self, connection: ConfigurationConnection, reason: &str);
 }

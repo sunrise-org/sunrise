@@ -3,6 +3,7 @@ mod tests {
     use crate::game::native_entity_refs::tests::{
         fixture_root, run_fresh_cases, with_game, with_game_at,
     };
+    use crate::game::remote::RemoteDimensionEntry;
     use mod_api::{
         Block, BlockEntityOnLoadEvent, BlockEntityPart, BlockEntityTicksEvent, BlocksEvent, Hooks,
         Host, HostSide, ModEntry, Registrar, RegistrationContext,
@@ -23,12 +24,10 @@ mod tests {
             event.ticks = true;
         }
 
-        fn block_entity_tick(
-            &self,
-            _: &mut dyn mod_api::ServerHost,
-            event: &mut mod_api::BlockEntityTickEvent<'_>,
-        ) {
-            self.0.lock().unwrap().push((event.pos[0], -1));
+        fn block_entity_tick(&self, event: &mut mod_api::BlockEntityTickEvent<'_>) {
+            event.subject.with_view(|entity| {
+                self.0.lock().unwrap().push((entity.position()[0], -1));
+            });
         }
 
         fn block_entity_on_load(&self, host: HostSide, event: &mut BlockEntityOnLoadEvent) {
@@ -123,6 +122,7 @@ mod tests {
                 game.world.block_entities.insert((1, 64, 1), holder(11));
                 game.fire_pending_block_entity_loads();
                 assert!(log.lock().unwrap().is_empty());
+                game.world.set(3, 64, 1, block).unwrap();
                 game.world.block_entities.insert((3, 64, 1), holder(0));
                 game.fire_pending_block_entity_loads();
                 game.fire_pending_block_entity_loads();
@@ -180,7 +180,7 @@ mod tests {
                         portal_cooldown: 0,
                         sea_level: 63,
                     };
-                    game.enter_remote_dimension(&spawn, false, Reason::Other);
+                    game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
                     game.remote.as_mut().unwrap().logged_in = true;
                     game.world
                         .chunks

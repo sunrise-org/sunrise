@@ -2,7 +2,8 @@
 //! ([`ItemResource`]), and a [`ResourceHandler`] is the indexed contents of one holder, written
 //! only inside a transaction.
 use crate::{
-    Capability, Host, HostTransaction, ItemStack, ServerHost, Tag, Transaction, backend_of,
+    Capability, Host, HostTransaction, ItemStack, ItemStackView, ServerHost, Tag, Transaction,
+    backend_of,
 };
 use std::fmt;
 use sunrise_core::nbt::JavaString;
@@ -167,6 +168,12 @@ impl ItemResource {
     /// Whether `stack` is this item with these components.
     pub fn matches(&self, stack: &ItemStack) -> bool {
         self.0.is_stackable_with(stack)
+    }
+    /// Reject different items and damage without projecting their component patches.
+    pub(crate) fn matches_view(&self, stack: &ItemStackView<'_>) -> bool {
+        self.item() == stack.item()
+            && self.0.damage_component() == stack.damage_component()
+            && stack.project().is_some_and(|stack| self.matches(&stack))
     }
     /// This item's own value of component `id` in its patch, as saved (`minecraft:damage` on a
     /// worn sword); none where it keeps the item's default or has the component removed.

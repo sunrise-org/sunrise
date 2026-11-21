@@ -7,7 +7,6 @@ COPY Cargo.toml Cargo.toml
 COPY crates/sunrise-addresses crates/sunrise-addresses
 COPY crates/sunrise-bench crates/sunrise-bench
 COPY crates/sunrise-core crates/sunrise-core
-COPY crates/sunrise-guest-stack crates/sunrise-guest-stack
 COPY crates/sunrise-hooks crates/sunrise-hooks
 COPY crates/sunrise-perf-format crates/sunrise-perf-format
 COPY crates/sunrise-platform crates/sunrise-platform

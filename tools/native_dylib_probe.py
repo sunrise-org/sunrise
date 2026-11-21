@@ -250,7 +250,6 @@ def main():
         '    mod_api::__private::native::BuiltMod { id: "probe", version: "0.1.0", side: mod_api::Side::Both },\n'))
     shipped_exe = shipped / ("sunrise-client.exe" if windows else "sunrise-client")
     subprocess.run([*route, "--crate-type", "bin", "--crate-name", "sunrise_native_game",
-                    *(flag for arg in identity["link_args"] for flag in ("-C", f"link-arg={arg}")),
                     *extern("sunrise_client"), *extern("sunrise_mod_host"), *extern("mod_api"), *extern("sunrise_mod_package"),
                     *sdk_tools.official_externs(deps),
                     "--extern", f"mod_0={shipped / 'libmod_0.rlib'}", "-o", str(shipped_exe), str(shipped / "main.rs")], check=True)
@@ -267,7 +266,6 @@ def main():
         # 3. At run time, which heap each allocator draws from (classified, never freed across).
         heap_exe = shipped / "route_heap.exe"
         run([*route, "--crate-name=route_heap", *extern("sunrise_client"), *extern("mod_api"),
-             *(flag for arg in identity["link_args"] for flag in ("-C", f"link-arg={arg}")),
              str(FIXTURES / "route_heap.rs"), "-o", str(heap_exe)])
         heap = subprocess.run([str(heap_exe), game.name, std_runtime[0].name, *names.values()],
                               env=runtime_env(shipped), capture_output=True, text=True)

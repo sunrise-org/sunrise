@@ -10,14 +10,6 @@
   {
     "package": "sunrise-client",
     "target": "lib",
-    "test": "game::block_entity_tick_items_bench_tests::unscoped_item_entity_reads",
-    "path": "crates/sunrise-client/src/game/modding/block_entity_tick_items_bench_tests.rs",
-    "reason": "measurement; needs prepared resources in SUNRISE_TEST_RESOURCES",
-    "rationale": "Opt-in measurement, not an ordinary daily correctness check: measurement; needs prepared resources in SUNRISE_TEST_RESOURCES. Run by hand on an idle machine with the optimized profile and its explicitly requested inputs; all assertions remain in the test."
-  },
-  {
-    "package": "sunrise-client",
-    "target": "lib",
     "test": "game::end::cooldown_tests::gateway_counters_match_actual_vanilla_methods",
     "path": "crates/sunrise-client/src/game/world/end/gateway_cooldown_tests.rs",
     "reason": "needs explicit SUNRISE_TEST_RESOURCES and SUNRISE_PORTAL_REFERENCE",
@@ -582,14 +574,6 @@
     "path": "crates/sunrise-native-build/src/registry_compile.rs",
     "reason": "requires an explicitly prepared private SDK, mod and launcher executable",
     "rationale": "Existing explicit manual runner by-hand in tools/ci/ignored-tests/manual-sunrise-native-build.txt: requires an explicitly prepared private SDK, mod and launcher executable. Not selected by daily shards."
-  },
-  {
-    "package": "sunrise-mod-api",
-    "target": "test:dispatch_benchmark",
-    "test": "subscriber_tick_benchmark",
-    "path": "crates/sunrise-mod-api/tests/dispatch_benchmark.rs",
-    "reason": "optimized hot-hook microbenchmark",
-    "rationale": "Existing explicit manual runner by-hand in tools/ci/ignored-tests/manual-sunrise-mod-api.txt: optimized hot-hook microbenchmark. Not selected by daily shards."
   },
   {
     "package": "sunrise-mod-api-gen",

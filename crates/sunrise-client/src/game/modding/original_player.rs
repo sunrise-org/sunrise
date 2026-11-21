@@ -371,7 +371,7 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn death_clone_retains_original_and_expires_after_dispatch() {
-        crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
+        crate::game::native_entity_refs::tests::run_with_game_stack(|| {
             clone_case(true, false);
             clone_case(true, true);
         });
@@ -380,7 +380,7 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn end_return_clone_retains_end_state_and_expires_after_dispatch() {
-        crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
+        crate::game::native_entity_refs::tests::run_with_game_stack(|| {
             clone_case(false, true);
         });
     }

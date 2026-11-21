@@ -253,8 +253,10 @@ impl mod_api::Hooks for Breather {
             slot: 103,
         };
         *self.helmet.lock().unwrap() = head
-            .stack(host)
-            .and_then(|stack| mod_api::__private::item_key_id(stack.item()).map(str::to_owned));
+            .with_stack(host, |stack| {
+                mod_api::__private::item_key_id(stack.item()).map(str::to_owned)
+            })
+            .flatten();
         let chest = mod_api::ItemPlace::PlayerSlot {
             player: 123,
             slot: 102,

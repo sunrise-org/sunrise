@@ -9,20 +9,22 @@ pub trait PlayerSessionBackend {
     /// Side: server.
     /// The IP address the player connects from, without the port. Displaced connected
     /// players keep their address; an acting player with no known connection
-    /// has an empty address. None for a stale or unavailable player.
+    /// has an empty address. None for a stale or unavailable player. The text
+    /// borrows the host; copy it only to keep it beyond that borrow.
     #[access(WorldOnly)]
-    fn player_address(&self, player: PlayerRef) -> Option<String>;
+    fn player_address(&self, player: PlayerRef) -> Option<&str>;
     /// Side: server.
-    /// The stable name of a connected or acting player. None for a stale or
-    /// unavailable player; displaced online players retain their identity.
+    /// The stable name of a connected or acting player, borrowed from the host.
+    /// None for a stale or unavailable player; displaced online players retain their identity.
     #[access(WorldOnly)]
-    fn player_name(&self, player: PlayerRef) -> Option<String>;
+    fn player_name(&self, player: PlayerRef) -> Option<&str>;
     /// Side: server.
-    /// `ServerPlayer.getGameProfile`: the UUID, name and login properties (skin
-    /// `textures` included) of a connected or acting player. An offline-mode
-    /// player has no properties. None for a stale or unavailable player.
+    /// `Player.getGameProfile()`: the UUID, name and login properties (skin
+    /// `textures` included) of a connected or acting player, borrowed from the host.
+    /// Displaced online players keep their profile. An offline-mode player has no
+    /// properties. None for a stale or unavailable player.
     #[access(WorldOnly)]
-    fn player_profile(&self, player: PlayerRef) -> Option<GameProfile>;
+    fn player_profile(&self, player: PlayerRef) -> Option<GameProfile<'_>>;
     /// Side: server.
     /// The player's permission level, 0 to 4 (`Player.permissions()`,
     /// `PlayerList.getProfilePermissions`): an op's level, the
@@ -39,26 +41,29 @@ pub trait PlayerSessionBackend {
     #[access(WorldOnly)]
     fn player_text_filtering(&self, player: PlayerRef) -> Option<bool>;
     /// Side: server.
-    /// The compound mods keep on a server player (NeoForge's `Entity.getPersistentData`),
-    /// saved in their file as `NeoForgeData` beside the keys the game keeps; empty when there
-    /// is none. None for a stale or unavailable player and on a client.
+    /// Borrows the compound mods keep on a server player (NeoForge's `Entity.getPersistentData`),
+    /// saved as `NeoForgeData`. An explicitly empty compound is still present. Returns `None`
+    /// if no compound is stored, the player is stale or unavailable, or this is a client.
+    /// The borrow lasts only as long as the shared Host borrow; clone explicitly for a snapshot.
     #[access(WorldOnly)]
-    fn player_persistent_data(&self, player: PlayerRef) -> Option<Compound>;
+    fn player_persistent_data(&self, player: PlayerRef) -> Option<&Compound>;
     /// Side: both.
     /// The brand the player's client announced when it connected (`ServerPlayer.clientBrand`),
     /// empty when it sent none. Displaced connected players keep theirs; an acting player with
     /// no known connection has an empty one. None for a stale or unavailable player.
+    /// The brand borrows the host.
     #[access(WorldOnly)]
-    fn player_client_brand(&self, player: PlayerRef) -> Option<String>;
+    fn player_client_brand(&self, player: PlayerRef) -> Option<&str>;
     /// Side: server.
-    /// The plugin channels the player's client announced in `minecraft:register`, less those
-    /// it withdrew in `minecraft:unregister`, during configuration and play, in announcement
-    /// order (Bukkit's `Player.getListeningPluginChannels`). Malformed entries are skipped and
-    /// at most 128 channels of up to 64 bytes are kept. Empty for a client that announced
-    /// none and for an acting player with no known connection; None for a stale or
-    /// unavailable player.
+    /// A shared snapshot, in announcement order, of the plugin channels the client announced
+    /// with `minecraft:register` and has not withdrawn with `minecraft:unregister`, during
+    /// configuration and play (Bukkit's `Player.getListeningPluginChannels`). Malformed
+    /// entries are skipped and at most 128 channels of up to 64 bytes are kept. Empty for a
+    /// client that announced none and for an acting player with no known connection; None
+    /// for a stale or unavailable player. A snapshot can outlive the host borrow and does
+    /// not change when the client registers or unregisters channels later.
     #[access(WorldOnly)]
-    fn player_announced_channels(&self, player: PlayerRef) -> Option<Vec<String>>;
+    fn player_announced_channels(&self, player: PlayerRef) -> Option<Arc<[String]>>;
     /// Side: server.
     /// Whether `viewer`'s client is shown the player `target` by the rules players are tracked
     /// with (`ServerPlayer.broadcastToPlayer`; Paper's `Player.canSee`): a spectator is seen
@@ -87,10 +92,11 @@ pub trait PlayerSessionBackend {
     #[access(WorldOnly)]
     fn player_hidden(&self, player: PlayerRef) -> Result<Option<u8>, PlayerWorldRefusal>;
     /// Side: server.
-    /// The name `player_set_nickname` set for that player, `None` when there is none. Refuses
-    /// with `PlayerWorldRefusal`: `Client`, and `Stale` for a stale or offline player.
+    /// The name `player_set_nickname` set for that player, borrowed from the host,
+    /// `None` when there is none. Refuses with `PlayerWorldRefusal`: `Client`,
+    /// and `Stale` for a stale or offline player.
     #[access(WorldOnly)]
-    fn player_nickname(&self, player: PlayerRef) -> Result<Option<String>, PlayerWorldRefusal>;
+    fn player_nickname(&self, player: PlayerRef) -> Result<Option<&str>, PlayerWorldRefusal>;
 }
 /// The handles' writes of the `player_session` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
@@ -136,20 +142,23 @@ pub trait PlayerSessionBackendMut {
     #[access(WorldOnly)]
     fn player_hide(&mut self, player: PlayerRef, level: Option<u8>) -> bool;
     /// Side: server.
-    /// Replaces the compound mods keep on a server player (`player_persistent_data`) with
-    /// `data`; an empty compound takes it away. It is saved with the player and never sent to
-    /// a client; changing it raises no notification, so a mod that wants to hear of changes
-    /// keeps its own. On a death respawn and on a player's first exit from the End (before
-    /// the credits) only the `PlayerPersisted` sub-compound is carried to the new player, as
-    /// NeoForge does, and every other key is lost; dimension changes, later End exits and
-    /// teleports keep the whole compound. For ports: new mods use attachments. Refuses,
-    /// writing nothing: `Stale`, `Client`, `Dead`, and `TooDeep` for data that would sit 512
-    /// levels deep or more in the player's file.
-    /// An open transaction journals this write; an abort restores the previous value.
+    /// Sets one literal NBT `key` in the server player's `NeoForgeData`; `None` removes only
+    /// that key. Setting a value creates the compound if absent; removing a missing key does
+    /// nothing, and removing the last key leaves a present, empty compound. Other keys are
+    /// unchanged. Data is saved with the player, never sent to clients, and raises no notice.
+    ///
+    /// A death respawn or the first exit from the End carries only `PlayerPersisted`, whatever
+    /// its type, as in NeoForge; dimension changes, later exits and teleports keep all keys.
+    /// This is for ports; new mods should use attachments.
+    ///
+    /// Refuses with [`PlayerPersistentDataError`] and writes nothing if the player cannot be
+    /// written or the entry cannot be saved. An open transaction journals the edit; aborting
+    /// restores the previous value, including absence of the compound.
     #[access(WorldOnly)]
-    fn player_set_persistent_data(
+    fn player_set_persistent_data_key(
         &mut self,
         player: PlayerRef,
-        data: Compound,
-    ) -> Result<(), PlayerDataRefusal>;
+        key: &JavaString,
+        value: Option<&Tag>,
+    ) -> Result<(), PlayerPersistentDataError>;
 }

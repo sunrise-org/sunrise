@@ -27,6 +27,7 @@ pub trait Hooks {
     /// menu's storage counts), refused and undone. When no part listens, the
     /// click is refused.
     #[hook(
+        dispatch = "api_carrier",
         side = "server",
         contract = "listen",
         scope = "menu",

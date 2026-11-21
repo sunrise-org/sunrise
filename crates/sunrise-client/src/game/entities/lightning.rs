@@ -892,6 +892,7 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::native_entity_refs::tests::collect_entities_in;
     use mod_api::{self, ServerHost};
     use std::sync::Arc;
     use sunrise_client::mobs::{Anim, Brain, Mob, MobType, Part, Species};
@@ -1054,34 +1055,40 @@ mod tests {
             ) {
                 let old = host
                     .entity(event.entity)
-                    .and_then(|entity| entity.kind(host).map(|kind| kind.id(host)));
+                    .and_then(|entity| entity.kind(host)?.id(host))
+                    .map(|name| name.as_str().to_owned());
                 let outcome = host.entity(event.converted);
                 let weapon = outcome
                     .and_then(|entity| host.living(entity))
-                    .and_then(|living| living.equipment(host, EquipmentSlot::MainHand))
-                    .map(|stack| {
-                        mod_api::__private::item_key_id(stack.item())
-                            .unwrap()
-                            .to_string()
+                    .and_then(|living| {
+                        living.with_equipment(host, EquipmentSlot::MainHand, |stack| {
+                            mod_api::__private::item_key_id(stack.item())
+                                .unwrap()
+                                .to_string()
+                        })
                     });
                 let mushrooms = host
                     .level("minecraft:overworld")
                     .and_then(|level| {
-                        level.entities_in(host, [-10.0, 60.0, -10.0], [20.0, 70.0, 20.0])
+                        collect_entities_in(host, level, [-10.0, 60.0, -10.0], [20.0, 70.0, 20.0])
+                            .ok()
                     })
                     .unwrap()
                     .into_iter()
                     .filter_map(|entity| host.item_entity(entity))
-                    .filter_map(|item| item.stack(host))
-                    .filter(|stack| {
-                        mod_api::__private::item_key_id(stack.item())
-                            .unwrap()
-                            .ends_with("mushroom")
+                    .filter(|item| {
+                        item.with_stack(host, |stack| {
+                            mod_api::__private::item_key_id(stack.item())
+                                .unwrap()
+                                .ends_with("mushroom")
+                        }) == Some(true)
                     })
                     .count();
                 self.seen.lock().unwrap().push(SeenConversion {
                     old,
-                    outcome: outcome.and_then(|entity| entity.kind(host).map(|kind| kind.id(host))),
+                    outcome: outcome
+                        .and_then(|entity| entity.kind(host)?.id(host))
+                        .map(|name| name.as_str().to_owned()),
                     weapon,
                     mushrooms,
                 });

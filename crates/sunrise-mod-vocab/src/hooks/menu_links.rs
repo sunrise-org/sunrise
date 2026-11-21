@@ -10,11 +10,12 @@ pub trait Hooks {
     /// and positions after 64 accepted containers (`MAX_MENU_LINKS`). First accepted
     /// occurrence wins, preserving answer order.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "collect",
         out = "links",
         neoforge = "none (Sunrise mod menus expose linked container slots)",
         cancellable = false
     )]
-    fn menu_links();
+    fn menu_links(player: u128, menu: &str, pos: [i32; 3], links: &mut Vec<[i32; 3]>);
 }

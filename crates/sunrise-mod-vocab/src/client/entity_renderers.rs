@@ -11,8 +11,9 @@ use std::{collections::BTreeMap, sync::Arc};
 /// what a renderer reads to place and turn its model. Angles are in degrees, interpolated to the
 /// frame's partial tick, except for primed TNT and experience orbs, which supply their current
 /// rotation.
+// no wire: this frame is passed directly to native renderers.
 #[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EntityRenderState {
     /// The entity's network id, as mod messages name it.
     pub id: u32,
@@ -37,7 +38,9 @@ pub struct EntityRenderState {
     /// An item frame or glow item frame's own frame ([`ItemFrameRenderState`]); none for any
     /// other entity.
     pub item_frame: Option<ItemFrameRenderState>,
-    /// A general entity's immutable synced fields; none for other families.
+    /// A general entity's last published immutable generation of synced fields, even if empty.
+    /// An over-budget generation leaves the previous one in place. The general entity does not
+    /// draw until its first generation is published. `None` for other entity families.
     pub attachments: Option<crate::EntityRenderAttachments>,
 }
 
@@ -45,8 +48,9 @@ pub struct EntityRenderState {
 /// `LivingEntityRenderer.extractRenderState` fills a `LivingEntityRenderState`: what a model
 /// reads to pose and animate a body. Angles are in degrees, interpolated to the frame's partial
 /// tick. Plain values, so a frame allocates nothing.
+// no wire: lives in the native entity render state.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LivingRenderState {
     /// `bodyRot`: the way the body faces (0 is south, 90 west).
     pub body_rot: f32,
@@ -87,8 +91,9 @@ pub struct LivingRenderState {
 /// `height` as the entity already holds them). The variant id is not here: the state
 /// is only plain numbers, so a renderer that needs the variant reads it in a hook and
 /// keeps what it read.
+// no wire: lives in the native entity render state.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaintingRenderState {
     /// The way the painting faces out from the wall (`Direction.get2DDataValue`: south,
     /// west, north, east).
@@ -103,8 +108,9 @@ pub struct PaintingRenderState {
 /// glow frame, whether the frame model is hidden, its item rotation, and whether it holds an
 /// item or a filled map. The stack itself is not here: the state is only plain numbers, so a
 /// renderer that needs the item reads it in a hook and keeps what it read.
+// no wire: lives in the native entity render state.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ItemFrameRenderState {
     /// The face it hangs on (`Direction.get3DDataValue`: down, up, north, south, west, east).
     pub facing: crate::Direction,
@@ -133,8 +139,9 @@ pub trait EntityRenderer: Send + Sync + 'static {
     /// `item`, `model_part`) under its pose stack, which starts at the entity's position, not
     /// turned: turn it by `entity.yaw` and `entity.pitch` as the model needs. `draw` also has
     /// the partial tick, the game time and the entity's light. Asked once a frame for each entity
-    /// of the type in view; what it draws replaces the type's own drawing. A frame is drawn
-    /// afresh: `draw.keep()` does nothing here. `Ok(())` keeps what it drew. On an `Err` or
+    /// of the type in view; a general entity is drawn only after its first synced attachment
+    /// generation is published. What this method draws replaces the type's own drawing. A frame
+    /// is drawn afresh: `draw.keep()` does nothing here. `Ok(())` keeps what it drew. On an `Err` or
     /// panic, what it drew this frame is dropped, the error is logged once, and the renderer
     /// is asked no more until the next resource load resolves it again. Until then its type
     /// draws as it would without a registered renderer.

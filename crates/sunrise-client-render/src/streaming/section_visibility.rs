@@ -480,84 +480,97 @@ pub(super) mod tests {
         );
     }
 
+    fn test_block_key() -> mod_api::BlockKey {
+        mod_platform::__private::part_tests::install_parts_fixture(&[]).unwrap();
+        mod_api::__private::resolve_block_keys(["minecraft:air"], |_| {
+            sunrise_mod_runtime::block_definitions::BlockDefinition::new(
+                &[&std::collections::BTreeMap::new()],
+                0,
+            )
+            .map_err(|error| format!("{error:?}"))
+        })
+        .unwrap();
+        mod_api::__private::block_key("minecraft:air").unwrap()
+    }
+
     #[test]
     #[ignore = "daily"]
     fn remote_column_arrival_and_unload_remesh_the_actual_halo() {
         use crate::mesher::{SectionPlanBuilder, capture_input};
-        use mod_api::{BlockStateId, SectionCell};
+        use mod_api::SectionCell;
 
-        let (mut world, mut streaming, stone) = fixture();
-        let base = world.bottom_y();
-        let mut centre = Chunk::empty(0, 0);
-        centre.set(15, base + 4, 8, stone);
-        streaming.insert_remote(&mut world, centre);
-        assert!(streaming.update(&mut world).0.is_empty());
-        assert!(streaming.take_visibility_requests().is_empty());
-        assert!(
-            world.dirty_sections.contains(&CENTRE),
-            "the no-listener route still waits for a complete region"
-        );
-        streaming.refresh_section_visibility(&mut world, true);
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            let block = test_block_key();
+            let state = |raw: u32| mod_api::__private::block_state_from_ordinal(block, raw as u16);
+            let (mut world, mut streaming, stone) = fixture();
+            let base = world.bottom_y();
+            let mut centre = Chunk::empty(0, 0);
+            centre.set(15, base + 4, 8, stone);
+            streaming.insert_remote(&mut world, centre);
+            assert!(streaming.update(&mut world).0.is_empty());
+            assert!(streaming.take_visibility_requests().is_empty());
+            assert!(
+                world.dirty_sections.contains(&CENTRE),
+                "the no-listener route still waits for a complete region"
+            );
+            streaming.refresh_section_visibility(&mut world, true);
 
-        let compile = |world: &mut World, streaming: &mut Streaming, expected: SectionCell| {
-            let mut captured = false;
-            for _ in 0..100 {
-                let (uploads, _) = streaming.update(world);
-                for request in streaming.take_visibility_requests() {
-                    let mut builder = SectionPlanBuilder::new();
-                    if request.key == CENTRE {
-                        let input = capture_input(&request.region, 0);
-                        assert_eq!(input.cell([16, 4, 8]), Ok(expected));
-                        captured = true;
-                    } else if request.key == (1, 0, 0) {
-                        builder.restrict([1, 4, 8], false, false, 0);
+            let compile = |world: &mut World, streaming: &mut Streaming, expected: SectionCell| {
+                let mut captured = false;
+                for _ in 0..100 {
+                    let (uploads, _) = streaming.update(world);
+                    for request in streaming.take_visibility_requests() {
+                        let mut builder = SectionPlanBuilder::new();
+                        if request.key == CENTRE {
+                            let input = capture_input(&request.region, 0, state);
+                            assert_eq!(input.cell([16, 4, 8]), Ok(expected));
+                            captured = true;
+                        } else if request.key == (1, 0, 0) {
+                            builder.restrict([1, 4, 8], false, false, 0);
+                        }
+                        streaming.submit_visibility_answer(world, request, builder.finish());
                     }
-                    streaming.submit_visibility_answer(world, request, builder.finish());
+                    let faces = uploads
+                        .iter()
+                        .find(|upload| {
+                            upload.key == CENTRE && streaming.can_publish_mesh(world, upload)
+                        })
+                        .map(|upload| upload.mesh.solid.len() / 4);
+                    streaming.free(uploads);
+                    if let Some(faces) = faces {
+                        assert!(captured);
+                        return faces;
+                    }
+                    streaming.wait(Duration::from_millis(20));
                 }
-                let faces = uploads
-                    .iter()
-                    .find(|upload| {
-                        upload.key == CENTRE && streaming.can_publish_mesh(world, upload)
-                    })
-                    .map(|upload| upload.mesh.solid.len() / 4);
-                streaming.free(uploads);
-                if let Some(faces) = faces {
-                    assert!(captured);
-                    return faces;
-                }
-                streaming.wait(Duration::from_millis(20));
-            }
-            panic!("the requested centre mesh did not complete");
-        };
-        assert_eq!(compile(&mut world, &mut streaming, SectionCell::Missing), 6);
-        let mut east = Chunk::empty(1, 0);
-        east.set(0, base + 4, 8, stone);
-        streaming.insert_remote(&mut world, east);
-        assert_eq!(
-            compile(
-                &mut world,
-                &mut streaming,
-                SectionCell::State(BlockStateId(stone))
-            ),
-            5
-        );
-        assert!(
-            streaming
-                .section_visibility
-                .answers
-                .contains_key(&(1, 0, 0))
-        );
-        let gone = [(1, 0)].into_iter().collect();
-        assert_eq!(Streaming::take_remote_columns(&mut world, &gone).len(), 1);
-        streaming.forget_columns(&mut world, &gone);
-        assert!(
-            !streaming
-                .section_visibility
-                .answers
-                .contains_key(&(1, 0, 0)),
-            "unload drops the answer and its lease"
-        );
-        assert_eq!(compile(&mut world, &mut streaming, SectionCell::Missing), 6);
+                panic!("the requested centre mesh did not complete");
+            };
+            assert_eq!(compile(&mut world, &mut streaming, SectionCell::Missing), 6);
+            let mut east = Chunk::empty(1, 0);
+            east.set(0, base + 4, 8, stone);
+            streaming.insert_remote(&mut world, east);
+            assert_eq!(
+                compile(&mut world, &mut streaming, SectionCell::State(state(stone))),
+                5
+            );
+            assert!(
+                streaming
+                    .section_visibility
+                    .answers
+                    .contains_key(&(1, 0, 0))
+            );
+            let gone = [(1, 0)].into_iter().collect();
+            assert_eq!(Streaming::take_remote_columns(&mut world, &gone).len(), 1);
+            streaming.forget_columns(&mut world, &gone);
+            assert!(
+                !streaming
+                    .section_visibility
+                    .answers
+                    .contains_key(&(1, 0, 0)),
+                "unload drops the answer and its lease"
+            );
+            assert_eq!(compile(&mut world, &mut streaming, SectionCell::Missing), 6);
+        });
     }
 
     #[test]
@@ -567,101 +580,105 @@ pub(super) mod tests {
         use mod_api::SectionCell;
 
         const EAST: (i32, i32, i32) = (1, 0, 0);
-        let (mut world, mut streaming, stone) = fixture();
-        let base = world.bottom_y();
-        let marker = streaming
-            .shared
-            .context
-            .read()
-            .unwrap()
-            .assets
-            .registry
-            .default_state("minecraft:cobblestone")
-            .unwrap();
-        let mut centre = Chunk::empty(0, 0);
-        centre.set(15, base + 4, 8, stone);
-        let mut east = Chunk::empty(1, 0);
-        east.set(0, base + 4, 8, stone);
-        east.set(8, base + 4, 8, marker.0);
-        streaming.insert_remote(&mut world, centre);
-        streaming.insert_remote(&mut world, east);
-        streaming.refresh_section_visibility(&mut world, true);
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            let block = test_block_key();
+            let state = |raw: u32| mod_api::__private::block_state_from_ordinal(block, raw as u16);
+            let (mut world, mut streaming, stone) = fixture();
+            let base = world.bottom_y();
+            let marker = streaming
+                .shared
+                .context
+                .read()
+                .unwrap()
+                .assets
+                .registry
+                .default_state("minecraft:cobblestone")
+                .unwrap();
+            let mut centre = Chunk::empty(0, 0);
+            centre.set(15, base + 4, 8, stone);
+            let mut east = Chunk::empty(1, 0);
+            east.set(0, base + 4, 8, stone);
+            east.set(8, base + 4, 8, marker.0);
+            streaming.insert_remote(&mut world, centre);
+            streaming.insert_remote(&mut world, east);
+            streaming.refresh_section_visibility(&mut world, true);
 
-        let centre_faces = |world: &mut World, streaming: &mut Streaming| {
-            for _ in 0..200 {
-                let (uploads, _) = streaming.update(world);
-                for request in streaming.take_visibility_requests() {
-                    let mut answer = SectionPlanBuilder::new();
-                    if request.key == EAST
-                        && capture_input(&request.region, EAST.1).cell([8, 4, 8])
-                            == Ok(SectionCell::State(mod_api::BlockStateId(marker.0)))
-                    {
-                        answer.restrict([0, 4, 8], false, false, 0);
+            let centre_faces = |world: &mut World, streaming: &mut Streaming| {
+                for _ in 0..200 {
+                    let (uploads, _) = streaming.update(world);
+                    for request in streaming.take_visibility_requests() {
+                        let mut answer = SectionPlanBuilder::new();
+                        if request.key == EAST
+                            && capture_input(&request.region, EAST.1, state).cell([8, 4, 8])
+                                == Ok(SectionCell::State(state(marker.0)))
+                        {
+                            answer.restrict([0, 4, 8], false, false, 0);
+                        }
+                        streaming.submit_visibility_answer(world, request, answer.finish());
                     }
-                    streaming.submit_visibility_answer(world, request, answer.finish());
-                }
-                let faces = uploads
-                    .iter()
-                    .find(|upload| {
-                        upload.key == CENTRE && streaming.can_publish_mesh(world, upload)
-                    })
-                    .map(|upload| upload.mesh.solid.len() / 4);
-                streaming.free(uploads);
-                if let Some(faces) = faces {
-                    return faces;
-                }
-                streaming.wait(Duration::from_millis(20));
-            }
-            panic!("the centre never had a current mesh");
-        };
-        assert_eq!(centre_faces(&mut world, &mut streaming), 6);
-
-        world.dirty_sections.insert_mesh(CENTRE);
-        streaming.update(&mut world);
-        let request = streaming
-            .take_visibility_requests()
-            .into_iter()
-            .find(|request| request.key == CENTRE)
-            .expect("centre selected");
-        let seq = request.seq;
-        streaming.submit_visibility_answer(&mut world, request, None);
-        // Same light behaviour and away from all borders: only the east section's raw input
-        // changes. Its listener will no longer hide the stone on the border.
-        world.set(24, base + 4, 8, BlockStateId(stone)).unwrap();
-        assert!(!world.dirty_sections.contains(&CENTRE));
-        assert!(world.dirty_sections.contains(&EAST));
-
-        let completed = (0..200)
-            .find_map(|_| {
-                let (uploads, _) = streaming.update(&mut world);
-                let completed = uploads
-                    .iter()
-                    .find(|upload| upload.key == CENTRE && upload.seq == seq)
-                    .map(|upload| {
-                        (
-                            upload.mesh.solid.len() / 4,
-                            streaming.can_publish_mesh(&world, upload),
-                        )
-                    });
-                streaming.free(uploads);
-                if completed.is_none() {
+                    let faces = uploads
+                        .iter()
+                        .find(|upload| {
+                            upload.key == CENTRE && streaming.can_publish_mesh(world, upload)
+                        })
+                        .map(|upload| upload.mesh.solid.len() / 4);
+                    streaming.free(uploads);
+                    if let Some(faces) = faces {
+                        return faces;
+                    }
                     streaming.wait(Duration::from_millis(20));
                 }
-                completed
-            })
-            .expect("the centre worker finished before the east answer was collected");
-        assert_eq!(
-            completed,
-            (6, false),
-            "the old six-face mesh must not publish"
-        );
-        let east = streaming
-            .take_visibility_requests()
-            .into_iter()
-            .find(|request| request.key == EAST)
-            .expect("the east answer is still outstanding");
-        streaming.submit_visibility_answer(&mut world, east, None);
-        assert_eq!(centre_faces(&mut world, &mut streaming), 5);
+                panic!("the centre never had a current mesh");
+            };
+            assert_eq!(centre_faces(&mut world, &mut streaming), 6);
+
+            world.dirty_sections.insert_mesh(CENTRE);
+            streaming.update(&mut world);
+            let request = streaming
+                .take_visibility_requests()
+                .into_iter()
+                .find(|request| request.key == CENTRE)
+                .expect("centre selected");
+            let seq = request.seq;
+            streaming.submit_visibility_answer(&mut world, request, None);
+            // Same light behaviour and away from all borders: only the east section's raw input
+            // changes. Its listener will no longer hide the stone on the border.
+            world.set(24, base + 4, 8, BlockStateId(stone)).unwrap();
+            assert!(!world.dirty_sections.contains(&CENTRE));
+            assert!(world.dirty_sections.contains(&EAST));
+
+            let completed = (0..200)
+                .find_map(|_| {
+                    let (uploads, _) = streaming.update(&mut world);
+                    let completed = uploads
+                        .iter()
+                        .find(|upload| upload.key == CENTRE && upload.seq == seq)
+                        .map(|upload| {
+                            (
+                                upload.mesh.solid.len() / 4,
+                                streaming.can_publish_mesh(&world, upload),
+                            )
+                        });
+                    streaming.free(uploads);
+                    if completed.is_none() {
+                        streaming.wait(Duration::from_millis(20));
+                    }
+                    completed
+                })
+                .expect("the centre worker finished before the east answer was collected");
+            assert_eq!(
+                completed,
+                (6, false),
+                "the old six-face mesh must not publish"
+            );
+            let east = streaming
+                .take_visibility_requests()
+                .into_iter()
+                .find(|request| request.key == EAST)
+                .expect("the east answer is still outstanding");
+            streaming.submit_visibility_answer(&mut world, east, None);
+            assert_eq!(centre_faces(&mut world, &mut streaming), 5);
+        });
     }
 
     #[test]

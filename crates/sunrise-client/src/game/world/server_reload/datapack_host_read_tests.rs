@@ -1,7 +1,7 @@
 use super::*;
 use mod_api::{
-    DatapackField, DatapackFieldKind, DatapackReadError as E, DatapackRegistrySync, DimensionKey,
-    LevelRef, Registrar, RegistrationContext, WorldEpoch,
+    DatapackEntry, DatapackField, DatapackFieldKind, DatapackReadError as E, DatapackRegistrySync,
+    DimensionKey, LevelRef, Registrar, RegistrationContext, WorldEpoch,
 };
 struct SyncedRegistryMod;
 #[mod_api::__subscriptions]
@@ -54,10 +54,22 @@ fn native_datapack_host_reads_enforce_level_session_and_generation() {
                 let handle = level
                     .datapack_handle(game, "registry_test:spell", "registry_test:fire")
                     .unwrap();
-                assert_eq!(
-                    level.datapack_read(game, &handle),
-                    Ok(vec![("power".into(), DatapackValue::Int(7))])
-                );
+                let published = game
+                    .mods
+                    .datapack_registries
+                    .as_ref()
+                    .unwrap()
+                    .get(&handle)
+                    .unwrap();
+                let mut visits = 0;
+                level
+                    .datapack_read(game, &handle, &mut |entry| {
+                        assert!(std::ptr::eq(entry, published));
+                        assert_eq!(entry.values, [("power".to_owned(), DatapackValue::Int(7))]);
+                        visits += 1;
+                    })
+                    .unwrap();
+                assert_eq!(visits, 1);
                 assert_eq!(level.datapack_entries(game, "missing:registry"), None);
                 assert_eq!(
                     level.datapack_handle(game, "missing:registry", "addon:ice"),
@@ -67,6 +79,8 @@ fn native_datapack_host_reads_enforce_level_session_and_generation() {
                     level.datapack_handle(game, "registry_test:spell", "addon:missing"),
                     Err(E::MissingEntry)
                 );
+                let mut visited_refusal = false;
+                let mut unexpected_visit = |_: &DatapackEntry| visited_refusal = true;
                 for refused in [
                     LevelRef::new(WorldEpoch::new(level.epoch().get() + 1), level.dimension()),
                     LevelRef::new(level.epoch(), DimensionKey::NETHER),
@@ -77,7 +91,7 @@ fn native_datapack_host_reads_enforce_level_session_and_generation() {
                         Err(E::UnknownRegistry)
                     );
                     assert_eq!(
-                        refused.datapack_read(game, &handle),
+                        refused.datapack_read(game, &handle, &mut unexpected_visit),
                         Err(E::UnknownRegistry)
                     );
                 }
@@ -89,11 +103,17 @@ fn native_datapack_host_reads_enforce_level_session_and_generation() {
                         .reload(candidate())
                         .unwrap(),
                 ));
-                assert_eq!(level.datapack_read(game, &handle), Err(E::StaleGeneration));
+                assert_eq!(
+                    level.datapack_read(game, &handle, &mut unexpected_visit),
+                    Err(E::StaleGeneration)
+                );
                 game.mods.datapack_registries = Some(std::sync::Arc::new(
                     mod_api::DatapackRegistrySet::first(candidate(), 401),
                 ));
-                assert_eq!(level.datapack_read(game, &handle), Err(E::WrongSession));
+                assert_eq!(
+                    level.datapack_read(game, &handle, &mut unexpected_visit),
+                    Err(E::WrongSession)
+                );
                 // The client must use the received snapshot, not this Game's server set.
                 let declarations = mod_api::__private::datapack_registry_declarations();
                 let remote = mod_api::DatapackCandidate::build(
@@ -123,15 +143,21 @@ fn native_datapack_host_reads_enforce_level_session_and_generation() {
                 let client_handle = level
                     .datapack_handle(game, "registry_test:spell", "registry_test:fire")
                     .unwrap();
+                let mut visits = 0;
+                level
+                    .datapack_read(game, &client_handle, &mut |entry| {
+                        // Clearing takes the publication lock and drops its reference to the set.
+                        sunrise_client::datapack_net::clear_received();
+                        assert_eq!(entry.get("power"), Some(&DatapackValue::Int(19)));
+                        visits += 1;
+                    })
+                    .unwrap();
+                assert_eq!(visits, 1);
                 assert_eq!(
-                    level.datapack_read(game, &client_handle),
-                    Ok(vec![("power".into(), DatapackValue::Int(19))])
-                );
-                sunrise_client::datapack_net::clear_received();
-                assert_eq!(
-                    level.datapack_read(game, &client_handle),
+                    level.datapack_read(game, &client_handle, &mut unexpected_visit),
                     Err(E::UnknownRegistry)
                 );
+                assert!(!visited_refusal);
             });
         },
     );

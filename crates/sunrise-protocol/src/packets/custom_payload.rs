@@ -29,8 +29,9 @@ mod registry_tests;
 
 use crate::{
     Error, Result,
-    buf::{Codec, Ident, Reader, Writer},
+    buf::{Codec, Ident, Reader},
 };
+use sunrise_core::vanilla_bytes::Writer;
 
 /// Exact application bytes following a namespaced channel identifier.
 #[derive(Clone, Debug, PartialEq)]

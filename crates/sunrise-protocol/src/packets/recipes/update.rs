@@ -2,8 +2,9 @@
 use super::{HolderSet, SlotDisplay};
 use crate::{
     Result,
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Reader},
 };
+use sunrise_core::vanilla_bytes::Writer;
 
 /// ClientboundUpdateRecipesPacket. Each packet replaces the previous generation,
 /// including when either collection is empty.

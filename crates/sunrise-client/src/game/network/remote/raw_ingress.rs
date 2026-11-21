@@ -195,7 +195,7 @@ impl Game<'_> {
                     self.score.board = Default::default();
                     self.clear_waypoints();
                     if let Some(r) = self.remote.as_mut() {
-                        r.attachments.clear();
+                        r.clear_attachments();
                         r.players.clear();
                         r.tab_players.clear();
                         r.listed.clear();

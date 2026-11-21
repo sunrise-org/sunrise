@@ -4,7 +4,7 @@
 //! a client's copy, and only on the level in place.
 use super::{Game, Insertion, Kind, MoveIn, PlacementAttempt, Pos, Slots, View};
 use crate::game::transactions::After;
-use mod_api::{BlockSide, LevelRef, Transaction};
+use mod_api::{BlockSide, ItemResource, LevelReadError, LevelRef, Transaction};
 use sunrise_client::items::ItemStack;
 use sunrise_core::geometry::Direction;
 
@@ -320,25 +320,29 @@ impl Game<'_> {
                 total.checked_add(u64::from(c.planning_room(&view, slot, resource)))
             })
     }
-    /// What the slots `at`'s side reaches hold, from its `from`th to before its
-    /// `from + limit`th (fewer at the end), empty ones included: never more than
-    /// `MAX_STORAGE_PAGE` slots, whatever `limit` asks, so a request cannot make the game
-    /// allocate more than one page.
-    pub(in crate::game) fn container_listing(
+    /// Visits the occupied slots `at`'s side reaches, in order, converting only reached stacks.
+    pub(in crate::game) fn container_visit_entries(
         &self,
         at: BlockSide,
-        from: usize,
-        limit: usize,
-    ) -> Option<Vec<Option<ItemStack>>> {
-        let view = self.capability_view(at)?;
+        visitor: &mut dyn FnMut(&ItemResource, u64) -> std::ops::ControlFlow<()>,
+    ) -> Result<(), LevelReadError> {
+        use crate::game::api_values::TryIntoApi;
+        let Some(view) = self.capability_view(at) else {
+            return Ok(());
+        };
         let c = self.containers();
-        Some(
-            view.capability_slots(at.side)
-                .skip(from)
-                .take(limit.min(mod_api::MAX_STORAGE_PAGE))
-                .map(|slot| c.get(&view, slot).cloned())
-                .collect(),
-        )
+        for stack in view
+            .capability_slots(at.side)
+            .filter_map(|slot| c.get(&view, slot))
+        {
+            let stack = stack
+                .try_into_api()
+                .map_err(|_| LevelReadError::Unavailable)?;
+            if visitor(&ItemResource::of(&stack), u64::from(stack.count())).is_break() {
+                break;
+            }
+        }
+        Ok(())
     }
     /// Puts up to `amount` of `resource` into the slots `at`'s side reaches, those holding it
     /// first and then the empty ones, in transaction `tx`, on one view of the container: what

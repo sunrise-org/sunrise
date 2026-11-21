@@ -10,6 +10,7 @@
 //! `EntityRenderersEvent.RegisterLayerDefinitions`), and `bake_layer`
 //! bakes one of them or a vanilla layer (`EntityModelSet.bakeLayer`).
 
+use crate::RegisterLayerDefinitionsEvent;
 use sunrise_core::geometry::Direction;
 
 /// `CubeDeformation`: how far a box grows past its size on each side, in
@@ -367,8 +368,6 @@ struct PartNode {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 #[serde(try_from = "MeshDefinitionData")]
 // exhaustive: private fields; use the builder to create the tree
-#[derive(sunrise_mod_api_macros::Wire)]
-#[wire(via = String)]
 pub struct MeshDefinition {
     parts: Vec<PartNode>,
 }
@@ -499,6 +498,34 @@ impl LayerDefinition {
         let texture = [self.texture_width as f32, self.texture_height as f32];
         self.mesh.bake(0, texture)
     }
+}
+
+impl RegisterLayerDefinitionsEvent<'_> {
+    /// Register a supplier for a model layer ID such as `mymod:golem#main`.
+    /// The first valid registration of an ID wins. Malformed IDs, IDs in `minecraft`,
+    /// duplicates and registrations from a phase-refused listener never call their supplier.
+    /// An accepted supplier runs once at client startup to build the frozen definition, not
+    /// when the layer is baked or resources are reloaded. Capture owned data in the supplier.
+    pub fn register(
+        &mut self,
+        id: impl Into<String>,
+        supplier: impl Fn() -> LayerDefinition + Send + Sync + 'static,
+    ) {
+        self.layers.push(LayerDefinitionRegistration {
+            id: id.into(),
+            supplier: Box::new(supplier),
+        });
+    }
+}
+
+/// A staged layer supplier; dispatch attributes it to the registering mod.
+// no wire: registration retains executable native code.
+#[non_exhaustive]
+pub struct LayerDefinitionRegistration {
+    /// The model layer ID, validated when the layer table is frozen.
+    pub id: String,
+    /// The supplier called when assembling the frozen table.
+    pub supplier: Box<dyn Fn() -> LayerDefinition + Send + Sync>,
 }
 
 /// A corner of a baked face (`ModelPart.Vertex`): in texels in its part's

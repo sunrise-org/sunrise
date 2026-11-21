@@ -8,6 +8,8 @@ pub trait Hooks {
     /// after a resource reload. An id in vanilla's namespace, not of that form, or registered already
     /// is logged and left out; a select on a property nobody registers draws its fallback.
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "client",
         contract = "collect",
         out = "properties",
@@ -40,5 +42,5 @@ Each `when` value in the item's `minecraft:select` on `example:mode` is a string
 whose value equals the answer is drawn, else `fallback`, also when no mod answers. A resource reload keeps
 reading the mod's value. Ids are checked as for numeric properties. A select on a property no mod registers
 draws its fallback, decided once at load."##]
-    fn register_select_item_model_property();
+    fn register_select_item_model_property(properties: &mut Vec<String>);
 }

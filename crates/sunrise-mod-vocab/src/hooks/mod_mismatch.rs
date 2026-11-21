@@ -44,6 +44,7 @@ resolved at debug (self or other resolver), unresolved at warn. Only a missing m
 holds the open back; a changed version never does.
 "##]
     #[hook(
+        dispatch = "flat",
         side = "both",
         contract = "collect",
         out = "resolved",
@@ -51,5 +52,8 @@ holds the open back; a changed version never does.
         version = 2,
         neoforge = "ModMismatchEvent"
     )]
-    fn mod_mismatch();
+    fn mod_mismatch(
+        mismatches: &[mod_api::ModMismatch],
+        resolved: &mut Vec<mod_api::ModMismatchResolution>,
+    );
 }

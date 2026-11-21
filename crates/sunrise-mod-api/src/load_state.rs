@@ -181,26 +181,26 @@ pub(crate) fn set_phase(state: PhaseState) {
 #[derive(Default)]
 pub(crate) struct TestReader {
     pub registries: std::collections::BTreeMap<String, Arc<[String]>>,
-    pub tags: Arc<[(String, Arc<[String]>)]>,
+    pub tags: Option<Arc<[(String, Arc<[String]>)]>>,
 }
 #[cfg(test)]
 impl LoadReader for TestReader {
-    fn registry(&self, name: &str) -> Option<Arc<[String]>> {
-        self.registries.get(name).cloned()
+    fn registry(&self, name: &str) -> Option<&[String]> {
+        self.registries.get(name).map(AsRef::as_ref)
     }
-    fn fluid_tags(&self) -> Arc<[(String, Arc<[String]>)]> {
-        self.tags.clone()
+    fn fluid_tags(&self) -> Option<&[(String, Arc<[String]>)]> {
+        self.tags.as_deref()
     }
-    fn setting(&self, _: &str, _: &str) -> Option<String> {
+    fn setting(&self, _: &str, _: &str) -> Option<&str> {
         None
     }
 }
 #[cfg(test)]
 impl LoopReader for TestReader {
-    fn registry(&self, name: &str) -> Option<Arc<[String]>> {
-        self.registries.get(name).cloned()
+    fn registry(&self, name: &str) -> Option<&[String]> {
+        self.registries.get(name).map(AsRef::as_ref)
     }
-    fn setting(&self, _: &str, _: &str) -> Option<String> {
+    fn setting(&self, _: &str, _: &str) -> Option<&str> {
         None
     }
 }
@@ -543,15 +543,12 @@ mod tests {
                 "item".to_owned(),
                 vec!["a:b".into()].into(),
             )]),
-            tags: Arc::from([]),
+            tags: None,
         };
         with_test_packages(&["one", "two"], || {
-            let context = OwningLoop::new(LoopSide::Client, &source);
+            let context = OwningLoop::new(LoopSide::Client, &source, None);
             assert_eq!(context.side(), LoopSide::Client);
-            assert_eq!(
-                context.registry("item").as_deref(),
-                Some(&["a:b".to_owned()][..])
-            );
+            assert_eq!(context.registry("item"), Some(&["a:b".to_owned()][..]));
             assert_eq!(context.registry("block"), None);
             assert_eq!(context.setting("one", "mode"), None);
             assert_eq!(context.mods().ids().collect::<Vec<_>>(), ["one", "two"]);
@@ -559,20 +556,61 @@ mod tests {
     }
 
     #[test]
+    fn refused_component_listener_discards_only_its_appends() {
+        crate::__private::initialize().unwrap();
+
+        struct Component(&'static str, bool);
+        #[crate::__subscriptions]
+        impl Hooks for Component {
+            fn component_types(
+                &self,
+                _: &RegistrationContext,
+                event: &mut ComponentTypesEvent<'_>,
+            ) {
+                event.register(self.0.into());
+                if self.1 {
+                    check_access("level", LoadAccess::WorldOnly);
+                }
+            }
+        }
+
+        let _phase = PhaseOwner::new(ModPhase::Registration);
+        let mods = vec![
+            ModEntry::new("z_first", Box::new(Component("z_first:component", false))),
+            ModEntry::new(
+                "a_refused",
+                Box::new(Component("a_refused:component", true)),
+            ),
+            ModEntry::new("m_last", Box::new(Component("m_last:component", false))),
+        ];
+        let mut types = vec!["game:seeded".to_owned()];
+        crate::testing::with_dispatch(mods.into(), || {
+            dispatch_component_types(&RegistrationContext::new(), &mut types);
+        });
+        assert_eq!(
+            types,
+            ["game:seeded", "z_first:component", "m_last:component"]
+        );
+    }
+
+    #[test]
     fn registration_hooks_read_one_snapshot_and_refuse_bad_reads() {
         crate::__private::initialize().unwrap();
         use crate::*;
-        use std::sync::Mutex;
+        use std::{
+            path::{Path, PathBuf},
+            sync::Mutex,
+        };
 
         /// Every answer the context gives this hook, for the keys the test names.
-        fn probe(cx: &RegistrationContext) -> Vec<String> {
+        fn probe(cx: &RegistrationContext, expected_dir: &Path) -> Vec<String> {
+            let directory: Result<&Path, RegistrationReadError> = cx.instance_dir();
             let registry = |name| format!("{:?}", cx.registry(name));
             let setting = |id, key| format!("{:?}", cx.setting(id, key));
             vec![
                 format!(
                     "{:?}",
-                    cx.instance_dir()
-                        .map(|dir| dir == &crate::InstanceDirectory::Unix(vec![47, 255]))
+                    directory.map(|dir| dir.as_os_str() == expected_dir.as_os_str())
                 ),
                 registry("minecraft:item"),
                 registry("minecraft:missing"),
@@ -588,20 +626,40 @@ mod tests {
                 setting("reader", "a\\b"),
             ]
         }
-        struct Reader(Arc<Mutex<Vec<String>>>);
+        struct Reader {
+            registered: Arc<Mutex<Vec<String>>>,
+            expected_dir: PathBuf,
+        }
         #[crate::__subscriptions]
         impl Hooks for Reader {
             fn register(&self, _: &mut dyn Registrar, cx: &RegistrationContext) {
-                *self.0.lock().unwrap() = probe(cx);
+                *self.registered.lock().unwrap() = probe(cx, &self.expected_dir);
             }
             fn component_types(
                 &self,
                 cx: &RegistrationContext,
                 event: &mut ComponentTypesEvent<'_>,
             ) {
-                *event.types = probe(cx);
+                for answer in probe(cx, &self.expected_dir) {
+                    event.register(answer);
+                }
             }
         }
+
+        #[cfg(unix)]
+        let expected_dir = {
+            use std::os::unix::ffi::OsStrExt;
+            PathBuf::from(std::ffi::OsStr::from_bytes(b"/mods/\xffinstance"))
+        };
+        #[cfg(windows)]
+        let expected_dir = {
+            use std::os::windows::ffi::OsStringExt;
+            let mut units: Vec<u16> = r"C:\mods\instance".encode_utf16().collect();
+            units.push(0xd800);
+            PathBuf::from(std::ffi::OsString::from_wide(&units))
+        };
+        #[cfg(not(any(unix, windows)))]
+        let expected_dir = PathBuf::from("instance");
 
         let data = RegistrationData::new(
             BTreeMap::from([(
@@ -618,7 +676,7 @@ mod tests {
                     BTreeMap::from([("mode".to_owned(), "slow".to_owned())]),
                 ),
             ]),
-            crate::InstanceDirectory::Unix(vec![47, 255]),
+            expected_dir.clone(),
             crate::RuntimeEnvironment::new(
                 crate::Dist::Client,
                 "26.3".into(),
@@ -630,7 +688,10 @@ mod tests {
         let registered = Arc::new(Mutex::new(Vec::new()));
         let mods: Mods = vec![ModEntry::new(
             "reader",
-            Box::new(Reader(registered.clone())),
+            Box::new(Reader {
+                registered: registered.clone(),
+                expected_dir,
+            }),
         )]
         .into();
         crate::__private::install(mods.clone());

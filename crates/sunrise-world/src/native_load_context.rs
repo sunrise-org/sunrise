@@ -1,4 +1,5 @@
 //! Data-only inputs carried from an owning load boundary to native load hooks.
+use mod_api::__private::BoundItemTags;
 use std::{
     collections::{BTreeMap, HashMap},
     ffi::{OsStr, OsString},
@@ -19,10 +20,6 @@ pub enum DataLoadOrigin {
 /// borrow the same registry snapshot instead of scanning it again.
 pub struct LoadInputs {
     registries: BTreeMap<String, Arc<[String]>>,
-    /// The fluid tags a recipe load reads for its ingredients' `#tags`:
-    /// each tag id to its fluids, in the sources' order. Empty until a load
-    /// that reads recipe resources fills them.
-    fluid_tags: Arc<[(String, Arc<[String]>)]>,
     settings_root: PathBuf,
 }
 
@@ -33,18 +30,8 @@ impl LoadInputs {
                 .into_iter()
                 .map(|(name, ids)| (name, ids.into()))
                 .collect(),
-            fluid_tags: Arc::from([]),
             settings_root,
         }
-    }
-    /// The inputs with the fluid `tags` a recipe load reads
-    /// (`data/<ns>/tags/fluid`), each tag's fluids in the sources' order.
-    pub fn with_fluid_tags(mut self, tags: HashMap<String, Vec<String>>) -> Self {
-        self.fluid_tags = tags
-            .into_iter()
-            .map(|(tag, fluids)| (tag, fluids.into()))
-            .collect();
-        self
     }
 }
 
@@ -62,17 +49,11 @@ impl Snapshot {
         Self { inputs, settings }
     }
 
-    fn registry(&self, name: &str) -> Option<Arc<[String]>> {
-        self.inputs.registries.get(name).cloned()
+    fn registry(&self, name: &str) -> Option<&[String]> {
+        self.inputs.registries.get(name).map(Arc::as_ref)
     }
 
-    /// The fluid tags the inputs carry, each tag's fluids in the sources'
-    /// order; empty until a load that reads recipe resources fills them.
-    fn fluid_tags(&self) -> &Arc<[(String, Arc<[String]>)]> {
-        &self.inputs.fluid_tags
-    }
-
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
+    fn setting(&self, mod_id: &str, key: &str) -> Option<&str> {
         let mod_at = self
             .settings
             .binary_search_by(|(known, _)| known.as_str().cmp(mod_id))
@@ -81,7 +62,7 @@ impl Snapshot {
         let at = values
             .binary_search_by(|(known, _)| known.as_str().cmp(key))
             .ok()?;
-        Some(values[at].1.clone())
+        Some(values[at].1.as_str())
     }
 }
 
@@ -100,6 +81,7 @@ fn shared_settings(
 pub struct LoadContext {
     origin: DataLoadOrigin,
     snapshot: Snapshot,
+    fluid_tags: Option<Arc<[(String, Arc<[String]>)]>>,
 }
 
 impl LoadContext {
@@ -114,6 +96,7 @@ impl LoadContext {
         Self {
             origin,
             snapshot: Snapshot::capture(inputs, mod_ids),
+            fluid_tags: None,
         }
     }
 
@@ -139,10 +122,12 @@ impl LoadContext {
         Self {
             origin,
             snapshot: Snapshot { inputs, settings },
+            fluid_tags: None,
         }
     }
 
-    /// A new owning load of `origin` over this load's registry inputs, with fresh settings.
+    /// A new owning load of `origin` over this load's registry inputs, with
+    /// fresh settings and no recipe fluid tags.
     pub fn for_load<'a>(
         &self,
         origin: DataLoadOrigin,
@@ -151,33 +136,24 @@ impl LoadContext {
         Self::new(origin, self.snapshot.inputs.clone(), mod_ids)
     }
 
-    /// This load over the same registries and settings, with the fluid `tags`
-    /// its recipe pass reads (`data/<ns>/tags/fluid`): what that pass's
-    /// ingredient hooks resolve fluid `#tags` with. A recipe load builds it
-    /// where it knows its overlay; loads that read no recipe resources share
-    /// the inputs as-is, with no tags.
+    /// Attach the recipe pass's fluid tags (`data/<ns>/tags/fluid`), even if
+    /// empty, while sharing this load's existing registry and settings snapshot.
     pub fn with_fluid_tags(&self, tags: HashMap<String, Vec<String>>) -> Self {
-        let inputs = Arc::new(LoadInputs {
-            registries: self.snapshot.inputs.registries.clone(),
-            fluid_tags: tags
-                .into_iter()
-                .map(|(tag, fluids)| (tag, fluids.into()))
-                .collect(),
-            settings_root: self.snapshot.inputs.settings_root.clone(),
-        });
         Self {
             origin: self.origin,
-            snapshot: Snapshot {
-                inputs,
-                settings: self.snapshot.settings.clone(),
-            },
+            snapshot: self.snapshot.clone(),
+            fluid_tags: Some(
+                tags.into_iter()
+                    .map(|(tag, fluids)| (tag, fluids.into()))
+                    .collect(),
+            ),
         }
     }
 
-    /// The fluid tags this load's recipe pass reads: each tag id to its
-    /// fluids, in the sources' order. Empty where no recipe pass filled them.
-    pub fn fluid_tags(&self) -> &Arc<[(String, Arc<[String]>)]> {
-        self.snapshot.fluid_tags()
+    /// Borrows each recipe fluid tag's members in source order. `None` means
+    /// there is no recipe overlay; an empty overlay still returns `Some`.
+    pub fn fluid_tags(&self) -> Option<&[(String, Arc<[String]>)]> {
+        self.fluid_tags.as_deref()
     }
 
     /// Readers of this load's resource generation, with the same captured
@@ -224,12 +200,12 @@ impl LoadContext {
     }
 
     /// Names in registry ID order, from the load's registry snapshot.
-    pub fn registry(&self, name: &str) -> Option<Arc<[String]>> {
+    pub fn registry(&self, name: &str) -> Option<&[String]> {
         self.snapshot.registry(name)
     }
 
     /// A loaded mod's setting captured at this load boundary, with no file I/O.
-    pub fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
+    pub fn setting(&self, mod_id: &str, key: &str) -> Option<&str> {
         self.snapshot.setting(mod_id, key)
     }
 }
@@ -250,15 +226,24 @@ pub struct LoopContext {
     side: LoopSide,
     snapshot: Snapshot,
     recipe_properties: Arc<HashMap<String, std::collections::HashSet<String>>>,
-    item_tags: Option<Arc<item_tags::ItemTags>>,
+    item_tags: Option<Arc<BoundItemTags>>,
 }
 
-#[path = "native_load_context/item_tags.rs"]
-mod item_tags;
 #[path = "native_load_context/recipe_properties.rs"]
 mod recipe_properties;
 
 impl LoopContext {
+    /// Publish the API adapter's bound item tags at a load or synchronization boundary.
+    /// `None` marks unavailable tags. Clones retain the previous generation.
+    pub fn set_item_tags(&mut self, tags: Option<BoundItemTags>) {
+        self.item_tags = tags.map(Arc::new);
+    }
+
+    /// Borrow the published item tags when building the API view of this loop.
+    pub fn item_tags(&self) -> Option<&BoundItemTags> {
+        self.item_tags.as_deref()
+    }
+
     pub fn side(&self) -> LoopSide {
         self.side
     }
@@ -272,12 +257,12 @@ impl LoopContext {
     }
 
     /// Names in registry ID order, from the registry snapshot it was built over.
-    pub fn registry(&self, name: &str) -> Option<Arc<[String]>> {
+    pub fn registry(&self, name: &str) -> Option<&[String]> {
         self.snapshot.registry(name)
     }
 
     /// A loaded mod's setting captured when this context was built, with no file I/O.
-    pub fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
+    pub fn setting(&self, mod_id: &str, key: &str) -> Option<&str> {
         self.snapshot.setting(mod_id, key)
     }
 }
@@ -651,12 +636,12 @@ pub struct WorldgenContext {
 
 impl WorldgenContext {
     /// Names in registry ID order, from the registry snapshot it was built over.
-    pub fn registry(&self, name: &str) -> Option<Arc<[String]>> {
+    pub fn registry(&self, name: &str) -> Option<&[String]> {
         self.snapshot.registry(name)
     }
 
     /// A loaded mod's setting captured when this context was built, with no file I/O.
-    pub fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
+    pub fn setting(&self, mod_id: &str, key: &str) -> Option<&str> {
         self.snapshot.setting(mod_id, key)
     }
 }
@@ -806,14 +791,11 @@ mod tests {
         ));
         std::thread::scope(|scope| {
             scope.spawn(|| {
-                assert_eq!(
-                    worldgen.setting("reader", "value").as_deref(),
-                    Some("before")
-                );
+                assert_eq!(worldgen.setting("reader", "value"), Some("before"));
                 assert_eq!(worldgen.setting("reader", "invalid"), None);
             });
             scope.spawn(|| {
-                assert_eq!(audio.setting("reader", "value").as_deref(), Some("before"));
+                assert_eq!(audio.setting("reader", "value"), Some("before"));
                 assert_eq!(audio.setting("reader", "later-invalid"), None);
             });
         });
@@ -866,18 +848,12 @@ mod tests {
             &admitted.snapshot.settings,
             &loop_context.snapshot.settings
         ));
-        assert_eq!(
-            loop_context.setting("reader", "mode").as_deref(),
-            Some("before")
-        );
+        assert_eq!(loop_context.setting("reader", "mode"), Some("before"));
         assert_eq!(worldgen.setting("reader", "late"), None);
         let next = admitted.for_load(DataLoadOrigin::ClientPreload, ["reader"]);
-        assert_eq!(next.setting("reader", "mode").as_deref(), Some("after"));
-        assert_eq!(next.setting("reader", "late").as_deref(), Some("later key"));
-        assert_eq!(
-            loop_context.setting("reader", "mode").as_deref(),
-            Some("before")
-        );
+        assert_eq!(next.setting("reader", "mode"), Some("after"));
+        assert_eq!(next.setting("reader", "late"), Some("later key"));
+        assert_eq!(loop_context.setting("reader", "mode"), Some("before"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1119,19 +1095,19 @@ mod tests {
         // Change the files before the first lookup, not just between reads.
         fs::write(active.join("mode"), "  after\n").unwrap();
         fs::write(active.join("late"), "new key").unwrap();
-        assert_eq!(before.setting("active", "mode").as_deref(), Some("before"));
-        assert_eq!(before.setting("active", "empty").as_deref(), Some(""));
+        assert_eq!(before.setting("active", "mode"), Some("before"));
+        assert_eq!(before.setting("active", "empty"), Some(""));
         assert_eq!(before.setting("active", "invalid"), None);
         assert_eq!(before.setting("active", "late"), None);
         assert_eq!(before.setting("inactive", "mode"), None);
         assert_eq!(read_setting(&active, "mode").as_deref(), Some("after"));
 
         let after = LoadContext::new(DataLoadOrigin::ClientPreload, inputs.clone(), ["active"]);
-        assert_eq!(after.setting("active", "mode").as_deref(), Some("after"));
-        assert_eq!(after.setting("active", "late").as_deref(), Some("new key"));
+        assert_eq!(after.setting("active", "mode"), Some("after"));
+        assert_eq!(after.setting("active", "late"), Some("new key"));
         fs::remove_dir_all(&root).unwrap();
-        assert_eq!(before.setting("active", "mode").as_deref(), Some("before"));
-        assert_eq!(after.setting("active", "mode").as_deref(), Some("after"));
+        assert_eq!(before.setting("active", "mode"), Some("before"));
+        assert_eq!(after.setting("active", "mode"), Some("after"));
         let missing = LoadContext::new(DataLoadOrigin::ServerDataLoad, inputs, ["active"]);
         assert_eq!(missing.setting("active", "mode"), None);
         assert!(!root.exists());
@@ -1157,14 +1133,11 @@ mod tests {
 
         assert_eq!(client.side(), LoopSide::Client);
         assert_eq!(server.side(), LoopSide::Server);
-        assert_eq!(
-            client.registry("item").as_deref(),
-            Some(&["a:b".to_owned()][..])
-        );
+        assert_eq!(client.registry("item"), Some(&["a:b".to_owned()][..]));
         assert_eq!(server.registry("item"), client.registry("item"));
-        assert_eq!(client.setting("active", "mode").as_deref(), Some("one"));
-        assert_eq!(server.setting("active", "mode").as_deref(), Some("two"));
-        assert_eq!(load.setting("active", "mode").as_deref(), Some("one"));
+        assert_eq!(client.setting("active", "mode"), Some("one"));
+        assert_eq!(server.setting("active", "mode"), Some("two"));
+        assert_eq!(load.setting("active", "mode"), Some("one"));
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1186,13 +1159,10 @@ mod tests {
         let worldgen = load.worldgen_context(["active"]);
         fs::write(mod_dir.join("ground"), "moss").unwrap();
 
-        assert_eq!(
-            worldgen.registry("block").as_deref(),
-            Some(&["a:b".to_owned()][..])
-        );
-        assert_eq!(worldgen.setting("active", "ground").as_deref(), Some("mud"));
+        assert_eq!(worldgen.registry("block"), Some(&["a:b".to_owned()][..]));
+        assert_eq!(worldgen.setting("active", "ground"), Some("mud"));
         assert_eq!(worldgen.setting("inactive", "ground"), None);
-        assert_eq!(load.setting("active", "ground").as_deref(), Some("podzol"));
+        assert_eq!(load.setting("active", "ground"), Some("podzol"));
         fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -309,7 +309,7 @@ pub(super) fn register_anchor(
     use mod_api::{__private::game::ServerReloadListenersOrder, ServerReloadListeners};
     let generation = Arc::new(mod_api::GlobalLootModifierManager::default());
     let id = mod_api::GlobalLootModifierManager::key().id().clone();
-    let preceding = registry.get_last_vanilla_listener();
+    let preceding = registry.get_last_vanilla_listener().clone();
     registry.add_retained(
         id.clone(),
         mod_api::FileToIdConverter::json("loot_modifiers").unwrap(),
@@ -327,5 +327,33 @@ pub(super) fn bind_retained(
     use mod_api::__private::game::GlobalLootModifierManagerNew;
     if let Some(retained) = resources.listener(&mod_api::GlobalLootModifierManager::key()) {
         retained.bind_from(generation);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mod_api::{
+        __private::game::ServerReloadListenersOrder, ServerListenerRegistry, ServerReloadListeners,
+    };
+
+    #[test]
+    fn reload_views_follow_the_registered_loot_anchor() {
+        let mut listeners = ServerListenerRegistry::new();
+        let functions = Identifier::parse("minecraft:function_library").unwrap();
+        let loot = Identifier::parse("neoforge:loot_modifiers").unwrap();
+        assert_eq!(listeners.get_last_vanilla_listener(), &functions);
+
+        register_anchor(&mut listeners).unwrap();
+
+        let anchor: &Identifier = listeners.get_last_vanilla_listener();
+        assert_eq!(anchor, &loot);
+        assert!(listeners.get_registry().iter().any(|id| id == anchor));
+        assert!(
+            listeners
+                .get_graph()
+                .iter()
+                .any(|edge| edge == (&functions, anchor))
+        );
     }
 }

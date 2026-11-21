@@ -41,11 +41,5 @@ pub use crate::load_state::{
     with_test_registration_data,
 };
 
-pub use crate::equip_reads::{
-    EquipReadGuard, EquipReadSet, cached_equip_alive, cached_equip_equipment,
-    cached_equip_hand_item, cached_equip_health, cached_equip_kind, cached_equip_living,
-    cached_equip_max_health, cached_equip_position, enter_equip_reads,
-};
-
 #[doc(hidden)]
 pub use crate::parts::attachment_declarations;

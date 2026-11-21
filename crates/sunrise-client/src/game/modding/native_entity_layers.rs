@@ -14,7 +14,7 @@ use super::{
 use glam::DVec3;
 use mod_api::{
     __private::game::RegistrationContextNew, EntityLayers, EntityRenderLayer, EntityRenderer,
-    LayerTarget, PlayerModel, PosedParts, RegistrationContext,
+    FrameModel, LayerTarget, PlayerModel, RegistrationContext,
 };
 use std::{
     collections::{BTreeMap, HashMap},
@@ -178,7 +178,7 @@ impl LayerTable {
 
 impl Game<'_> {
     /// The layers the last load resolved for `mob` (a player's model's for a player), looked up
-    /// once per mob a frame: the answer both decides whether the draw keeps the mob's posed parts
+    /// once per mob a frame: the answer both decides whether the draw keeps the mob's final model
     /// and is what `mod_layer_geometry` draws. With no layer added at all it is none after one
     /// flag check, with no lock and no lookup.
     pub(in crate::game) fn mod_layers(&self, mob: &Mob) -> Option<Layers> {
@@ -207,15 +207,15 @@ impl Game<'_> {
     }
 
     /// Draws `layers` over `mob`, told as the entity `id`, each from its frame (at the feet,
-    /// turned with the body), in the order they were added; `parts` are its humanoid parts as the
-    /// vanilla draw posed them.
+    /// turned with the body), in the order they were added. Each layer borrows the same final
+    /// `model`, if this draw produced a body pose.
     #[allow(clippy::too_many_arguments)]
     pub(in crate::game) fn registered_layer_geometry(
         &self,
         mob: &Mob,
         id: u32,
         layers: &Layers,
-        parts: Option<&PosedParts>,
+        model: Option<&dyn FrameModel>,
         partial: f32,
         camera: DVec3,
         light: u32,
@@ -239,7 +239,7 @@ impl Game<'_> {
                 light,
                 None,
                 out,
-                |draw| layer.inner.submit(&entity, parts, draw),
+                |draw| layer.inner.submit(&entity, model, draw),
             );
         }
     }

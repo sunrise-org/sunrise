@@ -60,7 +60,7 @@ fn rpm_of(nbt: &Compound) -> i32 {
 fn record(host: &dyn ClientHost, event: &BlockEntityClientTickEvent<'_>) {
     assert_eq!(event.block_entity.position(host), Some(event.pos));
     // The block and its block entity type share the name here.
-    assert_eq!(event.state.block().id(host), event.entity.id());
+    assert_eq!(event.state.block().id(host), Some(event.entity.id()));
     TICK_PARTICLES
         .lock()
         .unwrap()

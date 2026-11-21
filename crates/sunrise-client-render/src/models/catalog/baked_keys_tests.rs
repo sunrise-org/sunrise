@@ -32,29 +32,29 @@ fn a_state_lists_every_weighted_alternative_and_multipart_part_once_in_bake_orde
             vec![],
         ),
     ] {
-        let mut models = catalog(definition);
-        models.states[0] = Some((0, selected));
-        assert_eq!(
-            models.state_slots(BlockStateId(0)),
-            Some(expected),
-            "{definition}"
-        );
+        let models = catalog(definition, Some(selected));
+        let slots = models.state_slots(BlockStateId(0)).unwrap();
+        assert_eq!(slots, expected.as_slice(), "{definition}");
+        assert!(std::ptr::eq(
+            slots,
+            models.state_slots(BlockStateId(0)).unwrap()
+        ));
     }
 }
 
 #[test]
 fn an_unbound_or_corrupt_selection_lists_nothing() {
-    let mut models = catalog(r#"{"variants":{"":{"model":"sunrise:a"}}}"#);
-    assert_eq!(models.state_slots(BlockStateId(1)), None, "past the table");
-    models.states[0] = None;
+    let definition = r#"{"variants":{"":{"model":"sunrise:a"}}}"#;
+    let unbound = catalog(definition, None);
+    assert_eq!(unbound.state_slots(BlockStateId(1)), None, "past the table");
     assert_eq!(
-        models.state_slots(BlockStateId(0)),
+        unbound.state_slots(BlockStateId(0)),
         None,
         "no definition binds it"
     );
-    models.states[0] = Some((0, SelectedModels::Variant(5)));
+    let corrupt = catalog(definition, Some(SelectedModels::Variant(5)));
     assert_eq!(
-        models.state_slots(BlockStateId(0)),
+        corrupt.state_slots(BlockStateId(0)),
         None,
         "a selection past its choices"
     );
@@ -65,6 +65,7 @@ fn an_unbound_or_corrupt_selection_lists_nothing() {
 fn listing_alternatives_leaves_the_seeded_selection_unchanged() {
     let models = catalog(
         r#"{"variants":{"": [{"model":"sunrise:a","weight":1},{"model":"sunrise:b","weight":3}]}}"#,
+        Some(SelectedModels::Variant(0)),
     );
     let seed = position_seed(BlockPos::new(13, 64, -7));
     let before: Vec<_> = models
@@ -73,7 +74,7 @@ fn listing_alternatives_leaves_the_seeded_selection_unchanged() {
         .into_iter()
         .map(|(variant, _)| variant.model.clone())
         .collect();
-    assert_eq!(models.state_slots(BlockStateId(0)), Some(vec![0, 1]));
+    assert_eq!(models.state_slots(BlockStateId(0)).unwrap(), &[0, 1]);
     let after: Vec<_> = models
         .collect_seeded(BlockStateId(0), seed)
         .unwrap()

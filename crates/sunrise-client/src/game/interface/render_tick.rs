@@ -1,7 +1,10 @@
 //! Per-tick client visuals: the particle engine, `ClientLevel.animateTick`,
 //! campfire smoke and rain splashes (`ClientLevel.tickWeatherEffects`).
-use super::{Dim, Game, host::draw::GameCameraDrawContext};
-use mod_api::BlockScreenEffect;
+use super::{Dim, Game, api_values::TryIntoApi, host::draw::GameCameraDrawContext};
+use mod_api::{
+    __private::{SelectedBlockScreenEffectRenderer, block_screen_effect_render},
+    BlockScreenEffect,
+};
 use sunrise_client::assets::Properties;
 use sunrise_client::camera::NearPlane;
 use sunrise_client::fog::{FogData, FogInputs, FogType, settle_rain_fog, update_rain_fog};
@@ -38,7 +41,6 @@ const BLOCK_OVERLAYS: [BlockScreenEffect; 3] = [
     BlockScreenEffect::Fire,
 ];
 /// The block overlays of `ScreenEffectRenderer` a frame shows.
-#[derive(Clone, Copy, Debug, PartialEq)]
 struct BlockScreenEffects {
     /// The view-blocking block the camera is inside, drawn with its particle texture.
     block: Option<BlockStateId>,
@@ -46,9 +48,14 @@ struct BlockScreenEffects {
     water: bool,
     /// The player burns, seen in first person.
     on_fire: bool,
-    /// The state and position of each overlay in [`BLOCK_OVERLAYS`] a mod draws itself
-    /// (`custom_draw`), shown or canceled.
-    custom: [Option<(BlockStateId, BlockPos)>; 3],
+    /// The renderer for each overlay in [`BLOCK_OVERLAYS`], shown or canceled.
+    custom: [Option<ExtractedBlockScreenEffect>; 3],
+}
+
+struct ExtractedBlockScreenEffect {
+    state: mod_api::BlockState,
+    pos: BlockPos,
+    renderer: SelectedBlockScreenEffectRenderer,
 }
 pub(super) fn player_tracking_body(player: &PlayerMotion) -> TrackingBody {
     TrackingBody {
@@ -422,8 +429,8 @@ impl Game<'_> {
             custom: [&custom[0], &custom[1], &custom[2]],
         })
     }
-    /// `block_screen_effect_draw` for each overlay in `effects` a mod draws itself: what it drew,
-    /// by [`BLOCK_OVERLAYS`]. An overlay replaced there leaves `effects`.
+    /// Submit the selected renderers in vanilla order. Keep their quads separate so each
+    /// goes immediately before its own vanilla overlay, if that overlay is still shown.
     fn custom_screen_effects(
         &self,
         effects: &mut BlockScreenEffects,
@@ -431,40 +438,39 @@ impl Game<'_> {
         hand_projection: [f32; 16],
     ) -> [Vec<ScreenQuad>; 3] {
         let mut drawn = <[Vec<ScreenQuad>; 3]>::default();
-        if effects.custom == [None; 3] {
-            return drawn;
-        }
-        let mut quads = CameraQuads::new(hand_projection);
-        for (i, effect) in BLOCK_OVERLAYS.into_iter().enumerate() {
-            let Some((state, pos)) = effects.custom[i] else {
+        for ((effect, custom), drawn) in BLOCK_OVERLAYS
+            .into_iter()
+            .zip(&effects.custom)
+            .zip(&mut drawn)
+        {
+            let Some(custom) = custom else {
                 continue;
             };
-            let mut replace_vanilla = false;
-            self.native_block_screen_effect_draw(
-                crate::game::native_hooks::BlockScreenEffectDrawCall {
+            let mut quads = CameraQuads::new(hand_projection);
+            if custom.renderer.submit(
+                self,
+                block_screen_effect_render(
                     effect,
-                    state,
-                    pos,
-                    partial_tick: partial,
-                    hide_gui: self.ui.hide_gui,
-                    draw: &mut GameCameraDrawContext::new(self, &mut quads),
-                    replace_vanilla: &mut replace_vanilla,
-                },
-            );
-            drawn[i] = quads.take();
-            if replace_vanilla {
+                    custom.state,
+                    custom.pos,
+                    partial,
+                    self.ui.hide_gui,
+                    &mut GameCameraDrawContext::new(self, &mut quads),
+                ),
+            ) {
                 match effect {
                     BlockScreenEffect::Block => effects.block = None,
                     BlockScreenEffect::Water => effects.water = false,
                     BlockScreenEffect::Fire => effects.on_fire = false,
                 }
             }
+            *drawn = quads.take();
         }
         drawn
     }
     /// The block overlays `ScreenEffectRenderer` draws this frame for player `p` with its eye
-    /// at `eye`, less those a mod canceled in `extract_block_screen_effect`, with those a mod
-    /// said it draws itself.
+    /// at `eye`, less those a mod canceled in `extract_block_screen_effect`, together with
+    /// any renderers selected during extraction.
     fn block_screen_effects(
         &self,
         p: &PlayerMotion,
@@ -479,7 +485,7 @@ impl Game<'_> {
         let spectator = self.spectator();
         let modded = mod_api::__private::listened(mod_api::HookId::ExtractBlockScreenEffect);
         let mut block = None;
-        let mut custom = [None; 3];
+        let mut custom = [None, None, None];
         if !spectator {
             // Frustum.getNearPlaneBounds, moved to the eye.
             let (near_min, near_max) = sunrise_client::camera::near_plane_bounds(
@@ -577,29 +583,33 @@ impl Game<'_> {
             custom,
         }
     }
-    /// `extract_block_screen_effect` for one overlay: false when a mod canceled it. `custom`
-    /// takes the overlay's state and position when a mod set `custom_draw`, canceled or not.
+    /// Extract one overlay's renderer independently of whether vanilla's quads are kept.
     fn screen_effect_kept(
         &self,
         effect: BlockScreenEffect,
         state: BlockStateId,
         pos: [i32; 3],
         partial_tick: f32,
-        custom: &mut Option<(BlockStateId, BlockPos)>,
+        custom: &mut Option<ExtractedBlockScreenEffect>,
     ) -> bool {
+        let Ok(state) = state.try_into_api() else {
+            return true;
+        };
         let pos = BlockPos::new(pos[0], pos[1], pos[2]);
-        let (mut canceled, mut custom_draw) = (false, false);
+        let (mut canceled, mut renderer) = (false, None);
         self.native_extract_block_screen_effect(
             effect,
             state,
             pos,
             partial_tick,
             &mut canceled,
-            &mut custom_draw,
+            &mut renderer,
         );
-        if custom_draw {
-            *custom = Some((state, pos));
-        }
+        *custom = renderer.map(|renderer| ExtractedBlockScreenEffect {
+            state,
+            pos,
+            renderer,
+        });
         !canceled
     }
     /// `Lightmap.getBrightness(getMaxLocalRawBrightness(eye))`.
@@ -1073,7 +1083,7 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BlockScreenEffects, Properties, World, splash_height};
+    use super::{Properties, World, splash_height};
     use std::sync::Arc;
     use sunrise_client::chunk::Chunk;
     use sunrise_world::registry::BlockStateId;
@@ -1130,7 +1140,7 @@ mod tests {
             fn extract_block_screen_effect(
                 &self,
                 _: &dyn ClientHost,
-                event: &mut ExtractBlockScreenEffectEvent,
+                event: &mut ExtractBlockScreenEffectEvent<'_>,
             ) -> Flow {
                 SEEN.lock().unwrap().push((
                     event.effect,
@@ -1173,25 +1183,20 @@ mod tests {
                 game.world.set(0, 65, 0, block).unwrap();
                 let p = game.player.as_ref().unwrap();
                 let eye = [0.5, 64.0 + f64::from(p.dimensions.eye_height), 0.5];
-                game.block_screen_effects(p, eye, 0.0, [854, 480], 1.0)
+                let effects = game.block_screen_effects(p, eye, 0.0, [854, 480], 1.0);
+                assert!(effects.custom.iter().all(Option::is_none));
+                (effects.block, effects.water, effects.on_fire)
             };
             let open = effects(game, air);
             let in_dirt = effects(game, dirt);
-            assert_eq!(
-                effects(game, stone),
-                BlockScreenEffects {
-                    block: Some(stone),
-                    ..open
-                },
-                "stone shows its overlay"
-            );
+            assert_eq!(effects(game, stone), (Some(stone), false, true));
             let mods: Mods = vec![ModEntry::new("screen-effect", Box::new(Mod(stone)))].into();
             mod_platform::testing::with_mods(mods, || {
                 assert_eq!(effects(game, stone), open);
                 assert_eq!(effects(game, dirt), in_dirt);
             });
-            assert_eq!(in_dirt.block, Some(dirt));
-            assert!(open.on_fire && !open.water);
+            assert_eq!(in_dirt, (Some(dirt), false, true));
+            assert_eq!(open, (None, false, true));
             let seen = SEEN.lock().unwrap();
             let feet = BlockPos::new(0, 64, 0);
             assert_eq!(

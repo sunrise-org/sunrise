@@ -424,11 +424,23 @@ pub enum Heightmap {
     MotionBlockingNoLeaves,
 }
 impl Heightmap {
-    pub fn from_name(name: &str) -> Self {
-        match name {
+    pub(super) fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
             "WORLD_SURFACE" => Self::WorldSurface,
             "OCEAN_FLOOR" => Self::OceanFloor,
             "MOTION_BLOCKING" => Self::MotionBlocking,
+            "MOTION_BLOCKING_NO_LEAVES" => Self::MotionBlockingNoLeaves,
+            _ => return None,
+        })
+    }
+}
+
+impl From<mod_api::Heightmap> for Heightmap {
+    fn from(heightmap: mod_api::Heightmap) -> Self {
+        match heightmap {
+            mod_api::Heightmap::WorldSurface => Self::WorldSurface,
+            mod_api::Heightmap::OceanFloor => Self::OceanFloor,
+            mod_api::Heightmap::MotionBlocking => Self::MotionBlocking,
             _ => Self::MotionBlockingNoLeaves,
         }
     }
@@ -1757,7 +1769,7 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
 /// `getTopNonCollidingPos`: the type's heightmap, under the ceiling in
 /// dimensions that have one, then the placement type's adjustment.
 fn top_non_colliding<L: NaturalLevel>(l: &L, entity: &str, x: i32, z: i32) -> [i32; 3] {
-    let heightmap = Heightmap::from_name(l.mob_data().heightmap(entity));
+    let heightmap = l.mob_data().heightmap(entity);
     let mut y = l.heightmap(heightmap, x, z);
     if l.has_ceiling() {
         loop {

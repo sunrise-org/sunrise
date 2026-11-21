@@ -2,7 +2,7 @@
 mod text_style_capture;
 use mod_api::text::{
     Text, TextClick, TextContent, TextFormError, TextHover, TextNbtSource, TextObject, TextProfile,
-    TextProfileProperty, TextRelation, TextStyle,
+    TextProfileProperty, TextStyle,
 };
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -92,6 +92,15 @@ enum Style<'a> {
     Native(&'a engine::Style),
     Empty,
 }
+#[derive(Clone, Copy)]
+enum CaptureEdge {
+    Child,
+    Argument,
+    Separator,
+    Fallback,
+    HoverText,
+    HoverEntityName,
+}
 struct Node<'a> {
     source: Source<'a>,
     content: Content<'a>,
@@ -99,7 +108,7 @@ struct Node<'a> {
     hover: Option<Hover<'a>>,
     hover_fields: Option<&'a Map<String, Value>>,
     fields: Option<&'a Map<String, Value>>,
-    edges: Vec<(Source<'a>, TextRelation, bool)>,
+    edges: Vec<(Source<'a>, CaptureEdge, bool)>,
     merge: bool,
 }
 
@@ -250,12 +259,12 @@ fn node(source: Source<'_>) -> Result<Node<'_>, Error> {
             node.merge = true;
             if let Some(source) = text.source_component() {
                 node.edges
-                    .push((Source::Json(source), TextRelation::Child, true));
+                    .push((Source::Json(source), CaptureEdge::Child, true));
             } else {
                 node.edges.extend(text.spans.iter().map(|span| {
                     (
                         Source::Span(span),
-                        TextRelation::Child,
+                        CaptureEdge::Child,
                         text.spans.len() == 1,
                     )
                 }));
@@ -269,7 +278,7 @@ fn node(source: Source<'_>) -> Result<Node<'_>, Error> {
                 values
                     .iter()
                     .enumerate()
-                    .map(|(i, v)| (Source::Json(v), TextRelation::Child, i == 0)),
+                    .map(|(i, v)| (Source::Json(v), CaptureEdge::Child, i == 0)),
             );
         }
         Source::Json(Value::Object(fields)) => {
@@ -282,7 +291,7 @@ fn node(source: Source<'_>) -> Result<Node<'_>, Error> {
                 node.edges.extend(
                     values
                         .iter()
-                        .map(|v| (Source::Json(v), TextRelation::Child, false)),
+                        .map(|v| (Source::Json(v), CaptureEdge::Child, false)),
                 );
             }
         }
@@ -359,22 +368,22 @@ fn node(source: Source<'_>) -> Result<Node<'_>, Error> {
         Content::Translate { arguments, .. } => node.edges.extend(
             arguments
                 .iter()
-                .map(|v| (Source::Json(v), TextRelation::Argument, false)),
+                .map(|v| (Source::Json(v), CaptureEdge::Argument, false)),
         ),
         Content::Selector { separator, .. } | Content::Nbt { separator, .. } => node.edges.extend(
             separator
                 .iter()
-                .map(|&v| (v, TextRelation::Separator, false)),
+                .map(|&v| (v, CaptureEdge::Separator, false)),
         ),
         Content::Player { fallback, .. } | Content::Atlas { fallback, .. } => node
             .edges
-            .extend(fallback.iter().map(|&v| (v, TextRelation::Fallback, false))),
+            .extend(fallback.iter().map(|&v| (v, CaptureEdge::Fallback, false))),
         _ => {}
     }
     match &node.hover {
-        Some(Hover::Text(v)) => node.edges.push((*v, TextRelation::HoverText, false)),
+        Some(Hover::Text(v)) => node.edges.push((*v, CaptureEdge::HoverText, false)),
         Some(Hover::Entity { name: Some(v), .. }) => {
-            node.edges.push((*v, TextRelation::HoverEntityName, false))
+            node.edges.push((*v, CaptureEdge::HoverEntityName, false))
         }
         _ => {}
     }
@@ -803,31 +812,30 @@ fn captured_shallow(node: &Node<'_>) -> Result<Text, Error> {
     text.style = captured_style(node)?;
     Ok(text)
 }
-fn attach(text: &mut Text, relation: TextRelation, child: Text) {
+fn attach(text: &mut Text, relation: CaptureEdge, child: Text) {
     match relation {
-        TextRelation::Child => text.children.push(child),
-        TextRelation::Argument => match &mut text.content {
+        CaptureEdge::Child => text.children.push(child),
+        CaptureEdge::Argument => match &mut text.content {
             TextContent::Translatable { arguments, .. } => arguments.push(child),
             _ => unreachable!(),
         },
-        TextRelation::Separator => match &mut text.content {
+        CaptureEdge::Separator => match &mut text.content {
             TextContent::Selector { separator, .. } | TextContent::Nbt { separator, .. } => {
                 *separator = Some(Box::new(child))
             }
             _ => unreachable!(),
         },
-        TextRelation::Fallback => match &mut text.content {
+        CaptureEdge::Fallback => match &mut text.content {
             TextContent::Object(
                 TextObject::Player { fallback, .. } | TextObject::Atlas { fallback, .. },
             ) => *fallback = Some(Box::new(child)),
             _ => unreachable!(),
         },
-        TextRelation::HoverText => text.style.hover = Some(TextHover::Text(Box::new(child))),
-        TextRelation::HoverEntityName => match &mut text.style.hover {
+        CaptureEdge::HoverText => text.style.hover = Some(TextHover::Text(Box::new(child))),
+        CaptureEdge::HoverEntityName => match &mut text.style.hover {
             Some(TextHover::Entity { name, .. }) => *name = Some(Box::new(child)),
             _ => unreachable!(),
         },
-        _ => unreachable!("component visitor supplied an unknown relation"),
     }
 }
 fn capture(root: Source<'_>) -> Result<Text, Error> {
@@ -936,7 +944,7 @@ fn api_nodes(root: &Text) -> Vec<&Text> {
         } else {
             work.push((text, true));
             let mut children = Vec::new();
-            text.visit_children(|text, _| children.push((text, false)));
+            text.visit_children(|text| children.push((text, false)));
             work.extend(children.into_iter().rev());
         }
     }
@@ -1714,7 +1722,7 @@ mod text_encoding_tests {
 #[cfg(test)]
 mod iterative_tests {
     use super::*;
-    use mod_api::text::TextForm;
+    use mod_api::wire::Writer;
     use serde_json::json;
 
     #[test]
@@ -1737,7 +1745,7 @@ mod iterative_tests {
                     }
                     let engine = text.try_into_engine(&()).unwrap();
                     let restored = engine.try_into_api().unwrap();
-                    assert_eq!(TextForm::try_from(&restored).unwrap().nodes.len(), 512);
+                    assert_eq!(api_nodes(&restored).len(), 512);
                     drop((text.clone(), restored.clone(), engine.clone()));
                     drop((text, restored, engine));
                 })
@@ -1784,13 +1792,19 @@ mod iterative_tests {
                     continue;
                 }
                 let api = engine.try_into_api().unwrap();
-                let expected = TextForm::try_from(&api).unwrap();
-                assert_eq!(expected.nodes.len(), 512);
-                assert!(matches!(&expected.nodes.last().unwrap().content, mod_api::text::TextNodeContent::Literal(s) if s == "leaf"));
+                let nodes = api_nodes(&api);
+                assert_eq!(nodes.len(), 512);
+                assert!(matches!(&nodes[0].content, TextContent::Literal(s) if s == "leaf"));
+                // Compare the full trees without calling recursive PartialEq on this small stack.
+                let mut expected = Writer::new();
+                expected.put(&api);
+                assert_eq!(expected.error(), None);
                 let emitted = api.try_into_engine(&()).unwrap();
                 let restored = emitted.try_into_api().unwrap();
-                let actual = TextForm::try_from(&restored).unwrap();
-                assert_eq!(actual, expected);
+                let mut actual = Writer::new();
+                actual.put(&restored);
+                assert_eq!(actual.error(), None);
+                assert_eq!(actual.bytes(), expected.bytes());
                 // Recursive ownership operations are not the crossing guarantee.
                 std::mem::forget((engine, api, emitted, restored));
             }
@@ -1867,13 +1881,7 @@ mod iterative_tests {
                     if depth == 513 {
                         assert!(matches!(api, Err(mod_api::text::TextFormError::TooDeep)));
                     } else {
-                        assert_eq!(
-                            TextForm::try_from(api.as_ref().unwrap())
-                                .unwrap()
-                                .nodes
-                                .len(),
-                            512
-                        );
+                        assert_eq!(api_nodes(api.as_ref().unwrap()).len(), 512);
                     }
                     std::mem::forget((text, api));
                 }

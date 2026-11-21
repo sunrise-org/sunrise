@@ -2,7 +2,7 @@
 //! calculator, effects and unbounded radius.
 #![cfg(test)]
 use crate::game::Game;
-use crate::game::native_entity_refs::tests::{bind_local_player, run_on_guest_stack, with_game};
+use crate::game::native_entity_refs::tests::{bind_local_player, run_with_game_stack, with_game};
 use mod_api::{
     EntityRef, ExplodeError, ExplosionCalculator, ExplosionDetonateEvent, ExplosionInteraction,
     ExplosionSettings, ExplosionStartEvent, Flow, HitHost, Hooks, LivingDamagePostEvent,
@@ -164,7 +164,7 @@ fn kill(source: impl Fn(&mut Game<'_>) -> u32) -> (Vec<(u32, String, i32)>, bool
 /// Asserts the source credit and damage type reported by [`kill`].
 fn kills(name: &str, source: fn(&mut Game<'_>) -> u32, expected: (i32, &'static str, bool)) {
     crate::game::in_own_process(&format!("game::native_explosions_tests::{name}"), || {
-        run_on_guest_stack(move || {
+        run_with_game_stack(move || {
             let (causing, damage_type, credited) = expected;
             assert_eq!(
                 kill(source),
@@ -279,7 +279,7 @@ fn a_players_fishing_bobber_credits_the_player() {
 #[test]
 #[ignore = "daily"]
 fn a_mob_blast_breaks_blocks_only_when_its_source_may_grief() {
-    run_on_guest_stack(|| {
+    run_with_game_stack(|| {
         for griefing in [false, true] {
             with_game(|game| {
                 floor(game);
@@ -320,7 +320,7 @@ fn a_mob_blast_breaks_blocks_only_when_its_source_may_grief() {
 #[test]
 #[ignore = "daily"]
 fn a_trigger_blast_presses_a_button_and_breaks_nothing() {
-    run_on_guest_stack(|| {
+    run_with_game_stack(|| {
         with_game(|game| {
             floor(game);
             assert!(game.run_command("setblock 6 80 4 minecraft:stone_button[face=floor]"));
@@ -350,7 +350,7 @@ fn a_trigger_blast_presses_a_button_and_breaks_nothing() {
 #[test]
 #[ignore = "daily"]
 fn a_blast_that_keeps_blocks_still_lights_fire() {
-    run_on_guest_stack(|| {
+    run_with_game_stack(|| {
         with_game(|game| {
             floor(game);
             let blast = Blast {
@@ -375,7 +375,7 @@ fn a_blast_that_keeps_blocks_still_lights_fire() {
 #[test]
 #[ignore = "daily"]
 fn an_invalid_source_explodes_nothing() {
-    run_on_guest_stack(|| {
+    run_with_game_stack(|| {
         with_game(|game| {
             floor(game);
             mob(
@@ -435,7 +435,7 @@ impl Hooks for Listener {
 /// [`Listener`] hearing it, and hands it what was heard.
 fn heard(test: impl Fn(&mut Game<'_>, &Arc<Mutex<Heard>>) + Send + Sync + 'static) {
     crate::entry::install_client_hooks();
-    run_on_guest_stack(move || {
+    run_with_game_stack(move || {
         let heard = Arc::new(Mutex::new(Heard::default()));
         let mods = vec![ModEntry::new(
             "explode-heard",

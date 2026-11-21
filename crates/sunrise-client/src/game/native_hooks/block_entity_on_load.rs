@@ -21,13 +21,14 @@ impl Game<'_> {
     }
 
     /// A replacement can inherit a ticker slot later in the current pass.
-    /// Deliver its attachment notice before taking it out for that tick.
-    pub(in crate::game) fn tick_mod_block_entity(&mut self, pos: Pos) {
+    /// Deliver its attachment notice before lending its resident row to that tick.
+    /// Returns whether the resident ticker was dispatched.
+    pub(in crate::game) fn tick_mod_block_entity(&mut self, pos: Pos) -> bool {
         if mod_api::__private::any_mod_disabled()
             && let Some(BlockEntity::Mod(entity)) = self.world.block_entities.get(&pos)
             && mod_api::__private::content_owner_disabled(entity.id())
         {
-            return;
+            return false;
         }
         if self.world.block_entities.has_pending_on_load()
             || self.world.block_entities.has_pending_data_load()
@@ -35,10 +36,10 @@ impl Game<'_> {
             let generation = self.world.block_entities.generation(&pos);
             self.fire_pending_block_entity_loads();
             if self.world.block_entities.generation(&pos) != generation {
-                return;
+                return false;
             }
         }
-        self.tick_mod_block_entity_loaded(pos);
+        self.tick_mod_block_entity_loaded(pos)
     }
 
     /// Drain attachment notices before either logical side runs block entity tickers.

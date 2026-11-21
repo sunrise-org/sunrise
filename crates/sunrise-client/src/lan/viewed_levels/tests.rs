@@ -10,8 +10,9 @@ use crate::lan::{
 };
 use crate::world::World;
 use std::sync::mpsc::Receiver;
+use sunrise_core::vanilla_bytes::Writer;
 use sunrise_protocol::{
-    buf::{Reader, Writer},
+    buf::Reader,
     ids::play::clientbound as ids,
     packets::play::Clientbound as C,
     viewed_levels::{self, Answer, CHANNEL, Level, Message},

@@ -13,11 +13,13 @@ pub trait Hooks {
     /// `event.dimension` names the opened level, not the Host's current level.
     /// Server-side.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_level_load",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "LevelEvent.Load",
         cancellable = false,
         version = 2
     )]
-    fn level_load();
+    fn level_load(dimension: &str);
 }

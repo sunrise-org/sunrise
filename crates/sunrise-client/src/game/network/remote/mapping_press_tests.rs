@@ -1,10 +1,14 @@
-//! A mod presses the vanilla gameplay mappings (`set_mapping_down`, `click_mapping`) on a server's
-//! client: the client tick's key step acts on them with its checks and sends the packets the
-//! player's own keys send.
+//! A mod presses vanilla gameplay mappings with `VanillaKeyMappingRef::set_down` and
+//! `VanillaKeyMappingRef::click`. The client tick's key step acts on them with its checks
+//! and sends the packets the player's own keys send.
 use super::super::super::Screen;
 use super::*;
+use mod_api::__private::{ModPhase, PhaseOwner};
 use mod_api::prelude::ClientInputClientHost;
-use mod_api::{ClientHost, InteractionKeyMappingTriggeredEvent, MappingError};
+use mod_api::{
+    ClientHost, InteractionKeyMappingTriggeredEvent, MappingError, VanillaKeyMappingRef,
+};
+use std::sync::OnceLock;
 
 #[path = "input_burst_tests.rs"]
 mod input_burst_tests;
@@ -14,6 +18,7 @@ struct Heard {
     packets: Arc<Mutex<Vec<String>>>,
     triggered: Arc<Mutex<Vec<Hand>>>,
     click_in_callback: Arc<std::sync::atomic::AtomicBool>,
+    attack_mapping: Arc<OnceLock<VanillaKeyMappingRef>>,
 }
 #[mod_api::__subscriptions]
 impl Hooks for Heard {
@@ -35,7 +40,7 @@ impl Hooks for Heard {
             .click_in_callback
             .swap(false, std::sync::atomic::Ordering::Relaxed)
         {
-            host.click_mapping("key.attack").unwrap();
+            self.attack_mapping.get().unwrap().click(host).unwrap();
         }
         Flow::Continue
     }
@@ -44,35 +49,49 @@ impl Hooks for Heard {
 /// A survival player on a server's client, playing with nothing open, the tick's first packets
 /// (the held slot) sent: `test` gets the game, the packets sent since and the hands triggered.
 fn with_pressing_game(test: impl FnOnce(&mut Game<'_>, &Mutex<Vec<String>>, &Mutex<Vec<Hand>>)) {
-    with_callback_game(false, test);
+    with_callback_game(false, |game, packets, triggered, _| {
+        test(game, packets, triggered);
+    });
 }
 fn with_callback_game(
     click: bool,
-    test: impl FnOnce(&mut Game<'_>, &Mutex<Vec<String>>, &Mutex<Vec<Hand>>),
+    test: impl FnOnce(
+        &mut Game<'_>,
+        &Mutex<Vec<String>>,
+        &Mutex<Vec<Hand>>,
+        Option<VanillaKeyMappingRef>,
+    ),
 ) {
     let packets = Arc::new(Mutex::new(Vec::new()));
     let triggered = Arc::new(Mutex::new(Vec::new()));
+    let attack_mapping = Arc::new(OnceLock::new());
     let mods = vec![mod_api::ModEntry::new(
         "presses",
         Box::new(Heard {
             packets: packets.clone(),
             triggered: triggered.clone(),
             click_in_callback: Arc::new(std::sync::atomic::AtomicBool::new(click)),
+            attack_mapping: attack_mapping.clone(),
         }),
     )]
     .into();
     mod_platform::testing::with_mods(mods, || {
         with_interaction_game(true, |game| {
-            let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+            let _phase = PhaseOwner::scope(ModPhase::World);
             game.set_mode_id(0);
             game.title = None;
             game.screen = Screen::Playing;
             game.remote.as_mut().unwrap().loaded_sent = true;
+            let attack = click.then(|| {
+                let attack = game.vanilla_key_mapping("key.attack").unwrap();
+                attack_mapping.set(attack).unwrap();
+                attack
+            });
             // The tick's first packet, the held slot (`MultiPlayerGameMode.tick`), then its keys.
             game.remote_send_carried();
             game.remote_handle_input();
             packets.lock().unwrap().clear();
-            test(game, &packets, &triggered);
+            test(game, &packets, &triggered, attack);
         })
     });
 }
@@ -100,9 +119,10 @@ fn stone_under_the_crosshair(game: &mut Game<'_>) {
 fn holding_use_draws_a_bow_once_and_letting_go_releases_it() {
     with_pressing_game(|game, packets, triggered| {
         game.inventory[game.selected] = Some(ItemStack::new("minecraft:bow", 1));
+        let use_mapping = game.vanilla_key_mapping("key.use").unwrap();
         game.inventory[9] = Some(ItemStack::new("minecraft:arrow", 64));
         let sequence = game.remote.as_ref().unwrap().sequence;
-        assert_eq!(game.set_mapping_down("key.use", true), Ok(()));
+        assert_eq!(use_mapping.set_down(game, true), Ok(()));
         assert!(game.right);
         assert_eq!(
             sent(packets),
@@ -123,7 +143,7 @@ fn holding_use_draws_a_bow_once_and_letting_go_releases_it() {
             Vec::<String>::new(),
             "no repeat while drawing"
         );
-        assert_eq!(game.set_mapping_down("key.use", false), Ok(()));
+        assert_eq!(use_mapping.set_down(game, false), Ok(()));
         assert!(!game.right);
         game.remote_handle_input();
         assert_eq!(sent(packets), ["minecraft:player_action"]);
@@ -139,9 +159,10 @@ fn holding_use_draws_a_bow_once_and_letting_go_releases_it() {
 #[ignore = "daily"]
 fn clicking_attack_on_a_block_starts_the_break_and_punches() {
     with_pressing_game(|game, packets, triggered| {
+        let attack_mapping = game.vanilla_key_mapping("key.attack").unwrap();
         stone_under_the_crosshair(game);
         let sequence = game.remote.as_ref().unwrap().sequence;
-        assert_eq!(game.click_mapping("key.attack"), Ok(()));
+        assert_eq!(attack_mapping.click(game), Ok(()));
         game.remote_handle_input();
         assert_eq!(
             sent(packets),
@@ -155,8 +176,8 @@ fn clicking_attack_on_a_block_starts_the_break_and_punches() {
         assert_eq!(*triggered.lock().unwrap(), [Hand::Main]);
 
         let sequence = game.remote.as_ref().unwrap().sequence;
-        assert_eq!(game.set_mapping_down("key.attack", true), Ok(()));
-        assert_eq!(game.click_mapping("key.attack"), Ok(()));
+        assert_eq!(attack_mapping.set_down(game, true), Ok(()));
+        assert_eq!(attack_mapping.click(game), Ok(()));
         game.remote_handle_input();
         // The same tick's `continueAttack(true)` digs on and punches again, as a held press does.
         assert_eq!(
@@ -170,7 +191,7 @@ fn clicking_attack_on_a_block_starts_the_break_and_punches() {
         assert_eq!(game.remote.as_ref().unwrap().sequence - sequence, 1);
         game.remote_handle_input();
         assert_eq!(sent(packets), ["minecraft:punch"], "the held key digs on");
-        assert_eq!(game.set_mapping_down("key.attack", false), Ok(()));
+        assert_eq!(attack_mapping.set_down(game, false), Ok(()));
         game.remote_handle_input();
         assert_eq!(sent(packets), ["minecraft:player_action"]);
     });
@@ -182,21 +203,22 @@ fn clicking_attack_on_a_block_starts_the_break_and_punches() {
 #[ignore = "daily"]
 fn clicking_attack_on_nothing_punches_and_waits_out_the_miss_cooldown() {
     with_pressing_game(|game, packets, _| {
+        let attack_mapping = game.vanilla_key_mapping("key.attack").unwrap();
         game.forced_hit = None;
-        assert_eq!(game.set_mapping_down("key.attack", true), Ok(()));
-        assert_eq!(game.click_mapping("key.attack"), Ok(()));
+        assert_eq!(attack_mapping.set_down(game, true), Ok(()));
+        assert_eq!(attack_mapping.click(game), Ok(()));
         game.remote_handle_input();
         assert_eq!(sent(packets), ["minecraft:punch"]);
         // 10, less the tick's own count down after `handleKeybinds`.
         assert_eq!(game.clicks.miss_time, 9);
-        assert_eq!(game.click_mapping("key.attack"), Ok(()));
+        assert_eq!(attack_mapping.click(game), Ok(()));
         game.remote_handle_input();
         assert_eq!(sent(packets), Vec::<String>::new(), "inside the cooldown");
         assert_eq!(game.clicks.miss_time, 8);
 
         game.clicks.miss_time = 0;
         game.set_mode_id(1);
-        assert_eq!(game.click_mapping("key.attack"), Ok(()));
+        assert_eq!(attack_mapping.click(game), Ok(()));
         game.remote_handle_input();
         assert_eq!(sent(packets), ["minecraft:punch"]);
         assert_eq!(game.clicks.miss_time, 0, "no cooldown in creative");
@@ -209,17 +231,18 @@ fn clicking_attack_on_nothing_punches_and_waits_out_the_miss_cooldown() {
 #[ignore = "daily"]
 fn a_screen_drops_the_clicks_and_holds_nothing() {
     with_pressing_game(|game, packets, triggered| {
+        let attack_mapping = game.vanilla_key_mapping("key.attack").unwrap();
         stone_under_the_crosshair(game);
         game.screen = Screen::Inventory;
-        assert_eq!(game.click_mapping("key.attack"), Ok(()));
-        assert_eq!(game.set_mapping_down("key.attack", true), Ok(()));
+        assert_eq!(attack_mapping.click(game), Ok(()));
+        assert_eq!(attack_mapping.set_down(game, true), Ok(()));
         assert!(!game.left);
         game.remote_handle_input();
         game.screen = Screen::Playing;
         game.remote_handle_input();
         assert_eq!(sent(packets), Vec::<String>::new());
 
-        assert_eq!(game.click_mapping("key.attack"), Ok(()));
+        assert_eq!(attack_mapping.click(game), Ok(()));
         game.screen = Screen::Inventory;
         game.remote_handle_input();
         game.screen = Screen::Playing;
@@ -229,56 +252,68 @@ fn a_screen_drops_the_clicks_and_holds_nothing() {
     });
 }
 
-/// A hotbar click selects its slot on the next tick, through the host as a mod calls it; the names
-/// are refused as the contract lists, and nothing is pressed with no player in a world.
+/// A resolved hotbar mapping selects its own slot on the next tick even after rebinding.
+/// Unknown names refuse resolution, while unavailable actions refuse the write without acting.
 #[test]
 #[ignore = "daily"]
 fn the_host_presses_by_name_and_refuses_the_others() {
     with_pressing_game(|game, packets, _| {
-        assert_eq!(
-            ClientInputClientHost::click_mapping(game, "key.hotbar.3"),
-            Ok(())
-        );
+        let hotbar = ClientInputClientHost::vanilla_key_mapping(game, "key.hotbar.3").unwrap();
+        game.settings.keys.set("key.hotbar.3", "key.keyboard.4");
+        assert_eq!(hotbar.click(game), Ok(()));
         game.remote_handle_input();
         assert_eq!(game.selected, 2);
         assert_eq!(sent(packets), Vec::<String>::new());
         // `MultiPlayerGameMode.tick` tells the server first thing in the next tick.
         game.remote_send_carried();
         assert_eq!(sent(packets), ["minecraft:set_carried_item"]);
+
+        for key in ["nope", ""] {
+            assert_eq!(
+                ClientInputClientHost::vanilla_key_mapping(game, key),
+                Err(MappingError::Unknown { key: key.into() })
+            );
+        }
+        for key in [
+            "key.screenshot",
+            "key.fullscreen",
+            "key.chat",
+            "key.spectatorHotbar",
+        ] {
+            let mapping = game.vanilla_key_mapping(key).unwrap();
+            let refused = Err(MappingError::NotGameplay { key: key.into() });
+            assert_eq!(mapping.set_down(game, true), refused);
+            assert_eq!(mapping.click(game), refused);
+        }
+        let pick = game.vanilla_key_mapping("key.pickItem").unwrap();
         assert_eq!(
-            ClientInputClientHost::click_mapping(game, "key.screenshot"),
-            Err(MappingError::NotGameplay {
-                key: "key.screenshot".into()
-            })
-        );
-        assert_eq!(
-            ClientInputClientHost::set_mapping_down(game, "nope", true),
-            Err(MappingError::Unknown { key: "nope".into() })
-        );
-        assert_eq!(
-            ClientInputClientHost::set_mapping_down(game, "key.pickItem", true),
+            pick.set_down(game, true),
             Err(MappingError::ClickOnly {
                 key: "key.pickItem".into()
             })
         );
-        assert_eq!(
-            ClientInputClientHost::click_mapping(game, "key.pickItem"),
-            Ok(())
-        );
+        assert_eq!(pick.click(game), Ok(()));
+
+        let forward = game.vanilla_key_mapping("key.forward").unwrap();
+        {
+            let _phase = PhaseOwner::scope(ModPhase::Setup);
+            assert_eq!(forward.set_down(game, true), Err(MappingError::Unavailable));
+            assert_eq!(hotbar.click(game), Err(MappingError::Unavailable));
+        }
+        assert_eq!(forward.is_down(game), Ok(false));
+        assert_eq!(game.hotbar_presses[2].count(), 0);
         game.player = None;
-        assert_eq!(
-            ClientInputClientHost::set_mapping_down(game, "key.forward", true),
-            Err(MappingError::NoWorld)
-        );
+        assert_eq!(forward.set_down(game, true), Err(MappingError::NoWorld));
+        assert_eq!(hotbar.click(game), Err(MappingError::NoWorld));
     });
 }
 
 #[test]
 #[ignore = "daily"]
 fn a_callback_click_survives_until_the_next_tick() {
-    with_callback_game(true, |game, _, triggered| {
+    with_callback_game(true, |game, _, triggered, attack| {
         stone_under_the_crosshair(game);
-        game.click_mapping("key.attack").unwrap();
+        attack.unwrap().click(game).unwrap();
         game.remote_handle_input();
         assert_eq!(triggered.lock().unwrap().len(), 1);
         // The callback's second click is not processed recursively in this tick.
@@ -297,16 +332,20 @@ fn opening_a_screen_releases_mod_holds() {
         use winit::event::MouseButton;
         use winit::keyboard::{KeyCode, ModifiersState};
 
+        let forward_mapping = game.vanilla_key_mapping("key.forward").unwrap();
+        let sneak_mapping = game.vanilla_key_mapping("key.sneak").unwrap();
+        let attack_mapping = game.vanilla_key_mapping("key.attack").unwrap();
+        let use_mapping = game.vanilla_key_mapping("key.use").unwrap();
         game.mapped_key_event(KeyCode::KeyW, true, false).unwrap();
-        assert!(game.mapping_state("key.forward").unwrap().0);
-        game.set_mapping_down("key.forward", false).unwrap();
-        assert!(!game.mapping_state("key.forward").unwrap().0);
-        game.set_mapping_down("key.forward", true).unwrap();
+        assert!(forward_mapping.is_down(game).unwrap());
+        forward_mapping.set_down(game, false).unwrap();
+        assert!(!forward_mapping.is_down(game).unwrap());
+        forward_mapping.set_down(game, true).unwrap();
         game.mapped_key_event(KeyCode::KeyW, false, false).unwrap();
-        assert!(!game.mapping_state("key.forward").unwrap().0);
-        game.set_mapping_down("key.forward", true).unwrap();
-        game.set_mapping_down("key.attack", true).unwrap();
-        game.set_mapping_down("key.use", true).unwrap();
+        assert!(!forward_mapping.is_down(game).unwrap());
+        forward_mapping.set_down(game, true).unwrap();
+        attack_mapping.set_down(game, true).unwrap();
+        use_mapping.set_down(game, true).unwrap();
         assert!(game.left && game.right);
         game.physical_buttons
             .extend([MouseButton::Left, MouseButton::Right]);
@@ -320,7 +359,7 @@ fn opening_a_screen_releases_mod_holds() {
         game.screen = Screen::Playing;
         game.build_screen();
         assert!(!game.left && !game.right);
-        assert!(!game.mapping_state("key.forward").unwrap().0);
+        assert!(!forward_mapping.is_down(game).unwrap());
 
         // ModifiersChanged can contain an unrelated change, or be the OS's only
         // report of a real release. Only the recovered sneak release takes over.
@@ -329,12 +368,12 @@ fn opening_a_screen_releases_mod_holds() {
         game.update_modifiers(ModifiersState::SHIFT | ModifiersState::ALT);
         game.mapped_key_event(KeyCode::ShiftLeft, true, false)
             .unwrap();
-        game.set_mapping_down("key.sneak", true).unwrap();
+        sneak_mapping.set_down(game, true).unwrap();
         game.update_modifiers(ModifiersState::SHIFT);
         game.heal_hold_latches();
-        assert!(game.mapping_state("key.sneak").unwrap().0);
+        assert!(sneak_mapping.is_down(game).unwrap());
         game.update_modifiers(ModifiersState::empty());
-        assert!(!game.mapping_state("key.sneak").unwrap().0);
+        assert!(!sneak_mapping.is_down(game).unwrap());
     });
 }
 

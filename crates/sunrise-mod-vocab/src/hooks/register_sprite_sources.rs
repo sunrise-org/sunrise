@@ -73,6 +73,8 @@ in. An entry whose type no mod registered fails its definition, as an unknown ty
 the log names the type and the entry's place. A `Texture` the resources lack, and `Pixels` whose length
 isn't `width * height * 4` or whose side is over 32768 pixels, are logged and skipped one by one."#]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "client",
         version = 2,
         contract = "collect",
@@ -80,5 +82,5 @@ isn't `width * height * 4` or whose side is over 32768 pixels, are logged and sk
         context = "registration",
         neoforge = "RegisterSpriteSourcesEvent"
     )]
-    fn register_sprite_sources();
+    fn register_sprite_sources(sources: &mut Vec<String>);
 }

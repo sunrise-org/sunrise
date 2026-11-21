@@ -41,7 +41,7 @@ pub const ENTITY_ITEMS: EntityCapabilityKey<dyn ResourceHandler<ItemResource>> =
     EntityCapabilityKey {
         name: "sunrise:entity_items",
         default: Some(|host, entity, ()| {
-            if !builtin_player_inventory_type(&entity.kind(host)?.id(host)) {
+            if !builtin_player_inventory_type(entity.kind(host)?.id(host)?.as_str()) {
                 if let Some(size) = backend_of(host)?.entity_container_size(entity.id()) {
                     return Some(Box::new(ContainerItems { entity, size }));
                 }
@@ -111,7 +111,7 @@ impl EntityRef {
         let table = host.capability_providers();
         let kind = table
             .provided(ProvidedBy::Entity, key.name)
-            .then(|| self.kind(host).map(|kind| kind.id(host)))
+            .then(|| self.kind(host)?.id(host))
             .flatten();
         crate::answered(
             crate::ask_providers(
@@ -263,8 +263,10 @@ impl ResourceHandler<ItemResource> for LivingEquipment {
             // `Mob.canEquip`: only what its `equippable` names for this kind,
             // one of it (`ArmorSlot.getMaxStackSize`).
             Some(slot)
-                if resource
-                    .is_some_and(|item| !equips(host, item, slot, &kind_of(host, self.entity))) =>
+                if resource.is_some_and(|item| {
+                    let name = self.entity.kind(host).and_then(|kind| kind.id(host));
+                    !equips(host, item, slot, name.as_deref().unwrap_or_default())
+                }) =>
             {
                 0
             }
@@ -297,14 +299,6 @@ impl ResourceHandler<ItemResource> for LivingEquipment {
         self.place(host, index)
             .map_or(0, |place| place.extract(host, tx, resource, amount))
     }
-}
-
-/// The entity type `entity` is (`minecraft:zombie`), empty where the handle no longer reads.
-fn kind_of(host: &dyn Host, entity: EntityRef) -> String {
-    entity
-        .kind(host)
-        .map(|kind| kind.id(host))
-        .unwrap_or_default()
 }
 
 /// The player inventory's slots, by `Inventory`'s numbers (`PlayerInventoryWrapper`).
@@ -350,9 +344,13 @@ fn fill(
     amount: u32,
     limit: u32,
 ) -> u32 {
-    let held = match place.stack(host) {
-        Some(held) if !resource.matches(&held) => return 0,
-        held => held.map_or(0, |held| held.count()),
+    let held = place.with_stack(host, |held| {
+        resource.matches_view(&held).then(|| held.count())
+    });
+    let held = match held {
+        Some(Some(count)) => count,
+        Some(None) => return 0,
+        None => 0,
     };
     match amount.min(limit.saturating_sub(held)) {
         0 => 0,
@@ -486,17 +484,22 @@ impl ResourceHandler<ItemResource> for PlayerItems {
             .filter_map(|index| self.slot(index));
         let mut went = 0;
         for place in same {
-            if went < amount
-                && place
-                    .stack(host)
-                    .is_some_and(|held| resource.matches(&held))
-            {
-                went += fill(host, tx, &place, resource, amount - went, limit);
+            if went >= amount {
+                break;
+            }
+            if let Some(Some(count)) = place.with_stack(host, |held| {
+                resource.matches_view(&held).then(|| held.count())
+            }) {
+                let room = (amount - went).min(limit.saturating_sub(count));
+                went += place.insert(host, tx, resource, room);
             }
         }
         for place in (0..MAIN).filter_map(|index| self.slot(index)) {
-            if went < amount && place.stack(host).is_none() {
-                went += fill(host, tx, &place, resource, amount - went, limit);
+            if went >= amount {
+                break;
+            }
+            if place.with_stack(host, |_| ()).is_none() {
+                went += place.insert(host, tx, resource, (amount - went).min(limit));
             }
         }
         Ok(went)

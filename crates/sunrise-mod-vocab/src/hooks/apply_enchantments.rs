@@ -16,6 +16,8 @@ pub trait Hooks {
     /// contract beyond the method's name and parameters is Sunrise's reading, not checked
     /// against NeoForge's.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         scope = "item",
@@ -23,5 +25,9 @@ pub trait Hooks {
         host = "read",
         neoforge = "IItemExtension.applyEnchantments"
     )]
-    fn apply_enchantments();
+    fn apply_enchantments(
+        stack: &ItemStack,
+        enchantments: &[(std::sync::Arc<str>, u32)],
+        result: &mut ItemStack,
+    );
 }

@@ -71,9 +71,9 @@ pub fn block_hook_inert(hook: HookId, state: BlockState) -> bool {
         .is_some()
 }
 
-/// Resolve a listener's owner once at load, for dispatch through [`mod_index_on`].
+/// Resolve a listener's owner by id, for dispatch through [`mod_index_on`].
 pub fn mod_index(id: &str) -> Option<usize> {
-    crate::mods().iter().position(|entry| entry.id == id)
+    crate::runtime::installed()?.by_id.get(id).copied()
 }
 
 /// Whether a resolved listener's owner is currently enabled.
@@ -162,14 +162,46 @@ pub fn installed_code_ids() -> impl Iterator<Item = &'static str> {
 
 /// What the installed code mod `id` carries that a joining client must have, as the end of a
 /// sentence about the mod: its first subscription to a client-side hook, its first part that
-/// subscribes to one, a synced attachment, or a required payload channel sent to clients. The engine refuses
-/// a `side = "server"` mod that has one. Read once the parts are installed.
+/// subscribes to one, a required client menu screen, a synced attachment, or a required
+/// payload channel sent to clients. The engine refuses a `side = "server"` mod that has one. Read once the parts are installed.
 pub fn client_requirement(id: &str) -> Option<String> {
     let mine = || crate::mods().iter().filter(|entry| entry.id == id);
     if let Some(hook) = mine().find_map(|entry| entry.client_hook()) {
         return Some(format!("listens to the client hook {hook}"));
     }
     let installed = crate::parts::installed()?;
+    if let Some(index) = mod_index(id)
+        && installed
+            .menu_screen_factories
+            .values()
+            .any(|rows| rows.contains_key(&index))
+    {
+        return Some("registers a client menu screen factory".into());
+    }
+    if installed
+        .menu_recipe_books
+        .values()
+        .any(|book| book.owner == id)
+    {
+        return Some("binds a recipe book that requires a client menu screen".into());
+    }
+    if installed.menu_slot_exclusions.iter().any(|(menu, scopes)| {
+        scopes.iter().any(|(opener, slots)| {
+            if slots.is_empty() {
+                return false;
+            }
+            let scope = if menu.starts_with("minecraft:") {
+                opener
+            } else {
+                menu
+            };
+            scope
+                .split_once(':')
+                .is_some_and(|(namespace, _)| crate::parts::owns_namespace(id, namespace))
+        })
+    }) {
+        return Some("excludes menu slots that require a client menu screen".into());
+    }
     if let Some((part, hook)) = installed.client_part(id) {
         return Some(format!(
             "attaches the part {part}, which listens to the client hook {hook}"
@@ -242,21 +274,9 @@ pub mod built {
     pub fn model_ref(generation: u64, slot: u32) -> crate::ModelRef {
         crate::ModelRef(generation, slot)
     }
-    /// An empty baked model copy the game fills field by field.
-    pub fn baked_model_view() -> crate::BakedModelView {
-        crate::BakedModelView {
-            ambient_occlusion: true,
-            particle: None,
-            quads: Vec::new(),
-        }
-    }
     /// What a mod may still create of its dynamic textures: `images` and `bytes` of pixels left.
     pub fn dynamic_texture_budget(images: u32, bytes: u64) -> crate::DynamicTextureBudget {
         crate::DynamicTextureBudget { images, bytes }
-    }
-    /// Wrap a slot of the baked model store's published generation.
-    pub fn baked_model_key(generation: u64, slot: u32) -> crate::BakedModelKey {
-        crate::BakedModelKey(generation, slot)
     }
     /// Wrap a slot in the pipeline set's published generation.
     pub fn render_pipeline_ref(generation: u64, slot: u32) -> crate::RenderPipelineRef {

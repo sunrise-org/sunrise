@@ -1,26 +1,52 @@
 //! Immutable block metadata and registry facts (`host.block_states()`).
 //! Queries consume owned API block states, never world numeric IDs. Both sides read the
-//! game's published tables; definitions are copied out and property values are borrowed.
+//! game's published tables and borrow their property definitions.
 use crate::{
-    BlockKey, BlockMetadata, BlockSoundType, BlockState, BlockStateError, BlockStateRange,
-    BlockStateRecord, Host, LevelReadError, host::block_states::BlockStatesBackend,
+    BlockKey, BlockMetadata, BlockSoundType, BlockState, BlockStateError, BlockStateRange, Host,
+    LevelReadError, host::block_states::BlockStatesBackend,
 };
 
-/// One property and its legal values in a state definition.
-#[derive(Clone, Debug, PartialEq, Eq)]
+// no wire: borrows a name and values from the host's state definition.
+/// One property and its legal values in a state definition. Copying the view does not copy
+/// the name or values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct StateProperty {
-    /// Property name.
-    pub name: String,
-    /// Legal serialized values.
-    pub values: Vec<String>,
+pub struct StateProperty<'a> {
+    /// Property name as serialized.
+    pub name: &'a str,
+    /// Legal serialized values in definition order.
+    pub values: &'a [String],
 }
 
-impl StateProperty {
-    /// Construct a definition entry from a property name and legal values.
-    pub fn new(name: String, values: Vec<String>) -> Self {
-        Self { name, values }
+// no wire: borrows the host's resident property definitions.
+/// A borrowed view of the properties of a block or world fluid, in property-name order.
+// exhaustive: its field is private
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StateProperties<'a>(&'a [(String, Vec<String>)]);
+
+impl<'a> StateProperties<'a> {
+    /// Lend the game's ordered property slice.
+    // hidden: the engine lends its resident definitions; mods obtain the view from the metadata service.
+    #[doc(hidden)]
+    pub fn of(properties: &'a [(String, Vec<String>)]) -> Self {
+        Self(properties)
+    }
+
+    /// Read each property in definition order without copying its name or values.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = StateProperty<'a>> + use<'a> {
+        self.0
+            .iter()
+            .map(|(name, values)| StateProperty { name, values })
+    }
+
+    /// The number of properties.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether this definition has no properties.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -131,6 +157,13 @@ impl<'a> BlockStates<'a> {
     pub fn backend(&self) -> &'a dyn BlockStatesBackend {
         self.backend
     }
+
+    /// Borrow the block's property names and legal values from the host's tables. An unknown
+    /// block or unavailable tables return `None`; a known block without properties returns an
+    /// empty view.
+    pub fn definition(&self, block: crate::BlockKey) -> Option<StateProperties<'a>> {
+        self.backend.block_state_definition(block)
+    }
 }
 
 /// The reads of a level view with no block tables: the one place that says what such a view answers,
@@ -138,19 +171,19 @@ impl<'a> BlockStates<'a> {
 struct NoBlockTables;
 
 impl BlockStatesBackend for NoBlockTables {
-    fn block_weathering_age(&self, _: BlockStateRecord) -> Option<WeatheringAge> {
+    fn block_weathering_age(&self, _: BlockState) -> Option<WeatheringAge> {
         None
     }
-    fn block_next_weathering_stage(&self, _: BlockStateRecord) -> Option<BlockState> {
+    fn block_next_weathering_stage(&self, _: BlockState) -> Option<BlockState> {
         None
     }
-    fn block_previous_weathering_stage(&self, _: BlockStateRecord) -> Option<BlockState> {
+    fn block_previous_weathering_stage(&self, _: BlockState) -> Option<BlockState> {
         None
     }
-    fn block_state_waxed(&self, _: BlockStateRecord) -> Option<BlockState> {
+    fn block_state_waxed(&self, _: BlockState) -> Option<BlockState> {
         None
     }
-    fn block_state_unwaxed(&self, _: BlockStateRecord) -> Option<BlockState> {
+    fn block_state_unwaxed(&self, _: BlockState) -> Option<BlockState> {
         None
     }
     fn block_metadata_name(&self, _: BlockKey) -> Result<&str, BlockStateError> {
@@ -158,24 +191,24 @@ impl BlockStatesBackend for NoBlockTables {
     }
     fn block_metadata_property(
         &self,
-        _: BlockStateRecord,
+        _: BlockState,
         _: &str,
     ) -> Result<Option<&str>, BlockStateError> {
         Err(BlockStateError::Unavailable)
     }
     fn block_metadata_with(
         &self,
-        _: BlockStateRecord,
+        _: BlockState,
         _: &str,
         _: &str,
-    ) -> Result<BlockStateRecord, BlockStateError> {
+    ) -> Result<BlockState, BlockStateError> {
         Err(BlockStateError::Unavailable)
     }
     fn block_metadata_of(
         &self,
         _: BlockKey,
         _: &[StateConstraint],
-    ) -> Result<BlockStateRecord, BlockStateError> {
+    ) -> Result<BlockState, BlockStateError> {
         Err(BlockStateError::Unavailable)
     }
     fn block_state_replaceable(&self, _: BlockState) -> Option<bool> {
@@ -231,7 +264,7 @@ impl BlockStatesBackend for NoBlockTables {
     fn block_states_of(&self, _: BlockKey) -> Option<BlockStateRange> {
         None
     }
-    fn block_state_definition(&self, _: BlockKey) -> Option<Vec<StateProperty>> {
+    fn block_state_definition(&self, _: BlockKey) -> Option<StateProperties<'_>> {
         None
     }
     fn block_state_matches(
@@ -242,13 +275,13 @@ impl BlockStatesBackend for NoBlockTables {
     ) -> Option<Result<bool, StateMatchError>> {
         None
     }
-    fn fluid_state_definition(&self, _: crate::FluidKey) -> Option<crate::FluidDefinition> {
+    fn fluid_state_definition(&self, _: crate::FluidKey) -> Option<crate::FluidDefinition<'_>> {
         None
     }
     fn fluid_type_properties(&self, _: crate::FluidKey) -> Option<crate::FluidTypeProperties> {
         None
     }
-    fn fluid_legacy_block(&self, _: crate::FluidState) -> Option<crate::BlockStateId> {
+    fn fluid_legacy_block(&self, _: crate::FluidState) -> Option<BlockState> {
         None
     }
     fn fluid_state_validate(
@@ -264,26 +297,22 @@ impl BlockMetadata for BlockStates<'_> {
     fn name(&self, block: BlockKey) -> Result<&str, BlockStateError> {
         self.backend.block_metadata_name(block)
     }
-    fn property(
-        &self,
-        state: BlockStateRecord,
-        name: &str,
-    ) -> Result<Option<&str>, BlockStateError> {
+    fn property(&self, state: BlockState, name: &str) -> Result<Option<&str>, BlockStateError> {
         self.backend.block_metadata_property(state, name)
     }
     fn with(
         &self,
-        state: BlockStateRecord,
+        state: BlockState,
         name: &str,
         value: &str,
-    ) -> Result<BlockStateRecord, BlockStateError> {
+    ) -> Result<BlockState, BlockStateError> {
         self.backend.block_metadata_with(state, name, value)
     }
     fn of(
         &self,
         block: BlockKey,
         properties: &[StateConstraint],
-    ) -> Result<BlockStateRecord, BlockStateError> {
+    ) -> Result<BlockState, BlockStateError> {
         self.backend.block_metadata_of(block, properties)
     }
 }
@@ -293,36 +322,35 @@ impl BlockStates<'_> {
     /// doesn't implement weathering, including waxed copper; ask `unwaxed`
     /// first to get the age of a waxed block's underlying stage.
     pub fn weathering_age(&self, state: BlockState) -> Option<WeatheringAge> {
-        self.backend.block_weathering_age((&state).into())
+        self.backend.block_weathering_age(state)
     }
 
     /// `WeatheringCopper.getNext`: the next weathering stage, retaining
     /// compatible state properties. None if no such stage or state exists.
     /// Reads the host's loaded oxidation maps before the vanilla chain.
     pub fn next_weathering_stage(&self, state: BlockState) -> Option<BlockState> {
-        self.backend.block_next_weathering_stage((&state).into())
+        self.backend.block_next_weathering_stage(state)
     }
 
     /// `WeatheringCopper.getPrevious`: the previous weathering stage,
     /// retaining compatible state properties. None if no such stage or state
     /// exists. Reads the host's loaded oxidation maps before the vanilla chain.
     pub fn previous_weathering_stage(&self, state: BlockState) -> Option<BlockState> {
-        self.backend
-            .block_previous_weathering_stage((&state).into())
+        self.backend.block_previous_weathering_stage(state)
     }
 
     /// `HoneycombItem.getWaxed`: the waxed counterpart, retaining compatible
     /// state properties. None if the state does not have one or is unknown.
     /// Reads the host's loaded waxables map before vanilla's.
     pub fn waxed(&self, state: BlockState) -> Option<BlockState> {
-        self.backend.block_state_waxed((&state).into())
+        self.backend.block_state_waxed(state)
     }
 
     /// `HoneycombItem.WAX_OFF_BY_BLOCK`: the unwaxed counterpart, retaining
     /// compatible state properties. None if the state does not have one or
     /// is unknown. Reads the host's loaded waxables map before vanilla's.
     pub fn unwaxed(&self, state: BlockState) -> Option<BlockState> {
-        self.backend.block_state_unwaxed((&state).into())
+        self.backend.block_state_unwaxed(state)
     }
 
     /// `BlockState.canBeReplaced()`: whether placing a block where `state` stands replaces it
@@ -418,11 +446,6 @@ impl BlockStates<'_> {
     pub fn is_redstone_conductor(&self, state: BlockState) -> Option<bool> {
         self.backend.block_state_is_redstone_conductor(state)
     }
-    /// The block's property names and legal serialized values. None without resolved tables.
-    pub fn definition(&self, block: crate::BlockKey) -> Option<Vec<StateProperty>> {
-        self.backend.block_state_definition(block)
-    }
-
     /// Match a state against a block and partial property constraints. Unknown properties and
     /// values are errors even when the state belongs to a different block. None means the
     /// owning thread has no resolved tables or the state is unknown.
@@ -447,6 +470,16 @@ impl BlockStates<'_> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn state_property_can_be_copied_from_a_shared_reference() {
+        let table = [("powered".to_owned(), vec!["false".into(), "true".into()])];
+        let property = StateProperties::of(&table).iter().next().unwrap();
+        let borrowed = &property;
+        let copied = *borrowed;
+        assert_eq!(copied.name, "powered");
+        assert_eq!(copied.values, ["false", "true"]);
+    }
+
     /// A mod's test double: a host with no game behind it.
     struct Double;
     impl Host for Double {}
@@ -455,7 +488,7 @@ mod tests {
     #[test]
     fn a_host_without_a_game_answers_none() {
         let facts = Double.block_states();
-        let state: BlockState = BlockStateRecord::new(crate::BlockKey(0), 0).into();
+        let state: BlockState = crate::__private::block_state_from_ordinal(crate::BlockKey(0), 0);
         assert_eq!(facts.replaceable(state), None);
         assert_eq!(facts.destroy_speed(state), None);
         assert_eq!(
@@ -467,5 +500,6 @@ mod tests {
         assert_eq!(facts.map_color(state), None);
         assert_eq!(facts.map_color_rgba(6), None);
         assert_eq!(facts.states_of(crate::BlockKey(0)), None);
+        assert_eq!(facts.definition(crate::BlockKey(0)), None);
     }
 }

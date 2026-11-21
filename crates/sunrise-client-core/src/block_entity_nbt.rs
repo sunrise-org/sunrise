@@ -853,19 +853,25 @@ fn is_record(item: &Compound) -> bool {
 /// form (including the detail Sunrise does not model, such as styled text), what it
 /// changed takes the current value, and keys Sunrise never models stay. The outer
 /// table follows the live writer; unchanged values keep their original tables.
-pub fn overlay(original: &Tag, loaded: &Tag, current: &Tag) -> Tag {
+/// A slotless mod's `Items` field is payload, not inventory: the current value
+/// (or its absence) is authoritative, including the order of any list it holds.
+pub fn overlay(original: &Tag, loaded: &Tag, current: &Tag, items_are_payload: bool) -> Tag {
     match (original, loaded, current) {
         (Tag::Compound(o), Tag::Compound(l), Tag::Compound(c)) => {
+            let payload_key = items_are_payload.then(|| "Items".into());
             let mut out = c.clone();
             out.for_each_mut(|key, value| {
-                if let (Some(ov), Some(lv)) = (o.get(key), l.get(key)) {
+                if payload_key.as_ref() != Some(key)
+                    && let (Some(ov), Some(lv)) = (o.get(key), l.get(key))
+                {
                     *value = overlay_value(ov, lv, value);
                 }
             });
             // Keys the game never models (or models only when present) survive;
             // keys it removed are gone.
             for (key, ov) in o {
-                if !c.contains_key(key) && !l.contains_key(key) {
+                if payload_key.as_ref() != Some(key) && !c.contains_key(key) && !l.contains_key(key)
+                {
                     out.insert(key.clone(), ov.clone());
                 }
             }
@@ -881,7 +887,7 @@ fn overlay_value(original: &Tag, loaded: &Tag, current: &Tag) -> Tag {
     }
     match (original, loaded, current) {
         (Tag::Compound(_), Tag::Compound(_), Tag::Compound(_)) => {
-            overlay(original, loaded, current)
+            overlay(original, loaded, current, false)
         }
         (Tag::List(o), Tag::List(l), Tag::List(c)) if keyed_by_slot(c) && keyed_by_slot(l) => {
             let slot = |t: &Tag| int(t.get("Slot"));
@@ -1113,7 +1119,7 @@ mod tests {
             "{id:\"minecraft:sign\",front_text:{messages:[\"a\",\"\",\"\",\"\"]},\
              back_text:{messages:[\"y\",\"\",\"\",\"\"]}}",
         );
-        let merged = overlay(&original, &loaded, &current);
+        let merged = overlay(&original, &loaded, &current, false);
         assert_eq!(merged.get("front_text"), original.get("front_text"));
         assert_eq!(merged.get("back_text"), current.get("back_text"));
         assert_eq!(merged.get("extra"), original.get("extra"));
@@ -1135,7 +1141,7 @@ mod tests {
         )]);
         let loaded = Tag::compound([("Items", Tag::List(vec![item(0, 1, ""), item(1, 1, "")]))]);
         let current = Tag::compound([("Items", Tag::List(vec![item(0, 1, ""), item(1, 5, "")]))]);
-        let merged = overlay(&original, &loaded, &current);
+        let merged = overlay(&original, &loaded, &current, false);
         let Some(Tag::List(items)) = merged.get("Items") else {
             panic!("items")
         };

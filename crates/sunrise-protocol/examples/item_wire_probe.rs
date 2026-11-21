@@ -10,8 +10,9 @@
 //!     cargo run -p sunrise-protocol --example item_wire_probe -- vanilla.jsonl rust.jsonl
 use serde_json::{Value, json};
 use std::io::Write;
+use sunrise_core::vanilla_bytes::Writer;
 use sunrise_protocol::{
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Reader},
     item::{Component, Slot},
 };
 

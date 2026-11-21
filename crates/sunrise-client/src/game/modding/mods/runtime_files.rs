@@ -1,21 +1,23 @@
 //! Each package's runtime data files, checked against their `[runtime]` hashes once when the
 //! package opens and handed to registration, which serves them to the mod that owns them.
 use super::ModsState;
-use std::{collections::BTreeMap, sync::Arc};
+use mod_api::RuntimePathError;
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 use sunrise_mod_package::manifest::RuntimeData;
 
 /// One package's checked files, as the mod API's source of them.
 struct PackageRuntime(RuntimeData);
 
 impl mod_api::RuntimeFileSource for PackageRuntime {
-    fn names(&self) -> Vec<String> {
-        self.0.names().map(str::to_owned).collect()
+    fn names(&self) -> &[String] {
+        self.0.names()
     }
-    fn file(&self, name: &str) -> Option<Vec<u8>> {
-        self.0.file(name).map(|bytes| bytes.to_vec())
+    fn file(&self, name: &str) -> Option<&[u8]> {
+        self.0.file(name).map(|(bytes, _)| bytes)
     }
-    fn path(&self, name: &str) -> Option<mod_api::InstanceDirectory> {
-        mod_api::InstanceDirectory::from_path(&self.0.path(name)?)
+    fn path(&self, name: &str) -> Result<&Path, RuntimePathError> {
+        let (_, path) = self.0.file(name).ok_or(RuntimePathError::NotListed)?;
+        path.ok_or(RuntimePathError::NotAFolder)
     }
 }
 
@@ -87,9 +89,43 @@ mod tests {
             .path()
             .join(std::ffi::OsStr::from_bytes(b"ruby-\xff\x80"));
         let source = PackageRuntime(open_package(&folder));
-        let path = source.path("nav.bin").unwrap().to_path_buf().unwrap();
-        assert_eq!(path, folder.join("runtime/nav.bin"));
+        let path = source.path("nav.bin").unwrap();
+        assert_eq!(path.as_os_str(), folder.join("runtime/nav.bin").as_os_str());
         assert_eq!(std::fs::read(path).unwrap(), BYTES);
+    }
+
+    #[test]
+    fn a_live_path_does_not_replace_the_verified_bytes() {
+        use mod_api::RuntimeFileSource as _;
+        let folder = tempfile::tempdir().unwrap();
+        let runtime = open_package(folder.path());
+        let source = PackageRuntime(runtime.clone());
+        let path = source.path("nav.bin").unwrap();
+        let (verified, stored_path) = runtime.file("nav.bin").unwrap();
+        assert!(std::ptr::eq(path, stored_path.unwrap()));
+        assert!(std::ptr::eq(source.names(), runtime.names()));
+        assert!(std::ptr::eq(source.file("nav.bin").unwrap(), verified));
+
+        std::fs::write(path, b"edited after opening").unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"edited after opening");
+        assert_eq!(source.file("nav.bin"), Some(BYTES));
+    }
+
+    #[test]
+    fn runtime_paths_distinguish_unlisted_and_archived_files() {
+        use mod_api::RuntimeFileSource as _;
+        let folder = tempfile::tempdir().unwrap();
+        let package = folder.path().join("package");
+        let source = PackageRuntime(open_package(&package));
+        let archive = folder.path().join("package.smod");
+        std::fs::write(&archive, Package::pack_directory(&package).unwrap()).unwrap();
+        let packaged = Package::read(&archive).unwrap();
+        let archived = PackageRuntime(packaged.read_runtime(&archive).unwrap().unwrap());
+
+        assert_eq!(source.path("other.bin"), Err(RuntimePathError::NotListed));
+        assert_eq!(archived.path("other.bin"), Err(RuntimePathError::NotListed));
+        assert_eq!(archived.path("nav.bin"), Err(RuntimePathError::NotAFolder));
+        assert_eq!(archived.file("nav.bin"), Some(BYTES));
     }
 
     /// What each mod's registration saw of its runtime files.

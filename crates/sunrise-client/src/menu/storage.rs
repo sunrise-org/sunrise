@@ -79,7 +79,6 @@ impl Menu {
 
     pub(super) fn touch(&mut self) {
         self.stamp.advance();
-        self.state.slot_snapshot.clear();
     }
 
     /// Commit a staged edit into this same menu; do not install the private
@@ -101,8 +100,6 @@ pub struct State {
     pub(super) registry_id: Option<Box<str>>,
     /// The block whose menu this is, for `menu_slot_rules`; None with no block.
     pub(super) block_pos: Option<[i32; 3]>,
-    /// The parts' copy of the slots for this click plan; emptied by every mutation.
-    pub(super) slot_snapshot: super::SlotSnapshot,
     pub(super) slots: Vec<Slot>,
     pub(super) containers: [Vec<Option<ItemStack>>; 4],
     pub(super) grid_size: usize,
@@ -195,13 +192,12 @@ pub struct State {
     pub anvil_hook: bool,
     /// The anvil result taken while `anvil_hook` is set, as it was before
     /// crafting.
-    pub anvil_craft: Option<AnvilCraft>,
-    /// The caller fires `GrindstoneEvent.OnTakeItem` for a taken grindstone
-    /// result: its `onTake` waits in `grind_take` for `grindstone_taken`.
+    pub anvil_craft: Option<AnvilCraftSnapshot>,
+    /// Defer a grindstone result's `onTake` to the caller, which can dispatch
+    /// `GrindstoneEvent.OnTakeItem` before applying the experience and replacements.
     pub grind_hook: bool,
-    /// The grindstone result taken while `grind_hook` is set, with its
-    /// inputs as they were.
-    pub grind_take: Option<GrindstoneTake>,
+    /// The pre-take inputs and initial experience for a deferred `onTake`.
+    pub grind_take: Option<PendingGrindstoneTake>,
     /// `GrindstoneEvent.OnPlaceItem`'s experience for the result now in the
     /// slot, or -1 for vanilla's.
     pub(super) grind_xp: i32,

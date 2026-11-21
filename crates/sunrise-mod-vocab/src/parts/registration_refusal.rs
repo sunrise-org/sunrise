@@ -1,5 +1,8 @@
 // exports: none (reached inside the crate only)
 //! Registration refusals and bounded loading messages.
+use std::sync::{Arc, Mutex};
+
+use crate::RegistrationContext;
 
 /// Why a native declaration was not accepted.
 #[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
@@ -95,9 +98,7 @@ pub enum DeclarationKind {
 }
 
 /// The most loading warnings one mod keeps; later ones are dropped.
-// hidden: registration contexts enforce the cap.
-#[doc(hidden)]
-pub const MAX_LOADING_WARNINGS: usize = 16;
+const MAX_LOADING_WARNINGS: usize = 16;
 
 /// A loading message as a translation key and its arguments, resolved against the
 /// selected language when the game shows it (NeoForge's `ModLoadingIssue`).
@@ -130,7 +131,7 @@ impl LoadingMessage {
 }
 
 /// `text` cut to at most 4096 UTF-8 bytes, at a character boundary.
-pub(crate) fn bounded_text(text: &str) -> &str {
+fn bounded_text(text: &str) -> &str {
     let mut end = text.len().min(4096);
     while !text.is_char_boundary(end) {
         end -= 1;
@@ -138,11 +139,63 @@ pub(crate) fn bounded_text(text: &str) -> &str {
     &text[..end]
 }
 
-/// Drains the context's warnings after the registration callback.
-// hidden: the loader collects warnings before installing Parts.
+/// One mod's diagnostic record, owned by the native registrar and written through its context.
+// no wire: the native registrar retains this record for admission and warning publication.
+// hidden: engine registration plumbing, not a mod authoring surface.
 #[doc(hidden)]
-pub fn take_registration_warnings(cx: &crate::RegistrationContext) -> Vec<LoadingMessage> {
-    std::mem::take(&mut *cx.warnings.lock().unwrap_or_else(|p| p.into_inner()))
+#[derive(Default)]
+#[non_exhaustive]
+pub struct RegistrationDiagnostics {
+    /// The first reason the mod gave for refusing its own registration, if any.
+    pub refusal: Option<String>,
+    /// Warnings recorded in call order up to the per-mod limit.
+    pub warnings: Vec<LoadingMessage>,
+}
+
+/// Lend the native registrar's sink to this mod's `Hooks::register` callback.
+// hidden: other registration hooks only receive the read view.
+#[doc(hidden)]
+pub fn registration_context_with_diagnostics(
+    diagnostics: Arc<Mutex<RegistrationDiagnostics>>,
+) -> RegistrationContext {
+    RegistrationContext {
+        diagnostics: Some(diagnostics),
+        ..RegistrationContext::new()
+    }
+}
+
+impl RegistrationContext {
+    /// In [`Hooks::register`](crate::Hooks::register), refuse this mod's registration without
+    /// panicking. The first reason wins, even if empty. Reasons over 4096 UTF-8 bytes are
+    /// truncated at a character boundary; shorter reasons are preserved verbatim.
+    /// All this mod's declarations from the callback are discarded, including later
+    /// declarations, without adding their validation errors to the report. Other mods'
+    /// declarations are unchanged. Return from the callback after calling this method.
+    /// This method has no effect in other hooks.
+    pub fn refuse(&self, reason: &str) {
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .refusal
+                .get_or_insert_with(|| bounded_text(reason).to_owned());
+        }
+    }
+
+    /// In [`Hooks::register`](crate::Hooks::register), record a loading problem without
+    /// refusing this mod. `key` is a translation key in the mod's own `lang/` files and
+    /// `args` its `%s` arguments. The log names the key and arguments; the Mods screen
+    /// shows the first warning in the player's language. The first 16 warnings are kept,
+    /// with each key and argument cut as [`refuse`](Self::refuse) cuts its reason.
+    /// This method has no effect in other hooks.
+    pub fn warn(&self, key: &str, args: &[&str]) {
+        if let Some(diagnostics) = &self.diagnostics {
+            let mut diagnostics = diagnostics.lock().unwrap_or_else(|p| p.into_inner());
+            if diagnostics.warnings.len() < MAX_LOADING_WARNINGS {
+                diagnostics.warnings.push(LoadingMessage::new(key, args));
+            }
+        }
+    }
 }
 
 /// The loading warnings mod `id` gave during registration, in order, from the installed Parts.
@@ -153,25 +206,16 @@ pub fn registration_warnings(id: &str) -> Vec<LoadingMessage> {
         installed
             .warnings
             .iter()
-            .filter(|(owner, _)| owner == id)
-            .map(|(_, warning)| warning.clone())
+            .filter(|(owner, _)| *owner == id)
+            .flat_map(|(_, warnings)| warnings.iter().cloned())
             .collect()
     })
 }
 
-/// Drains the context's refusal after the registration callback.
-// hidden: the loader decides whether to admit the registered mod.
-#[doc(hidden)]
-pub fn take_registration_refusal(cx: &crate::RegistrationContext) -> Option<String> {
-    cx.self_refusal
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .take()
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::RegistrationContext;
+    use super::*;
+
     #[test]
     fn bounded_reasons_preserve_utf8_and_empty_is_a_refusal() {
         for (reason, expected) in [
@@ -179,25 +223,12 @@ mod tests {
             ("é".repeat(2048), "é".repeat(2048)),
             (String::new(), String::new()),
         ] {
-            let cx = RegistrationContext::new();
+            let diagnostics = Arc::new(Mutex::new(RegistrationDiagnostics::default()));
+            let cx = registration_context_with_diagnostics(Arc::clone(&diagnostics));
             cx.refuse(&reason);
             cx.refuse("not the first reason");
-            assert_eq!(*cx.self_refusal.lock().unwrap(), Some(expected));
+            assert_eq!(diagnostics.lock().unwrap().refusal, Some(expected));
         }
-    }
-
-    #[test]
-    fn warnings_keep_key_and_arguments_up_to_the_cap() {
-        let cx = RegistrationContext::new();
-        for i in 0..=super::MAX_LOADING_WARNINGS {
-            cx.warn("test.warn.optional", &["jei", &i.to_string()]);
-        }
-        let warnings = super::take_registration_warnings(&cx);
-        assert_eq!(warnings.len(), super::MAX_LOADING_WARNINGS);
-        assert_eq!(warnings[0].key(), "test.warn.optional");
-        assert_eq!(warnings[0].args(), ["jei", "0"]);
-        assert_eq!(warnings[15].args(), ["jei", "15"]);
-        assert_eq!(*cx.self_refusal.lock().unwrap(), None);
     }
 
     #[test]

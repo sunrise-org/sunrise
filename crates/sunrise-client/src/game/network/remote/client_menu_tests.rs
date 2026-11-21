@@ -95,6 +95,7 @@ fn inventory_repair_does_not_replace_an_open_menus_predicted_cursor() {
 #[ignore = "daily"]
 fn client_menu_reads_follow_packets_and_lifetimes() {
     use crate::game::native_entity_refs::tests::with_game;
+    use crate::game::remote::RemoteDimensionEntry;
     use crate::game::{Screen, execution_role::ExecutionRole};
     use sunrise_client::level_loading::Reason;
     use sunrise_core::nbt::Tag;
@@ -422,7 +423,7 @@ fn client_menu_reads_follow_packets_and_lifetimes() {
             .unwrap();
         let mut other = spawn;
         other.dimension = "test:other_overworld".into();
-        game.enter_remote_dimension(&other, true, Reason::Other);
+        game.enter_remote_dimension(&other, RemoteDimensionEntry::Respawn, Reason::Other);
         assert_eq!(game.menu_slot_count(before_replacement), None);
         assert!(!before_replacement.click(game, &[pickup(36)]));
         let before_logout = game
@@ -439,7 +440,7 @@ fn client_menu_reads_follow_packets_and_lifetimes() {
         );
         let (client, _server) = Pipe::pair();
         game.connect_local(client, "MenuReadTest").unwrap();
-        game.enter_remote_dimension(&other, false, Reason::Other);
+        game.enter_remote_dimension(&other, RemoteDimensionEntry::Login, Reason::Other);
         let remote = game.remote.as_mut().unwrap();
         remote.logged_in = true;
         remote.entity_id = 7;

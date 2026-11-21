@@ -177,12 +177,6 @@
       "canonical_path": "crate::world::criteria::CriterionTestError"
     },
     {
-      "name": "DataLoadOrigin",
-      "path": "crate::world::phase::DataLoadOrigin",
-      "hash": "62bed09fc036dc1a",
-      "canonical_path": "crate::world::phase::DataLoadOrigin"
-    },
-    {
       "name": "DataMapError",
       "path": "crate::world::data_maps::DataMapError",
       "hash": "3c338ccd2a00316e",
@@ -216,7 +210,7 @@
     {
       "name": "DebugGroup",
       "path": "crate::client::debug_entries::DebugGroup",
-      "hash": "0ed40ec8fd186007",
+      "hash": "71b5301b988d283b",
       "canonical_path": "crate::client::debug_entries::DebugGroup"
     },
     {
@@ -308,12 +302,6 @@
       "canonical_path": "crate::block::types::FakeEffect"
     },
     {
-      "name": "FileToIdConverterError",
-      "path": "crate::content::file_to_id_converter::FileToIdConverterError",
-      "hash": "1264ee92f3e87063",
-      "canonical_path": "crate::content::file_to_id_converter::FileToIdConverterError"
-    },
-    {
       "name": "FireworkShape",
       "path": "crate::item::recipe_rule::FireworkShape",
       "hash": "f30055197dbdfd54",
@@ -382,12 +370,6 @@
       "canonical_path": "crate::client::hud_mode::HudMode"
     },
     {
-      "name": "HumanoidPart",
-      "path": "crate::client::posed_parts::HumanoidPart",
-      "hash": "e132abe5802f54d7",
-      "canonical_path": "crate::client::posed_parts::HumanoidPart"
-    },
-    {
       "name": "IngredientKeysError",
       "path": "crate::item::crafting::IngredientKeysError",
       "hash": "eb04a828ac673339",
@@ -448,22 +430,10 @@
       "canonical_path": "crate::world::types::LightLayer"
     },
     {
-      "name": "LoadAccess",
-      "path": "crate::world::phase::LoadAccess",
-      "hash": "37e043538dddbbc7",
-      "canonical_path": "crate::world::phase::LoadAccess"
-    },
-    {
       "name": "LogicalSide",
       "path": "crate::item::menu::LogicalSide",
       "hash": "159ff71dd6275675",
       "canonical_path": "crate::item::menu::LogicalSide"
-    },
-    {
-      "name": "LoopSide",
-      "path": "crate::world::phase::LoopSide",
-      "hash": "803b4f3ff2293bb8",
-      "canonical_path": "crate::world::phase::LoopSide"
     },
     {
       "name": "MainHand",
@@ -494,12 +464,6 @@
       "path": "crate::world::types::MobCategory",
       "hash": "663292b422d610b3",
       "canonical_path": "crate::world::types::MobCategory"
-    },
-    {
-      "name": "ModPhase",
-      "path": "crate::world::phase::ModPhase",
-      "hash": "21ca5a351846af43",
-      "canonical_path": "crate::world::phase::ModPhase"
     },
     {
       "name": "ModelError",
@@ -548,12 +512,6 @@
       "path": "crate::client::pack_finders::PackType",
       "hash": "bd912057dc38cc2a",
       "canonical_path": "crate::client::pack_finders::PackType"
-    },
-    {
-      "name": "PackageKind",
-      "path": "crate::world::phase::PackageKind",
-      "hash": "b7d360283d1348c5",
-      "canonical_path": "crate::world::phase::PackageKind"
     },
     {
       "name": "ParticleBlend",
@@ -690,12 +648,6 @@
       "canonical_path": "crate::content::content_declarations::RenderShape"
     },
     {
-      "name": "ScheduleError",
-      "path": "crate::world::scheduler::ScheduleError",
-      "hash": "bd7d79b5cdfd02ab",
-      "canonical_path": "crate::world::scheduler::ScheduleError"
-    },
-    {
       "name": "ScreenOpening",
       "path": "crate::client::types::ScreenOpening",
       "hash": "9ed3c4e52a797d6c",
@@ -756,24 +708,6 @@
       "path": "crate::world::types::SpawnCheck",
       "hash": "ae12b2dd0ea7aaec",
       "canonical_path": "crate::world::types::SpawnCheck"
-    },
-    {
-      "name": "SpawnLight",
-      "path": "crate::world::types::SpawnLight",
-      "hash": "52308115c1bf6d98",
-      "canonical_path": "crate::world::types::SpawnLight"
-    },
-    {
-      "name": "SpawnPlacementError",
-      "path": "crate::world::types::SpawnPlacementError",
-      "hash": "51c72252d1d5d3f7",
-      "canonical_path": "crate::world::types::SpawnPlacementError"
-    },
-    {
-      "name": "SpawnPlacementType",
-      "path": "crate::world::types::SpawnPlacementType",
-      "hash": "8ba0ef8dc68e1bbb",
-      "canonical_path": "crate::world::types::SpawnPlacementType"
     },
     {
       "name": "SpawnReason",
@@ -897,14 +831,11 @@
     "crate::content::payloads::PayloadDirection",
     "crate::content::payloads::PayloadPhase",
     "crate::content::payloads::PeerPolicy",
-    "crate::item::item_stack::StackError"
-  ],
-  "manual_contract_changes": {
-    "AttachmentError": {
-      "contract_change": "#4614 appends Undeclared at u32 ordinal 9 with package_id:String and attachment_id:String. Existing ordinals 0 through 8 remain unchanged. This manual data-carrying Wire enum is pinned by every_attachment_error_and_write_case_has_declared_tag_type; fieldless enum layouts are unchanged."
-    },
-    "PartStateRefusal": {
-      "contract_change": "#4614 removes the former UnownedNamespace refusal: attachment usages may reference another loaded owner. Incompatible and EntityKind move from ordinals 5 and 6 to 4 and 5; this data-carrying enum is outside the fieldless baseline. All declarations still require the declaring package namespace."
-    }
-  }
+    "crate::item::item_stack::StackError",
+    "crate::world::phase::DataLoadOrigin",
+    "crate::world::phase::LoadAccess",
+    "crate::world::phase::LoopSide",
+    "crate::world::phase::ModPhase",
+    "crate::world::phase::PackageKind"
+  ]
 }

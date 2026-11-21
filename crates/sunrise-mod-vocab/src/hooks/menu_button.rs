@@ -13,6 +13,8 @@ single player and LAN guests. It is routed to the active menu type's owner and e
 optional block position, optional backing block entity and mutable carried stack, so a widget outside the slots can
 take or give what the player carries. A blockless menu supplies None for the position and entity."#]
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_menu_button",
+        dispatch = "flat",
         version = 2,
         side = "server",
         contract = "listen",
@@ -20,5 +22,11 @@ take or give what the player carries. A blockless menu supplies None for the pos
         key = "menu",
         neoforge = "none (NeoForge has no such event; vanilla AbstractContainerMenu.clickMenuButton)"
     )]
-    fn menu_button();
+    fn menu_button(
+        menu: &str,
+        block: Option<&str>,
+        context: &mod_api::item::menu::MenuButtonContext,
+        entity: Option<&mut ModBlockEntity>,
+        carried: &mut Option<mod_api::ItemStack>,
+    );
 }

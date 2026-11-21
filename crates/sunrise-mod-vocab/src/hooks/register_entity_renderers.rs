@@ -13,8 +13,9 @@ pub trait Hooks {
     /// experience orbs (in place of the billboarded orb quad) and of paintings (in place of the
     /// painting's quads) and of item frames and glow item frames (in place of the frame model and
     /// the item or map on its face);
-    /// general entity types draw only through their renderer, if registered. Other entity
-    /// families keep their own drawing, including the dragon and end crystals. General, living,
+    /// general entity types draw only through their renderer, if registered. That renderer reads
+    /// the published generation of synced attachments through `EntityRenderState::attachments`.
+    /// Other entity families keep their own drawing, including the dragon and end crystals. General, living,
     /// primed TNT and experience orb renderers submit at each entity's slot in level join order.
     #[notes = r#"## Entity renderers
 
@@ -61,7 +62,9 @@ type's model and its vanilla layers, held items and worn blocks included); the g
 draws around it. Entities of a type share the one
 renderer, whose `submit` has no `Host` and no level: a renderer that needs the world reads it in a
 hook. A general entity type (`declare_general_entity`) draws only through its renderer. Its
-`EntityRenderState::attachments` holds the synced fields captured in the immutable state before submission.
+`EntityRenderState::attachments` holds the last published immutable generation, even if empty.
+The game logs each over-budget generation and does not publish it. If none has been published yet,
+the general entity does not draw. Later sync updates can publish a complete generation that fits.
 
 A later registration for a type replaces the earlier one, whichever mod made it, as in NeoForge. When
 resources load, a registration for a type the game does not know is logged with the type's id and left
@@ -79,17 +82,20 @@ reading `painting`), and item frames and glow item frames (`minecraft:item_frame
 are its current rotation, not interpolated (it has no previous rotation). A painting's `age` is its unsaved `tickCount` plus the partial tick; its yaw is
 `Direction.get2DDataValue * 90` and its pitch is 0 (it does not interpolate rotation). An item frame's `age` is its unsaved `tickCount` plus the partial tick; its yaw and
 pitch follow `ItemFrame.setDirection` and are not interpolated (it has no previous rotation). Around a living type's renderer everything else stays: `render_living_pre`
-(whose cancel skips it), the mods' layers (with no posed parts) and `render_living_post`, in the order
-the type's own model has, so it changes with #3915 and not before. Boats, displays and the other
+(whose cancel skips it), the mods' layers and `render_living_post`, in the order the type's own
+model has, so it changes with #3915 and not before. When the replacement succeeds, the layers and
+Post receive `model: None`. Boats, displays and the other
 projectiles come in follow-ups of #860. A renderer that returns an `Err` or panics is logged once with
 the error and asked no more until the next resource load resolves it again. What it drew that frame is
 dropped, and until then its type draws as it would without one."#]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "client",
-        version = 3,
+        version = 4,
         contract = "listen",
         context = "registration",
         neoforge = "EntityRenderersEvent.RegisterRenderers"
     )]
-    fn register_entity_renderers();
+    fn register_entity_renderers(renderers: &mut dyn EntityRenderers);
 }

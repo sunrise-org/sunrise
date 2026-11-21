@@ -1,4 +1,10 @@
 //! Registered raw custom-payload vocabulary.
+#[path = "payload/codec.rs"]
+mod codec;
+pub use codec::{
+    PAYLOAD_DECODE_BUDGET, PAYLOAD_MAX_DEPTH, PAYLOAD_MAX_LIST_ENTRIES, PAYLOAD_MAX_STRING_BYTES,
+    PAYLOAD_SCHEMA_MARKER, decode_payload, encode_payload, payload_schema, typed_payload_version,
+};
 #[path = "payload/registrar.rs"]
 mod registrar;
 pub use registrar::{
@@ -8,7 +14,9 @@ pub use registrar::{
 mod typed;
 pub use typed::{PayloadToken, ToClient, ToServer};
 
-use crate::{ClientHost, PlayerRef, ServerHost, Text};
+use crate::{
+    ClientHost, ConfigurationTaskError, ConfigurationTaskRef, PlayerRef, ServerHost, Text,
+};
 use std::sync::Arc;
 
 /// Opaque application bytes. The transport never prepends a mod envelope.
@@ -302,7 +310,24 @@ pub trait IPayloadContext {
         id: &PayloadId,
         bytes: PayloadBytes,
     ) -> Result<u32, PayloadSendError>;
-    /// Disconnect this session with the supplied component.
+    /// In a server main-thread configuration handler, request completion of the exact
+    /// running task for this receiving peer. Pass the server-local instance captured
+    /// when sending the original challenge: never take an instance from the wire or
+    /// substitute the task running when the reply arrives.
+    ///
+    /// A different live peer's instance returns `WrongConnection`; a no-longer-current
+    /// task on this connection returns `StaleTask`. `WrongContext` means this is not a
+    /// server main-thread configuration handler with a transaction; `Disconnected`
+    /// means the connection or its configuration epoch has ended. No refusal advances a task.
+    /// Completion takes effect only after the outermost transaction commits and
+    /// publishes its deferred sends. Abort, handler failure, or explicitly disconnecting
+    /// this peer discards the request.
+    fn finish_configuration_task(
+        &mut self,
+        instance: ConfigurationTaskRef,
+    ) -> Result<(), ConfigurationTaskError>;
+    /// Disconnect this session with the supplied component. This discards any configuration
+    /// task completion staged by the handler.
     fn disconnect(&mut self, reason: Text);
     /// Run now on the main thread or schedule there from the network executor.
     /// Failure of the work is reported as a named session failure.

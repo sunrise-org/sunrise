@@ -133,6 +133,3 @@ pub mod mod_build {
     /// The shared mod API and source generator.
     pub use sunrise_mod_api_gen as api_gen;
 }
-
-/// Establish the executable stack policy before starting the game or supervisor.
-pub use sunrise_guest_stack::prepare_main as prepare_main_stack;

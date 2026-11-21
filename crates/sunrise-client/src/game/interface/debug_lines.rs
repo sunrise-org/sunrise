@@ -46,7 +46,14 @@ impl Game<'_> {
         let mut paths: Vec<&str> = ENTRIES
             .iter()
             .map(|e| e.path)
-            .filter(|path| self.debug_entries.enabled(path, self.debug, reduced))
+            .filter(|path| {
+                self.debug_entries.enabled(
+                    &self.registered_debug_entries,
+                    path,
+                    self.debug,
+                    reduced,
+                )
+            })
             .collect();
         paths.sort_unstable();
         let server = self.server_debug(paths.iter().any(|p| SERVER_ENTRIES.contains(p)));
@@ -227,9 +234,11 @@ impl Game<'_> {
         }
         // A native mod's entries come after vanilla's, in registration order.
         for (group, lines) in debug_entries::mod_lines(
-            debug_entries::registered(),
-            |id| self.debug_entries.enabled(id, self.debug, reduced),
-            |id, lines| self.native_debug_entry_lines(id, lines),
+            &self.registered_debug_entries,
+            self,
+            &self.debug_entries,
+            self.debug,
+            reduced,
         ) {
             d.group(debug_entries::group_key(group), lines);
         }

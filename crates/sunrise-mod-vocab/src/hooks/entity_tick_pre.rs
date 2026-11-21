@@ -24,6 +24,8 @@ pub trait Hooks {
     /// already-passed slot is not revisited.
     /// Version 3 expands the version 2 coverage without changing the event signature.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_entity_tick_pre",
+        dispatch = "flat",
         side = "both",
         version = 3,
         contract = "collect",
@@ -31,5 +33,5 @@ pub trait Hooks {
         neoforge = "EntityTickEvent.Pre",
         cancellable = true
     )]
-    fn entity_tick_pre();
+    fn entity_tick_pre(dimension: &str, entities: &[u32], kinds: &[&str], canceled: &mut Vec<u32>);
 }

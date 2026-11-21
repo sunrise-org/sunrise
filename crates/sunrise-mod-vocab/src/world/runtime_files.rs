@@ -4,19 +4,20 @@
 //! compiled script bundle, a baked lookup table), each file listed with its SHA-512 in the
 //! manifest's `[runtime]` table. The game checks every hash once, when the package opens, and
 //! serves those bytes: a read never hashes again. A mod reads only its own package's files.
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 /// The game's side of one package's runtime files. A mod reaches it through
 /// [`RegistrationContext::runtime_files`](crate::RegistrationContext::runtime_files), not
 /// directly.
 pub trait RuntimeFileSource: Send + Sync + 'static {
-    /// The names of the files the manifest lists, in order.
-    fn names(&self) -> Vec<String>;
-    /// The checked bytes of `name`; `None` for a name the manifest does not list.
-    fn file(&self, name: &str) -> Option<Vec<u8>>;
-    /// Where `name` sits on disk, when the package is a folder and lists it, as the host's own
-    /// path (never through UTF-8 text).
-    fn path(&self, name: &str) -> Option<crate::InstanceDirectory>;
+    /// Borrow the listed names in name order.
+    fn names(&self) -> &[String];
+    /// Borrow the checked bytes of `name`; `None` for a name the manifest does not list.
+    fn file(&self, name: &str) -> Option<&[u8]>;
+    /// Borrow the exact live disk path, without converting through UTF-8. Return
+    /// [`RuntimePathError::NotListed`] for an unlisted name or [`RuntimePathError::NotAFolder`]
+    /// for a listed file in a `.smod` archive. Look up the name directly rather than scanning.
+    fn path(&self, name: &str) -> Result<&Path, RuntimePathError>;
 }
 
 /// A package's runtime files were asked for and are not there.
@@ -59,40 +60,35 @@ impl std::error::Error for RuntimePathError {}
 
 /// The calling mod's own runtime files, from
 /// [`RegistrationContext::runtime_files`](crate::RegistrationContext::runtime_files). The mod may
-/// keep it and read from any thread: the bytes were checked against the manifest's SHA-512 when the
-/// package opened, and no read checks them again.
+/// keep it and read from any thread. Reads borrow from this handle without copying. The bytes were
+/// checked against the manifest's SHA-512 when the package opened, and no read checks them again.
 // exhaustive: its fields are private, so mods cannot build or destructure it
-// no wire: a mod-side handle around the game's source, which crosses as its own resource.
+// no wire: a native handle retaining the game's verified file source.
 #[derive(Clone)]
 pub struct RuntimeFiles {
     source: Arc<dyn RuntimeFileSource>,
 }
 
 impl RuntimeFiles {
-    /// The names of the files the package lists, in order.
-    pub fn names(&self) -> Vec<String> {
+    /// The names of the files the package lists, borrowed in name order.
+    pub fn names(&self) -> &[String] {
         self.source.names()
     }
 
-    /// The bytes of `name`, a name the manifest lists under `[runtime]` (not `runtime/` before
-    /// it). `None` for any other name: a mod cannot read a file its package does not list, nor
-    /// another package's.
-    pub fn file(&self, name: &str) -> Option<Vec<u8>> {
+    /// The verified bytes of `name`, borrowed without copying. Use the name the manifest lists
+    /// under `[runtime]`, without a `runtime/` prefix. Returns `None` for any other name.
+    pub fn file(&self, name: &str) -> Option<&[u8]> {
         self.source.file(name)
     }
 
-    /// Where `name` sits on disk, so native code can map or cache-compile a large file without a
-    /// copy. A package that is a `.smod` archive has no path ([`RuntimePathError::NotAFolder`]).
-    /// The file was checked when the package opened; a later edit of the folder is the mod's to
-    /// guard against.
-    pub fn file_path(&self, name: &str) -> Result<std::path::PathBuf, RuntimePathError> {
-        if !self.source.names().iter().any(|listed| listed == name) {
-            return Err(RuntimePathError::NotListed);
-        }
-        self.source
-            .path(name)
-            .and_then(|path| path.to_path_buf())
-            .ok_or(RuntimePathError::NotAFolder)
+    /// The exact host path to a listed file in a package folder, borrowed without copying.
+    /// Returns [`RuntimePathError::NotListed`] for an unlisted name and
+    /// [`RuntimePathError::NotAFolder`] for a listed file in a `.smod` archive.
+    ///
+    /// This path refers to the live file on disk, not to the verified byte snapshot. Use
+    /// [`Self::file`] to read the bytes checked when the package opened.
+    pub fn file_path(&self, name: &str) -> Result<&Path, RuntimePathError> {
+        self.source.path(name)
     }
 }
 
@@ -116,64 +112,50 @@ impl crate::RegistrationContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
-    /// One package's files: `nav.bin` is listed and, when `folder`, sits on disk.
     struct Fake {
-        folder: bool,
+        names: [String; 1],
+        bytes: [u8; 6],
+        path: Option<PathBuf>,
     }
+
+    impl Fake {
+        fn new(path: Option<PathBuf>) -> Self {
+            Self {
+                names: ["nav.bin".into()],
+                bytes: *b"tables",
+                path,
+            }
+        }
+    }
+
     impl RuntimeFileSource for Fake {
-        fn names(&self) -> Vec<String> {
-            vec!["nav.bin".into()]
+        fn names(&self) -> &[String] {
+            &self.names
         }
-        fn file(&self, name: &str) -> Option<Vec<u8>> {
-            (name == "nav.bin").then(|| b"tables".to_vec())
+        fn file(&self, name: &str) -> Option<&[u8]> {
+            (name == "nav.bin").then_some(self.bytes.as_slice())
         }
-        fn path(&self, name: &str) -> Option<crate::InstanceDirectory> {
-            (self.folder && name == "nav.bin").then(|| host_path().0)
-        }
-    }
-
-    /// A host path with a byte (or code unit) no UTF-8 text holds, as the value the game hands
-    /// over and as the path it must give back.
-    #[cfg(unix)]
-    fn host_path() -> (crate::InstanceDirectory, std::path::PathBuf) {
-        use std::os::unix::ffi::OsStrExt;
-        let bytes = b"/mods/\xff ruby/runtime/nav.bin";
-        (
-            crate::InstanceDirectory::Unix(bytes.to_vec()),
-            std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes)),
-        )
-    }
-    #[cfg(windows)]
-    fn host_path() -> (crate::InstanceDirectory, std::path::PathBuf) {
-        use std::os::windows::ffi::OsStringExt;
-        let mut units: Vec<u16> = "C:\\mods\\".encode_utf16().collect();
-        units.push(0xd800);
-        units.extend("ruby\\runtime\\nav.bin".encode_utf16());
-        (
-            crate::InstanceDirectory::Windows(units.clone()),
-            std::path::PathBuf::from(std::ffi::OsString::from_wide(&units)),
-        )
-    }
-    #[cfg(not(any(unix, windows)))]
-    fn host_path() -> (crate::InstanceDirectory, std::path::PathBuf) {
-        (
-            crate::InstanceDirectory::Unix(b"/mods/ruby/runtime/nav.bin".to_vec()),
-            std::path::PathBuf::new(),
-        )
-    }
-
-    fn files(folder: bool) -> RuntimeFiles {
-        RuntimeFiles {
-            source: Arc::new(Fake { folder }),
+        fn path(&self, name: &str) -> Result<&Path, RuntimePathError> {
+            if name != "nav.bin" {
+                return Err(RuntimePathError::NotListed);
+            }
+            self.path.as_deref().ok_or(RuntimePathError::NotAFolder)
         }
     }
 
     #[test]
-    fn a_mod_reads_only_the_names_its_manifest_lists() {
-        let files = files(true);
+    fn a_mod_borrows_only_the_names_and_bytes_its_manifest_lists() {
+        let source = Arc::new(Fake::new(None));
+        let files = RuntimeFiles {
+            source: source.clone(),
+        };
         assert_eq!(files.names(), ["nav.bin"]);
-        assert_eq!(files.file("nav.bin").as_deref(), Some(b"tables".as_slice()));
+        assert!(std::ptr::eq(files.names(), source.names()));
+        let bytes = files.file("nav.bin").unwrap();
+        assert_eq!(bytes, b"tables");
+        assert!(std::ptr::eq(bytes, source.bytes.as_slice()));
         assert_eq!(files.file("other.bin"), None);
         assert_eq!(files.file("../nav.bin"), None);
     }
@@ -188,17 +170,28 @@ mod tests {
 
     #[cfg(any(unix, windows))]
     #[test]
-    fn a_path_is_listed_only_and_a_folder_only_and_comes_back_exactly() {
-        let folder = files(true);
-        let archive = files(false);
-        assert_eq!(folder.file_path("nav.bin"), Ok(host_path().1));
-        assert_eq!(
-            folder.file_path("other.bin"),
-            Err(RuntimePathError::NotListed)
-        );
-        assert_eq!(
-            archive.file_path("nav.bin"),
-            Err(RuntimePathError::NotAFolder)
-        );
+    fn a_mod_borrows_the_exact_host_path() {
+        #[cfg(unix)]
+        let expected = {
+            use std::os::unix::ffi::OsStrExt;
+            PathBuf::from(std::ffi::OsStr::from_bytes(
+                b"/mods/\xff ruby/runtime/nav.bin",
+            ))
+        };
+        #[cfg(windows)]
+        let expected = {
+            use std::os::windows::ffi::OsStringExt;
+            let mut units: Vec<u16> = "C:\\mods\\".encode_utf16().collect();
+            units.push(0xd800);
+            units.extend("ruby\\runtime\\nav.bin".encode_utf16());
+            PathBuf::from(std::ffi::OsString::from_wide(&units))
+        };
+        let source = Arc::new(Fake::new(Some(expected.clone())));
+        let folder = RuntimeFiles {
+            source: source.clone(),
+        };
+        let path = folder.file_path("nav.bin").unwrap();
+        assert_eq!(path.as_os_str(), expected.as_os_str());
+        assert!(std::ptr::eq(path, source.path.as_deref().unwrap()));
     }
 }

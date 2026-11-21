@@ -31,8 +31,8 @@ fn section_visibility(&self, _: &dyn ClientHost, event: &mut SectionVisibilityEv
 
 `event.input` is the section and a one-block border on every side, edges and corners too: 18 cubed cells, local
 -1 to 16 on each axis, with each cell's sky and block light, stored biome and deterministic model seed. A cell
-is the state the world holds, before any
-visibility answer, so an ore a `block_render_visibility` part hides still reads as the ore. A column that is not
+is the world's canonical `BlockState`, before any visibility answer, so an ore a
+`block_render_visibility` part hides still reads as the ore. A column that is not
 loaded reads `SectionCell::Missing`: not air, but neither occluding nor matching anything. `cell` refuses a read
 beyond the border with `SectionVisibilityRefusal::OutsideInput`.
 

@@ -53,7 +53,6 @@
 //! - [Wire types](https://playsunrise.net/docs/modding/concepts/wire-types)
 //! - [The manifest and the package](https://playsunrise.net/docs/modding/reference/manifest)
 extern crate self as mod_api;
-mod equip_reads;
 
 pub use mod_vocab::*;
 /// Platform-owned crash attribution with shared vocabulary types.

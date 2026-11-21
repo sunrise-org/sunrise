@@ -1017,7 +1017,8 @@ pub(super) mod tests {
             let key = |name| mod_api::__private::block_key(name).unwrap();
             let air = key("minecraft:air");
             let stone = key("minecraft:stone");
-            let states = [air, stone].map(|block| mod_api::BlockStateRecord::new(block, 0).into());
+            let states =
+                [air, stone].map(|block| mod_api::__private::block_state_from_ordinal(block, 0));
             let mut scene = Scene::new();
             let mut chunk = Chunk::empty(0, 0);
             chunk.set(1, 64, 3, 1);

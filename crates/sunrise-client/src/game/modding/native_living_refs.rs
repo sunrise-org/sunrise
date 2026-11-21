@@ -2,21 +2,25 @@
 //! (docs/modding/src/how-to/native-mods.md, "Entity and level handles", #7387): the equipment
 //! of mobs, players and armor stands, throwing a stack, and whether a mob
 //! is tamed. Reads return `None`, writes false, for a stale handle or on a
-//! client; the exception is the reads marked side `both` (`living`, `equipment`,
-//! `hand_item`, `health`, `max_health`, `attribute_value`, `attribute_base`,
+//! client; the exception is the reads marked side `both` (`living`, `with_equipment`,
+//! `with_hand_item`, `health`, `max_health`, `attribute_value`, `attribute_base`,
 //! `attributes` and `attribute_modifiers`), which on a client answer for the
 //! local player from the client's own copy; and `effect`/`effects`.
 use super::Game;
+use super::api_values::{StackReadMetadata, project_stack, stack_read_metadata};
 use super::commands::{Target, items::Owner};
 use super::living_attributes::AttributeWrite;
 use crate::mobs::Who;
 use mod_api::client::first_person::Hand;
 use mod_api::{
     AttributeModifier, AttributeOperation, Direction, EntityRef, EquipmentSlot, Identifier,
-    LivingRef, ModifierLifetime,
+    ItemStackView, LivingRef, ModifierLifetime,
 };
 use sunrise_client::items::ItemStack;
-use sunrise_client::mobs::Mob;
+use sunrise_client::mobs::{
+    Mob,
+    finalize::{self, EquipmentRead},
+};
 use sunrise_world::attributes::{Modifier, Operation};
 
 /// A player's armour slots (`armor`, head first) by equipment slot.
@@ -31,24 +35,44 @@ fn armor_index(slot: EquipmentSlot) -> Option<usize> {
 }
 
 /// A player's stack in `slot`, from its inventory, armour and off hand.
-fn player_slot(
-    inventory: &[Option<ItemStack>],
+fn player_slot<'a>(
+    inventory: &'a [Option<ItemStack>],
     selected: usize,
-    armor: &[Option<ItemStack>; 4],
-    offhand: &Option<ItemStack>,
-    equipment: &sunrise_items::equipment::Equipment,
+    armor: &'a [Option<ItemStack>; 4],
+    offhand: &'a Option<ItemStack>,
+    equipment: &'a sunrise_items::equipment::Equipment,
     slot: EquipmentSlot,
-) -> Option<ItemStack> {
+) -> Option<&'a ItemStack> {
     match slot {
-        EquipmentSlot::MainHand => inventory.get(selected).cloned().flatten(),
-        EquipmentSlot::OffHand => offhand.clone(),
-        EquipmentSlot::Body | EquipmentSlot::Saddle => equipment.get(slot as usize).cloned(),
-        _ => armor[armor_index(slot)?].clone(),
+        EquipmentSlot::MainHand => inventory.get(selected)?.as_ref(),
+        EquipmentSlot::OffHand => offhand.as_ref(),
+        EquipmentSlot::Body | EquipmentSlot::Saddle => equipment.get(slot as usize),
+        _ => armor[armor_index(slot)?].as_ref(),
     }
 }
 
+/// Lend one equipment slot to the API, applying overlays and encoding components only on demand.
+pub(super) fn lend_equipment(
+    stack: EquipmentRead<'_>,
+    read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+) -> Option<()> {
+    let metadata = stack_read_metadata(stack.base()).ok()?;
+    with_equipment_view(&stack, metadata, read);
+    Some(())
+}
+
+/// Use checked slot metadata to lend the same lazy view to readers and component editors.
+pub(super) fn with_equipment_view<R>(
+    stack: &EquipmentRead<'_>,
+    metadata: StackReadMetadata,
+    read: impl for<'a> FnOnce(ItemStackView<'a>) -> R,
+) -> R {
+    let project = |metadata| project_stack(&stack.project(), metadata).ok();
+    read(ItemStackView::resident(metadata, &project))
+}
+
 /// The equipment slot of a hand (`LivingEntity.getItemInHand`/`setItemInHand`).
-fn hand_slot(hand: Hand) -> EquipmentSlot {
+pub(super) fn hand_slot(hand: Hand) -> EquipmentSlot {
     match hand {
         Hand::Main => EquipmentSlot::MainHand,
         Hand::Off => EquipmentSlot::OffHand,
@@ -781,19 +805,22 @@ impl Game<'_> {
         }
     }
 
-    /// The stack in `slot` (`LivingEntity.getItemBySlot`). Players, guests,
-    /// mobs, armor stands and the dragon store all eight slots. An armor
-    /// stand's body and saddle are storage only: vanilla's `canUseSlot`
-    /// refuses them for interaction. None means empty, unsupported or stale.
-    /// The stack in equipment slot `slot` (`LivingEntity.getItemBySlot`):
-    /// None when it is empty, the entity has no such slot (a player has no
-    /// body or saddle slot), or the handle is stale. API 382.
-    pub(super) fn living_equipment(
+    /// Resolve one live equipment slot without taking a copy or reading any other slot.
+    pub(super) fn living_equipment_stack(
         &self,
         living: LivingRef,
         slot: EquipmentSlot,
-    ) -> Option<ItemStack> {
-        match self.native_living_read_target(living)? {
+    ) -> Option<EquipmentRead<'_>> {
+        self.equipment_stack_for(self.native_living_read_target(living)?, slot)
+    }
+
+    /// Read one equipment slot of an already resolved target.
+    pub(super) fn equipment_stack_for(
+        &self,
+        target: Target,
+        slot: EquipmentSlot,
+    ) -> Option<EquipmentRead<'_>> {
+        let stack = match target {
             Target::Player => player_slot(
                 &self.inventory,
                 self.selected,
@@ -814,25 +841,36 @@ impl Game<'_> {
                 )
             }
             Target::Mob(id) => {
-                self.mobs.iter().find(|m| m.id == id)?.equipment_stacks()[slot as usize].clone()
+                let mob = self.mobs.iter().find(|m| m.id == id)?;
+                return finalize::equipment_slot(mob, slot);
             }
             Target::Stand(id) => self
                 .armor_stands
                 .iter()
                 .find(|a| a.id == id)?
                 .equipment
-                .get(slot as usize)
-                .cloned(),
+                .get(slot as usize),
             Target::Dragon(id) => self
                 .dragon
                 .as_ref()
                 .filter(|d| d.id == id)?
                 .equipment
-                .get(slot as usize)
-                .cloned(),
+                .get(slot as usize),
             _ => None,
-        }
+        }?;
+        Some(EquipmentRead::resident(stack))
     }
+
+    /// Lend the stack in `slot` (`LivingEntity.getItemBySlot`).
+    pub(super) fn living_equipment(
+        &self,
+        living: LivingRef,
+        slot: EquipmentSlot,
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) -> Option<()> {
+        lend_equipment(self.living_equipment_stack(living, slot)?, read)
+    }
+
     /// Damage an equipped stack without an equip/unequip notification.
     pub(super) fn living_hurt_and_break(
         &mut self,
@@ -846,13 +884,21 @@ impl Game<'_> {
                 .for_player(target, |game| game.damage_player_equipment(slot, amount))
                 .flatten();
         }
-        let stack = self.living_equipment(living, slot)?;
+        let stack = self
+            .equipment_stack_for(target, slot)?
+            .project()
+            .into_owned();
         let wearer = super::durability::Wearer::Living(living.id());
         let (updated, broken) = self.damage_stack_worn(&stack, amount, wearer);
         if updated.as_ref() == Some(&stack) {
             return None;
         }
-        if self.living_equipment(living, slot).as_ref() != Some(&stack) {
+        if self
+            .living_equipment_stack(living, slot)?
+            .project()
+            .as_ref()
+            != &stack
+        {
             return None;
         }
         match target {
@@ -898,7 +944,8 @@ impl Game<'_> {
             &self.offhand,
             &self.equipment,
             slot,
-        )?;
+        )?
+        .clone();
         let (updated, broken) = self.damage_stack(&stack, amount, true);
         if updated.as_ref() == Some(&stack) {
             return None;
@@ -940,9 +987,14 @@ impl Game<'_> {
         broken
     }
 
-    /// The stack in hand `hand` (`LivingEntity.getItemInHand`). API 382.
-    pub(super) fn living_hand_item(&self, living: LivingRef, hand: Hand) -> Option<ItemStack> {
-        self.living_equipment(living, hand_slot(hand))
+    /// Lend the stack in `hand` (`LivingEntity.getItemInHand`).
+    pub(super) fn living_hand_item(
+        &self,
+        living: LivingRef,
+        hand: Hand,
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) -> Option<()> {
+        self.living_equipment(living, hand_slot(hand), read)
     }
     /// Puts `stack` in hand `hand` (`LivingEntity.setItemInHand`): the main
     /// hand's slot or the off hand's, written as `set_equipment`
@@ -998,15 +1050,19 @@ impl Game<'_> {
             let Some(mob) = self.mobs.iter_mut().find(|m| m.id == id) else {
                 return false;
             };
-            let old = if (slot as usize) <= 5 {
-                sunrise_client::mobs::finalize::item_stack(mob, slot as usize)
-            } else {
-                mob.equipment_stacks()[slot as usize].clone()
-            };
-            let changed = match (&old, &stack) {
-                (None, None) => false,
-                (Some(a), Some(b)) => !a.same_item_same_components(b),
-                _ => true,
+            let changed = {
+                let old = if (slot as usize) <= finalize::HEAD {
+                    finalize::item_stack(mob, slot as usize).map(std::borrow::Cow::Owned)
+                } else {
+                    mob.extra
+                        .slot_stack(slot as usize)
+                        .map(std::borrow::Cow::Borrowed)
+                };
+                match (old.as_deref(), &stack) {
+                    (None, None) => false,
+                    (Some(a), Some(b)) => !a.same_item_same_components(b),
+                    _ => true,
+                }
             };
             if !mob.set_equipment_stack(slot as usize, stack) {
                 return false;
@@ -1044,25 +1100,26 @@ impl Game<'_> {
         }
         // `LivingEntity.onEquipItem` for the entities that keep no equip state
         // of their own: the stand and the dragon (not silent, never spectators).
-        let (old, at, first_tick) = match t {
-            Target::Stand(id) => self.armor_stands.iter().find(|a| a.id == id).map(|a| {
-                (
-                    a.equipment.get(slot as usize).cloned(),
-                    a.position,
-                    a.first_tick,
-                )
-            }),
-            Target::Dragon(id) => self.dragon.as_ref().filter(|d| d.id == id).map(|d| {
-                (
-                    d.equipment.get(slot as usize).cloned(),
-                    d.position,
-                    d.first_tick(),
-                )
-            }),
+        let equip_event_at = match t {
+            Target::Stand(id) => self
+                .armor_stands
+                .iter()
+                .find(|a| a.id == id)
+                .map(|a| (a.equipment.get(slot as usize), a.position, a.first_tick)),
+            Target::Dragon(id) => self
+                .dragon
+                .as_ref()
+                .filter(|d| d.id == id)
+                .map(|d| (d.equipment.get(slot as usize), d.position, d.first_tick())),
             _ => None,
         }
-        .map_or((None, None, true), |(old, at, first)| {
-            (old, Some(at), first)
+        .and_then(|(old, at, first_tick)| {
+            let same = match (old, stack.as_ref()) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.same_item_same_components(b),
+                _ => false,
+            };
+            (!first_tick && !same).then_some(at)
         });
         let written = match self
             .slots_named(&Owner::Entity(t), slot_name(slot))
@@ -1070,34 +1127,27 @@ impl Game<'_> {
         {
             // This path owns onEquipItem below, including immediate writes.
             // The generic stand slot writer must not emit it a second time.
-            [s] => self.slot_set_with_effects(s, stack.clone(), false),
+            [s] => self.slot_set_with_effects(s, stack, false),
             _ => false,
         };
-        if let (true, Some(at), false) = (written, at, first_tick) {
-            let same = match (&old, &stack) {
-                (None, None) => true,
-                (Some(a), Some(b)) => a.same_item_same_components(b),
-                _ => false,
+        if let (true, Some(at)) = (written, equip_event_at) {
+            let sound = equippable.as_ref().and_then(|(equip_slot, sound)| {
+                (*equip_slot as usize == slot as usize).then(|| sound.clone())
+            });
+            let (Target::Stand(id) | Target::Dragon(id)) = t else {
+                unreachable!("only a stand or the dragon gets here")
             };
-            if !same {
-                let sound = equippable.as_ref().and_then(|(equip_slot, sound)| {
-                    (*equip_slot as usize == slot as usize).then(|| sound.clone())
+            if defer {
+                self.after_commit(super::transactions::After::Equip {
+                    at: [at.x, at.y, at.z],
+                    sound,
+                    equips: equippable.is_some(),
+                    who: id,
                 });
-                let (Target::Stand(id) | Target::Dragon(id)) = t else {
-                    unreachable!("only a stand or the dragon gets here")
-                };
-                if defer {
-                    self.after_commit(super::transactions::After::Equip {
-                        at: [at.x, at.y, at.z],
-                        sound,
-                        equips: equippable.is_some(),
-                        who: id,
-                    });
-                } else {
-                    let ctx_who = Some(sunrise_client::mobs::Who::Mob(id));
-                    let ctx = self.who_context(ctx_who, None);
-                    self.equip_item_effects([at.x, at.y, at.z], sound, equippable.is_some(), ctx);
-                }
+            } else {
+                let ctx_who = Some(sunrise_client::mobs::Who::Mob(id));
+                let ctx = self.who_context(ctx_who, None);
+                self.equip_item_effects([at.x, at.y, at.z], sound, equippable.is_some(), ctx);
             }
         }
         written
@@ -1353,7 +1403,10 @@ mod tests {
                 .hurt_and_break(game, EquipmentSlot::MainHand, 1)
                 .unwrap();
             assert_eq!(broken.damage(), max);
-            assert!(mob.equipment(game, EquipmentSlot::MainHand).is_none());
+            assert!(
+                mob.with_equipment(game, EquipmentSlot::MainHand, |_| ())
+                    .is_none()
+            );
         });
     }
 
@@ -2267,12 +2320,18 @@ mod tests {
             assert_eq!(game.inventory[3], Some(sword.clone()));
             assert_eq!(game.offhand, Some(shield.clone()));
             assert_eq!(
-                player.hand_item(game, Hand::Main),
-                Some(sword.try_into_api().unwrap())
+                player.with_hand_item(game, Hand::Main, |stack| (
+                    stack.item().id(game),
+                    stack.count()
+                )),
+                Some((Some("minecraft:iron_sword"), 1))
             );
             assert_eq!(
-                player.hand_item(game, Hand::Off),
-                Some(shield.try_into_api().unwrap())
+                player.with_hand_item(game, Hand::Off, |stack| (
+                    stack.item().id(game),
+                    stack.count()
+                )),
+                Some((Some("minecraft:shield"), 1))
             );
             assert!(player.set_hand_item(game, Hand::Off, None).unwrap());
             assert_eq!(game.offhand, None);
@@ -2291,9 +2350,13 @@ mod tests {
                     .set_hand_item(game, Hand::Off, Some(sword.try_into_api().unwrap()))
                     .unwrap()
             );
-            let stacks = game.mobs[0].equipment_stacks();
-            assert_eq!(stacks[EquipmentSlot::OffHand as usize], Some(sword.clone()));
-            assert_eq!(stacks[EquipmentSlot::MainHand as usize], None);
+            assert_eq!(
+                zombie
+                    .with_hand_item(game, Hand::Off, |stack| stack.project())
+                    .flatten(),
+                Some(sword.try_into_api().unwrap())
+            );
+            assert!(zombie.with_hand_item(game, Hand::Main, |_| ()).is_none());
 
             game.mobs.clear();
             assert!(
@@ -2418,9 +2481,18 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn mob_equipment_writes_keep_full_stacks() {
-        use sunrise_client::mobs::Mob;
+        use sunrise_client::mobs::gear;
         use sunrise_core::geometry::Vec3;
         super::super::native_entity_refs::tests::with_game(|game| {
+            let expect_slot = |game: &Game<'_>, living, slot, expected: Option<&ItemStack>| {
+                assert_eq!(
+                    game.living_equipment_stack(living, slot)
+                        .map(|stack| stack.project())
+                        .as_deref(),
+                    expected,
+                    "{slot:?}"
+                );
+            };
             for (id, kind) in [
                 (12, "minecraft:zombie"),
                 (13, "minecraft:horse"),
@@ -2444,15 +2516,28 @@ mod tests {
                 Err(mod_api::StackWriteError::CountExceeded { maximum: 1 })
             );
             assert!(game.living_set_equipment(zombie, EquipmentSlot::Head, Some(helmet.clone())));
+            let trim: gear::Trim = ("minecraft:gold".into(), "minecraft:coast".into());
+            gear::set(
+                &mut game.mobs[0],
+                gear::HEAD,
+                vec![("minecraft:protection".into(), 4)],
+            );
+            gear::set_trim(&mut game.mobs[0], gear::HEAD, Some(trim.clone()));
+            let mut expected = helmet.clone();
+            expected.data_mut().enchantments = vec![("minecraft:protection".into(), 4)];
+            expected.data_mut().trim = Some(trim);
             assert_eq!(
-                zombie.equipment(game, EquipmentSlot::Head),
-                Some(helmet.try_into_api().unwrap())
+                zombie.with_equipment(game, EquipmentSlot::Head, |stack| {
+                    (stack.count(), stack.damage(), stack.project())
+                }),
+                Some((2, 7, Some(expected.try_into_api().unwrap())))
             );
             assert_eq!(
                 game.mobs[0]
                     .extra
                     .slot_stack(sunrise_items::equipment::HEAD),
-                Some(&helmet)
+                Some(&helmet),
+                "reading overlays must not write into the resident slot"
             );
             let mut shield = ItemStack::new("minecraft:shield", 2);
             shield.damage = 11;
@@ -2461,23 +2546,14 @@ mod tests {
                 EquipmentSlot::OffHand,
                 Some(shield.clone())
             ));
-            assert_eq!(
-                game.living_equipment(zombie, EquipmentSlot::OffHand),
-                Some(shield)
-            );
+            expect_slot(game, zombie, EquipmentSlot::OffHand, Some(&shield));
             assert!(game.living_set_equipment(horse, EquipmentSlot::Head, Some(helmet.clone())));
             let mut body = ItemStack::new("minecraft:diamond_horse_armor", 3);
             body.damage = 9;
             body.data_mut().custom_name = Some(sunrise_core::nbt::Tag::String("armor".into()));
             assert!(game.living_set_equipment(horse, EquipmentSlot::Body, Some(body.clone())));
-            assert_eq!(
-                game.living_equipment(horse, EquipmentSlot::Head),
-                Some(helmet.clone())
-            );
-            assert_eq!(
-                game.living_equipment(horse, EquipmentSlot::Body),
-                Some(body)
-            );
+            expect_slot(game, horse, EquipmentSlot::Head, Some(&helmet));
+            expect_slot(game, horse, EquipmentSlot::Body, Some(&body));
             for slot in [
                 EquipmentSlot::MainHand,
                 EquipmentSlot::Chest,
@@ -2486,36 +2562,30 @@ mod tests {
             ] {
                 let stack = ItemStack::new("minecraft:stone", 4);
                 assert!(game.living_set_equipment(zombie, slot, Some(stack.clone())));
-                assert_eq!(game.living_equipment(zombie, slot), Some(stack));
+                expect_slot(game, zombie, slot, Some(&stack));
                 assert!(game.living_set_equipment(
                     zombie,
                     slot,
                     Some(ItemStack::new("minecraft:stone", 0))
                 ));
-                assert_eq!(game.living_equipment(zombie, slot), None);
+                expect_slot(game, zombie, slot, None);
             }
             let mut saddle = ItemStack::new("minecraft:saddle", 3);
             saddle.data_mut().custom_name = Some(sunrise_core::nbt::Tag::String("saddle".into()));
             assert!(game.living_set_equipment(horse, EquipmentSlot::Saddle, Some(saddle.clone())));
-            assert_eq!(
-                game.living_equipment(horse, EquipmentSlot::Saddle),
-                Some(saddle)
-            );
+            expect_slot(game, horse, EquipmentSlot::Saddle, Some(&saddle));
             sunrise_client::mobs::raider::set_patrol_leader(&mut game.mobs[2], true);
             sunrise_client::mobs::raider::wear_banner(&mut game.mobs[2]);
             assert!(sunrise_client::mobs::raider::is_captain(&game.mobs[2]));
             assert!(game.living_set_equipment(captain, EquipmentSlot::Head, Some(helmet.clone())));
-            assert_eq!(
-                game.living_equipment(captain, EquipmentSlot::Head),
-                Some(helmet)
-            );
+            expect_slot(game, captain, EquipmentSlot::Head, Some(&helmet));
             assert!(!sunrise_client::mobs::raider::is_captain(&game.mobs[2]));
             assert!(game.living_set_equipment(
                 horse,
                 EquipmentSlot::Body,
                 Some(ItemStack::new("minecraft:air", 1))
             ));
-            assert_eq!(game.living_equipment(horse, EquipmentSlot::Body), None);
+            expect_slot(game, horse, EquipmentSlot::Body, None);
             let mut dragon = super::super::dragon::Dragon::new(Vec3::ZERO, 0.0, 0);
             // Reserve the dragon's eight consecutive part IDs away from the stand.
             dragon.id = 40;
@@ -2534,7 +2604,7 @@ mod tests {
                     stack.data_mut().custom_name =
                         Some(sunrise_core::nbt::Tag::String(slot_name(slot).into()));
                     assert!(game.living_set_equipment(living, slot, Some(stack.clone())));
-                    assert_eq!(game.living_equipment(living, slot), Some(stack));
+                    expect_slot(game, living, slot, Some(&stack));
                 }
             }
             let saved = game
@@ -2555,7 +2625,7 @@ mod tests {
             assert_eq!(loaded.equipment, stored.equipment);
             for living in [dragon, stand] {
                 assert!(game.living_set_equipment(living, EquipmentSlot::Saddle, None));
-                assert_eq!(game.living_equipment(living, EquipmentSlot::Saddle), None);
+                expect_slot(game, living, EquipmentSlot::Saddle, None);
             }
             // An empty dragon saves no `equipment` key, a stale one included.
             for slot in EquipmentSlot::ALL {
@@ -2707,30 +2777,19 @@ mod tests {
         let offhand = stack("minecraft:shield");
         let mut equipment = sunrise_items::equipment::Equipment::default();
         equipment.set(sunrise_items::equipment::SADDLE, stack("minecraft:saddle"));
-        let at =
-            |slot| player_slot(&inventory, 1, &armor, &offhand, &equipment, slot).map(|s| s.item);
-        assert_eq!(
-            at(EquipmentSlot::MainHand).as_deref(),
-            Some("minecraft:dirt")
-        );
-        assert_eq!(
-            at(EquipmentSlot::OffHand).as_deref(),
-            Some("minecraft:shield")
-        );
-        assert_eq!(
-            at(EquipmentSlot::Head).as_deref(),
-            Some("minecraft:iron_helmet")
-        );
-        assert_eq!(
-            at(EquipmentSlot::Feet).as_deref(),
-            Some("minecraft:iron_boots")
-        );
-        assert_eq!(at(EquipmentSlot::Chest), None);
-        assert_eq!(at(EquipmentSlot::Body), None);
-        assert_eq!(
-            at(EquipmentSlot::Saddle).as_deref(),
-            Some("minecraft:saddle")
-        );
+        let at = |slot| player_slot(&inventory, 1, &armor, &offhand, &equipment, slot);
+        let id = |slot| at(slot).map(|s| s.item.as_ref());
+        assert!(std::ptr::eq(
+            at(EquipmentSlot::MainHand).unwrap(),
+            inventory[1].as_ref().unwrap()
+        ));
+        assert_eq!(id(EquipmentSlot::MainHand), Some("minecraft:dirt"));
+        assert_eq!(id(EquipmentSlot::OffHand), Some("minecraft:shield"));
+        assert_eq!(id(EquipmentSlot::Head), Some("minecraft:iron_helmet"));
+        assert_eq!(id(EquipmentSlot::Feet), Some("minecraft:iron_boots"));
+        assert_eq!(id(EquipmentSlot::Chest), None);
+        assert_eq!(id(EquipmentSlot::Body), None);
+        assert_eq!(id(EquipmentSlot::Saddle), Some("minecraft:saddle"));
     }
 
     #[test]
@@ -2771,7 +2830,9 @@ mod tests {
             );
             let item = game.living_drop(wolf, bone.clone(), false, true).unwrap();
             assert_eq!(
-                game.entity_kind(item).map(|kind| kind.id(game)).as_deref(),
+                game.entity_kind(item)
+                    .and_then(|kind| kind.id(game))
+                    .as_deref(),
                 Some("minecraft:item")
             );
             let wolf_uuid = game.uuid_for(id);

@@ -165,7 +165,10 @@ fn a_dead_player_is_given_nothing() {
             .update_connection(13, |g| g.dead = true);
         let before = game.dropped.len();
         assert_eq!(b.give_stack(game, rock), Err(PlayerDataRefusal::Dead));
-        assert_eq!(b.inventory_slots(game), Some(Vec::new()));
+        assert_eq!(
+            b.with_inventory(game, |view| view.iter().next().is_none()),
+            Some(true)
+        );
         assert_eq!(game.dropped.len(), before);
     });
 }

@@ -6,8 +6,7 @@ use super::{
     index::{AttachmentIndex, AttachmentOwner, AttachmentRow, AttachmentSnapshot},
 };
 
-// no wire: owned by the lower runtime crate, which cannot depend on mod_api's derive;
-// mod_api supplies the explicit tagged Wire implementation, including bounded static text.
+// no wire: reports local snapshot decode, residency or write failures.
 /// A failed row read or write through a retained batch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -54,12 +53,6 @@ impl<H> AttachmentBatch<H> {
         Self { rows: None }
     }
 
-    /// Borrow the captured rows for an owned boundary conversion.
-    /// Native query construction does not invoke that conversion.
-    pub fn rows(&self) -> &[AttachmentRow<H>] {
-        self.rows.as_deref().map_or(&[], |rows| rows.as_slice())
-    }
-
     /// Bind the key once, checking its policy before any row is read.
     /// The query borrows only the key, never the index or host.
     pub fn query<T: Send + Sync + 'static>(
@@ -85,7 +78,12 @@ impl<H: Copy, T: Send + Sync + 'static> AttachmentQuery<'_, H, T> {
     /// or per-item allocation. A first saved decode may allocate in the codec/cache.
     pub fn iter(&self) -> AttachmentIter<'_, H, T> {
         AttachmentIter {
-            rows: self.batch.rows().iter(),
+            rows: self
+                .batch
+                .rows
+                .as_deref()
+                .map_or(&[][..], |rows| rows.as_slice())
+                .iter(),
             key: self.key,
         }
     }

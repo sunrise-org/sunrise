@@ -8,10 +8,9 @@
 pub enum ScreenSlotRefusal {
     /// No mod screen is open, or the open one is another menu type's or another mod's.
     NoScreen,
-    /// The slot is past the slots the screen declared when it opened.
+    /// The slot is outside the menu's container backing.
     NoSuchSlot,
-    /// The slot was hidden when the screen opened, so the server's menu has no such slot:
-    /// showing it would offer a slot the server does not have.
+    /// The index is an authoritative slot exclusion, not a local hide that can be undone.
     HiddenAtOpen,
     /// A position that is not finite.
     BadPosition,

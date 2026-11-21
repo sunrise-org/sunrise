@@ -19,6 +19,8 @@ pub trait Hooks {
     /// A disabled owner's subscribed rule preserves a plant of this type already
     /// at the position or settling there, but does not authorize a new planting.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "both",
         version = 2,
         contract = "replace",
@@ -29,5 +31,12 @@ pub trait Hooks {
         target = "sunrise_client::game::native_hooks::base::LevelView<'_>::native_may_place_on",
         neoforge = "IBlockExtension.canSustainPlant"
     )]
-    fn may_place_on();
+    fn may_place_on(
+        dimension: LevelDimension,
+        state: BlockState,
+        ground: BlockState,
+        ground_pos: BlockPos,
+        may: &mut Option<bool>,
+        #[engine] inert: &mut bool,
+    );
 }

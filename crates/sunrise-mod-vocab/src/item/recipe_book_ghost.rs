@@ -12,7 +12,7 @@ pub struct GhostSlot {
     pub slot: u16,
     /// What the slot shows.
     pub display: RecipeSlotDisplay,
-    /// The recipe's result: it gets the frame `Screen::recipe_book_big_result` asks for.
+    /// The recipe's result: it gets the frame `MenuScreenLayout::recipe_book_big_result` asks for.
     pub result: bool,
 }
 

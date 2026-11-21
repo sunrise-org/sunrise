@@ -4,9 +4,11 @@
 
 `LevelRef::dimension` returns a `DimensionKey`, a small `Copy` value that names the dimension
 for as long as the game runs, custom dimensions included. Compare it with another key or with
-`DimensionKey::OVERWORLD`, `NETHER` and `END`; `level.dimension().id(host)` gives the name
-(`minecraft:the_nether`). On a client, `host.level(name)` gives the level it shows under the
-name the server calls it, whether or not that is a vanilla dimension.
+`DimensionKey::OVERWORLD`, `NETHER` and `END`; `level.dimension().id(host)` borrows the name
+as `Option<&str>` (for example, `Some("minecraft:the_nether")`). It returns `None`
+without a backend or for an unissued slot. Copy the name only if you need to retain it
+beyond the host borrow. On a client, `host.level(name)` gives the level it shows under
+the name the server calls it, whether or not that is a vanilla dimension.
 
 ## Dimension shape
 
@@ -109,15 +111,17 @@ as `Entity.teleport` with a portal's transition. It works for a player, a mob, a
 trident, a firework and the thrown items and fireballs a chunk saves. The entity keeps its motion;
 set it first with `entity.set_velocity` to stop or turn it.
 
+Bind a [server command](../entities/server-commands.md) in `Hooks::register_commands`.
+This executor accepts a player source and returns `Some(1)` when the move is queued:
+
 ```rust,ignore
-fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>) -> Flow {
-    let CommandSource::Player { player, .. } = event.source else {
-        return Flow::Continue;
+event.commands.push(Command::new("pocket").executes(|host, source, _| {
+    let CommandSource::Player { player, .. } = source else {
+        return None;
     };
-    let entity = player.entity();
-    entity.teleport_to_level(host, "mymod:pocket", [8.5, 100.0, 8.5], None);
-    Flow::Cancel
-}
+    player.entity().teleport_to_level(host, "mymod:pocket", [8.5, 100.0, 8.5], None)
+        .then_some(1)
+}));
 ```
 
 `pos` is in the destination's own coordinates: nothing scales it by the level's
@@ -175,10 +179,41 @@ position, not the position above it used by Pre.
 
 ## Players, structures and chunk watchers
 
-`level.online_players(host)` lists the real online players in that server level, including
-when it is parked. Obtain a chunk with `host.chunk(level, pos)`, then call
-`chunk.watchers(host)` to ask which players were sent it and have it inside their
-view distance; fake players watch nothing.
+`level.visit_online_players(host, &mut visit)` visits the real online players in that server
+level without building a list, even if the level is parked. In the active level the local
+or acting player comes first, then the placed guests in server order; a parked level has
+only its placed guests. Fake players and players displaced by a nested guest turn are skipped.
+The callback takes a `PlayerRef` and can make shared reads through the same host. Return
+`core::ops::ControlFlow::Break(())` to stop or `Continue(())` to keep going. The call returns
+`Ok(Break(()))` if you stopped it or `Ok(Continue(()))` if it finished, including when
+the level had no players. A stale level gives `Err(LevelReadError::Stale)`; a client or
+unavailable world access gives `Err(LevelReadError::Unavailable)`. Neither calls the visitor.
+
+If you need mutable host access, collect only the handles that will receive the effect.
+For example, select players above a world y-coordinate (`min_y: f64`) with a shared
+read, then send each a message. This example is from a context that can propagate
+both visit and send errors:
+
+```rust,ignore
+use core::ops::ControlFlow::Continue;
+
+let mut recipients = Vec::new();
+let _ = level.visit_online_players(host, &mut |player| {
+    if player.entity().position(host).is_some_and(|pos| pos[1] > min_y) {
+        recipients.push(player);
+    }
+    Continue(())
+})?;
+for player in recipients {
+    let _ = player.tell(host, message.clone())?;
+}
+```
+
+For typed payloads, `ToClient::send_in_level` and `ToClient::send_near` already handle
+collecting recipients before sending.
+
+Obtain a chunk with `host.chunk(level, pos)`, then call `chunk.watchers(host)` to ask which
+players were sent it and have it inside their view distance; fake players watch nothing.
 
 `level.find_nearest_structure(host, structure, StructureSearch::new(origin, radius))` searches
 for a structure id or `#tag` and returns its structure and locate position. This is a

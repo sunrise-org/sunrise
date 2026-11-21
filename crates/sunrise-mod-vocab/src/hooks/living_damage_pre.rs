@@ -24,6 +24,7 @@ The six combat hooks (`living_incoming_damage`, `damage_pre`, `damage_post`, `li
 **Sounds and an entity's random (`living_incoming_damage`, `living_damage_pre`, `living_damage_post`, `living_shield_block`, `living_use_totem`, now one version up):** these five take the hit's host as `&mut dyn HitHost` (a `LevelRandomHost` that also plays level sounds and draws from an entity's own random), so a listener can play a hit sound with a pitch drawn from the attacker. `host.play_sound_at(sound, at, source, volume, pitch)` is `Level.playSound(null, x, y, z, ...)` and `host.play_sound_from(entity, sound, source, volume, pitch)` is `Level.playSound(null, entity, ...)`: every player in range hears it, the entity's own player too, and a cancelled hit still plays what was queued. The sound's seed is drawn at the call from the level's sound-seed stream, never from the level random. `entity.next_float(host)`, `next_double`, `next_bool` and `next_int(host, bound)` draw from the entity's actual random stream, in listener order, and the stream keeps the draws. A hit lends its attacker where the game applies a melee hit (the attacking player or mob, for player → mob, mob → mob and mob → player) and no entity at any other damage site (environment, projectiles, explosions, potions and the like); the attacking mob's own random is the one its AI draws from, and a hit built inside a mob's own tick lends none. Any other entity, a stale handle, a client and an out-of-range `bound` answer `None` (`false` for a sound). **Migration:** change the host parameter's type from `&mut dyn LevelRandomHost` to `&mut dyn HitHost`; `with_random`, attachments and the event are unchanged. `entity_invulnerability_check` is asked on both sides and as a query, so its host stays read-only and it gets none of this. Tick-time effect: one pointer in the hit; with no listener nothing is looked up, drawn or allocated."#]
     /// The container is an API-owned scalar snapshot; the engine retains sequencing and normalization.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         host = "hit",
@@ -31,5 +32,10 @@ The six combat hooks (`living_incoming_damage`, `damage_pre`, `damage_post`, `li
         version = 2,
         target = "sunrise_client::game::native_hooks::living_damage_pre::HitLevel<'_>::native_living_damage_pre"
     )]
-    fn living_damage_pre();
+    fn living_damage_pre(
+        entity: i32,
+        kind: &str,
+        source: &HurtSource<'_>,
+        container: &mut mod_api::DamageContainer,
+    );
 }

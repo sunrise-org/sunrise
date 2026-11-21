@@ -186,24 +186,34 @@ pub trait LivingBackend {
         id: &str,
     ) -> Option<Vec<AttributeModifier>>;
     /// Side: both.
-    /// The stack in `slot` (`LivingEntity.getItemBySlot`). Players, guests,
-    /// mobs, armor stands and the dragon store all eight slots. An armor
-    /// stand's body and saddle are storage only: vanilla's `canUseSlot`
-    /// refuses them for interaction. None means empty, unsupported or stale.
-    /// The stack in equipment slot `slot` (`LivingEntity.getItemBySlot`):
-    /// None when it is empty, the entity has no such slot (a player has no
-    /// body or saddle slot), or the handle is stale. API 382.
+    /// Lend the stack in `slot` once, as in [`LivingRef::with_equipment`].
     #[access(WorldOnly)]
-    fn living_equipment(&self, living: LivingRef, slot: EquipmentSlot) -> Option<ItemStack>;
+    #[manual_handle]
+    fn living_equipment(
+        &self,
+        living: LivingRef,
+        slot: EquipmentSlot,
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) -> Option<()>;
     /// Side: both.
-    /// The stack in hand `hand` (`LivingEntity.getItemInHand`). API 382.
+    /// Lend the stack in `hand` once, as in [`LivingRef::with_hand_item`].
     #[access(WorldOnly)]
-    fn living_hand_item(&self, living: LivingRef, hand: Hand) -> Option<ItemStack>;
+    #[manual_handle]
+    fn living_hand_item(
+        &self,
+        living: LivingRef,
+        hand: Hand,
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) -> Option<()>;
     /// Side: server.
-    /// DamageSource.getWeaponItem on a living attacker: the active auto-spin
-    /// stack for a player, otherwise its live main hand. None if unavailable.
+    /// Lend the living attacker's weapon once, as in [`LivingRef::with_weapon_item`].
     #[access(WorldOnly)]
-    fn living_weapon_item(&self, living: LivingRef) -> Option<ItemStack>;
+    #[manual_handle]
+    fn living_weapon_item(
+        &self,
+        living: LivingRef,
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) -> Option<()>;
     /// Side: server.
     /// `TamableAnimal.isTame`, `AbstractHorse.isTamed`: None for a kind that
     /// can't be tamed or a stale handle. API @API:living_refs@.
@@ -224,16 +234,18 @@ pub trait LivingBackend {
     fn living_item_use_remaining(&self, living: LivingRef) -> Option<i32>;
     /// Side: both.
     /// `LivingEntity.getUsedItemHand` while `isUsingItem`: the hand of the item
-    /// a player or a mob uses, None when it uses none. On a client, the local
-    /// player's only.
+    /// a player or a mob is ordinarily using, None when it uses none. On a client,
+    /// the local player's only. [`crate::ClientItemUseBehavior`] intercepts input
+    /// without entering this state.
     #[access(WorldOnly)]
     fn living_used_item_hand(&self, living: LivingRef) -> Option<Hand>;
     /// Side: both.
     /// `LivingEntity.isBlocking`: whether a player or a mob holds up an item that blocks attacks
     /// (a shield, or any item with `minecraft:blocks_attacks`): it is using that item, from either
     /// hand, and has used it for the component's `block_delay_seconds` (5 ticks for a shield).
-    /// False while it uses nothing or another item. On a client, the local player's only. None
-    /// for armor stands and the dragon, and for a stale handle.
+    /// False while it uses nothing or another item. Intercepting input with
+    /// [`crate::ClientItemUseBehavior`] does not make the player block. On a client, the local
+    /// player's only. None for armor stands and the dragon, and for a stale handle.
     #[access(WorldOnly)]
     fn living_is_blocking(&self, living: LivingRef) -> Option<bool>;
     /// Side: both.

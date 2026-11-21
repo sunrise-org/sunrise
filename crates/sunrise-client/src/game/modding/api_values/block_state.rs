@@ -296,7 +296,7 @@ mod tests {
             BlockStateId(u32::MAX).try_into_api(),
             Err(BlockStateError::UnknownState)
         );
-        let bad = BlockState::from(mod_api::BlockStateRecord::new(east.block(), u16::MAX));
+        let bad = mod_api::__private::block_state_from_ordinal(east.block(), u16::MAX);
         assert_eq!(bad.try_into_engine(&()), Err(BlockStateError::UnknownState));
         std::thread::spawn(|| {
             assert_eq!(

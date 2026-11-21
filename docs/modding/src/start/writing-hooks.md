@@ -82,6 +82,11 @@ method on `mod_api::Hooks` in your editor, using the pinned SDK under
 [`.sunrise/sdk/api/`](../reference/sdk/03-in-a-project.md#sunrisesdk).
 For a scoped hook, look at the relevant Part trait instead.
 
+The engine declares the parameters of each hook in vocabulary types in
+`crates/sunrise-mod-vocab/src/hooks/`. The listener method and event come from that declaration.
+When adding a hook to the engine, give its game function the generated `fire::<Name>Call`
+carrier rather than copying the parameter list. See [Adding a hook](https://github.com/sunrise-org/sunrise/blob/main/docs/mod-api/adding-a-hook.md).
+
 ## Order between mods
 
 Mods run in dependency order: a mod after the mods it depends on. A hook method may carry

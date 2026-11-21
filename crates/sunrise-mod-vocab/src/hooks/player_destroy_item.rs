@@ -13,10 +13,16 @@ pub trait Hooks {
     /// inferred from an equipment status packet. Partial consumption, refused
     /// actions and creative use that preserves the stack do not fire.
     #[hook(
+        dispatch = "flat",
         side = "both",
         version = 2,
         contract = "listen",
         neoforge = "PlayerDestroyItemEvent"
     )]
-    fn player_destroy_item();
+    fn player_destroy_item(
+        player: u128,
+        player_entity_id: i32,
+        original: &ItemStack,
+        hand: Option<Hand>,
+    );
 }

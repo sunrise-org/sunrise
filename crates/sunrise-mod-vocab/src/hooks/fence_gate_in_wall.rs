@@ -9,6 +9,8 @@ pub trait Hooks {
     /// This does not change wall connections or pathfinding. Answer from
     /// the state alone; the host is read-only.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "both",
         contract = "replace",
         scope = "block",
@@ -17,5 +19,5 @@ pub trait Hooks {
         target = "sunrise_client::game::native_hooks::fence_gate_in_wall::GameLevel<'_>::native_fence_gate_in_wall",
         neoforge = "none (vanilla FenceGateBlock.isWall)"
     )]
-    fn fence_gate_in_wall();
+    fn fence_gate_in_wall(state: BlockState, answer: &mut Option<bool>);
 }

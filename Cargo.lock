@@ -4311,6 +4311,7 @@ name = "sunrise-bots"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "sunrise-core",
  "sunrise-protocol",
 ]
 
@@ -4354,9 +4355,7 @@ dependencies = [
  "sunrise-core",
  "sunrise-dualsense",
  "sunrise-friends",
- "sunrise-game-discovery",
  "sunrise-gameplay",
- "sunrise-guest-stack",
  "sunrise-hooks",
  "sunrise-items",
  "sunrise-java-properties",
@@ -4384,7 +4383,6 @@ dependencies = [
  "ureq",
  "wgpu",
  "winit",
- "winresource",
  "zip",
 ]
 
@@ -4463,8 +4461,6 @@ dependencies = [
  "sunrise-command",
  "sunrise-core",
  "sunrise-dualsense",
- "sunrise-game-discovery",
- "sunrise-guest-stack",
  "sunrise-hooks",
  "sunrise-items",
  "sunrise-java-properties",
@@ -4526,7 +4522,6 @@ dependencies = [
  "sunrise-command",
  "sunrise-connected",
  "sunrise-core",
- "sunrise-guest-stack",
  "sunrise-hdr",
  "sunrise-hooks",
  "sunrise-items",
@@ -4675,13 +4670,6 @@ dependencies = [
  "sunrise-protocol",
  "sunrise-threads",
  "sunrise-world",
-]
-
-[[package]]
-name = "sunrise-guest-stack"
-version = "0.1.0"
-dependencies = [
- "libc",
 ]
 
 [[package]]
@@ -4840,7 +4828,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sunrise-client",
- "sunrise-guest-stack",
  "sunrise-hooks",
  "sunrise-mod-api",
  "sunrise-mod-package",
@@ -4871,7 +4858,6 @@ dependencies = [
  "subtle",
  "sunrise-assets",
  "sunrise-core",
- "sunrise-mod-api-macros",
  "sunrise-mod-surface",
  "sunrise-mod-vocab",
  "sunrise-shader-api",
@@ -5066,7 +5052,6 @@ version = "0.1.0"
 dependencies = [
  "sunrise-bench",
  "sunrise-core",
- "sunrise-guest-stack",
  "sunrise-hooks",
  "sunrise-java-properties",
  "sunrise-mod-api-gen",
@@ -5277,7 +5262,6 @@ dependencies = [
  "mimalloc",
  "object",
  "rustc-demangle",
- "sunrise-guest-stack",
  "windows-sys 0.61.2",
 ]
 
@@ -5301,6 +5285,7 @@ dependencies = [
  "sunrise-core",
  "sunrise-deflate",
  "sunrise-mod-api-macros",
+ "sunrise-mod-vocab",
  "sunrise-threads",
  "xxhash-rust",
 ]

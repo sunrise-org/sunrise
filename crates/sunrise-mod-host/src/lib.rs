@@ -15,5 +15,3 @@ mod mods_button;
 #[allow(dead_code)]
 #[path = "../build.rs"]
 mod build_script;
-
-pub use sunrise_guest_stack::prepare_main as prepare_main_stack;

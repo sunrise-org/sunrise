@@ -844,7 +844,8 @@ impl Game<'_> {
 #[cfg(test)]
 mod seen_advancement_tests {
     use super::*;
-    use sunrise_protocol::buf::{Codec, Reader, Writer};
+    use sunrise_core::vanilla_bytes::Writer;
+    use sunrise_protocol::buf::{Codec, Reader};
     use sunrise_protocol::packets::play::SeenAdvancements;
 
     /// `ServerboundSeenAdvancementsPacket.openedTab` and `closedScreen`: an

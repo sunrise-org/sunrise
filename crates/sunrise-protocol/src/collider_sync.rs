@@ -9,11 +9,9 @@
 //!
 //! The channel is an engine declaration in the negotiated payload table: only a peer that
 //! offers it at [`VERSION`] is sent anything.
-use crate::{
-    Error, Result,
-    buf::{Reader, Writer},
-};
+use crate::{Error, Result, buf::Reader};
 use sunrise_core::geometry::oriented;
+use sunrise_core::vanilla_bytes::Writer;
 
 /// The custom payload channel, clientbound only.
 pub const CHANNEL: &str = "sunrise:collider_sync";

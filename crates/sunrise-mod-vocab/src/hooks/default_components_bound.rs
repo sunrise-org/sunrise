@@ -16,6 +16,7 @@ pub trait Hooks {
     /// Runs in Reloading: published asset/data queries can rebind caches; world handles
     /// and transactions remain unavailable.
     #[hook(
+        dispatch = "flat",
         side = "both",
         contract = "listen",
         neoforge = "DefaultDataComponentsBoundEvent"
@@ -46,5 +47,5 @@ on a tag packet: its defaults come from its own load. The client-side notice
 therefore marks the applied tags' arrival rather than a rebinding; how often
 it should fire, and its exact order against the client's component binding,
 are the open questions this hook's review asks about."##]
-    fn default_components_bound();
+    fn default_components_bound(cause: mod_api::TagsUpdateCause);
 }

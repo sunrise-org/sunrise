@@ -16,6 +16,8 @@ pub trait Hooks {
     /// replaceable with the supplied context. Non-finite click or view values
     /// are refused. Survival and obstruction still apply at the final position.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "both",
         contract = "replace",
         scope = "item",
@@ -25,5 +27,10 @@ pub trait Hooks {
         neoforge = "none (vanilla BlockItem.updatePlacementContext)",
         version = 2
     )]
-    fn placement_context();
+    fn placement_context(
+        stack: &ItemStack,
+        context: &PlacementContext,
+        placer: Option<mod_api::PlacementPlacer>,
+        answer: &mut Option<Option<mod_api::PlacementContext>>,
+    );
 }

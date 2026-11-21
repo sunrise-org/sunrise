@@ -32,10 +32,11 @@ pub trait EntitySightBackend {
     /// A ray from the entity's eyes along its view vector, `distance` blocks
     /// long, against block outlines with an empty collision context and no
     /// fluids (`Entity.pick(distance, 1.0F, false)`): what it looks at. A
-    /// miss is the hit with `miss` set. Entities are not clipped: that is
-    /// `LevelRef::ray_trace_entities`. None for a stale handle, a
-    /// `distance` that is negative or not finite, and where `LevelRef::clip`
-    /// is None.
+    /// miss is the hit with `miss` set. This clips blocks only. For entities, use
+    /// [`LevelRef::ray_trace_nearest_entity`] for one accepted hit or
+    /// [`LevelRef::ray_trace_entities`] for all hits in order. Returns `None` for a
+    /// stale handle, a negative or non-finite `distance`, or when `LevelRef::clip`
+    /// returns `None`.
     #[access(WorldOnly)]
     fn entity_pick(&self, entity: EntityRef, distance: f64) -> Option<ClipHit>;
 }

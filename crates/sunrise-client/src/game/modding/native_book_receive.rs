@@ -49,8 +49,7 @@ impl Game<'_> {
         &self,
         data: &sync::CatalogBytes,
     ) -> Result<ModBookIndex, sync::Refusal> {
-        let declarations: Vec<mod_api::RecipeBookCategory> =
-            mod_api::wire::Reader::decode(&data.bytes).map_err(|_| sync::Refusal::Invalid)?;
+        let declarations = sync::decode_catalogue(&data.bytes)?;
         let mut recipes = BTreeMap::new();
         for category in &declarations {
             if category.target_menu != data.identity.menu.as_str()

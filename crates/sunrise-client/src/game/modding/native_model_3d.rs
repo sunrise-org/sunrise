@@ -24,7 +24,7 @@ impl Game<'_> {
     pub(super) fn native_model_3d(
         &self,
         batch: &mut HudBatch,
-        subject: Gui3dSubject,
+        subject: Gui3dSubject<'_>,
         view: Gui3dView,
     ) -> Result<(), Gui3dError> {
         if !self.native_window() {
@@ -40,13 +40,11 @@ impl Game<'_> {
         let (start, blends) = (batch.vertices.len(), batch.blends.len());
         match subject {
             Gui3dSubject::Item(stack) => {
-                let stack = crate::game::api_values::stack_value(&stack)
+                let stack = crate::game::api_values::stack_value(stack)
                     .map_err(|_| Gui3dError::UnknownItem)?;
-                // GuiGraphicsExtractor.item draws nothing for an empty stack.
-                if &*stack.item == "minecraft:air"
-                    || stack.count == 0
-                    || self.res.items().get(&stack.item).is_none()
-                {
+                // GuiGraphicsExtractor.item draws nothing for an empty stack; ItemStack already
+                // guarantees a nonzero count.
+                if &*stack.item == "minecraft:air" || self.res.items().get(&stack.item).is_none() {
                     return Err(Gui3dError::UnknownItem);
                 }
                 if !self.draw_item_model_posed(batch, &stack, pose) {
@@ -135,7 +133,8 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mod_api::IDENTITY_TRANSFORM;
+    use crate::game::host::draw::GameDrawContext;
+    use mod_api::{DrawContext, IDENTITY_TRANSFORM};
 
     #[test]
     fn the_identity_at_size_16_is_the_slots_pose() {
@@ -159,7 +158,7 @@ mod tests {
         assert_eq!(right, Vec3::new(100.0, 90.0, 0.0));
     }
 
-    /// An item whose turn overflows is refused, and the batch is as it was.
+    /// A borrowed stack is reusable, and a refused second draw leaves the first draw intact.
     #[test]
     #[ignore = "daily"]
     fn an_overflowing_item_is_refused_and_leaves_the_batch_as_it_was() {
@@ -170,17 +169,22 @@ mod tests {
             )
             .unwrap();
             let mut batch = HudBatch::scratch([320, 240]);
-            let (vertices, blends) = (batch.vertices.len(), batch.blends.len());
-            // Twice 3e38 pixels a block is not a number: the pose overflows.
-            let mut turn = mod_api::IDENTITY_TRANSFORM;
+            let mut draw = GameDrawContext::new(game, &mut batch);
+            let view = Gui3dView::new([40.0, 30.0], 16.0, IDENTITY_TRANSFORM);
+            draw.model_3d(Gui3dSubject::Item(&stack), view).unwrap();
+            let (vertices, blends) = (draw.surface.vertices.len(), draw.surface.blends.len());
+            assert!(vertices > 0, "the first draw submitted the sword");
+
+            // Twice 3e38 pixels a block is not finite: the pose overflows.
+            let mut turn = IDENTITY_TRANSFORM;
             turn[0] = 2.0;
             let view = Gui3dView::new([40.0, 30.0], 3.0e38, turn);
             assert_eq!(
-                game.native_model_3d(&mut batch, Gui3dSubject::Item(stack), view),
+                draw.model_3d(Gui3dSubject::Item(&stack), view),
                 Err(Gui3dError::NotFinite)
             );
             assert_eq!(
-                (batch.vertices.len(), batch.blends.len()),
+                (draw.surface.vertices.len(), draw.surface.blends.len()),
                 (vertices, blends)
             );
         });

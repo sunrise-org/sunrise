@@ -25,6 +25,8 @@ pub trait Hooks {
     /// listeners retaining the earlier family set filter out `minecraft:fishing_bobber`
     /// and `minecraft:firework_rocket`.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_projectile_impact",
+        dispatch = "api_carrier",
         side = "server",
         version = 2,
         contract = "cancel",
@@ -71,6 +73,8 @@ pub trait Hooks {
     /// found again by id after the board and dismount checks: gone, the click is spent and
     /// the player is not seated. Server-side.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_entity_mount",
+        dispatch = "api_carrier",
         side = "server",
         contract = "cancel",
         out = "canceled",
@@ -98,6 +102,8 @@ pub trait Hooks {
     /// of this flag. Attack and mining swing packets also honour the item swing veto. Pick
     /// only vetoes its packet and never swings. Fires on the window client.
     #[hook(
+        target = "sunrise_client::game::native_hooks::interaction::Game<'_>::native_interaction_key_mapping_triggered",
+        dispatch = "flat",
         side = "client",
         contract = "cancel",
         out = "canceled",
@@ -105,5 +111,11 @@ pub trait Hooks {
         version = 2,
         cancellable = true
     )]
-    fn interaction_key_mapping_triggered();
+    fn interaction_key_mapping_triggered(
+        key: InteractionKey,
+        hand: Hand,
+        attempt: InteractionAttempt,
+        swing_hand: &mut bool,
+        canceled: &mut bool,
+    );
 }

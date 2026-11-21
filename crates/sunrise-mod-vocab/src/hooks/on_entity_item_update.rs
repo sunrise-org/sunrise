@@ -12,6 +12,7 @@ pub trait Hooks {
     /// none costs one table lookup, and a game with no such part none at all.
     /// Server-side, for every dropped item that ticks.
     #[hook(
+        dispatch = "api_carrier",
         side = "server",
         contract = "cancel",
         out = "canceled",

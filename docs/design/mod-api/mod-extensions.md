@@ -61,7 +61,7 @@ The derive implements the existing trait (`crates/sunrise-mod-vocab/src/wire/wir
 | `vec!["ab".to_string()]` | std, hand-written | 4 | `01 00 00 00 02 00 00 00 61 62` |
 | `serde_json::json!(1)` | JSON string | 4 | `01 00 00 00 31` |
 
-The first derive PR commits these as a golden test, plus one case per shape and per hand-written impl that becomes a derive. It runs against the generated impls first, then against the derive, so any byte change fails it.
+The first derive PR commits these as a golden test, plus one case per shape and per hand-written impl that becomes a derive. It runs against the generated impls first, then against the derive, so any byte change fails it. `BlockStateId` was subsequently removed from the mod API; its bytes above are historical.
 
 **Nesting.** A derived record counts one `nested` level, exactly as the generated one does. A few hand-written impls that become derives (listed below) don't nest today. That changes no bytes; it only uses one more level of the shared 1040-level budget on those types. The budget is sized for 512 nested NBT levels, and `Tag` is already a generated variant enum.
 

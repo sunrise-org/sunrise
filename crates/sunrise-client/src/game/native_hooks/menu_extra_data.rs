@@ -5,10 +5,10 @@ impl Game<'_> {
     /// Block `block` at `pos` opens its mod menu type `menu` for server
     /// player `player`: set `data` to hand the menu's screen bytes of your
     /// own (a machine's tier, mode or recipes), up to 32 KiB, which the
-    /// client reads with `screen_extra_data` while the screen is open
+    /// client reads only from `MenuScreenOpen::extra` during construction
     /// (NeoForge's `openMenu` with an extra-data writer). The first mod to
-    /// set it wins, so answer only for your blocks. The player's state is not
-    /// swapped in. 401.
+    /// set it wins, so answer only for your blocks. Live data slots travel
+    /// separately. The player's state is not swapped in.
     pub(in crate::game) fn native_menu_extra_data(
         &mut self,
         player: u128,
@@ -24,28 +24,15 @@ impl Game<'_> {
 /// Helpers for native mods, kept as stable as the hook points.
 // Native mods use these; nothing in Sunrise does.
 impl Game<'_> {
-    /// The block of the mod screen that is open (`native_screen`), as the
-    /// server named it when the block opened its menu type; None when no mod
-    /// screen is open. 401.
+    /// The opener position for the currently shown mod menu, if known.
     pub(in crate::game) fn screen_pos(&self) -> Option<[i32; 3]> {
-        self.shown_native_screen()?.pos()
-    }
-    /// What the block's mod wrote for the mod screen that is open
-    /// (`native_menu_extra_data` on the server), empty when it wrote nothing;
-    /// None when no mod screen is open. @API:menu_extra_data@.
-    pub(in crate::game) fn screen_extra_data(&self) -> Option<Vec<u8>> {
-        let screen = self.shown_native_screen()?;
-        Some(
-            screen
-                .extra
-                .as_ref()
-                .map_or_else(Vec::new, |e| e.data.clone()),
-        )
+        self.shown_native_screen()?.menu.pos
     }
     /// The `sunrise:menu_extra` payload the server sent just before its
     /// `OpenScreen`, in the layout its revision query in configuration chose:
     /// the current one from a server that asked, the legacy one from a server
-    /// that never did (an older Sunrise server).
+    /// that never did (an older Sunrise server). The pending message must match
+    /// the opening; its bytes are borrowed by that factory and then discarded.
     pub(in crate::game) fn receive_menu_extra(&mut self, data: &[u8]) {
         let revision = self
             .remote

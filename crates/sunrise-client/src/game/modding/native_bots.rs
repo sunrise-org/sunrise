@@ -38,7 +38,6 @@ fn input_keys(input: &PlayerInput) -> Option<Keys> {
         shift: input.sneak,
         sprint: input.sprint,
         analog: (!key(forward) || !key(strafe)).then_some([strafe, forward]),
-        ..Keys::default()
     })
 }
 

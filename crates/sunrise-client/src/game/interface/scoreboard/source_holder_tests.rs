@@ -8,11 +8,8 @@ use sunrise_client::{
     chunk::Chunk,
     lan::{Joined, NetConfig, Out, PlayerSender, guest::Guest, hub::HubConfig},
 };
-use sunrise_protocol::{
-    buf::{Reader, Writer},
-    ids,
-    packets::configuration::ClientInformation,
-};
+use sunrise_core::vanilla_bytes::Writer;
+use sunrise_protocol::{buf::Reader, ids, packets::configuration::ClientInformation};
 
 /// A hosted world with `name` joined and placed at the world spawn.
 fn game_with_guest<'a>(

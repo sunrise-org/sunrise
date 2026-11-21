@@ -269,7 +269,7 @@ impl Game<'_> {
                     &self.level.enabled_features,
                 )));
             self.restore_native_commands();
-            self.resend_commands_filtered();
+            self.send_native_command_report(true);
         }
     }
 }

@@ -1,15 +1,15 @@
-//! The side-neutral machinery of reload listeners: the error and apply types,
-//! crash attribution, the shared prepare and apply loops, and the registration
-//! core both sides build on. The per-side `server_reload` and `client_reload`
-//! hold only their context, listener trait and vanilla anchors.
+//! Shared reload listener registration, prepare/apply, errors and crash attribution.
+//! `server_reload` and `client_reload` define each side's context, listener trait
+//! and vanilla anchors.
 use crate::{
     FileToIdConverter, Identifier,
     world::reload_order::{ReloadOrder, ReloadOrderError},
 };
 use std::{collections::BTreeMap, sync::Arc};
 
-/// An error loading a resource, including the resource that caused it.
-// no wire: transfers resource id and rendered error message, not the boxed native error object.
+/// An error loading a resource, with its ID and the original cause available
+/// through [`Self::resource`] and [`std::error::Error::source`].
+// no wire: retains the native error and its source chain in this process.
 #[derive(Debug)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct ReloadResourceError {
@@ -17,7 +17,8 @@ pub struct ReloadResourceError {
     source: Box<dyn std::error::Error + Send + Sync>,
 }
 impl ReloadResourceError {
-    /// Attach the resource ID to a parsing or validation error.
+    /// Attach the resource ID to a parsing or validation error without losing
+    /// its type. For a validation message alone, use `std::io::Error::other(message)`.
     pub fn new(
         resource: Identifier,
         source: impl std::error::Error + Send + Sync + 'static,
@@ -27,19 +28,10 @@ impl ReloadResourceError {
             source: Box::new(source),
         }
     }
-}
-/// The error as its resource ID and message.
-impl From<&ReloadResourceError> for (Identifier, String) {
-    fn from(error: &ReloadResourceError) -> Self {
-        (error.resource.clone(), error.source.to_string())
-    }
-}
-impl From<(Identifier, String)> for ReloadResourceError {
-    fn from((resource, message): (Identifier, String)) -> Self {
-        Self {
-            resource,
-            source: message.into(),
-        }
+
+    /// The converted ID of the resource that failed to load.
+    pub fn resource(&self) -> &Identifier {
+        &self.resource
     }
 }
 impl std::fmt::Display for ReloadResourceError {
@@ -50,34 +42,6 @@ impl std::fmt::Display for ReloadResourceError {
 impl std::error::Error for ReloadResourceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(self.source.as_ref())
-    }
-}
-
-/// Infallible publication, run once, only after every listener prepared successfully: what a
-/// listener's `prepare` hands back. A later server table refusal leaves the old engine
-/// generation in place, but cannot undo this callback's own effects. One per listener per reload, never per tick;
-/// `<dyn ReloadApply>::new(move || ...)` makes one from a closure.
-pub trait ReloadApply: Send + Sync {
-    /// Publish the prepared state.
-    fn apply(&self);
-}
-impl dyn ReloadApply {
-    /// Capture newly parsed state without publishing it yet.
-    // The closure runs once, so it may move the parsed state into the live one.
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new(apply: impl FnOnce() + Send + 'static) -> Box<dyn ReloadApply> {
-        Box::new(Once(std::sync::Mutex::new(Some(Box::new(apply)))))
-    }
-}
-/// A closure run on the first `apply`.
-type Publish = Box<dyn FnOnce() + Send>;
-struct Once(std::sync::Mutex<Option<Publish>>);
-impl ReloadApply for Once {
-    fn apply(&self) {
-        let publish = self.0.lock().unwrap_or_else(|e| e.into_inner()).take();
-        if let Some(publish) = publish {
-            publish();
-        }
     }
 }
 
@@ -265,12 +229,11 @@ impl<L: ?Sized + 'static> ReloadCore<L> {
     }
 }
 
-/// A failed reload: accepted originals were unavailable, listener ordering
-/// failed, or a listener's `prepare` returned an error. Both sides share this
-/// form, so the reload paths report listeners alike.
+/// A failed reload: staging its inputs failed, listeners could not be ordered,
+/// or a listener's `prepare` returned an error. Both sides report listeners alike.
+// no wire: local staging preserves the typed ordering and listener errors.
 #[derive(Debug)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum ReloadStageError {
     /// The next resource generation or its enabled-package inventory could not be built.
     DataSource(String),
@@ -317,8 +280,8 @@ impl std::error::Error for ReloadStageError {
 pub enum PreparedStep<V = ()> {
     /// A mod listener's prepared step.
     Mod {
-        /// Applies the prepared result.
-        apply: Box<dyn ReloadApply>,
+        /// Publishes the prepared result, consuming the action.
+        apply: Box<dyn FnOnce() + Send + 'static>,
         /// The owning mod's id, or `None` for the game's own.
         owner: Option<&'static str>,
         /// The listener's name.
@@ -333,14 +296,14 @@ pub enum PreparedStep<V = ()> {
 /// `context_of` builds the side's context for one listener from its converter,
 /// `prepare_of` calls the side's listener trait, and `vanilla` turns a
 /// converter-less vanilla anchor into its own step (the server's function
-/// library); the boundaries prepare nothing. Runs wherever the side stages its
-/// reload, off the thread that owns the game.
+/// library); the boundaries prepare nothing. Runs on the side's staging thread.
+/// If a prepare fails, the already prepared actions are dropped without running.
 pub fn prepare_listeners<L: ?Sized, C, V>(
     ordered: Vec<RegisteredListener<L>>,
     phase: &'static str,
     vanilla: impl Fn(&RegisteredListener<L>) -> Option<V>,
     context_of: impl Fn(&Identifier, &FileToIdConverter) -> C,
-    prepare_of: impl Fn(&L, &C) -> Result<Box<dyn ReloadApply>, ReloadResourceError>,
+    prepare_of: impl Fn(&L, &C) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError>,
 ) -> Result<Vec<PreparedStep<V>>, ReloadStageError> {
     let mut prepared = Vec::new();
     for listener in ordered {
@@ -369,7 +332,7 @@ pub fn prepare_listeners<L: ?Sized, C, V>(
     Ok(prepared)
 }
 
-/// Applies the prepared steps in order on the thread that owns the game,
+/// Consumes the prepared steps in order on the thread that owns the game,
 /// attributing each mod listener's apply to its registering mod. `vanilla`
 /// publishes the side's own step.
 pub fn apply_listeners<V>(
@@ -381,7 +344,7 @@ pub fn apply_listeners<V>(
         match step {
             PreparedStep::Mod { apply, owner, id } => {
                 let _mark = ReloadMark::enter(owner, &id, phase);
-                apply.apply();
+                apply();
             }
             PreparedStep::Vanilla(step) => vanilla(step),
         }
@@ -392,8 +355,8 @@ pub fn apply_listeners<V>(
 /// sides' contexts; each side keeps its own context type so a wrong-side read
 /// does not compile.
 // exhaustive: its fields are private, so mods cannot build or destructure it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct ReloadFiles(pub(crate) BTreeMap<Identifier, Vec<u8>>);
+// no wire: owns the local bytes the prepare context lends to a listener.
+pub struct ReloadFiles(BTreeMap<Identifier, Vec<u8>>);
 impl ReloadFiles {
     pub(crate) fn new(files: BTreeMap<Identifier, Vec<u8>>) -> Self {
         Self(files)
@@ -405,5 +368,94 @@ impl ReloadFiles {
     /// The winning bytes for a converted ID, or None outside this directory.
     pub(crate) fn read(&self, id: &Identifier) -> Option<&[u8]> {
         self.0.get(id).map(Vec::as_slice)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        cell::Cell,
+        num::{IntErrorKind, ParseIntError},
+        sync::Mutex,
+        thread,
+    };
+
+    #[test]
+    fn reload_resource_error_borrows_the_resource_id() {
+        let resource = Identifier::parse("test:machines/press").unwrap();
+        let error =
+            ReloadResourceError::new(resource.clone(), std::io::Error::other("invalid file"));
+
+        assert_eq!(error.resource(), &resource);
+    }
+
+    #[test]
+    fn reload_resource_error_exposes_the_typed_source() {
+        let resource = Identifier::parse("test:machines/press").unwrap();
+        let cause = "invalid".parse::<u32>().unwrap_err();
+        let error = ReloadResourceError::new(resource, cause);
+
+        let source = std::error::Error::source(&error).unwrap();
+        let cause = source.downcast_ref::<ParseIntError>().unwrap();
+        assert_eq!(cause.kind(), &IntErrorKind::InvalidDigit);
+    }
+
+    #[test]
+    fn reload_moves_send_only_actions_to_the_applying_thread_in_order() {
+        let trace = Arc::new(Mutex::new(Vec::new()));
+        let applying_thread = thread::current().id();
+        let prepared = thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    assert_ne!(thread::current().id(), applying_thread);
+                    let ordered = ["first", "vanilla", "last"]
+                        .into_iter()
+                        .map(|name| RegisteredListener {
+                            id: Identifier::parse(&format!("test:{name}")).unwrap(),
+                            converter: (name != "vanilla")
+                                .then(|| FileToIdConverter::json("data").unwrap()),
+                            listener: Arc::new(name),
+                            owner: None,
+                        })
+                        .collect();
+                    prepare_listeners(
+                        ordered,
+                        "reload_prepare",
+                        |entry| entry.converter.is_none().then_some("apply vanilla"),
+                        |_, _| (),
+                        |&name, _| {
+                            trace.lock().unwrap().push(format!("prepare {name}"));
+                            let payload = Cell::new(format!("apply {name}"));
+                            let trace = trace.clone();
+                            Ok(Box::new(move || {
+                                assert_eq!(thread::current().id(), applying_thread);
+                                trace.lock().unwrap().push(payload.into_inner());
+                            }))
+                        },
+                    )
+                    .unwrap()
+                })
+                .join()
+                .unwrap()
+        });
+
+        assert_eq!(
+            trace.lock().unwrap().as_slice(),
+            ["prepare first", "prepare last"]
+        );
+        apply_listeners(prepared, "reload_apply", |vanilla| {
+            trace.lock().unwrap().push(vanilla.into());
+        });
+        assert_eq!(
+            trace.lock().unwrap().as_slice(),
+            [
+                "prepare first",
+                "prepare last",
+                "apply first",
+                "apply vanilla",
+                "apply last"
+            ]
+        );
     }
 }

@@ -1002,17 +1002,24 @@ fn a_mounted_guests_turn_publishes_its_teleport_without_dismounting() {
 #[ignore = "daily"]
 fn server_services_preserve_identity_and_message_delivery() {
     use mod_api::{ServerHost, Text};
+    use sunrise_client::lan::announced_channels::REGISTER;
     use sunrise_protocol::packets::play::Clientbound as C;
     with_guests(|game| {
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
         guests.update(0, |g| {
             g.permission = 3;
             g.game_mode = 1;
-            g.address = "192.0.2.12:25565".parse().unwrap();
+            g.set_address("192.0.2.12:25565".parse().unwrap());
+            g.brand = "test client".into();
+            assert!(
+                g.sender
+                    .announced
+                    .apply(REGISTER, b"test:first\0test:second")
+            );
         });
         guests.update(1, |g| {
             g.permission = 1;
-            g.address = "[2001:db8::13]:25566".parse().unwrap();
+            g.set_address("[2001:db8::13]:25566".parse().unwrap());
         });
         let players = game.players().server_players();
         assert_eq!(
@@ -1025,12 +1032,16 @@ fn server_services_preserve_identity_and_message_delivery() {
         assert_eq!(host.players().player_by_name("GUEST12"), Some(a));
         assert_eq!(host.players().player_by_name("missing"), None);
         assert!(game.players().acting_player().is_none());
-        assert_eq!(a.name(game).as_deref(), Some("guest12"));
+        assert_eq!(a.name(game), Some("guest12"));
         assert_eq!(a.permission_level(game), Some(3));
         assert_eq!(b.permission_level(game), Some(1));
         assert_eq!(a.can_use_game_master_blocks(game), Some(true));
-        assert_eq!(a.address(game).as_deref(), Some("192.0.2.12"));
-        assert_eq!(b.address(game).as_deref(), Some("2001:db8::13"));
+        assert_eq!(a.address(game), Some("192.0.2.12"));
+        assert_eq!(b.address(game), Some("2001:db8::13"));
+        assert_eq!(a.client_brand(game), Some("test client"));
+        assert_eq!(b.client_brand(game), Some(""));
+        let channels = a.announced_channels(game).unwrap();
+        assert_eq!(channels.as_ref(), ["test:first", "test:second"]);
         let stale = mod_api::__private::game::player_ref(
             mod_api::EntityRef::new(
                 mod_api::WorldEpoch::new(a.entity().epoch().get() + 1),
@@ -1056,8 +1067,8 @@ fn server_services_preserve_identity_and_message_delivery() {
         game.as_guest(12, |game| {
             assert_eq!(game.players().acting_player(), Some(a));
             assert_eq!(game.players().server_players(), players);
-            assert_eq!(a.address(game).as_deref(), Some("192.0.2.12"));
-            assert_eq!(b.address(game).as_deref(), Some("2001:db8::13"));
+            assert_eq!(a.address(game), Some("192.0.2.12"));
+            assert_eq!(b.address(game), Some("2001:db8::13"));
             assert_eq!(a.permission_level(game), Some(3));
             assert_eq!(b.permission_level(game), Some(1));
             assert_eq!(a.can_use_game_master_blocks(game), Some(true));
@@ -1082,11 +1093,13 @@ fn server_services_preserve_identity_and_message_delivery() {
             game.as_guest(13, |game| {
                 assert_eq!(game.players().acting_player(), Some(b));
                 assert_eq!(game.players().server_players(), players);
-                assert_eq!(a.name(game).as_deref(), Some("guest12"));
+                assert_eq!(a.name(game), Some("guest12"));
                 assert_eq!(a.permission_level(game), Some(3));
                 assert_eq!(b.permission_level(game), Some(1));
-                assert_eq!(a.address(game).as_deref(), Some("192.0.2.12"));
-                assert_eq!(b.address(game).as_deref(), Some("2001:db8::13"));
+                assert_eq!(a.address(game), Some("192.0.2.12"));
+                assert_eq!(b.address(game), Some("2001:db8::13"));
+                assert_eq!(a.client_brand(game), Some("test client"));
+                assert!(Arc::ptr_eq(&channels, &a.announced_channels(game).unwrap()));
                 assert_eq!(a.game_mode(game), None, "body remains displaced");
                 assert_eq!(a.can_use_game_master_blocks(game), None);
                 for invalid in [stale, wrong_entity, wrong_uuid] {
@@ -1109,6 +1122,9 @@ fn server_services_preserve_identity_and_message_delivery() {
         assert!(!a.set_nickname(game, Some("offline")));
         assert!(!a.set_sleep_ignored(game, true));
         assert_eq!(a.address(game), None);
+        assert_eq!(a.client_brand(game), None);
+        assert!(a.announced_channels(game).is_none());
+        assert_eq!(channels.as_ref(), ["test:first", "test:second"]);
         assert_eq!(a.permission_level(game), None);
         assert!(!stale.hide(game, None));
         assert_eq!(stale.name(game), None);
@@ -1167,11 +1183,11 @@ fn canonical_permissions_preserve_owner_and_fake_player_reads() {
             .conn;
         game.as_guest(conn, |game| {
             assert_eq!(fake.permission_level(game), Some(0));
-            assert_eq!(
-                fake.address(game).as_deref(),
-                Some(""),
-                "unknown acting address"
-            );
+            assert_eq!(fake.address(game), Some(""), "unknown acting address");
+            assert_eq!(fake.client_brand(game), Some(""));
+            let empty = fake.announced_channels(game).unwrap();
+            assert!(empty.is_empty());
+            assert!(Arc::ptr_eq(&empty, &fake.announced_channels(game).unwrap()));
             assert_eq!(fake.can_use_game_master_blocks(game), Some(false));
         })
         .unwrap();

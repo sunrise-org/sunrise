@@ -18,6 +18,7 @@ pub trait Hooks {
     /// `HostSide` identifies which one is being edited. UI and sound-engine-only
     /// playback do not ask this hook. Both sides.
     #[hook(
+        dispatch = "api_carrier",
         side = "both",
         contract = "cancel",
         out = "cancel",
@@ -50,6 +51,7 @@ pub trait Hooks {
     /// including steps, falls, hurt, bundle clicks and consumption; these remain
     /// positional sounds, not following sounds. Both sides, distinguished by `HostSide`.
     #[hook(
+        dispatch = "api_carrier",
         side = "both",
         contract = "cancel",
         out = "cancel",

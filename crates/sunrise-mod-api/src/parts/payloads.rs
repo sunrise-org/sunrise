@@ -188,12 +188,19 @@ impl PayloadsRegistrar for PartRegistrar {
     fn add_typed_payload(
         &mut self,
         declaration: PayloadDeclaration,
-        schema: u64,
+        schema: Option<u64>,
         server: Option<Arc<dyn IPayloadHandler>>,
         client: Option<Arc<dyn IPayloadHandler>>,
     ) -> PayloadToken {
         let (protocol, direction) = (declaration.protocol, declaration.direction);
         let requested = declaration.id.clone();
+        let Some(schema) = schema else {
+            self.refused.push(format!(
+                "{} declared typed payload {} with an ordinary-only Wire form",
+                self.mod_id, requested.0
+            ));
+            return PayloadToken::new(requested, u32::MAX, 0, protocol, direction, 0);
+        };
         let (id, slot, load) = match self.declare_payload(declaration, server, client, Some(schema))
         {
             Some((id, slot)) => (

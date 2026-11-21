@@ -10,10 +10,17 @@ pub trait Hooks {
     /// level. `player` is the replacement's UUID. Heard before placement on
     /// a server, without swapping a player's state in. Not cancellable.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_player_clone",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "PlayerEvent.Clone (not cancellable)",
         cancellable = false
     )]
-    fn player_clone();
+    fn player_clone(
+        player: u128,
+        name: &str,
+        was_death: bool,
+        original: mod_api::OriginalPlayerRef,
+    );
 }

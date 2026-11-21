@@ -15,7 +15,12 @@ pub trait Hooks {
         target = "sunrise_client_render::sound_engine::hooks::native_play_sound"
     )]
     /// `instance` is an engine-local sound instance id, unchanged across its live updates.
-    fn play_sound();
+    fn play_sound(
+        instance: u64,
+        starting: bool,
+        original: &SoundPlay,
+        sound: &mut Option<SoundPlay>,
+    );
     /// A sound that is not streamed has started on `channel` (`PlaySoundSourceEvent`), after the engine set its pitch, volume, attenuation, looping and position: `sound` is what is playing, after `play_sound`'s edits. A notice: the channel is an id only and gives no control. Streamed sounds (music, records) fire `play_streaming_source` instead. Client-side only.
     #[hook(
         side = "client",
@@ -25,7 +30,7 @@ pub trait Hooks {
         cancellable = false,
         target = "sunrise_client_render::sound_engine::hooks::native_play_sound_source"
     )]
-    fn play_sound_source();
+    fn play_sound_source(sound: &SoundPlay, channel: &ChannelRef);
     /// A streamed sound (music, a record) has started on `channel` (`PlayStreamingSourceEvent`): `sound` is what is playing, after `play_sound`'s edits. A notice: the channel is an id only and gives no control. Other sounds fire `play_sound_source` instead. Client-side only.
     #[hook(
         side = "client",
@@ -35,7 +40,7 @@ pub trait Hooks {
         cancellable = false,
         target = "sunrise_client_render::sound_engine::hooks::native_play_streaming_source"
     )]
-    fn play_streaming_source();
+    fn play_streaming_source(sound: &SoundPlay, channel: &ChannelRef);
     /// The sound engine opened its output (`SoundEngineLoadEvent`): once at window start, after each resource reload (with the `context` of the new resource generation) and when the output device changes. Nothing fires with no sound output (no device, or audio turned off). Client-side only.
     #[hook(
         side = "client",

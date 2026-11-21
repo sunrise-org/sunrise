@@ -52,6 +52,14 @@ impl Hooks for MyMod {
 - In `has_analog_output`, answer from the block state alone. In `analog_output`, do not change the
   world. The game clamps the comparator signal to the range 0 to 15.
 
+## Equipment eligibility
+
+Implement `ItemPart::can_equip` to allow or refuse a stack in the candidate slot for a living
+entity. `event.can_equip` starts with the vanilla data answer; set it to override the answer, or
+leave it alone. Read the target through its handle and the supplied read-only `Host`, for example
+`event.entity.health(host)` or `event.entity.entity().position(host)`. Target type, position,
+health, living status and equipment come from the same snapshot across slot checks in a decision.
+
 ## Fire eligibility
 
 `BlockPart::fire_odds` receives a read-only `LevelSide` on both sides. Its ignite odds

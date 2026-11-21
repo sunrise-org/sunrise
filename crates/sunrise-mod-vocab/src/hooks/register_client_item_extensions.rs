@@ -5,10 +5,12 @@ pub trait Hooks {
     /// frame callbacks choose references, never geometry. A duplicate item provider or an unknown
     /// texture refuses registration with a named diagnostic. Server-only packages cannot listen.
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         context = "registration",
         neoforge = "RegisterClientExtensionsEvent"
     )]
-    fn register_client_item_extensions();
+    fn register_client_item_extensions(extensions: &mut dyn mod_api::ClientItemExtensionsRegistrar);
 }

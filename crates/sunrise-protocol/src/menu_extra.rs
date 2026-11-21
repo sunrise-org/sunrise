@@ -17,10 +17,8 @@
 //! [`encode_legacy`]'s layout instead (the window, then the three axes —
 //! never `None` — then the bytes), and no menu is opened without a block
 //! for it. A vanilla client is never asked.
-use crate::{
-    Error, Result,
-    buf::{Reader, Writer},
-};
+use crate::{Error, Result, buf::Reader};
+use sunrise_core::vanilla_bytes::Writer;
 
 /// The custom payload channel.
 pub const CHANNEL: &str = "sunrise:menu_extra";
@@ -247,6 +245,7 @@ mod tests {
         assert_eq!(read_query(&query()).unwrap(), REVISION);
         assert_eq!(read_answer(&answer(REVISION)).unwrap(), REVISION);
         assert_eq!(read_query(&[QUERY, 1]).unwrap(), 1);
+        assert_eq!(read_query(&[QUERY, 2]).unwrap(), 2);
         assert_eq!(read_answer(&answer(1)).unwrap(), 1);
         // Another revision's exchange is still answered, and reads as none.
         let other = [QUERY, REVISION + 1, 9];

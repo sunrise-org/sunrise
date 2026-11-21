@@ -41,7 +41,10 @@ fn a_move_right_after_joining_enters_the_end_of_the_section() {
     admit(&journal, 2);
     table.entered_section(1);
     assert_eq!(section(&mut table, &[1, 2]), vec![2, 1]);
-    assert_eq!(table.level_entities(HOME.dimension), vec![1, 2]);
+    assert_eq!(
+        collect_level_entities(&mut table, HOME.dimension),
+        vec![1, 2]
+    );
 }
 
 #[test]
@@ -69,7 +72,10 @@ fn crossings_enter_in_the_order_they_happen_not_in_lookup_order() {
     table.entered_section(9);
     table.entered_section(5);
     assert_eq!(section(&mut table, &[5, 7, 9]), vec![7, 9, 5]);
-    assert_eq!(table.level_entities(HOME.dimension), vec![5, 7, 9]);
+    assert_eq!(
+        collect_level_entities(&mut table, HOME.dimension),
+        vec![5, 7, 9]
+    );
 }
 
 #[test]
@@ -89,7 +95,10 @@ fn a_put_back_keeps_its_place_and_a_readmission_enters_at_the_end() {
     emit(&journal, Change::Remove(first));
     emit(&journal, Change::Install(first));
     assert_eq!(section(&mut table, &[5, 7, 9]), vec![7, 5, 9]);
-    assert_eq!(table.level_entities(HOME.dimension), vec![5, 7, 9]);
+    assert_eq!(
+        collect_level_entities(&mut table, HOME.dimension),
+        vec![5, 7, 9]
+    );
     // A crossing told for an id that is no member changes nothing.
     table.entered_section(0);
     table.entered_section(42);
@@ -105,12 +114,18 @@ fn an_id_given_after_spawning_admits_the_entity_where_it_spawned() {
     let arrow = Identity::new(30, JoinSeq::next()).unwrap();
     admit(&journal, 20);
     emit(&journal, Change::Spawned(arrow));
-    assert_eq!(table.level_entities(HOME.dimension), vec![30, 20]);
+    assert_eq!(
+        collect_level_entities(&mut table, HOME.dimension),
+        vec![30, 20]
+    );
     assert_eq!(section(&mut table, &[20, 30]), vec![30, 20]);
     // Only a new member: an id reported again keeps the admission it has.
     emit(&journal, Change::Remove(arrow));
     admit(&journal, 21);
     emit(&journal, Change::Install(arrow));
     emit(&journal, Change::Spawned(arrow));
-    assert_eq!(table.level_entities(HOME.dimension), vec![20, 21, 30]);
+    assert_eq!(
+        collect_level_entities(&mut table, HOME.dimension),
+        vec![20, 21, 30]
+    );
 }

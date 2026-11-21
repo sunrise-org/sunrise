@@ -44,10 +44,10 @@ pub trait ServicesClientHost {
 /// The client_session service, reached through its host.
 pub trait ClientSession {
     /// Side: client.
-    /// The connected server, not a stale reconnect target. None outside a
-    /// logged-in client world. External display names are not retained; memory
+    /// The connected server's borrowed text, not a stale reconnect target. None outside
+    /// a logged-in client world. External display names are not retained; memory
     /// connections have no address. Friend-invite secrets are redacted.
-    fn client_server(&self) -> Option<ClientServer> {
+    fn client_server(&self) -> Option<ClientServer<'_>> {
         crate::world::phase::unprovided(
             "ClientSession::client_server",
             "client_server",
@@ -55,9 +55,11 @@ pub trait ClientSession {
         )
     }
     /// Side: client.
-    /// The applied language code, not a pending options selection. None outside
-    /// a logged-in client world. Read is_paused for the applied pause state.
-    fn client_language(&self) -> Option<String> {
+    /// A shared snapshot of the applied language code, not a pending options selection.
+    /// None outside a logged-in client world. The snapshot can outlive the host borrow
+    /// and does not change when a different language is applied. Read `ClientHost::is_paused`
+    /// for the applied pause state.
+    fn client_language(&self) -> Option<Arc<str>> {
         crate::world::phase::unprovided(
             "ClientSession::client_language",
             "client_language",
@@ -104,8 +106,9 @@ pub trait Commands {
     /// Side: server.
     /// A mod changed the commands it registers (`register_commands`):
     /// at the start of the next server tick every mod is asked again, the
-    /// commands players may run are rebuilt, and every player on the server is
-    /// sent their tree again, after `player_commands_sent`. Nothing
+    /// server dispatcher and its executors are replaced, and every player on the server
+    /// is sent their command tree again, after `player_commands_sent`. The tree contains
+    /// no executors, and parses from the previous dispatcher are no longer executable. Nothing
     /// happens where no world is open to players, and nothing for a server
     /// whose mods never call it. API @API:refresh_commands@.
     fn refresh_commands(&mut self) {
@@ -116,8 +119,9 @@ pub trait Commands {
         )
     }
     /// Side: server.
-    /// A command's success feedback, routed to its originating source using
+    /// An executor can send success feedback to the command's originating source, using
     /// vanilla's silence, send-command-feedback and block/cart track-output rules.
+    /// This sends a message; the executor's return value determines the command result.
     /// Refuses text deeper than 512 component nodes before applying any changes.
     fn feedback(&mut self, line: Text) -> Result<(), TextFormError> {
         crate::world::phase::unprovided(
@@ -216,7 +220,7 @@ pub trait Players {
     }
     /// Side: server.
     /// The player whose action or command a hook hears, as their state is
-    /// swapped in (`run_mod_command`, `right_click_block`,
+    /// swapped in (a command executor, `right_click_block`,
     /// `native_use_on`, `break_block`...): None outside such a
     /// hook.
     fn acting_player(&self) -> Option<PlayerRef> {
@@ -362,11 +366,11 @@ pub trait RenderAssets {
     /// Published asset/data read: available in Setup, Reloading and World.
     /// Keys of every baked model `state` can draw in the current published generation, in bake
     /// order without repeats: each weighted alternative and each multipart part its properties
-    /// select, whichever one a position's seed would pick. A valid state with no baked binding
-    /// returns an empty list. A state the live block-state index lacks (a block it does not
-    /// hold, or an ordinal past the block's states) returns `ModelError::UnknownModel`.
-    /// Cache keys until the next `model_baking_completed`.
-    fn block_state_models(&self, state: BlockState) -> Result<Vec<BakedModelKey>, ModelError> {
+    /// select, whichever one a position's seed would pick. Borrow the list from this generation;
+    /// a valid state with no baked binding has no keys. A state the live block-state index lacks
+    /// (a block it does not hold, or an ordinal past the block's states) returns
+    /// `ModelError::UnknownModel`. Retain the keys until the next `model_baking_completed`.
+    fn block_state_models(&self, state: BlockState) -> Result<BakedModelKeys<'_>, ModelError> {
         crate::world::phase::unprovided(
             "RenderAssets::block_state_models",
             "block_state_models",
@@ -375,11 +379,11 @@ pub trait RenderAssets {
     }
     /// Side: client.
     /// Published asset/data read: available in Setup, Reloading and World.
-    /// A copy of the baked model `key` names: its quads and sprites as the mesher draws them.
-    /// `ModelError::StaleModel` once a successful resource reload has superseded the key's
-    /// generation; `ModelError::UnknownModel` for a slot the store lacks. Each call copies the
-    /// model's quads, so read the ones a mod needs once per `model_baking_completed`.
-    fn baked_model(&self, key: BakedModelKey) -> Result<BakedModelView, ModelError> {
+    /// Borrow the baked model `key` names: its geometry and sprite names, before draw-time
+    /// tints, lighting or material selection. `ModelError::StaleModel` once a successful resource
+    /// reload supersedes the key's generation; `ModelError::UnknownModel` for a slot the store
+    /// lacks. Retain the key and borrow the model when reading its quads, without copying them.
+    fn baked_model(&self, key: BakedModelKey) -> Result<BakedModelView<'_>, ModelError> {
         crate::world::phase::unprovided(
             "RenderAssets::baked_model",
             "baked_model",

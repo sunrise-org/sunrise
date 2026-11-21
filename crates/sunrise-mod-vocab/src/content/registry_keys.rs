@@ -6,7 +6,138 @@ use crate::{
     BlockEntityTypeKey, BlockKey, DimensionKey, EffectKey, EnchantmentKey, EntityTypeKey, FluidKey,
     ItemKey, MenuKey,
 };
-use std::sync::Arc;
+use std::{
+    borrow::Borrow,
+    cmp::Ordering,
+    fmt,
+    hash::{Hash, Hasher},
+    ops::Deref,
+    sync::Arc,
+};
+use sunrise_mod_runtime::registry_keys::Names;
+
+/// A canonical UTF-8 registry name. Keeps the text readable after the host borrow ends or the
+/// registry publishes a new table, without copying the text or holding a registry lock.
+/// Cloning shares the backing text. Display, equality, ordering and hashing use the full
+/// namespaced string, not its slot or its registry's iteration order.
+// no wire: pins a process-local registry table or borrows resident text.
+// exhaustive: the private field keeps the storage and validated index opaque.
+#[derive(Clone)]
+pub struct RegistryName(RegistryNameText);
+
+#[derive(Clone)]
+enum RegistryNameText {
+    Resident(&'static str),
+    Snapshot { names: Names, index: usize },
+}
+
+impl RegistryName {
+    pub(crate) const fn from_static(text: &'static str) -> Self {
+        Self(RegistryNameText::Resident(text))
+    }
+
+    /// Borrow the full name, including its namespace, from this snapshot.
+    pub fn as_str(&self) -> &str {
+        match &self.0 {
+            RegistryNameText::Resident(text) => text,
+            RegistryNameText::Snapshot { names, index } => &names.entries[*index].id,
+        }
+    }
+}
+
+impl Deref for RegistryName {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for RegistryName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl Borrow<str> for RegistryName {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Debug for RegistryName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl fmt::Display for RegistryName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self.as_str(), f)
+    }
+}
+
+impl PartialEq for RegistryName {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for RegistryName {}
+
+impl PartialEq<str> for RegistryName {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for RegistryName {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<RegistryName> for str {
+    fn eq(&self, other: &RegistryName) -> bool {
+        self == other.as_str()
+    }
+}
+
+impl PartialEq<RegistryName> for &str {
+    fn eq(&self, other: &RegistryName) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialOrd for RegistryName {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RegistryName {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl Hash for RegistryName {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+/// Pin the name at `slot` in this table, without retaining its borrow.
+// hidden: registration snapshot construction, not a mod API.
+#[doc(hidden)]
+pub fn registry_name_snapshot(names: &Names, slot: u32) -> Option<RegistryName> {
+    let index = slot as usize;
+    names.entries.get(index)?;
+    Some(RegistryName(RegistryNameText::Snapshot {
+        names: names.clone(),
+        index,
+    }))
+}
 
 impl BlockKey {
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
@@ -118,7 +249,7 @@ fn share_blocks(
 pub(crate) fn share_names(
     names: sunrise_mod_runtime::registry_keys::Names,
 ) -> sunrise_mod_runtime::registry_keys::Names {
-    use sunrise_mod_runtime::registry_keys::{Names, Table};
+    use sunrise_mod_runtime::registry_keys::Table;
     #[cfg(any(test, feature = "testing"))]
     static SHARED: std::sync::Mutex<Vec<Arc<Table>>> = std::sync::Mutex::new(Vec::new());
     let shared = SHARED
@@ -326,8 +457,29 @@ fn ordered_keys<K>(
 fn ordered_id(
     table: &std::sync::RwLock<Option<sunrise_mod_runtime::registry_keys::Names>>,
     slot: u32,
-) -> Option<String> {
-    table.read().ok()?.as_ref()?.id(slot).map(str::to_owned)
+) -> Option<RegistryName> {
+    let table = table.read().ok()?;
+    registry_name_snapshot(table.as_ref()?, slot)
+}
+
+#[cfg(test)]
+#[test]
+fn ordered_name_survives_republication() {
+    let table = std::sync::RwLock::new(None);
+    resolve_ordered(&table, ["test:zinc", "test:copper"], "test").unwrap();
+    let zinc = ordered_keys(&table, |slot| slot)[0];
+    let retained = ordered_id(&table, zinc).unwrap();
+
+    // The retained text must not keep a read lock as the same table is published again.
+    assert!(table.try_write().is_ok());
+    resolve_ordered(&table, ["test:copper", "test:gold"], "test").unwrap();
+    let order = ordered_keys(&table, |slot| ordered_id(&table, slot).unwrap());
+    let order: Vec<_> = order.iter().map(RegistryName::as_str).collect();
+    assert_eq!(order, ["test:copper", "test:gold"]);
+    assert_eq!(ordered_id(&table, zinc).as_deref(), Some("test:zinc"));
+    assert!(ordered_id(&table, u32::MAX).is_none());
+    drop(table);
+    assert_eq!(&*retained, "test:zinc");
 }
 
 fn ordered_slot_is_live(
@@ -459,19 +611,19 @@ pub fn entity_type_name(key: EntityTypeKey) -> Option<&'static str> {
     resolved_entity_types().get()?.id(key.0)
 }
 
-/// The canonical name of a built-in entity-type key, for diagnostics.
-pub fn entity_type_key_id(key: EntityTypeKey) -> Option<String> {
+/// The canonical name of an entity-type slot, available from requests during registration.
+pub fn entity_type_key_id(key: EntityTypeKey) -> Option<RegistryName> {
     crate::parts::registration_name(crate::parts::RegistrationKeyKind::EntityType, key.0)
-        .or_else(|| resolved_entity_types().get()?.id(key.0).map(str::to_owned))
+        .or_else(|| entity_type_name(key).map(RegistryName::from_static))
 }
 
-/// The canonical name of a built-in menu key, for diagnostics.
-pub fn menu_key_id(key: MenuKey) -> Option<String> {
+/// Pin the canonical name retained by a menu slot.
+pub fn menu_key_id(key: MenuKey) -> Option<RegistryName> {
     ordered_id(resolved_menus(), key.0)
 }
 
-/// The canonical name of a loaded enchantment key, for diagnostics.
-pub fn enchantment_key_id(key: EnchantmentKey) -> Option<String> {
+/// Pin the canonical name retained by an enchantment slot.
+pub fn enchantment_key_id(key: EnchantmentKey) -> Option<RegistryName> {
     ordered_id(&ENCHANTMENTS, key.0)
 }
 
@@ -671,10 +823,11 @@ pub fn block_entity_type_name(key: BlockEntityTypeKey) -> Option<&'static str> {
         .id(key.0)
 }
 
-pub(crate) fn block_entity_type_display_name(key: BlockEntityTypeKey) -> String {
+pub(crate) fn block_entity_type_display_name(key: BlockEntityTypeKey) -> RegistryName {
     crate::parts::registration_name(crate::parts::RegistrationKeyKind::BlockEntityType, key.0)
-        .or_else(|| block_entity_type_name(key).map(str::to_owned))
-        .unwrap_or_else(|| "<invalid>".into())
+        .unwrap_or_else(|| {
+            RegistryName::from_static(block_entity_type_name(key).unwrap_or("<invalid>"))
+        })
 }
 
 /// Resolve requested effects once, after every mod's content has been registered.
@@ -707,9 +860,9 @@ pub fn effect_index(key: EffectKey) -> Option<usize> {
         .flatten()
 }
 
-/// Canonical diagnostic name, unavailable until the process effect registry is resolved.
+/// Canonical name of a resolved effect slot, if present.
 pub fn effect_id(key: EffectKey) -> Option<&'static str> {
-    Some(&crate::parts::resolved_effects().get()?.names.entries[key.0 as usize].id)
+    crate::parts::resolved_effects().get()?.names.id(key.0)
 }
 
 /// Canonical diagnostic name of a trusted, load-owned slot, independent of world resolution.
@@ -786,14 +939,14 @@ pub fn game_event_key(id: &str) -> Option<crate::GameEventKey> {
     Some(crate::GameEventKey(*names.slots.get(id)?))
 }
 /// Read an installed slot without trusting a retained mod key.
-pub fn game_event_key_id(key: crate::GameEventKey) -> Option<String> {
+pub fn game_event_key_id(key: crate::GameEventKey) -> Option<RegistryName> {
     crate::parts::registration_name(crate::parts::RegistrationKeyKind::GameEvent, key.0).or_else(
         || {
             crate::parts::installed()?
                 .resolved_game_events
                 .get()?
                 .id(key.0)
-                .map(str::to_owned)
+                .map(RegistryName::from_static)
         },
     )
 }

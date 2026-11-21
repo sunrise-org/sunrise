@@ -1,0 +1,8 @@
+ids = [
+    "type:instance_directory::InstanceDirectory",
+    "handle:instance_directory::InstanceDirectory::from_path",
+    "handle:instance_directory::InstanceDirectory::to_path_buf",
+    "handle:RegistrationContext::instance_dir",
+]
+why = "Registration now borrows the native instance path from the startup snapshot. The guest transport wrapper is gone; non-Unicode names and the missing-snapshot error are preserved."
+migrate = "Use cx.instance_dir()? directly as a &Path. Replace cx.instance_dir()?.to_path_buf() that returned Option<PathBuf> with the same call returning PathBuf; drop the second unwrap or missing-conversion branch, but keep handling RegistrationReadError::Unavailable. Remove imports of InstanceDirectory, whether from mod_api or mod_api::instance_directory. Replace InstanceDirectory::from_path(path) with path itself for a borrow or path.to_path_buf() to keep it. Instead of matching Unix or Windows variants, use Path operations; if you need the raw encoding, use path.as_os_str() with the platform's OsStrExt. There is no Wire representation of the instance path. Host::instance_dir() is unchanged."

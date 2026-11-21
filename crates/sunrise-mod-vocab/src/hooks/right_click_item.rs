@@ -8,11 +8,16 @@ pub trait Hooks {
     /// server, and `Consume` has no swing.
     /// A client without this mod predicts vanilla here; the server corrects it.
     #[hook(
+        dispatch = "flat",
         side = "both",
         contract = "cancel",
         out = "canceled",
         neoforge = "PlayerInteractEvent.RightClickItem",
         cancellable = true
     )]
-    fn right_click_item();
+    fn right_click_item(
+        click: &ItemClick<'_>,
+        cancellation_result: &mut mod_api::InteractionResult,
+        canceled: &mut bool,
+    );
 }

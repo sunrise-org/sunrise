@@ -124,7 +124,7 @@ fn spawn_member<L: PatrolLevel, R: RandomSource>(
     if !spawn_rules::is_valid_empty_spawn(pillager.species, level, x, y, z) {
         return false;
     }
-    if !spawn_rules::check_spawn_rules(pillager, level, Reason::Patrol, random, pos) {
+    if !spawn_rules::patrolling_monster_rules(pillager.species, level, Reason::Patrol, x, y, z) {
         return false;
     }
     spawn(level, Member { pos, leader }, random)

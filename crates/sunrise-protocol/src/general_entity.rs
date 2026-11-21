@@ -10,11 +10,9 @@
 //! The channel is an engine declaration in the negotiated payload table: only a peer that
 //! offers it at [`VERSION`] is sent anything. A vanilla peer never offers it, and is never
 //! paired with a general row.
-use crate::{
-    Error, Result,
-    buf::{Reader, Writer},
-};
+use crate::{Error, Result, buf::Reader};
 use sunrise_core::identifier::Identifier;
+use sunrise_core::vanilla_bytes::Writer;
 
 /// The custom payload channel, clientbound only.
 pub const CHANNEL: &str = "sunrise:general_entity";

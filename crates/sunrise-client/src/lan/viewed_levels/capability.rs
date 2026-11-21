@@ -54,8 +54,8 @@ mod tests {
         sync::Arc,
         time::{Duration, Instant},
     };
+    use sunrise_core::vanilla_bytes::Writer;
     use sunrise_protocol::{
-        buf::Writer,
         connection::Connection,
         crypto::offline_uuid,
         packets::{Empty, configuration as cfg, handshake, login},

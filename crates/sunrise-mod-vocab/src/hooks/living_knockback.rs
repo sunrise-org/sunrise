@@ -35,6 +35,7 @@ pub trait Hooks {
     /// there read the pushed entity's kill credit and its holder's main hand themselves.
     #[notes = "Version 2 adds the pushed entity's kill credit and its current main-hand stack; remembered player precedence and expiry match LivingRef::kill_credit."]
     #[hook(
+        dispatch = "api_carrier",
         side = "server",
         version = 2,
         contract = "cancel",

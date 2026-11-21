@@ -1,4 +1,3 @@
-// game-module-visibility: pub
 //! Mod block entities drawn on the client: `native_block_entity_submit`
 //! (vanilla's `BlockEntityRenderer.submit`) gets a [`BlockEntityDraw`], whose
 //! pose stack (`PoseStack`) places what the helpers here add to the entity
@@ -3227,18 +3226,21 @@ mod tests {
                 _: &mod_api::RegistrationContext,
                 event: &mut mod_api::RegisterLayerDefinitionsEvent<'_>,
             ) {
-                let mut mesh = MeshDefinition::new();
-                let root = mesh.root();
-                mesh.add_or_replace_child(
-                    root,
-                    "body",
-                    CubeListBuilder::create().add_box_faces([0.0; 3], [16.0; 3], &[Face::South]),
-                    PartPose::offset(16.0, 0.0, 0.0),
-                );
-                event.layers.push((
-                    "golem_mod:golem#main".into(),
-                    LayerDefinition::create(mesh, 64, 64),
-                ));
+                event.register("golem_mod:golem#main", || {
+                    let mut mesh = MeshDefinition::new();
+                    let root = mesh.root();
+                    mesh.add_or_replace_child(
+                        root,
+                        "body",
+                        CubeListBuilder::create().add_box_faces(
+                            [0.0; 3],
+                            [16.0; 3],
+                            &[Face::South],
+                        ),
+                        PartPose::offset(16.0, 0.0, 0.0),
+                    );
+                    LayerDefinition::create(mesh, 64, 64)
+                });
             }
         }
         let drawn = |game: &Game<'_>| {

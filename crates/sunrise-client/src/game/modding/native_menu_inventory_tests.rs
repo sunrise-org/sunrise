@@ -27,9 +27,8 @@ impl mod_api::MenuPart for InventoryPart {
                 player: event.uuid,
                 slot: 9
             }
-            .stack(host)
-            .unwrap()
-            .count(),
+            .with_stack(host, |stack| stack.count())
+            .unwrap(),
             10
         );
         assert_eq!(
@@ -37,9 +36,8 @@ impl mod_api::MenuPart for InventoryPart {
                 player: event.uuid,
                 hand: mod_api::Hand::Main
             }
-            .stack(host)
-            .unwrap()
-            .count(),
+            .with_stack(host, |stack| stack.count())
+            .unwrap(),
             3
         );
         let menu = host
@@ -140,12 +138,12 @@ fn exercise(reopen: bool) {
                 player: 12,
                 hand: mod_api::Hand::Main,
             };
-            assert_eq!(hand.stack(game).unwrap().count(), 3);
+            assert_eq!(hand.with_stack(game, |stack| stack.count()).unwrap(), 3);
             let direct = ItemPlace::PlayerSlot {
                 player: 12,
                 slot: 9,
             };
-            assert_eq!(direct.stack(game).unwrap().count(), 10);
+            assert_eq!(direct.with_stack(game, |stack| stack.count()).unwrap(), 10);
             let foreign_player = mod_api::__private::game::player_ref(player.entity(), 13);
             let foreign = mod_api::__private::game::menu_ref(
                 foreign_player,
@@ -164,15 +162,15 @@ fn exercise(reopen: bool) {
                 })
                 .unwrap();
             click(game, window);
-            assert_eq!(take.stack(game).unwrap().count(), 6);
-            assert_eq!(give.stack(game).unwrap().count(), 5);
-            assert_eq!(partial.stack(game).unwrap().count(), 16);
+            assert_eq!(take.with_stack(game, |stack| stack.count()).unwrap(), 6);
+            assert_eq!(give.with_stack(game, |stack| stack.count()).unwrap(), 5);
+            assert_eq!(partial.with_stack(game, |stack| stack.count()).unwrap(), 16);
             let aborted: Result<(), ()> = (game as &mut dyn ServerHost).transaction(|host, tx| {
                 assert_eq!(give.insert(host, tx, &dirt, 3), 3);
                 Err(())
             });
             assert!(aborted.is_err());
-            assert_eq!(give.stack(game).unwrap().count(), 5);
+            assert_eq!(give.with_stack(game, |stack| stack.count()).unwrap(), 5);
             game.lan
                 .as_mut()
                 .unwrap()
@@ -190,7 +188,7 @@ fn exercise(reopen: bool) {
                 player.container_menu(game).unwrap().container_id(game),
                 Some(window)
             );
-            assert_eq!(direct.stack(game).unwrap().count(), 6);
+            assert_eq!(direct.with_stack(game, |stack| stack.count()).unwrap(), 6);
         });
     });
 }
@@ -402,7 +400,15 @@ mod owner {
                 Err(())
             });
             assert!(aborted.is_err());
-            assert_eq!(player.inventory_slots(game), Some(vec![(0, stone)]));
+            player
+                .with_inventory(game, |view| {
+                    let mut slots = view.iter();
+                    let (slot, stack) = slots.next().unwrap();
+                    assert_eq!(slot, 0);
+                    assert_eq!(stack.project(), Some(stone));
+                    assert!(slots.next().is_none());
+                })
+                .unwrap();
 
             game.lan
                 .as_mut()

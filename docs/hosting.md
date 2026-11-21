@@ -781,12 +781,12 @@ environment still applies.
 A mod can declare a payload channel as droppable (voice chat, live data): under congestion the game drops
 those sends, instead of letting them queue behind chunks and arrive late ([the modding
 book](modding/src/how-to/client/networking.md)). Under `[engine]`, `droppable_clientbound` is the bytes a
-second of them the server sends to each player (default 262144, 256 KiB, about 45 simultaneous speakers
-of Opus voice) and `droppable_serverbound` the bytes a second it accepts from each player (default 16384,
-16 KiB, one microphone with room to spare). Raise them for a busy voice server; `0` turns droppable
-delivery off in that direction. A player over the limit loses those sends, which are counted, and is not
-kicked; nothing else on the connection is ever dropped. Vanilla's `rate-limit` (off by default) still
-counts droppable payloads as packets. It applies at the next start.
+second of them the server sends to each player (default 262144, 256 KiB) and `droppable_serverbound`
+the bytes a second it accepts from each player (default 16384, 16 KiB). For voice, tune these budgets
+for the traffic your mod's codec and relay produce; `0` turns droppable delivery off in that direction.
+A player over the limit loses those sends, which are counted, and is not kicked; nothing else on the
+connection is ever dropped. Vanilla's `rate-limit` (off by default) still counts droppable payloads as
+packets. Changes to the budgets apply at the next start.
 
 ## When something goes wrong
 

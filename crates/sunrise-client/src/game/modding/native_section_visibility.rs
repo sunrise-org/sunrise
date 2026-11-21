@@ -12,10 +12,28 @@ impl Game<'_> {
         if requests.is_empty() {
             return;
         }
+        let Ok(index) = crate::game::api_values::block_state::current() else {
+            for request in requests {
+                self.streaming
+                    .submit_visibility_answer(&mut self.world, request, None);
+            }
+            return;
+        };
+        let Ok(air) = index.to_api(self.world.air) else {
+            for request in requests {
+                self.streaming
+                    .submit_visibility_answer(&mut self.world, request, None);
+            }
+            return;
+        };
         let poisoned = mod_api::__private::poisoned_listeners(mod_api::HookId::SectionVisibility);
         let mut refusals = std::mem::take(&mut self.streaming.section_visibility.refusals);
         for request in requests {
-            let input = capture_input(&request.region, request.key.1);
+            let input = capture_input(&request.region, request.key.1, |raw| {
+                index
+                    .to_api(sunrise_world::registry::BlockStateId(raw))
+                    .unwrap_or(air)
+            });
             let mut plan = SectionPlanBuilder::new();
             self.native_section_visibility(mod_api::__private::SectionVisibilityCall {
                 input: &input,

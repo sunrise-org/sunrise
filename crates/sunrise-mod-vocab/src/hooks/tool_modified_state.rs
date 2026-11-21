@@ -15,6 +15,8 @@ pub trait Hooks {
     /// not the ability's notification or a listener's replacement. The global hook still
     /// sees the candidate, and later abilities can be tried if this one has no result.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "both",
         contract = "cancel",
         out = "cancel",
@@ -24,5 +26,12 @@ pub trait Hooks {
         host = "read",
         neoforge = "IBlockExtension.getToolModifiedState"
     )]
-    fn tool_modified_state();
+    fn tool_modified_state(
+        state: BlockState,
+        stack: &ItemStack,
+        tool: &ToolUse,
+        final_state: &mut Option<BlockState>,
+        cancel: &mut bool,
+        #[engine] inert: &mut bool,
+    );
 }

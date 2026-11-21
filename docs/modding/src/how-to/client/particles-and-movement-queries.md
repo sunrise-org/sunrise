@@ -71,6 +71,16 @@ for padding sections and unloaded borders is tracked in [#2761](https://github.c
 
 Dispatch reuses its batch storage once it has enough capacity.
 
+### Particle render groups
+
+In `Hooks::register_particle_groups`, call `event.register(id, factory)` with a namespaced
+`Identifier` and a factory returning `ParticleGroup { blend, particles }`. The hook runs once at
+client startup; each accepted factory runs once per particle engine construction. The first
+registration for an ID wins, and a duplicate or a reserved `minecraft` ID never calls its factory.
+Reloading resources re-associates sprite sets with the groups already built; it does not call
+factories again. Provider registration is separate: a group chooses the draw layer and quota for
+the listed particle types, not how those particles move.
+
 ## Client fireworks
 
 `ClientHost::create_fireworks` draws a firework's explosions from a `FireworksRequest`: the

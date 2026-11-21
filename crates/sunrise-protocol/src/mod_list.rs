@@ -2,11 +2,9 @@
 //! package's runtime data files, when it has any) cross
 //! [`CHANNEL`]; client-only and server-only mods stay private. Content identity
 //! is checked separately. A vanilla client never hears the channel.
-use crate::{
-    Error, Result,
-    buf::{Reader, Writer},
-};
+use crate::{Error, Result, buf::Reader};
 use std::sync::OnceLock;
+use sunrise_core::vanilla_bytes::Writer;
 
 /// The custom payload channel, both ways.
 pub const CHANNEL: &str = "sunrise:mod_list";

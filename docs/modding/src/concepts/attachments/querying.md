@@ -10,7 +10,9 @@ writes.
 Call `host.query(&TYPE)` on `&dyn Host`, then borrow rows with `batch.iter()`.
 Each successful row contains a copyable `holder` and a borrowed `value: &T`.
 Match `AttachmentHolder` to obtain an `EntityRef`, `PlayerRef`, `BlockEntityRef`,
-`ChunkRef` or `LevelRef`.
+`ChunkRef` or `LevelRef`. Keep the batch and its holder identities in process;
+use the [attachment codec](../attachments.md#synchronization) for values that
+need to be saved or synced.
 
 For example, sum a counter across its holders:
 
@@ -77,7 +79,9 @@ fn increment(host: &mut dyn ServerHost) -> Result<(), AttachmentRowError> {
 - Each write validates the captured residency against the supplied host's current
   dimension. Unloaded, replaced or missing holders produce
   `AttachmentRowError::StaleHolder`. A host for another dimension does not
-  retarget the row, and a refused write does not revive the holder.
+  retarget the row, and a refused write does not revive the holder. Use `set`
+  and `remove` with the captured row; there is no byte encoding that can
+  restore its write token.
 - Removing only the attachment value does not invalidate a loaded holder. A
   retained row can set a replacement value on that holder.
 - Writes join your existing transaction. For an all-or-nothing loop, import
@@ -140,5 +144,5 @@ do not themselves register a holder.
 | `AttachmentRowError::HolderBusy` / `AttachmentRowError::UnsupportedHolder(family)` | The corresponding error from a retained row write. |
 | `AttachmentRowError::StaleHolder` | The row's holder is missing or its captured residency is invalid. |
 
-The `UnsupportedHolder` family text is limited to 256 UTF-8 bytes at the wire
-boundary; longer names are rejected.
+Handle these errors locally. If a message needs to report a refusal, give the
+message its own payload fields rather than encoding the attachment error.

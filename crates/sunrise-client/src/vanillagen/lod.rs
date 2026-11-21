@@ -83,7 +83,8 @@ impl Builder {
         tx: mpsc::Sender<LodDetail>,
         background: bool,
     ) -> thread::JoinHandle<()> {
-        sunrise_guest_stack::builder()
+        std::thread::Builder::new()
+            .stack_size(sunrise_threads::GAME_THREAD_STACK_BYTES)
             .name("Far decoration".into())
             .spawn(move || {
                 if background {

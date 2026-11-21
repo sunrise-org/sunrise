@@ -37,5 +37,10 @@ pub trait Hooks {
         target = "sunrise_client_lib::collision_parts::native_collision_shape",
         neoforge = "none (vanilla BlockBehaviour.getCollisionShape with its CollisionContext; NeoForge adds no event or extension for it)"
     )]
-    fn collision_shape();
+    fn collision_shape(
+        pos: BlockPos,
+        state: BlockState,
+        query: &CollisionQuery,
+        shape: &mut Option<Vec<[f64; 6]>>,
+    );
 }

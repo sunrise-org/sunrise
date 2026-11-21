@@ -1,3 +1,4 @@
+use crate::game::remote::RemoteDimensionEntry;
 use crate::game::{
     execution_role::ExecutionRole, native_entity_refs::tests::with_game,
     native_hooks::particle_count_tests::fill,
@@ -33,7 +34,7 @@ fn connection_and_dimension_replacement_clear_every_particle_group() {
         };
         fill(game);
         game.particles.elder_guardian();
-        game.enter_remote_dimension(&spawn, false, Reason::Other);
+        game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
         assert_eq!(game.client_particle_count(), 0);
         assert!(game.pickups.live.is_empty());
         game.tick_particles();

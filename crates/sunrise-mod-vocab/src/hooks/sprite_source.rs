@@ -19,5 +19,11 @@ pub trait Hooks {
         neoforge = "none (vanilla SpriteSource.run of a type RegisterSpriteSourcesEvent registers; NeoForge adds no event for it)",
         target = "sunrise_client_render::mod_sprite_sources::native_sprite_source"
     )]
-    fn sprite_source();
+    fn sprite_source(
+        source: &str,
+        atlas: &Identifier,
+        config: &Tag,
+        resources: &Arc<dyn ResourceReader>,
+        output: &mut Vec<SpriteSourceOutput>,
+    );
 }

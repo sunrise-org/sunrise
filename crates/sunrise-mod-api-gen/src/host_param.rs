@@ -1,5 +1,4 @@
 use super::{Hook, HostAccess, PhaseContext, Side};
-use syn::Type;
 
 /// The hook's host parameter type and the expression passed by its native method.
 #[derive(Debug, PartialEq, Eq)]
@@ -72,36 +71,10 @@ pub(super) fn validate(
     Ok(())
 }
 
-/// Remove the native phase input from the event, selecting its public context.
-pub(super) fn context_param(
-    hook: &Hook,
-    args: &mut Vec<(String, &Type)>,
-) -> Result<Option<HostParam>, String> {
-    let Some(kind) = hook.context else {
-        return Ok(None);
-    };
-    let name = &hook.name;
-    let expected = match kind {
-        PhaseContext::Registration => "RegistrationContext",
-        PhaseContext::DataLoad => "LoadContext",
-        PhaseContext::Loop => "LoopContext",
-        PhaseContext::Worldgen => "OwningWorldgen",
-        PhaseContext::ChunkDisk => "OwningChunkDisk",
-    };
-    let valid = args.first().is_some_and(|(name, ty)| {
-        name == "context"
-            && matches!(ty, Type::Reference(reference)
-            if reference.mutability.is_none() && matches!(&*reference.elem, Type::Path(path)
-                if path.path.segments.last().is_some_and(|segment| segment.ident == expected)))
-    });
-    if !valid {
-        return Err(format!(
-            "{name}: phase context requires first input context: &{expected}<'_>"
-        ));
-    }
-    args.remove(0);
-    Ok(Some(HostParam {
-        ty: match kind {
+/// The phase input is declared by `context`, separate from the event fields.
+pub(super) fn context_param(hook: &Hook) -> Option<HostParam> {
+    Some(HostParam {
+        ty: match hook.context? {
             PhaseContext::Registration => "&RegistrationContext",
             PhaseContext::DataLoad => "&dyn DataLoadContext",
             PhaseContext::Loop => "&dyn LoopContext",
@@ -110,7 +83,17 @@ pub(super) fn context_param(
         }
         .into(),
         call: "context",
-    }))
+    })
+}
+
+pub(super) fn phase_engine_type(phase: PhaseContext) -> &'static str {
+    match phase {
+        PhaseContext::Registration => "&mod_api::RegistrationContext",
+        PhaseContext::DataLoad => "&sunrise_world::native_load_context::LoadContext<'_>",
+        PhaseContext::Loop => "&sunrise_world::native_load_context::LoopContext",
+        PhaseContext::Worldgen => "&mod_api::OwningWorldgen<'_>",
+        PhaseContext::ChunkDisk => "&mod_api::OwningChunkDisk<'_>",
+    }
 }
 
 /// Select the host once for both generated signatures and the native call.
@@ -176,45 +159,20 @@ mod tests {
 
     #[test]
     fn phase_context_is_not_an_event_field_or_game_host() {
-        for (kind, input, public) in [
-            (
-                PhaseContext::Registration,
-                "&RegistrationContext",
-                "&RegistrationContext",
-            ),
-            (
-                PhaseContext::DataLoad,
-                "&LoadContext<'_>",
-                "&dyn DataLoadContext",
-            ),
-            (PhaseContext::Loop, "&LoopContext", "&dyn LoopContext"),
-            (
-                PhaseContext::Worldgen,
-                "&OwningWorldgen",
-                "&dyn WorldgenHost",
-            ),
+        for (kind, public) in [
+            (PhaseContext::Registration, "&RegistrationContext"),
+            (PhaseContext::DataLoad, "&dyn DataLoadContext"),
+            (PhaseContext::Loop, "&dyn LoopContext"),
+            (PhaseContext::Worldgen, "&dyn WorldgenHost"),
+            (PhaseContext::ChunkDisk, "&dyn ChunkDiskHost"),
         ] {
             let hook = Hook {
                 context: Some(kind),
                 ..Hook::sample("sunrise_client::game::Game<'_>::native_phase", Side::Both)
             };
-            let ty = syn::parse_str(input).unwrap();
-            let output = syn::parse_quote!(&mut Vec<String>);
-            let mut args = vec![("context".into(), &ty), ("values".into(), &output)];
-            assert_eq!(
-                context_param(&hook, &mut args).unwrap(),
-                Some(HostParam {
-                    ty: public.into(),
-                    call: "context",
-                })
-            );
-            assert_eq!(args.len(), 1);
-            assert_eq!(args[0].0, "values");
+            assert_eq!(context_param(&hook).unwrap().ty, public);
             assert!(validate(&hook, "phase", false, None, false).is_ok());
             assert!(validate(&hook, "phase", false, Some(true), false).is_err());
-            assert!(context_param(&hook, &mut args).is_err());
-            let mutable = syn::parse_str(&input.replacen('&', "&mut ", 1)).unwrap();
-            assert!(context_param(&hook, &mut vec![("context".into(), &mutable)]).is_err());
         }
     }
 }

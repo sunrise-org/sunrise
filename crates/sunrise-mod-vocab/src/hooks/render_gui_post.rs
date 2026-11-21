@@ -7,6 +7,12 @@ pub trait Hooks {
     /// `native_fill` and `native_text`.
     /// Use `ClientHost::debug_overlay_visible()` to avoid drawing over the debug overlay.
     /// Not heard when a mod canceled `render_gui_pre`. Client-side.
-    #[hook(side = "client", contract = "listen", neoforge = "RenderGuiEvent.Post")]
-    fn render_gui_post();
+    #[hook(
+        receiver = "read",
+        dispatch = "flat",
+        side = "client",
+        contract = "listen",
+        neoforge = "RenderGuiEvent.Post"
+    )]
+    fn render_gui_post(draw: &mut dyn DrawContext, corners: &mut Corners);
 }

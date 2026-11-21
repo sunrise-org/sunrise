@@ -84,6 +84,48 @@ fn with_mods(mods: Vec<ModEntry>, test: impl FnOnce()) {
     mod_platform::testing::with_mods(mods, test);
 }
 
+struct StagedReader;
+#[mod_api::sunrise_part]
+impl MenuPart for StagedReader {
+    fn menu_slot_rules(&self, _: &dyn mod_api::Host, event: &mut MenuSlotRulesEvent<'_>) {
+        use mod_api::MenuContainer::{Main, Player};
+        assert!(event.context.slot(Main, 2).is_none()); // unknown item
+        assert!(event.context.slot(Main, usize::MAX).is_none());
+        assert!(event.context.slot(Player, 0).is_none()); // occupied, but not lent
+        let ingredient = event.context.slot(Main, 1).unwrap();
+        assert_eq!(
+            mod_api::__private::item_key_id(ingredient.item()),
+            Some("minecraft:oak_planks")
+        );
+        event.max_stack = ingredient.count();
+    }
+}
+
+struct StagedListener;
+#[mod_api::__subscriptions]
+impl Hooks for StagedListener {
+    fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+        r.menu_part("minecraft:generic_9x3", StagedReader);
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn staged_slot_rule_reads_hide_unrepresentable_and_player_stacks() {
+    with_mods(
+        vec![ModEntry::new("rules", Box::new(StagedListener))],
+        || {
+            with_game(|game| {
+                let mut menu = chest(("minecraft:stone", 8));
+                menu.load_slot(1, Some(ItemStack::new("minecraft:oak_planks", 3)));
+                menu.load_slot(2, Some(ItemStack::new("test:unregistered", 1)));
+                menu.set_player_item(0, Some(ItemStack::new("minecraft:stone", 1)));
+                assert_eq!(pickup(game, &mut menu), (3, 5));
+            });
+        },
+    );
+}
+
 #[test]
 #[ignore = "daily"]
 fn a_click_asks_the_part_for_each_slot_and_stack_it_consults_in_order() {

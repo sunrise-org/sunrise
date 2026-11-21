@@ -4,7 +4,7 @@ RateKickingConnection.tickSecond	inline	crates/sunrise-client/src/lan/conn.rs::P
 UnconfiguredPipelineHandler.Inbound.channelRead	skip:other		Netty guard for packets before a protocol is set; Sunrise's connection loops only read their own phase
 UnconfiguredPipelineHandler.Inbound.write	skip:other		Netty guard for configuration tasks on the inbound pipeline; no pipeline in Sunrise
 UnconfiguredPipelineHandler.Outbound.write	skip:other		Netty guard for packets sent before a protocol is set; no pipeline in Sunrise
-VarInt.getByteSize	port	crates/sunrise-protocol/src/buf.rs::varint_size
+VarInt.getByteSize	port	crates/sunrise-core/src/vanilla_bytes.rs::varint_size
 VarLong.getByteSize	skip:java		byte-size helper with no caller here; Sunrise writes varlongs and measures the buffer
 Varint21FrameDecoder.copyVarint	inline	crates/sunrise-protocol/src/frame.rs::split	the 3-byte length read and the 'length wider than 21 bits' error
 Varint21FrameDecoder.decode	port	crates/sunrise-protocol/src/frame.rs::split	the length prefix is read by frame::header, which refuses a zero frame as corrupted, and split cuts the frame at it

@@ -1,1 +1,1 @@
-pub use world::random::{LegacyRandomSource, RandomSource};
+pub use world::random::{LegacyRandomSource, RandomDraw, RandomSource};

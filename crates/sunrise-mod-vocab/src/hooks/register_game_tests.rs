@@ -16,10 +16,12 @@ Definitions retain resolved callbacks only for their world snapshot. Unknown fun
 `minecraft:always_pass` remains built in. Data-pack test definitions override code-registered defaults. Registration refuses duplicates, invalid names and the vanilla
 namespace. This adds no sequence engine and no per-tick registry lookup."#]
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         host = "read",
         neoforge = "RegisterGameTestsEvent"
     )]
-    fn register_game_tests();
+    fn register_game_tests(functions: &mut dyn GameTests);
 }

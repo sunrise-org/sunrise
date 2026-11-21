@@ -38,15 +38,10 @@ pub trait EntityLifetimeBackendMut {
     /// a boat its lead, as vanilla's `remove` does. False for a player, a dragon
     /// part (it leaves with its dragon), or a stale handle. Also returns `false`
     /// if this entity's removal effects are already running, even if its handle still resolves.
-    /// The tick scope below is the port's own transactional requirement:
-    /// NeoForge adds no event, deferral or drop capture around a block entity's
-    /// tick, and new item spawning stays immediate. With no scope open the
-    /// engine behaves exactly as vanilla for these item operations: removal
-    /// is immediate, no overlay is created, and nothing is staged.
-    /// Dropped-item removal during a mod block-entity tick is staged with its
-    /// final snapshot, and immediately hidden from that scope's reads. It is
-    /// discarded on writeback rejection. Non-item removal and spawning are
-    /// deliberately immediate and are not undone by rejection.
+    /// A discarded dropped item immediately stops resolving. In an open
+    /// transaction the removal is journaled; abort restores the item and
+    /// commit delivers its removal notice. Non-item removal is immediate and
+    /// is not rolled back by this operation.
     #[access(WorldOnly)]
     fn entity_discard(&mut self, entity: EntityRef) -> bool;
     /// Side: server.
@@ -57,8 +52,8 @@ pub trait EntityLifetimeBackendMut {
     /// leaves with its dragon), or a stale handle. Also returns `false` if this
     /// entity's removal effects are already running, even if its handle still resolves.
     /// Removing a general entity dismounts its passengers without removing them.
-    /// Dropped items share `entity_discard`'s block-entity tick staging;
-    /// non-item removal is deliberately immediate.
+    /// For dropped items, the same transaction rules apply as for
+    /// `entity_discard`.
     #[access(WorldOnly)]
     fn entity_remove(&mut self, entity: EntityRef, reason: RemovalReason) -> bool;
     /// Side: server.

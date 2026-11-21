@@ -68,6 +68,8 @@ pub struct Parts {
     /// (`block_entity_tick`): its type id need not be its block's id.
     pub(crate) block_entity_kinds: HashMap<Box<str>, Vec<Attached<dyn BlockEntityPart>>>,
     pub(crate) items: HashMap<Box<str>, Vec<Attached<dyn ItemPart>>>,
+    /// The sole owner of main-hand client input for an item, independent of item hooks.
+    pub(crate) client_item_uses: HashMap<Box<str>, Attached<dyn crate::ClientItemUseBehavior>>,
     pub(crate) menus: HashMap<Box<str>, Vec<Attached<dyn MenuPart>>>,
     pub(crate) effects: HashMap<Box<str>, Vec<Attached<dyn MobEffectPart>>>,
     pub(crate) fluids: HashMap<Box<str>, Vec<Attached<dyn FluidPart>>>,
@@ -108,7 +110,7 @@ pub struct Parts {
     pub(crate) recipe_types: HashMap<Box<str>, usize>,
     /// Serializer IDs, their produced recipe types and retained owners.
     pub(crate) recipe_serializers:
-        HashMap<Box<str>, (usize, String, Arc<dyn crate::CraftingRecipeHandler>)>,
+        HashMap<Box<str>, (usize, String, crate::__private::RegisteredRecipeSerializer)>,
     /// Entity selector tokens the mods registered, by name, in registration order.
     pub(crate) entity_selectors: Vec<EntitySelectorInfo>,
     /// Frozen raw payload declarations and their sole receiving owners.
@@ -662,8 +664,7 @@ mod lookup_context_tests {
             || {
                 super::super::install_input(super::super::installation::InstalledInput::default());
                 TEST_PART_LOOKUPS.set(0);
-                let state =
-                    crate::BlockState::from(crate::BlockStateRecord::new(crate::BlockKey(0), 0));
+                let state = crate::__private::block_state_from_ordinal(crate::BlockKey(0), 0);
                 let mut answer = false;
                 crate::dispatch_should_check_weak_power(
                     &Level,

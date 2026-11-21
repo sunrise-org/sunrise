@@ -1,11 +1,10 @@
-//! `block_screen_effect_draw` in a real game: what a frame's screen quads hold for each thing a
-//! mod can do with an overlay, and where the quads land in a drawn frame.
+//! Selected block overlay renderers in a real game: what they submit and where those quads land.
 use super::Game;
 use super::native_entity_refs::tests::{run_fresh_cases, with_client_game};
 use BlockScreenEffect::{Block, Fire, Water};
 use mod_api::{
-    BlockScreenEffect, BlockScreenEffectDrawEvent, ClientHost, ExtractBlockScreenEffectEvent, Flow,
-    GuiRenderPostEvent, Hooks, ModEntry, Mods,
+    BlockScreenEffect, BlockScreenEffectRender, BlockScreenEffectRenderer, ClientHost,
+    ExtractBlockScreenEffectEvent, Flow, GuiRenderPostEvent, Hooks, ModEntry, Mods,
 };
 use std::sync::{Arc, Mutex};
 use sunrise_client::{
@@ -40,7 +39,7 @@ const LEAVE: Plan = Plan {
     cancel: &[],
     replace: &[],
 };
-/// One ask of the draw hook.
+/// One submission of a selected renderer.
 #[derive(Debug, PartialEq)]
 struct Asked {
     effect: BlockScreenEffect,
@@ -68,34 +67,36 @@ impl Hooks for Planned {
     fn extract_block_screen_effect(
         &self,
         _: &dyn ClientHost,
-        event: &mut ExtractBlockScreenEffectEvent,
+        event: &mut ExtractBlockScreenEffectEvent<'_>,
     ) -> Flow {
         let plan = *PLAN.lock().unwrap();
         EXTRACTED
             .lock()
             .unwrap()
             .push((event.effect, event.partial_tick));
-        event.custom_draw = plan.custom.contains(&event.effect);
+        if plan.custom.contains(&event.effect) {
+            event.set_custom_renderer(&PlannedRenderer);
+        }
         if plan.cancel.contains(&event.effect) {
             Flow::Cancel
         } else {
             Flow::Continue
         }
     }
-    fn block_screen_effect_draw(
-        &self,
-        _: &dyn ClientHost,
-        event: &mut BlockScreenEffectDrawEvent<'_>,
-    ) {
+}
+
+struct PlannedRenderer;
+impl BlockScreenEffectRenderer for PlannedRenderer {
+    fn submit(&self, _: &dyn ClientHost, render: BlockScreenEffectRender<'_>) -> bool {
         ASKED.lock().unwrap().push(Asked {
-            effect: event.effect,
-            state: event.state,
-            pos: event.pos,
-            partial_tick: event.partial_tick,
-            hide_gui: event.hide_gui,
+            effect: render.effect,
+            state: render.state,
+            pos: render.pos,
+            partial_tick: render.partial_tick,
+            hide_gui: render.hide_gui,
         });
-        assert!(event.draw.quad(QUAD, marker(event.effect)));
-        event.replace_vanilla = PLAN.lock().unwrap().replace.contains(&event.effect);
+        assert!(render.draw.quad(QUAD, marker(render.effect)));
+        PLAN.lock().unwrap().replace.contains(&render.effect)
     }
 }
 
@@ -226,7 +227,7 @@ fn a_mod_draws_prepends_replaces_and_cancels_overlays() {
             assert_eq!(names(&replaced), ["mod block", "fire", "fire"]);
             assert_eq!(draws, [Block]);
 
-            // Canceled with custom_draw: the hook is still asked, vanilla's overlay is gone.
+            // Cancellation does not clear the renderer, only the vanilla overlay.
             let (canceled, draws) = frame(
                 game,
                 Plan {
@@ -283,6 +284,105 @@ fn a_mod_draws_prepends_replaces_and_cancels_overlays() {
     });
 }
 
+struct Choice(u32);
+impl BlockScreenEffectRenderer for Choice {
+    fn submit(&self, _: &dyn ClientHost, render: BlockScreenEffectRender<'_>) -> bool {
+        assert!(render.draw.quad(QUAD, self.0));
+        false
+    }
+}
+
+struct FirstChoice(bool);
+#[mod_api::__subscriptions]
+impl Hooks for FirstChoice {
+    #[listener(priority = 10)]
+    fn extract_block_screen_effect(
+        &self,
+        _: &dyn ClientHost,
+        event: &mut ExtractBlockScreenEffectEvent<'_>,
+    ) -> Flow {
+        if event.effect == Block {
+            event.set_custom_renderer(&Choice(RED));
+            if self.0 {
+                return Flow::Cancel;
+            }
+        }
+        Flow::Continue
+    }
+}
+
+struct ReceiveCancelled;
+#[mod_api::__subscriptions]
+impl Hooks for ReceiveCancelled {
+    #[listener(receive_cancelled)]
+    fn extract_block_screen_effect(
+        &self,
+        _: &dyn ClientHost,
+        event: &mut ExtractBlockScreenEffectEvent<'_>,
+    ) -> Flow {
+        if event.effect == Block && event.cancelled {
+            event.set_custom_renderer(&Choice(0xFF0000FF));
+        }
+        Flow::Continue
+    }
+}
+
+struct LastChoice;
+#[mod_api::__subscriptions]
+impl Hooks for LastChoice {
+    #[listener(priority = -10)]
+    fn extract_block_screen_effect(
+        &self,
+        _: &dyn ClientHost,
+        event: &mut ExtractBlockScreenEffectEvent<'_>,
+    ) -> Flow {
+        if event.effect == Block {
+            event.set_custom_renderer(&Choice(0xFF00FF00));
+        }
+        Flow::Continue
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn only_the_last_eligible_renderer_submits() {
+    with_client_game(|game| {
+        burning_player(game);
+        let stone = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:stone")
+            .unwrap();
+        game.world.set(0, 65, 0, stone).unwrap();
+        let frame = |cancel| {
+            // Supply entries out of listener-priority order.
+            let mods: Mods = vec![
+                ModEntry::new("last", Box::new(LastChoice)),
+                ModEntry::new("receive", Box::new(ReceiveCancelled)),
+                ModEntry::new("first", Box::new(FirstChoice(cancel))),
+            ]
+            .into();
+            mod_platform::testing::with_mods(mods, || quads(game))
+        };
+        for (cancel, chosen) in [(false, [0.0, 1.0, 0.0, 1.0]), (true, [0.0, 0.0, 1.0, 1.0])] {
+            let frame = frame(cancel);
+            assert_eq!(frame[0].vertices[0].color, chosen);
+            let choices = [
+                [1.0, 0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0, 1.0],
+                [0.0, 0.0, 1.0, 1.0],
+            ];
+            let custom_colors: Vec<_> = frame
+                .iter()
+                .map(|quad| quad.vertices[0].color)
+                .filter(|color| choices.contains(color))
+                .collect();
+            assert_eq!(custom_colors, [chosen]);
+        }
+    });
+}
+
 /// A frame's pixels, RGBA.
 fn drawn_frame(game: &mut Game<'_>) -> (Vec<u8>, usize) {
     game.renderer.as_mut().unwrap().screenshot = Some(ScreenshotRequest {
@@ -307,32 +407,12 @@ impl Hooks for Painter {
     fn extract_block_screen_effect(
         &self,
         _: &dyn ClientHost,
-        event: &mut ExtractBlockScreenEffectEvent,
+        event: &mut ExtractBlockScreenEffectEvent<'_>,
     ) -> Flow {
-        event.custom_draw = event.effect == Fire;
+        if event.effect == Fire {
+            event.set_custom_renderer(&Painter);
+        }
         Flow::Continue
-    }
-    fn block_screen_effect_draw(
-        &self,
-        _: &dyn ClientHost,
-        event: &mut BlockScreenEffectDrawEvent<'_>,
-    ) {
-        // Leaning away to the right: the right edge is twice as deep, so half as far out.
-        let leaning = [
-            [-0.25, -0.25, -0.5],
-            [0.25, -0.25, -1.0],
-            [0.25, 0.25, -1.0],
-            [-0.25, 0.25, -0.5],
-        ];
-        assert!(event.draw.quad(leaning, RED));
-        let clear = [
-            [0.33, -0.1, -0.5],
-            [0.44, -0.1, -0.5],
-            [0.44, 0.1, -0.5],
-            [0.33, 0.1, -0.5],
-        ];
-        assert!(event.draw.quad(clear, CLEAR_BLUE));
-        event.replace_vanilla = true;
     }
     fn gui_render_post(&self, _: &dyn ClientHost, event: &mut GuiRenderPostEvent<'_>) {
         if DRAWING.load(std::sync::atomic::Ordering::Relaxed) {
@@ -341,6 +421,27 @@ impl Hooks for Painter {
                 .batch
                 .fill([0.0, 0.0, width / 2.0, height], 0xFF00FF00);
         }
+    }
+}
+
+impl BlockScreenEffectRenderer for Painter {
+    fn submit(&self, _: &dyn ClientHost, render: BlockScreenEffectRender<'_>) -> bool {
+        // Leaning away to the right: the right edge is twice as deep, so half as far out.
+        let leaning = [
+            [-0.25, -0.25, -0.5],
+            [0.25, -0.25, -1.0],
+            [0.25, 0.25, -1.0],
+            [-0.25, 0.25, -0.5],
+        ];
+        assert!(render.draw.quad(leaning, RED));
+        let clear = [
+            [0.33, -0.1, -0.5],
+            [0.44, -0.1, -0.5],
+            [0.44, 0.1, -0.5],
+            [0.33, 0.1, -0.5],
+        ];
+        assert!(render.draw.quad(clear, CLEAR_BLUE));
+        true
     }
 }
 

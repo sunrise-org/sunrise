@@ -4,10 +4,12 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use sunrise_client::neoforge_mob_maps::{self as builtin, BuiltinMap, Kind, MAPS, NeoForgeMobMaps};
+use sunrise_core::nbt::Tag;
+
 type Tags = HashMap<String, HashSet<String>>;
 
 pub(crate) struct Loaded {
-    pub values: Vec<(BuiltinMap, super::native_data_maps::MapValues)>,
+    pub values: Vec<(BuiltinMap, BTreeMap<String, Tag>)>,
     pub snapshot: Arc<NeoForgeMobMaps>,
 }
 struct Loader<'a, 'p> {
@@ -23,29 +25,24 @@ impl Loader<'_, '_> {
         values: BTreeMap<String, T>,
         applied: bool,
         install: impl FnOnce(&mut NeoForgeMobMaps, BTreeMap<String, T>),
-        encode: impl Fn(&T) -> sunrise_core::nbt::Tag,
-    ) -> super::native_data_maps::MapValues {
+        encode: impl Fn(&T) -> Tag,
+    ) -> BTreeMap<String, Tag> {
         let field = self.definition.kind.field();
         let encoded = values
             .iter()
-            .map(|(id, value)| {
-                (
-                    id.clone(),
-                    sunrise_core::nbt::Tag::compound([(field, encode(value))]),
-                )
-            })
+            .map(|(id, value)| (id.clone(), Tag::compound([(field, encode(value))])))
             .collect();
         if applied {
             install(self.snapshot, values);
         }
-        super::native_data_maps::MapValues::Decoded(encoded)
+        encoded
     }
     fn merge<T: Clone>(
         &mut self,
         codec: impl Fn(&Value) -> Result<T, String>,
         install: impl FnOnce(&mut NeoForgeMobMaps, BTreeMap<String, T>),
-        encode: impl Fn(&T) -> sunrise_core::nbt::Tag,
-    ) -> Result<super::native_data_maps::MapValues, String> {
+        encode: impl Fn(&T) -> Tag,
+    ) -> Result<BTreeMap<String, Tag>, String> {
         let definition = self.definition;
         let base = builtin::vanilla_layer(definition.kind)
             .into_iter()
@@ -70,8 +67,8 @@ impl Loader<'_, '_> {
         &mut self,
         codec: impl Fn(&serde_json::value::RawValue) -> Result<T, String>,
         install: impl FnOnce(&mut NeoForgeMobMaps, BTreeMap<String, T>),
-        encode: impl Fn(&T) -> sunrise_core::nbt::Tag,
-    ) -> Result<super::native_data_maps::MapValues, String> {
+        encode: impl Fn(&T) -> Tag,
+    ) -> Result<BTreeMap<String, Tag>, String> {
         let definition = self.definition;
         let field = definition.kind.field();
         let base = builtin::vanilla_layer(definition.kind)
@@ -115,17 +112,17 @@ pub(super) fn load<'a>(
             known: &known,
             snapshot: &mut snapshot,
         };
-        let raw = match definition.kind {
+        let encoded = match definition.kind {
             Kind::VillagerDistances => loader.merge_number(
                 builtin::decode_distance,
                 NeoForgeMobMaps::set_distances,
-                |value| sunrise_core::nbt::Tag::Float(value.to_bits()),
+                |value| Tag::Float(value.to_bits()),
             ),
             Kind::ParrotImitations => loader.merge(
                 |value| builtin::decode_sound(value, |id| known("minecraft:sound_event", id)),
                 NeoForgeMobMaps::set_parrots,
                 |sound| {
-                    sunrise_core::nbt::Tag::String(if sound.is_empty() {
+                    Tag::String(if sound.is_empty() {
                         "minecraft:intentionally_empty".into()
                     } else {
                         sunrise_client::mobs::entity_sounds::full_id(sound)
@@ -142,26 +139,26 @@ pub(super) fn load<'a>(
                         "minecraft:{}",
                         sunrise_client::mobs::render::VILLAGER_TYPES[*value as usize]
                     );
-                    sunrise_core::nbt::Tag::String(id.as_str().into())
+                    Tag::String(id.as_str().into())
                 },
             ),
             Kind::RaidHeroGifts => {
                 loader.merge(builtin::decode_gift, NeoForgeMobMaps::set_gifts, |value| {
-                    sunrise_core::nbt::Tag::String(value.as_str().into())
+                    Tag::String(value.as_str().into())
                 })
             }
             Kind::VibrationFrequencies => loader.merge_number(
                 builtin::decode_frequency,
                 NeoForgeMobMaps::set_frequencies,
-                |value| sunrise_core::nbt::Tag::Int(*value),
+                |value| Tag::Int(*value),
             ),
             Kind::VillagerCompostables => loader.merge(
                 builtin::decode_compostable,
                 NeoForgeMobMaps::set_compostables,
-                |value| sunrise_core::nbt::Tag::Byte(i8::from(*value)),
+                |value| Tag::Byte(i8::from(*value)),
             ),
         };
-        values.push((definition, raw?));
+        values.push((definition, encoded?));
     }
     Ok(Loaded {
         values,
@@ -216,36 +213,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(loaded.snapshot.villager_distance("test:wraith"), Some(21.0));
-        let raw = &loaded
+        let values = &loaded
             .values
             .iter()
             .find(|(definition, _)| definition.id == "neoforge:acceptable_villager_distances")
             .unwrap()
             .1;
-        let super::super::native_data_maps::MapValues::Decoded(raw) = raw else {
-            panic!("builtin codec stores decoded values");
-        };
         assert_eq!(
-            raw.get("test:wraith"),
-            Some(&sunrise_core::nbt::Tag::compound([(
+            values.get("test:wraith"),
+            Some(&Tag::compound([(
                 "acceptable_villager_distance",
-                sunrise_core::nbt::Tag::Float(21.0f32.to_bits())
+                Tag::Float(21.0f32.to_bits())
             )]))
         );
         assert_eq!(
-            raw.get("minecraft:zombie"),
-            Some(&sunrise_core::nbt::Tag::compound([(
+            values.get("minecraft:zombie"),
+            Some(&Tag::compound([(
                 "acceptable_villager_distance",
-                sunrise_core::nbt::Tag::Float(8.0f32.to_bits())
+                Tag::Float(8.0f32.to_bits())
             )]))
         );
-        assert!(!raw.contains_key("test:unknown"));
+        assert!(!values.contains_key("test:unknown"));
     }
 
     #[test]
     fn lexical_numeric_files_keep_infinity_and_exact_decimal_truncation_in_both_views() {
-        use super::super::native_data_maps::MapValues;
-        use sunrise_core::nbt::Tag;
         let files = vec![
             ("data_maps/neoforge:entity_type/acceptable_villager_distances".into(), vec![br#"{"values": {
                 "test:overflow": {"value": {"acceptable_villager_distance": 1e500}},
@@ -291,10 +283,7 @@ mod tests {
             .into_iter()
             .map(|(definition, values)| (definition.id, values))
             .collect();
-        let MapValues::Decoded(distances) = &tables["neoforge:acceptable_villager_distances"]
-        else {
-            panic!("decoded builtin");
-        };
+        let distances = &tables["neoforge:acceptable_villager_distances"];
         assert_eq!(
             distances.get("test:overflow"),
             Some(&Tag::compound([(
@@ -302,9 +291,7 @@ mod tests {
                 Tag::Float(f32::INFINITY.to_bits())
             )]))
         );
-        let MapValues::Decoded(frequencies) = &tables["neoforge:vibration_frequencies"] else {
-            panic!("decoded builtin");
-        };
+        let frequencies = &tables["neoforge:vibration_frequencies"];
         assert_eq!(
             frequencies.get("test:decimal"),
             Some(&Tag::compound([("frequency", Tag::Int(15))]))

@@ -122,12 +122,13 @@ pub(crate) fn generate(root: &Path, out: &Path) -> Result<(), String> {
     let dir = root.join(DIRECTORY);
     crate::rerun_if_changed(&dir.display());
     let mut areas = Catalog::modules(&root.join(DECLARATIONS))?;
-    // A fixture can support an engine entry-point module as well as a declaration.
+    // A fixture can support a declared engine target as well as a declaration file.
     // Their boundaries need not match when declarations are split per hook.
-    let native_dir = root.join("crates/sunrise-client/src/game/native_hooks");
-    if native_dir.is_dir() {
-        areas.extend(Catalog::modules(&native_dir)?);
-    }
+    const NATIVE: &str = "sunrise_client::game::native_hooks::";
+    areas.extend(Catalog::load(root)?.hooks.iter().filter_map(|hook| {
+        let (area, _) = hook.target.strip_prefix(NATIVE)?.split_once("::")?;
+        Some(area.to_owned())
+    }));
     let mut output = BTreeMap::new();
     let mut seen = BTreeSet::new();
     for area in Catalog::modules(&dir)? {

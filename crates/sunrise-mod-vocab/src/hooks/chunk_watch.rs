@@ -10,22 +10,24 @@ pub trait Hooks {
     /// the state after that step; the order per player and chunk is vanilla's.
     /// Server-side.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "ChunkWatchEvent.Watch"
     )]
-    fn chunk_watch();
+    fn chunk_watch(player: PlayerRef, chunk: ChunkRef);
     /// `chunk`'s packet went to `player` (NeoForge's `ChunkWatchEvent.Sent`,
     /// at the end of `PlayerChunkSender.sendChunk`), after `chunk_watch`, so
     /// a mod can send its own data for the chunk now. Told after the server's
     /// network step for the level, with the state after that step, as
     /// `chunk_watch`. Server-side.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "ChunkWatchEvent.Sent"
     )]
-    fn chunk_sent();
+    fn chunk_sent(player: PlayerRef, chunk: ChunkRef);
     /// `player` stopped watching `chunk` (NeoForge's `ChunkWatchEvent.UnWatch`,
     /// `ChunkMap.dropChunk`): it left their view, or they leave the level
     /// (through a portal or a teleport, or respawning) or the server. Once for
@@ -34,9 +36,10 @@ pub trait Hooks {
     /// with the state after that step, as `chunk_watch`. Not told when the
     /// server stops. Server-side.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "ChunkWatchEvent.UnWatch"
     )]
-    fn chunk_unwatch();
+    fn chunk_unwatch(player: PlayerRef, chunk: ChunkRef);
 }

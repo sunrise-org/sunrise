@@ -11,7 +11,8 @@ pub mod play;
 pub mod recipes;
 pub mod status;
 
-use crate::buf::{Codec, Reader, Writer};
+use crate::buf::{Codec, Reader};
+use sunrise_core::vanilla_bytes::Writer;
 
 /// Generate a state's packet enum from (Variant(Type) = ID) entries.
 #[macro_export]
@@ -91,7 +92,7 @@ macro_rules! packet_enum {
             /// The packet body: VarInt id then payload, for trusted values.
             /// Use `try_encode` for values supplied by mods or other untrusted producers.
             pub fn encode(&self) -> Vec<u8> {
-                let mut w = $crate::buf::Writer::new();
+                let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
                 w.varint(self.id());
                 match self {
                     $(Self::$variant(p) => <$crate::packet_codec!($ty $(, $codec)?) as $crate::buf::Codec<$ty>>::write(p, &mut w),)*

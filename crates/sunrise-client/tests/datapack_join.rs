@@ -303,7 +303,7 @@ fn refused_client(brand: &str) -> (String, bool) {
     }
     c.send(&cfg::Serverbound::ClientInformation(ClientInformation::new(4)).encode())
         .unwrap();
-    let mut name = sunrise_protocol::buf::Writer::new();
+    let mut name = ::sunrise_core::vanilla_bytes::Writer::new();
     name.string(brand);
     c.send(
         &cfg::Serverbound::CustomPayload(cfg::CustomPayload {

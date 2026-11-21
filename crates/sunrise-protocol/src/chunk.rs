@@ -3,10 +3,11 @@
 //! entities) and ClientboundLightUpdatePacketData (sky/block DataLayers).
 use crate::{
     Error, Result,
-    buf::{BitSet, Bytes, Codec, Longs, Reader, VarInt, Writer},
+    buf::{BitSet, Bytes, Codec, Longs, Reader, VarInt},
     packet,
 };
 use sunrise_core::nbt::Tag;
+use sunrise_core::vanilla_bytes::Writer;
 
 /// Blocks: 16^3 entries; biomes: 4^3 entries per section.
 pub const BLOCKS: usize = 4096;

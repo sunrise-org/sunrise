@@ -250,7 +250,6 @@ pub fn load(folder: &Path) -> Result<Vec<&'static mod_api::__private::native::Na
 
 /// Start the fixed executable, registering checked native libraries before the engine seal.
 pub fn main() {
-    crate::prepare_main_stack();
     let startup = sunrise_client::entry::prepare();
     let result = std::env::current_exe()
         .map_err(|e| e.to_string())

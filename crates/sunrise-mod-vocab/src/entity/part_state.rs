@@ -81,7 +81,8 @@ pub trait EntityPartState: EntityPart + Sized {
 
 /// Where the entity an [`EntityRef`] names is now, as its Part state checks it
 /// ([`EntitiesHost::entity_residency`]).
-#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, Default, PartialEq, Eq)]
+// no wire: residency is a momentary observation in the current host.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EntityResidency {
     /// Resident in the level this host is in, and reachable.
@@ -112,7 +113,8 @@ impl PartStateHolder for EntityRef {
 }
 
 /// An entity Part with state could not be attached: its state declaration was refused.
-#[derive(sunrise_mod_api_macros::Wire, Clone, Debug, PartialEq, Eq)]
+// no wire: reports a local entity Part-state registration failure.
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EntityPartStateError {
     /// Its state declaration was refused.
@@ -157,9 +159,9 @@ impl std::error::Error for EntityPartStateError {}
 
 /// One entity Part state declaration as registration kept it, for the game to check its
 /// entity type once every type is known.
+// no wire: registration metadata kept by the local game.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct EntityPartStateDeclaration {
     /// The mod that declared it.
     pub mod_id: String,

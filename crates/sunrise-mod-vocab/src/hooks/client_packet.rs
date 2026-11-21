@@ -46,11 +46,12 @@ Packets the network thread sends itself (keep-alives, chunk batch acknowledgemen
 a dialog's custom click action) and far terrain requests do not fire it. With no listener the
 send path checks one flag and builds nothing."#]
     #[hook(
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         cancellable = false,
         version = 2,
         neoforge = "none (NeoForge has no raw play-packet receive event)"
     )]
-    fn client_packet();
+    fn client_packet(packet: &ClientPacket);
 }

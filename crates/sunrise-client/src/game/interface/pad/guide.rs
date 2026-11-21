@@ -67,9 +67,11 @@ impl Game<'_> {
             && !self.screen_over_playing()
             && self.sleeping.is_none()
             && self.player.is_some()
-            && !self
-                .debug_entries
-                .any_enabled(self.debug, self.reduced_debug_info())
+            && !self.debug_entries.any_enabled(
+                &self.registered_debug_entries,
+                self.debug,
+                self.reduced_debug_info(),
+            )
     }
 
     /// Draw the guide (F1's hidden HUD never gets here). `from` is the batch's first vertex of

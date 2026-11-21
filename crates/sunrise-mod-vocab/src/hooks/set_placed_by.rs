@@ -10,11 +10,18 @@ pub trait Hooks {
     /// firing the item notice. Writes through the `ServerHost` participate in the
     /// current transaction, if one is open.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         scope = "block",
         key = "state",
         neoforge = "none (vanilla Block.setPlacedBy)"
     )]
-    fn set_placed_by();
+    fn set_placed_by(
+        level: LevelRef,
+        pos: [i32; 3],
+        state: BlockState,
+        placer: Option<EntityRef>,
+        stack: Option<&ItemStack>,
+    );
 }

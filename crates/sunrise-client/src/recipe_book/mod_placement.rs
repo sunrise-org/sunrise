@@ -7,7 +7,11 @@ use crate::{
     crafting::{Ingredient, Placement},
     menu::place::custom_plan::{MenuPlacement, PlacementRefusal},
 };
-use mod_api::{PlacementInfo, RecipeBookDisplayEntry};
+use mod_api::{
+    PlacementInfo, RecipeBookDisplayEntry,
+    item::crafting::{IngredientRule, Shape},
+};
+use sunrise_core::nbt::{Tag, discard_tag};
 
 // A rejected native declaration may contain a tree too deep even to drop recursively.
 // Drain every new placement value before its category batch is dropped on refusal.
@@ -28,10 +32,12 @@ impl Drop for BatchGuard<'_> {
                         if let Some((_, children)) = ingredient.children.take() {
                             pending.extend(children);
                         }
-                        if let Some((_, data)) = ingredient.custom.take() {
-                            for (_, tag) in data {
-                                sunrise_core::nbt::discard_tag(tag);
-                            }
+                        if let Some(rule) = ingredient.rule.take() {
+                            let IngredientRule::Components { patch, .. } = *rule;
+                            discard_tag(Tag::Compound(patch));
+                        }
+                        if let Some(display) = ingredient.display.take() {
+                            discard_tag(Tag::Compound(*display));
                         }
                     }
                 }
@@ -72,13 +78,8 @@ fn validate(info: &PlacementInfo, resources: &dyn DisplayResources) -> Result<()
     {
         return Err("shape dimensions disagree with cells".into());
     }
-    // This is only a preflight for values provably unable to cross Wire. The
-    // derived codec below, not a second decoder or local depth budget, decides
-    // acceptance identically for all declarations. A record and
-    // each recursive ingredient record contributes one reader level;
-    // category/entry/info/ingredient start at four (lists/options/tuples
-    // do not add reader depth).
-    // Reject that proven lower bound before invoking the recursive encoder.
+    // Bound recursive use and keep the code-free projection within the recipe
+    // catalogue's depth budget (category, entry, cells and first ingredient).
     let mut pending: Vec<_> = info
         .cells
         .iter()
@@ -87,7 +88,7 @@ fn validate(info: &PlacementInfo, resources: &dyn DisplayResources) -> Result<()
         .collect();
     while let Some((ingredient, depth)) = pending.pop() {
         if depth > usize::from(mod_api::wire::MAX_DEPTH) {
-            return Err("Wire refused placement: ingredient exceeds depth".into());
+            return Err("placement ingredient exceeds depth".into());
         }
         if ingredient.items.iter().any(|id| !resources.item(id)) {
             return Err("unknown ingredient item".into());
@@ -99,37 +100,31 @@ fn validate(info: &PlacementInfo, resources: &dyn DisplayResources) -> Result<()
         {
             return Err("ingredient holder order disagrees with its items".into());
         }
-        if let Some((kind, _)) = &ingredient.custom
-            && (ingredient.children.is_some()
-                || !super::super::custom_books::valid_book_id(kind)
-                || kind.starts_with("minecraft:"))
+        if ingredient.custom.is_some()
+            && (ingredient.children.is_some() || ingredient.rule.is_some())
         {
-            return Err("custom ingredient kind is invalid or mixed with a child shape".into());
+            return Err("custom ingredient cannot also have a child shape or built-in rule".into());
         }
-        // Tag owns its independent, iterative vanilla depth budget.
-        // The shared codec below validates it; ingredient depth is not NBT depth.
         if let Some((shape, children)) = &ingredient.children {
-            if children.is_empty()
-                || matches!(shape, mod_api::item::crafting::Shape::Difference)
-                    && children.len() != 2
-            {
+            let valid = match shape {
+                Shape::Compound | Shape::Intersection => !children.is_empty(),
+                Shape::Difference => children.len() == 2,
+                Shape::CustomDisplay => children.len() == 1,
+            };
+            if !valid {
                 return Err("ingredient shape has invalid children".into());
             }
             pending.extend(children.iter().map(|value| (value, depth + 1)));
         }
+        // The native declaration itself has no codec. Its remaining NBT
+        // fields still have the independent vanilla depth budget.
+        let mut output = mod_api::wire::Writer::new();
+        output.put(&ingredient.rule);
+        output.put(&ingredient.display);
+        if let Some(error) = output.error() {
+            return Err(format!("invalid placement ingredient data: {error}"));
+        }
     }
-    let mut output = mod_api::wire::Writer::new();
-    output.put(info);
-    if let Some(error) = output.error() {
-        return Err(format!("Wire refused placement: {error}"));
-    }
-    // Preserve the actual hook field's enclosing category and entry record
-    // levels. Lists, options and tuples add no reader level.
-    // This uses the shared reader, with no parallel placement codec.
-    let mut input = mod_api::wire::Reader::new(output.bytes());
-    let _: PlacementInfo = input
-        .nested(|input| input.nested(|input| input.take()))
-        .map_err(|error| format!("Wire refused placement: {error}"))?;
     Ok(())
 }
 
@@ -167,7 +162,7 @@ pub(super) fn compile(
         ))),
     }
 }
-// Only called after validate_batch accepted the shared Wire form.
+// Only called after validate_batch accepted the native declaration.
 fn convert(value: &mod_api::Ingredient) -> Ingredient {
     Ingredient {
         items: value.items.clone(),

@@ -50,7 +50,7 @@ pub type Mods = Arc<[ModEntry]>;
 
 pub(crate) struct Installed {
     pub(crate) mods: Mods,
-    by_id: std::collections::HashMap<&'static str, usize>,
+    pub(crate) by_id: std::collections::HashMap<&'static str, usize>,
     pub(crate) subscribers: sunrise_mod_runtime::subscribers::Subscribers,
     pub(crate) disabled: Box<[std::sync::atomic::AtomicBool]>,
     mod_id_owners: std::collections::HashMap<&'static str, usize>,

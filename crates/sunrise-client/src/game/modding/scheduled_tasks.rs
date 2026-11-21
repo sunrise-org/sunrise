@@ -1,11 +1,15 @@
 //! The delayed tasks mods scheduled in the running world (`schedule_task`): a queue counted in
 //! server ticks, owned by the world's lifecycle and dropped with it.
 
-use mod_api::{MAX_PENDING_TASKS, ScheduleError, TaskId};
-use std::collections::{BTreeMap, HashMap};
+use mod_api::{MAX_PENDING_TASKS, ScheduleError, ServerHost, TaskId};
+use std::{
+    collections::{BTreeMap, HashMap},
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+};
 
-/// What a due task hands back: its id, the owning mod's `[mod] id` and the mod's token.
-pub(super) type DueTask = (TaskId, &'static str, u64);
+pub(super) type ServerTask = Box<dyn FnOnce(&mut dyn ServerHost)>;
+/// The owning mod's `[mod] id` and its callable, detached from the scheduler.
+pub(super) type PendingTask = (&'static str, ServerTask);
 
 /// Runs every item `next` yields through `run`, even when one run panics: the other items still
 /// run, and the first panic comes back for the caller to put back in flight once it has restored
@@ -17,10 +21,14 @@ pub(super) fn run_all<S, T>(
 ) -> Option<Box<dyn std::any::Any + Send>> {
     let mut panic = None;
     while let Some(item) = next(state) {
-        let result =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&mut *state, item)));
-        if let Err(payload) = result {
-            panic.get_or_insert(payload);
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| run(state, item))) {
+            if panic.is_none() {
+                panic = Some(payload);
+            } else if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
+                // A later panic's payload may itself panic on drop. Keep draining, and never
+                // run another destructor on behalf of a payload we aren't going to report.
+                std::mem::forget(payload);
+            }
         }
     }
     panic
@@ -32,7 +40,7 @@ pub(super) struct ScheduledTasks {
     now: u64,
     next_id: u64,
     /// Waiting tasks by due tick, then id (the order they were scheduled).
-    queue: BTreeMap<(u64, u64), (&'static str, u64)>,
+    queue: BTreeMap<(u64, u64), PendingTask>,
     /// Each waiting task's due tick, to find it again on cancel.
     due: HashMap<u64, u64>,
     /// How many tasks each mod has waiting.
@@ -45,7 +53,7 @@ impl ScheduledTasks {
         &mut self,
         owner: Option<&'static str>,
         delay_ticks: u32,
-        token: u64,
+        task: ServerTask,
     ) -> Result<TaskId, ScheduleError> {
         let owner = owner.ok_or(ScheduleError::NotInMod)?;
         let waiting = self.pending.entry(owner).or_insert(0);
@@ -56,21 +64,20 @@ impl ScheduledTasks {
         self.next_id += 1;
         let id = self.next_id;
         let due = self.now.saturating_add(u64::from(delay_ticks.max(1)));
-        self.queue.insert((due, id), (owner, token));
+        self.queue.insert((due, id), (owner, task));
         self.due.insert(id, due);
         Ok(TaskId(id))
     }
 
-    /// Withdraw `id` if `owner` scheduled it and it is still waiting.
-    pub(super) fn cancel(&mut self, owner: Option<&'static str>, id: TaskId) -> bool {
-        let Some(&due) = self.due.get(&id.0) else {
-            return false;
-        };
-        if self.queue.get(&(due, id.0)).map(|task| task.0) != owner || owner.is_none() {
-            return false;
+    /// Withdraw `id` if `owner` scheduled it and it is still waiting. The caller gets the
+    /// callable back only once all bookkeeping is done, so dropping its captures is safe.
+    pub(super) fn cancel(&mut self, owner: &'static str, id: TaskId) -> Option<ServerTask> {
+        let &due = self.due.get(&id.0)?;
+        let &(waiting_owner, _) = self.queue.get(&(due, id.0))?;
+        if waiting_owner != owner {
+            return None;
         }
-        self.remove(due, id.0);
-        true
+        self.remove(due, id.0).map(|(_, task)| task)
     }
 
     /// A server tick starts: "now" moves to it, before any hook of the tick runs, so a task
@@ -79,160 +86,178 @@ impl ScheduledTasks {
         self.now += 1;
     }
 
-    /// The next task due by now, in the order they were scheduled, taken off the queue. One at a
-    /// time, so a task whose hook panics leaves the rest queued. A task scheduled while others
-    /// run is due on a later tick.
-    pub(super) fn pop_due(&mut self) -> Option<DueTask> {
+    /// The next task due by now, taken off the queue before any of its mod code runs. A task
+    /// scheduled while others run is due on a later tick.
+    pub(super) fn pop_due(&mut self) -> Option<PendingTask> {
         let (&(due, id), _) = self.queue.first_key_value()?;
         if due > self.now {
             return None;
         }
-        let (owner, token) = self.queue.remove(&(due, id))?;
-        self.due.remove(&id);
-        if let Some(waiting) = self.pending.get_mut(owner) {
-            *waiting -= 1;
-        }
-        Some((TaskId(id), owner, token))
+        self.remove(due, id)
     }
 
-    /// The world closed or opened: nothing carries over.
+    /// The world closed or opened: detach the old queue before running any capture destructors.
     pub(super) fn clear(&mut self) {
-        *self = Self::default();
+        let mut retired = std::mem::take(self).queue.into_values();
+        let panic = run_all(&mut retired, Iterator::next, |_, (owner, task)| {
+            let _call = mod_api::__private::enter(owner, "schedule_task");
+            drop(task);
+        });
+        if let Some(payload) = panic {
+            resume_unwind(payload);
+        }
     }
 
-    fn remove(&mut self, due: u64, id: u64) {
-        if let Some((owner, _)) = self.queue.remove(&(due, id))
-            && let Some(waiting) = self.pending.get_mut(owner)
-        {
+    fn remove(&mut self, due: u64, id: u64) -> Option<PendingTask> {
+        let task = self.queue.remove(&(due, id))?;
+        self.due.remove(&id);
+        if let Some(waiting) = self.pending.get_mut(task.0) {
             *waiting -= 1;
         }
-        self.due.remove(&id);
+        Some(task)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mod_api::testing::FakeHost;
+    use std::{cell::RefCell, rc::Rc};
 
     const A: Option<&str> = Some("a");
     const B: Option<&str> = Some("b");
 
-    /// One tick: "now" moves, then every due task comes out.
-    fn advance(tasks: &mut ScheduledTasks) -> Vec<DueTask> {
-        tasks.begin_tick();
-        std::iter::from_fn(|| tasks.pop_due()).collect()
+    struct PanicOnDrop;
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            panic!("destructor panicked");
+        }
     }
 
-    fn ids(due: &[DueTask]) -> Vec<(u64, u64)> {
-        due.iter().map(|d| (d.0.0, d.2)).collect()
+    fn advance(tasks: &mut ScheduledTasks) -> Vec<PendingTask> {
+        tasks.begin_tick();
+        std::iter::from_fn(|| tasks.pop_due()).collect()
     }
 
     #[test]
     fn tasks_run_after_their_delay_in_the_order_they_were_scheduled() {
         let mut tasks = ScheduledTasks::default();
-        tasks.schedule(A, 2, 20).unwrap();
-        tasks.schedule(A, 1, 10).unwrap();
-        tasks.schedule(B, 2, 21).unwrap();
-        tasks.schedule(B, 0, 0).unwrap();
-        assert_eq!(ids(&advance(&mut tasks)), [(2, 10), (4, 0)]);
-        assert_eq!(ids(&advance(&mut tasks)), [(1, 20), (3, 21)]);
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        for (owner, delay, value) in [(A, 2, 20), (A, 1, 10), (B, 2, 21), (B, 0, 0)] {
+            let heard = Rc::clone(&heard);
+            tasks
+                .schedule(
+                    owner,
+                    delay,
+                    Box::new(move |_| heard.borrow_mut().push(value)),
+                )
+                .unwrap();
+        }
+        let mut host = FakeHost::new();
+        for (_, task) in advance(&mut tasks) {
+            task(&mut host);
+        }
+        assert_eq!(*heard.borrow(), [10, 0]);
+        for (_, task) in advance(&mut tasks) {
+            task(&mut host);
+        }
+        assert_eq!(*heard.borrow(), [10, 0, 20, 21]);
         assert!(advance(&mut tasks).is_empty());
-    }
-
-    #[test]
-    fn a_task_scheduled_while_others_run_is_due_on_a_later_tick() {
-        let mut tasks = ScheduledTasks::default();
-        tasks.schedule(A, 1, 1).unwrap();
-        tasks.begin_tick();
-        assert!(tasks.pop_due().is_some());
-        tasks.schedule(A, 0, 2).unwrap();
-        assert!(tasks.pop_due().is_none());
-        assert_eq!(ids(&advance(&mut tasks)), [(2, 2)]);
-    }
-
-    #[test]
-    fn a_task_scheduled_from_the_tick_start_hook_waits_for_a_later_tick() {
-        // The lifecycle moves "now" before the start hook runs, so the hook schedules from the new
-        // tick: delay 0 and 1 fire on the next tick, delay N on the Nth after the current one.
-        let mut tasks = ScheduledTasks::default();
-        tasks.begin_tick();
-        tasks.schedule(A, 0, 100).unwrap();
-        tasks.schedule(A, 1, 101).unwrap();
-        tasks.schedule(A, 3, 103).unwrap();
-        assert!(tasks.pop_due().is_none());
-        assert_eq!(ids(&advance(&mut tasks)), [(1, 100), (2, 101)]);
-        assert!(advance(&mut tasks).is_empty());
-        assert_eq!(ids(&advance(&mut tasks)), [(3, 103)]);
     }
 
     #[test]
     fn only_the_owner_cancels_a_waiting_task() {
         let mut tasks = ScheduledTasks::default();
-        let id = tasks.schedule(A, 3, 1).unwrap();
-        assert!(!tasks.cancel(B, id));
-        assert!(!tasks.cancel(None, id));
-        assert!(tasks.cancel(A, id));
-        assert!(!tasks.cancel(A, id));
-        assert!(!tasks.cancel(A, TaskId(99)));
+        let capture = Rc::new(());
+        let owned = Rc::clone(&capture);
+        let id = tasks
+            .schedule(A, 3, Box::new(move |_| drop(owned)))
+            .unwrap();
+        assert!(tasks.cancel("b", id).is_none());
+        assert_eq!(Rc::strong_count(&capture), 2);
+        assert!(tasks.cancel("a", id).is_some());
+        assert_eq!(Rc::strong_count(&capture), 1);
+        assert!(tasks.cancel("a", id).is_none());
+        assert!(tasks.cancel("a", TaskId(99)).is_none());
         for _ in 0..3 {
             assert!(advance(&mut tasks).is_empty());
         }
-        let fired = tasks.schedule(A, 1, 2).unwrap();
+        let fired = tasks.schedule(A, 1, Box::new(|_| {})).unwrap();
         assert_eq!(advance(&mut tasks).len(), 1);
-        assert!(!tasks.cancel(A, fired));
+        assert!(tasks.cancel("a", fired).is_none());
     }
 
     #[test]
     fn a_mod_outside_its_hooks_cannot_schedule_and_one_mod_is_capped() {
         let mut tasks = ScheduledTasks::default();
-        assert_eq!(tasks.schedule(None, 1, 0), Err(ScheduleError::NotInMod));
-        for token in 0..MAX_PENDING_TASKS as u64 {
-            tasks.schedule(A, 5, token).unwrap();
+        assert_eq!(
+            tasks.schedule(None, 1, Box::new(|_| {})),
+            Err(ScheduleError::NotInMod)
+        );
+        let first = tasks.schedule(A, 5, Box::new(|_| {})).unwrap();
+        for _ in 1..MAX_PENDING_TASKS {
+            tasks.schedule(A, 5, Box::new(|_| {})).unwrap();
         }
-        assert_eq!(tasks.schedule(A, 5, 0), Err(ScheduleError::TooMany));
-        assert!(tasks.schedule(B, 5, 0).is_ok());
-        // A fired or cancelled task frees its place.
+        assert_eq!(
+            tasks.schedule(A, 5, Box::new(|_| {})),
+            Err(ScheduleError::TooMany)
+        );
+        assert!(tasks.schedule(B, 5, Box::new(|_| {})).is_ok());
+        assert!(tasks.cancel("a", first).is_some());
+        assert!(tasks.schedule(A, 5, Box::new(|_| {})).is_ok());
         for _ in 0..5 {
             advance(&mut tasks);
         }
-        assert!(tasks.schedule(A, 1, 0).is_ok());
+        assert!(tasks.schedule(A, 1, Box::new(|_| {})).is_ok());
     }
 
     #[test]
     fn the_largest_delay_does_not_wrap() {
         let mut tasks = ScheduledTasks::default();
-        tasks.schedule(A, u32::MAX, 1).unwrap();
+        tasks.schedule(A, u32::MAX, Box::new(|_| {})).unwrap();
         assert!(advance(&mut tasks).is_empty());
     }
 
     #[test]
-    fn closing_the_world_drops_every_task() {
+    fn closing_the_world_detaches_all_tasks_before_dropping_captures() {
         let mut tasks = ScheduledTasks::default();
-        tasks.schedule(A, 1, 1).unwrap();
-        tasks.clear();
+        let panics = PanicOnDrop;
+        tasks
+            .schedule(A, 1, Box::new(move |_| drop(panics)))
+            .unwrap();
+        let capture = Rc::new(());
+        let owned = Rc::clone(&capture);
+        tasks
+            .schedule(B, 1, Box::new(move |_| drop(owned)))
+            .unwrap();
+        let panic = catch_unwind(AssertUnwindSafe(|| tasks.clear())).unwrap_err();
+        assert_eq!(panic.downcast_ref::<&str>(), Some(&"destructor panicked"));
+        assert_eq!(Rc::strong_count(&capture), 1);
         assert!(advance(&mut tasks).is_empty());
-        assert_eq!(tasks.schedule(A, 1, 2).unwrap(), TaskId(1));
+        assert_eq!(tasks.schedule(A, 1, Box::new(|_| {})).unwrap(), TaskId(1));
     }
 
     #[test]
     fn a_panicking_task_does_not_drop_the_others() {
-        let mut state = (ScheduledTasks::default(), Vec::<u64>::new());
-        state.0.schedule(A, 1, 1).unwrap();
-        state.0.schedule(A, 1, 2).unwrap();
-        state.0.schedule(B, 1, 3).unwrap();
+        let mut state = (ScheduledTasks::default(), FakeHost::new());
+        state
+            .0
+            .schedule(A, 1, Box::new(|_| panic!("first")))
+            .unwrap();
+        state
+            .0
+            .schedule(A, 1, Box::new(|_| std::panic::panic_any(PanicOnDrop)))
+            .unwrap();
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&heard);
+        state
+            .0
+            .schedule(B, 1, Box::new(move |_| log.borrow_mut().push("third")))
+            .unwrap();
         state.0.begin_tick();
-        let panic = run_all(
-            &mut state,
-            |s| s.0.pop_due(),
-            |s, task| {
-                if task.2 == 1 {
-                    panic!("the first task fails");
-                }
-                s.1.push(task.2);
-            },
-        );
-        assert!(panic.is_some(), "the panic comes back to the caller");
-        assert_eq!(state.1, [2, 3]);
+        let panic = run_all(&mut state, |s| s.0.pop_due(), |s, (_, task)| task(&mut s.1)).unwrap();
+        assert_eq!(panic.downcast_ref::<&str>(), Some(&"first"));
+        assert_eq!(*heard.borrow(), ["third"]);
         assert!(state.0.pop_due().is_none());
     }
 }

@@ -209,6 +209,10 @@ impl Game<'_> {
         if !sunrise_client::containers::menu_reaches(brand, menu) {
             return MenuOpen::Refused;
         }
+        let opener = (self.mod_menu_at(pos) == Some(menu)).then_some(block.as_str());
+        let Some(hidden) = Self::native_hidden_slots(menu, opener, items.len()) else {
+            return MenuOpen::Refused;
+        };
         // The mods may stop the menu; the click is spent.
         match self.guest_may_open(conn, menu, Some([pos.0, pos.1, pos.2])) {
             Some(true) => {}
@@ -229,7 +233,6 @@ impl Game<'_> {
         // handle open has no earlier `startOpen`; only it starts the block's lid.
         let counts_openers =
             !opener_started && matches!(slots, Slots::Block(_) | Slots::Double(_, _));
-        let hidden = self.native_hidden_slots(menu, Some(pos), items.len());
         // A mod menu type's block tells the client where it is, with what its
         // mod writes (`openMenu` with an extra-data writer); a stock menu
         // sends nothing more.
@@ -270,7 +273,8 @@ impl Game<'_> {
                 host.hub
                     .open_menu_window(conn, menu, title, Some(pos), slots, items, extra)?;
                 if !hidden.is_empty() {
-                    host.hub.hide_menu_slots(conn, hidden);
+                    host.hub
+                        .hide_menu_slots(conn, hidden.iter().copied().map(usize::from).collect());
                 }
                 Some(())
             })

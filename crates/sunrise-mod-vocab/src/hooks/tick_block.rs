@@ -13,6 +13,7 @@ pub trait Hooks {
     /// Once re-enabled, the held occurrence is dispatched once with its original
     /// deadline, priority and order.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "handled",
@@ -23,5 +24,11 @@ pub trait Hooks {
         target = "sunrise_client::game::native_hooks::base::GameLevel<'_>::native_tick_block",
         neoforge = "none (vanilla BlockBehaviour.tick; NeoForge adds no event or extension for it)"
     )]
-    fn tick_block();
+    fn tick_block(
+        dimension: LevelDimension,
+        pos: BlockPos,
+        state: BlockState,
+        handled: &mut bool,
+        #[engine] ticks: &mut Ticks,
+    );
 }

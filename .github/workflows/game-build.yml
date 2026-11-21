@@ -335,24 +335,6 @@ jobs:
         run: |
           python3 .workflow-tools/tools/check_glibc.py \
             "$BIN/sunrise-client" "$BIN/sunrise-ctl" "$BIN/sunrise-perf" "$BIN/sunrise-prepare" "$BIN/sunrise-server" "$BIN/sunrise-port-pack"
-      - name: macOS main-stack diagnostics
-        if: runner.os == 'macOS'
-        run: |
-          echo "LC_MAIN of sunrise-client:"
-          otool -l "$BIN/sunrise-client" | grep -A4 LC_MAIN || true
-          if [[ "$(lipo -archs "$BIN/sunrise-client")" == x86_64 ]]; then
-            translated=$(arch -x86_64 /usr/sbin/sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)
-            stack_limit=$(arch -x86_64 /bin/sh -c 'ulimit -s' || true)
-          else
-            translated=$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)
-            stack_limit=$(ulimit -s || true)
-          fi
-          echo "sysctl.proc_translated (sunrise-client architecture): $translated"
-          echo "ulimit -s (sunrise-client architecture): $stack_limit"
-          echo "Runner uname -m:"
-          uname -m || true
-          echo "Runner arch:"
-          arch || true
       - name: Every program starts
         if: ${{ !matrix.musl && !matrix.started_elsewhere }}
         run: |

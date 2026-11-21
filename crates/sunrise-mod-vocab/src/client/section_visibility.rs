@@ -3,7 +3,7 @@
 //!
 //! The game captures the input and asks on the client world thread, never on a meshing worker; the
 //! workers read only the checked answers.
-use crate::{BiomeId, BlockStateId};
+use crate::{BiomeId, BlockState};
 
 /// Cells along each axis of a [`SectionVisibilityInput`]: the section's 16 and one each side.
 pub const SECTION_INPUT_SIDE: usize = 18;
@@ -22,7 +22,7 @@ pub enum SectionCell {
     /// The block state there as the world holds it, before any mod hid it: a state a
     /// `block_render_visibility` part hides still reads here as itself. Above or below the
     /// world it is air.
-    State(BlockStateId),
+    State(BlockState),
     /// A neighbouring column that is not loaded. It is not air: decide as if it neither occludes
     /// nor matches anything, and expect the section to be asked again when the column arrives.
     Missing,

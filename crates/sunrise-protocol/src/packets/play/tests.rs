@@ -233,7 +233,7 @@ fn a_seen_advancements_packet_carries_its_tab_only_when_one_was_opened() {
         action: 0,
         tab: Some("minecraft:story/root".into()),
     };
-    let mut w = crate::buf::Writer::new();
+    let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
     w.varint(0);
     w.string("minecraft:story/root");
     assert_eq!(

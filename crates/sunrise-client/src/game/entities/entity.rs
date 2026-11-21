@@ -1350,7 +1350,7 @@ fn draw_runs(lists: EntityLists<'_>, mut extra: DrawExtras<'_>, runs: &mut Vec<D
         .into_iter()
         .flat_map(|g| g.rows.values())
         .enumerate()
-        .filter(|(_, row)| row.shown)
+        .filter(|(_, row)| row.is_shown())
         .peekable();
     let mut next_extra = || {
         let (join, head) = [

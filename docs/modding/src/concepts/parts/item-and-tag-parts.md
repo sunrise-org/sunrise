@@ -3,8 +3,10 @@
 For an item-specific Part, request its canonical registry key once in `register`:
 `let stick = r.item_key("minecraft:stick"); r.item_part(stick, Sharp);`. Bare names use the
 `minecraft:` namespace. Requests may refer to content declared later; the final item registry refuses
-unknown IDs with the requesting mod. `ItemKey` equality uses its load-owned slot, and `key.id(host)`
-reads its canonical diagnostic name. Item capability registration and item helpers use strings.
+unknown IDs with the requesting mod. Compare `ItemKey` values directly when you have both keys.
+When you need text, `key.id(host)` borrows its canonical name as `Option<&str>`, so you can
+compare with `Some("minecraft:stick")` without allocating. Item capability registration and item
+helpers use strings.
 
 `r.block_part_tag("minecraft:logs", Rotates)` and `r.item_part_tag("minecraft:axes", Sharp)` attach a part to
 every member of a tag (its name without `#`). Each game resolves them against its own tags when its world
@@ -41,8 +43,9 @@ including air clicks with identical stacks in both hands. Read it directly when
 choosing which held stack to shrink. `player` and `player_entity_id` name who clicked,
 as `UseOnEvent` does: on a server the acting player's UUID and entity id (a guest's
 own, never the host's), on a client this client's own player. They come with the
-event, so a Part does not need `players().acting_player()` to be set while it runs. `living_used_item_hand` instead answers only during active item use and
-cannot identify an instantaneous click. The Part runs on both sides with `HostSide`,
+event, so a Part does not need `players().acting_player()` to be set while it runs.
+`living_used_item_hand` answers only during ordinary active item use; it does not identify an
+instantaneous click or intercepted input. The Part runs on both sides with `HostSide`,
 after the global right-click event and before the item's own use.
 Return `Some(InteractionResult::Success)` to consume and swing on the client,
 `Some(SuccessServer)` to consume and swing on the server, or `Some(Consume)`
@@ -63,6 +66,85 @@ The server fires it for the separate use-item packet, once for that packet's han
 Canceling skips the item Part and vanilla action.
 `Success`, `SuccessServer` and `Consume` end the client's hand loop.
 `Success` swings on the client, `SuccessServer` on the server, and `Consume` has no swing.
+
+## Intercept main-hand client input
+
+Use `ClientItemUseBehavior` for local input, for example to open a tool's client UI rather
+than use the block under the crosshair. In `Hooks::register`, request the item's key and bind
+one behavior to it. The item can be yours, vanilla's or another mod's. An unknown item or a
+second registration for the same item refuses startup; there is no last-writer-wins rule.
+
+This example traces the input for an existing `mymod:tool` without doing anything in the world:
+
+```rust
+use std::sync::Arc;
+
+use mod_api::{
+    ClientHost, ClientItemUseBehavior, Hooks, ItemStack, JavaString, Registrar, RegistrationContext,
+};
+
+struct ToolMod;
+struct Behavior;
+
+#[mod_api::sunrise_mod]
+impl Hooks for ToolMod {
+    fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+        let key = r.item_key("mymod:tool");
+        r.register_client_item_use(key, Arc::new(Behavior));
+    }
+}
+
+impl ClientItemUseBehavior for Behavior {
+    fn use_item(&self, _host: &mut dyn ClientHost, stack: &ItemStack, slot: u32) {
+        let data = stack
+            .components()
+            .and_then(|c| c.as_nbt().get(&JavaString::from("minecraft:custom_data")));
+        eprintln!(
+            "Tool input started in slot {slot}: {} item(s), custom data present: {}",
+            stack.count(),
+            data.is_some(),
+        );
+    }
+
+    fn release_using(
+        &self,
+        _host: &mut dyn ClientHost,
+        _stack: &ItemStack,
+        slot: u32,
+        ticks_held: u32,
+    ) {
+        eprintln!("Tool input released in slot {slot} after {ticks_held} ticks");
+    }
+
+    fn on_stop_using(
+        &self,
+        _host: &mut dyn ClientHost,
+        _stack: &ItemStack,
+        slot: u32,
+        _ticks_held: u32,
+    ) {
+        eprintln!("Tool input ended in slot {slot}");
+    }
+}
+```
+
+An enabled owner consumes the input before crosshair handling. This applies to main-hand
+input only. The callbacks send neither an item use nor a release packet and do not make the
+player use or block with the item. For ordinary behavior on both sides, use
+`ItemPart::use_item` and `ItemPart::release_using` instead. To track this local interception,
+use the callbacks, not `local_item_use`, `living_used_item_hand` or `living_is_blocking`.
+
+Every callback sees the original `&ItemStack` and its hotbar slot (`u32`, 0–8), even if the
+current stack has changed. `stack.item()` gives the `ItemKey` and `stack.count()` gives the
+count. Read `minecraft:custom_name` or `minecraft:custom_data` as typed `Tag` entries in the
+component patch, as above, or decode a component with `stack.get(&descriptor)`.
+
+Both optional end methods also receive the elapsed held ticks. The game clears the capture
+before calling either. An input release while the same item kind is still selected in the
+original slot and the player can still use it calls `release_using` followed by
+`on_stop_using`. A reset, such as a slot or item kind change, focus loss, death or disconnect,
+only calls `on_stop_using`. Put actions that require a release in `release_using` and cleanup
+that should also run on resets in `on_stop_using`. A disabled owner receives no callbacks.
 
 ## Item use on a block
 
@@ -207,13 +289,47 @@ A client without this mod predicts vanilla here; the server corrects it.
   contents) and the item slots a mod gives an item. A hopper filling a shulker box doesn't ask. A `true` for a
   shulker box lets shulker boxes nest: that is the mod's choice, bounded by the NBT readers' depth limit.
 
-`grindstone_place` can replace the result when the inputs change. A cancel or refusal leaves no
-result. `grindstone_take` can replace the two inputs and the experience award. Cancelling a take
-keeps the click that took the result but skips the input replacement and experience. Refusing a
-take (for example, because the backing block changed or the answer is invalid) instead restores
-the click, including the result, cursor, inventory and any dropped item. Both cancel and refusal
-undo the listener's writes. An accepted take is still tentative until the enclosing transaction
-commits.
+When the grindstone inputs change, `grindstone_place` lends the top and bottom stacks and
+vanilla's result through `event.inputs`. Set `event.edits.output = Some(stack)` with a valid
+stack to replace the result. Only a replacement uses `event.edits.xp`: leave it at `-1` for
+vanilla experience or set a nonnegative award. Leaving the override at `None` keeps vanilla's
+result and award. Only the replacement stack is checked as a write; the borrowed stacks are not.
+An invalid replacement or an uncancelled XP below `-1` refuses the answer. Either cancellation
+or refusal leaves no result and rolls back the listener's writes.
+
+`grindstone_take` lends the pre-take stacks as `event.inputs.top` and `event.inputs.bottom`.
+These optional references do not change when listeners edit the answer. Set a valid
+`event.edits.new_top` or `event.edits.new_bottom` to leave a stack in that slot; both start
+at `None` (empty the slot). `event.edits.xp` starts with the award set on place or `-1`
+for vanilla's award from the pre-take stacks. Set a nonnegative value to give that much
+experience. The game resolves the default award only on an accepted take.
+
+Cancelling a take keeps the click that took the result but skips input replacement,
+experience and sound. An invalid remainder refuses the click even if the listener cancels;
+XP below `-1` refuses an uncancelled answer. A refusal, including a stale read or a failing
+listener, restores the result, inputs, cursor, inventory and any dropped item. Both cancel and
+refusal undo the listener's writes. An accepted take is still tentative until the enclosing
+transaction commits.
+
+After the anvil calculates a result with a left input, `anvil_update` lends
+`event.inputs` on both sides: the left and optional right stacks, the optional rename text
+and vanilla's output and costs. Read those values without cloning; they don't change as
+listeners edit `event.edits`. Leave `edits.output` at `StackResult::Keep` to use vanilla's
+output, use `StackResult::Set(Some(stack))` to replace it, or use `StackResult::Set(None)`
+to clear it. To read the current answer, match on `&event.edits.output`: use
+`event.inputs.vanilla_output` for `Keep` and `stack.as_ref()` for `Set(stack)`. The level
+and material costs start at vanilla's values. Changing only the costs doesn't revalidate
+vanilla's stack. Cancellation or an invalid replacement clears the output and both costs.
+
+The server's `anvil_craft_pre` and `anvil_craft_post` both borrow the same pre-take snapshot
+through `event.inputs` (`AnvilCraftInputs<'_>`). Read the optional stacks through `inputs.left`
+and `inputs.right`, and the taken result through `inputs.output`. Set `event.cancelled` or
+return `Flow::Cancel` in Pre to veto the whole take: the result stays in the slot, the inputs,
+cursor, inventory and levels do not change, and Post is skipped. Post runs after the inputs
+are consumed, levels are charged and anvil wear is applied.
+
+These input views are valid only during the callback. Clone an individual stack only if you
+need to keep it afterwards. The input views and staged edits are not Wire records.
 
 `MenuPart::menu_slot_rules` answers per menu type and slot, including for a replacement from
 `item_stacked_on_other`.

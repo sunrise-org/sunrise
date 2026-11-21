@@ -6,9 +6,6 @@ mod fixture;
 struct Native;
 #[mod_api::__subscriptions]
 impl Hooks for Native {
-    fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
-        fixture::register(r);
-    }
     fn right_click_block(&self, host: HostSide<'_>, event: &mut RightClickBlockEvent<'_>) -> Flow {
         fixture::right_click_block(host, event)
     }
@@ -281,20 +278,7 @@ fn matrix(mods: mod_api::Mods) {
                         game.swing = Default::default();
                         game.use_failed = false;
                         advancement_tree(game);
-                        let mut control = mod_api::ModBlockEntity::new(
-                            "interaction_fixture:interaction_control".into(),
-                            Default::default(),
-                        );
-                        control.data = case.controls.iter().map(|&b| i32::from(b)).collect();
-                        game.native_block_entity_tick(
-                            &mut mod_api::BlockEntityTickReply::Changed,
-                            [0, 64, 0],
-                            &mut control,
-                        );
-                        assert!(
-                            control.data.is_empty(),
-                            "the control callback must run and accept {case:?}"
-                        );
+                        fixture::begin(case.controls);
                         let swings = game.swings_started;
                         let used = if client {
                             game.remote_use_item_on(hand)
@@ -326,24 +310,19 @@ fn matrix(mods: mod_api::Mods) {
                                 "{client:?} {hand:?} {name} {case:?}"
                             );
                         }
-                        game.native_block_entity_tick(
-                            &mut mod_api::BlockEntityTickReply::Changed,
-                            [0, 64, 0],
-                            &mut control,
-                        );
-                        let expected: Vec<i32> = case
+                        let expected: Vec<u8> = case
                             .phases
                             .iter()
                             .flat_map(|phase| {
                                 [
-                                    i32::from(*phase),
-                                    i32::from(hand == Hand::Off),
-                                    i32::from(client),
-                                    i32::from(!case.held),
+                                    *phase,
+                                    u8::from(hand == Hand::Off),
+                                    u8::from(client),
+                                    u8::from(!case.held),
                                 ]
                             })
                             .collect();
-                        assert_eq!(control.data, expected, "{client:?} {hand:?} {case:?}");
+                        assert_eq!(fixture::finish(), expected, "{client:?} {hand:?} {case:?}");
                         assert_eq!(
                             game.with_hand(hand, |g| g
                                 .held()

@@ -284,8 +284,9 @@ fn advancement_exact_values_fail_but_any_value_component_types_load() {
 #[test]
 fn saves_drop_transient_values_and_removals_without_mutating_live_or_wire_data() {
     use sunrise_core::nbt::Tag;
+    use sunrise_core::vanilla_bytes::Writer;
     use sunrise_protocol::{
-        buf::{Codec, Reader, Writer},
+        buf::{Codec, Reader},
         item::{Component, Slot, Stack, component},
         registry::{Builtin, Dynamic, Ids},
     };

@@ -9,6 +9,7 @@ use crate::{
 };
 use std::{
     collections::VecDeque,
+    net::SocketAddr,
     sync::{
         Arc,
         atomic::{AtomicI32, AtomicU64, Ordering},
@@ -126,12 +127,12 @@ struct GuestInit {
     conn: u32,
     uuid: u128,
     name: String,
-    properties: Vec<sunrise_protocol::packets::login::Property>,
+    properties: Vec<sunrise_core::profile::AccountProperty>,
     info: ClientInformation,
     brand: String,
     sender: PlayerSender,
     latency: Arc<AtomicI32>,
-    address: std::net::SocketAddr,
+    address: SocketAddr,
     expected: bool,
 }
 
@@ -170,8 +171,8 @@ pub struct Guest {
     pub residency: crate::join_seq::residency::member::Member,
     pub kind: GuestKind,
     pub conn: u32,
-    /// The client's address (IP bans, `list`).
-    pub address: std::net::SocketAddr,
+    address: SocketAddr,
+    ip_address: String,
     /// The hub tick of the player's last action (ServerPlayer.lastActionTime),
     /// for player-idle-timeout.
     pub last_action_tick: u64,
@@ -205,7 +206,7 @@ pub struct Guest {
     pub uuid: u128,
     pub name: String,
     /// The profile's properties, for the player list (skins).
-    pub properties: Vec<sunrise_protocol::packets::login::Property>,
+    pub properties: Vec<sunrise_core::profile::AccountProperty>,
     pub entity_id: i32,
     pub sender: PlayerSender,
     pub latency: Arc<AtomicI32>,
@@ -571,6 +572,22 @@ pub struct Guest {
 }
 
 impl Guest {
+    /// The client's socket address, including the port.
+    pub fn address(&self) -> SocketAddr {
+        self.address
+    }
+
+    /// The client's IP address as text, without the port.
+    pub fn ip_address(&self) -> &str {
+        &self.ip_address
+    }
+
+    /// Replaces the address and keeps its cached IP text in sync.
+    pub fn set_address(&mut self, address: SocketAddr) {
+        self.address = address;
+        self.ip_address = address.ip().to_string();
+    }
+
     /// Allocate the next protocol window and a non-reusable menu identity.
     pub fn next_menu_window(&mut self) -> i32 {
         self.next_window = self.next_window % 100 + 1;
@@ -741,6 +758,7 @@ impl Guest {
             kind,
             conn: j.conn,
             address: j.address,
+            ip_address: j.address.ip().to_string(),
             last_action_tick: 0,
             chat_index: 0,
             chain: Default::default(),
@@ -935,23 +953,39 @@ impl Guest {
             Err(error) => eprintln!("[lan] send refused: {error}"),
         }
     }
-    /// Send the complete committed data of this guest's current blockless menu.
+    /// Send the committed data that fits the negotiated blockless packet's index.
     pub fn send_menu_data_snapshot(&self) {
         let Some(menu) = &self.menu else { return };
-        for (index, &value) in menu.blockless_data.iter().enumerate() {
-            self.send_menu_data(menu.window, index as u16, value);
+        for (index, &value) in (0..=u16::MAX).zip(&menu.blockless_data) {
+            self.send_menu_data(menu.window, index, value);
+        }
+        let wire_len = usize::from(u16::MAX) + 1;
+        if menu.blockless_data.len() > wire_len {
+            log::warn!(
+                "Sunrise: blockless menu window {} cannot sync data slots at indices {wire_len}..{} (DataSlot index max is {})",
+                menu.window,
+                menu.blockless_data.len(),
+                u16::MAX,
+            );
         }
     }
 
     /// Commit one blockless-menu data slot. The caller resolves the window generation
     /// and validates the index before supplying a write.
-    pub fn set_menu_data(&mut self, index: u16, value: i32) {
+    pub fn set_menu_data(&mut self, index: usize, value: i32) {
         let Some(menu) = &mut self.menu else { return };
-        let slot = &mut menu.blockless_data[usize::from(index)];
+        let slot = &mut menu.blockless_data[index];
         if *slot != value {
             *slot = value;
             let window = menu.window;
-            self.send_menu_data(window, index, value);
+            if let Ok(wire_index) = u16::try_from(index) {
+                self.send_menu_data(window, wire_index, value);
+            } else {
+                log::warn!(
+                    "Sunrise: blockless menu window {window} cannot sync data slot {index} (DataSlot index max is {})",
+                    u16::MAX,
+                );
+            }
         }
     }
 
@@ -1309,7 +1343,7 @@ fn sign_text_bytes(text: &sunrise_core::nbt::Tag) -> Option<Vec<u8>> {
         Some(Tag::List(lines)) if lines.len() == 4 => Some(lines),
         _ => None,
     };
-    let mut w = sunrise_protocol::buf::Writer::new();
+    let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
     lines("messages")?.iter().for_each(|line| w.nbt(line));
     let filtered = lines("filtered_messages");
     w.bool(filtered.is_some());
@@ -1343,7 +1377,7 @@ fn builtin_component(
     ids: &dyn Fn(&str, &str) -> Option<i32>,
 ) -> Option<sunrise_protocol::item::Component> {
     use sunrise_core::nbt::Tag;
-    use sunrise_protocol::buf::Writer;
+    use sunrise_core::vanilla_bytes::Writer;
     let mut w = Writer::new();
     match name {
         "minecraft:attribute_modifiers" => {
@@ -1411,7 +1445,7 @@ fn builtin_component(
 fn write_tool(
     value: &sunrise_core::nbt::Tag,
     ids: &dyn Fn(&str, &str) -> Option<i32>,
-    w: &mut sunrise_protocol::buf::Writer,
+    w: &mut ::sunrise_core::vanilla_bytes::Writer,
 ) -> Option<()> {
     use sunrise_core::nbt::Tag;
     use sunrise_world::datafix::dynamic::{as_bool_opt, as_number};
@@ -1459,7 +1493,7 @@ fn write_holder_set(
     registry: &str,
     value: &sunrise_core::nbt::Tag,
     ids: &dyn Fn(&str, &str) -> Option<i32>,
-    w: &mut sunrise_protocol::buf::Writer,
+    w: &mut ::sunrise_core::vanilla_bytes::Writer,
 ) -> Option<()> {
     use sunrise_core::nbt::Tag;
     if let Tag::String(name) = value {
@@ -1503,7 +1537,7 @@ fn write_holder_set(
 fn write_block_predicate(
     value: &sunrise_core::nbt::Tag,
     ids: &dyn Fn(&str, &str) -> Option<i32>,
-    w: &mut sunrise_protocol::buf::Writer,
+    w: &mut ::sunrise_core::vanilla_bytes::Writer,
 ) -> Option<()> {
     use sunrise_core::nbt::Tag;
     let Tag::Compound(map) = value else {
@@ -1604,7 +1638,7 @@ fn write_block_predicate(
 fn write_matchers(
     value: &sunrise_core::nbt::Tag,
     ids: &dyn Fn(&str, &str) -> Option<i32>,
-    w: &mut sunrise_protocol::buf::Writer,
+    w: &mut ::sunrise_core::vanilla_bytes::Writer,
 ) -> Option<()> {
     use sunrise_core::nbt::Tag;
     for (field, expected, registry) in [
@@ -2076,7 +2110,7 @@ pub(super) fn network_stack(
             // The saved list names only the filled slots; the codec counts them
             // all, from the first to the last that holds one.
             let size = slots.iter().map(|(slot, _)| slot + 1).max().unwrap_or(0);
-            let mut w = sunrise_protocol::buf::Writer::new();
+            let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
             w.varint(size);
             for slot in 0..size {
                 let stack = slots.iter().find(|(at, _)| *at == slot).map(|(_, s)| s);
@@ -2312,7 +2346,8 @@ pub fn within_block_range(eye: [f64; 3], range: f64, pos: [i32; 3]) -> bool {
 mod tests {
     use super::*;
     use sunrise_core::nbt::Tag;
-    use sunrise_protocol::buf::{Codec, Reader, Writer};
+    use sunrise_core::vanilla_bytes::Writer;
+    use sunrise_protocol::buf::{Codec, Reader};
     use sunrise_protocol::item::{Component, component};
 
     #[test]

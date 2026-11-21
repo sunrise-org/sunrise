@@ -3,10 +3,16 @@ use super::*;
 pub(super) fn encode_stack_components(
     stack: &ItemStack,
     include_damage: bool,
+    selector: &impl Fn(&str) -> bool,
     template: &impl Fn(&ItemStack) -> Tag,
 ) -> Option<Tag> {
-    let mut components =
-        components_tag_inner(stack.damage, stack.data(), include_damage, template)?;
+    let mut components = components_tag_inner(
+        stack.damage,
+        stack.data(),
+        include_damage,
+        selector,
+        template,
+    )?;
     // DataComponentPatch.CODEC filters transient SET/REMOVE entries, including
     // typed nested stack patches carried by persistent text and item codecs.
     sunrise_world::item_defaults::strip_transient_component_map_tag(&mut components);

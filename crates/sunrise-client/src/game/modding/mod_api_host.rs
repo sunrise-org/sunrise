@@ -806,14 +806,10 @@ impl mod_api::LevelRandomHost for super::GameLevel<'_> {
     fn attachments(&mut self) -> &mut dyn mod_api::AttachmentStore {
         self
     }
-    fn random(&mut self) -> Option<mod_api::LegacyRandomSource> {
-        self.native_level_random()
-            .map(|r| super::api_values::random_to_api(r))
-    }
-    fn set_random(&mut self, random: mod_api::LegacyRandomSource) -> bool {
-        self.native_level_random()
-            .map(|r| *r = super::api_values::random_to_engine(&random))
-            .is_some()
+    fn lend_random(&mut self, draw: mod_api::RandomDraw<'_>) {
+        if self.native_authoritative {
+            super::api_values::with_live_level_random(&mut self.world.random, draw);
+        }
     }
 }
 
@@ -906,12 +902,8 @@ impl mod_api::LevelRandomHost for super::native_hooks::HitLevel<'_> {
     fn attachments(&mut self) -> &mut dyn mod_api::AttachmentStore {
         self
     }
-    fn random(&mut self) -> Option<mod_api::LegacyRandomSource> {
-        Some(super::api_values::random_to_api(self.0.random()))
-    }
-    fn set_random(&mut self, random: mod_api::LegacyRandomSource) -> bool {
-        *self.0.random() = super::api_values::random_to_engine(&random);
-        true
+    fn lend_random(&mut self, draw: mod_api::RandomDraw<'_>) {
+        super::api_values::with_live_level_random(self.0.random(), draw);
     }
 }
 
@@ -1186,11 +1178,8 @@ impl<'a: 'b, 'b, T: std::ops::Deref<Target = Ticks>> mod_api::LevelRandomHost
     fn attachments(&mut self) -> &mut dyn mod_api::AttachmentStore {
         mod_api::LevelRandomHost::attachments(&mut *self.level)
     }
-    fn random(&mut self) -> Option<mod_api::LegacyRandomSource> {
-        mod_api::LevelRandomHost::random(&mut *self.level)
-    }
-    fn set_random(&mut self, random: mod_api::LegacyRandomSource) -> bool {
-        mod_api::LevelRandomHost::set_random(&mut *self.level, random)
+    fn lend_random(&mut self, draw: mod_api::RandomDraw<'_>) {
+        mod_api::LevelRandomHost::lend_random(&mut *self.level, draw);
     }
 }
 

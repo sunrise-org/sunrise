@@ -90,7 +90,7 @@ fn state(sprite: &str, foil: FoilType, display: DisplayContext) -> ItemRenderSta
         display,
         layers: vec![LayerRender {
             geometry: LayerGeometry::Quads(Arc::new(baked)),
-            tints: vec![],
+            tints: LayerTints::Owned(Vec::new()),
             foil,
             matrix: Mat4::IDENTITY,
             particle: sprite.into(),
@@ -143,7 +143,7 @@ fn held_item_tint_is_per_draw_on_cpu_and_gpu() {
         unreachable!()
     };
     Arc::get_mut(baked).unwrap().quads[0].tint_index = 0;
-    plain.layers[0].tints = vec![0x7F_FF_60_11];
+    plain.layers[0].tints = LayerTints::Owned(vec![0x7F_FF_60_11]);
     let mut tinted = plain.clone();
     // The high byte is ignored. With ambient-only lighting on the south face,
     // the blue byte goes 17 -> 13 -> 5; lighting before tinting would give 4.

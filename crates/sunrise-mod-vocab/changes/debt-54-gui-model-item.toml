@@ -1,0 +1,3 @@
+ids = ["type:Gui3dSubject", "type:Gui3dSubject.Item", "method:DrawContext::model_3d"]
+why = "A GUI model draw only reads its item stack, so it borrows it instead of requiring a move or clone. The subject is local to the draw and no longer implements Wire."
+migrate = "In `draw.model_3d(subject, view)`, replace `Gui3dSubject::Item(stack)` or `Gui3dSubject::Item(stack.clone())` with `Gui3dSubject::Item(&stack)`. If `stack` is already an `&ItemStack`, pass it directly. Use `Gui3dSubject<'_>` in draw implementations and name the stack's lifetime where a signature needs one. Keep `Gui3dSubject::Model(model)` and `Gui3dView` by value. For serialized data, encode your own draw data instead of `Gui3dSubject` and borrow the resolved stack at the draw call."

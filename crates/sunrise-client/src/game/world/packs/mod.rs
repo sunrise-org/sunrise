@@ -630,7 +630,7 @@ impl Game<'_> {
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             std::mem::take(&mut self.gui.atlas.blinks);
         // Read with the language in use when the reload started: one picked since then wins.
-        let code = lang::code();
+        let code = lang::code_snapshot();
         lang::set(if language.code == code {
             language
         } else {
@@ -669,7 +669,6 @@ impl Game<'_> {
         self.join_world_rest()?;
         self.resolve_entity_renderers();
         self.resolve_client_item_extensions()?;
-        super::native_special_renderers::reload();
         self.texture_atlases_stitched();
         self.native_model_baking_completed();
         self.native_client_resources_reloaded();
@@ -877,7 +876,8 @@ impl PackReload {
     ) -> std::io::Result<Self> {
         let progress = super::Progress::with(&RELOAD_LINES);
         let worker = progress.clone();
-        let handle = sunrise_guest_stack::builder()
+        let handle = std::thread::Builder::new()
+            .stack_size(sunrise_threads::GAME_THREAD_STACK_BYTES)
             .name("pack-reload".into())
             .spawn(move || stage(&worker))?;
         Ok(Self {
@@ -986,7 +986,7 @@ mod tests {
                     "reload_boundary:block/oil_{}",
                     self.0.load(Ordering::SeqCst)
                 ));
-                event.models.push(model);
+                event.register(model);
             }
         }
         let dir = std::env::temp_dir().join(format!("sunrise-fluid-reload-{}", std::process::id()));

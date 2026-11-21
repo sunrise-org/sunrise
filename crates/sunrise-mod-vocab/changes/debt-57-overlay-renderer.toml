@@ -1,0 +1,16 @@
+ids = [
+    "hook:extract_block_screen_effect",
+    "hook:extract_block_screen_effect.custom_draw",
+    "method:Hooks::extract_block_screen_effect",
+    "type:ExtractBlockScreenEffectEvent",
+    "type:ExtractBlockScreenEffectEvent.custom_draw",
+    "handle:ExtractBlockScreenEffectEvent::set_custom_renderer",
+    "hook:block_screen_effect_draw",
+    "method:Hooks::block_screen_effect_draw",
+    "type:BlockScreenEffectDrawEvent",
+    "trait:BlockScreenEffectRenderer",
+    "method:BlockScreenEffectRenderer::submit",
+    "type:BlockScreenEffectRender",
+]
+why = "Extraction now chooses one renderer for each overlay, as in NeoForge, instead of setting a flag and broadcasting a draw hook. Only the last eligible choice submits, including if the vanilla overlay was canceled."
+migrate = "In Hooks::extract_block_screen_effect, change the event parameter to &mut ExtractBlockScreenEffectEvent<'_>. Replace event.custom_draw = true with event.set_custom_renderer(&MY_RENDERER), passing a static BlockScreenEffectRenderer. Remove Hooks::block_screen_effect_draw and move its drawing into BlockScreenEffectRenderer::submit(&self, host: &dyn ClientHost, render: BlockScreenEffectRender<'_>) -> bool. Use render.effect, render.state, render.pos, render.partial_tick, render.hide_gui and render.draw in place of the former BlockScreenEffectDrawEvent fields. Instead of setting replace_vanilla, return true to suppress that overlay, or false to let an uncanceled vanilla overlay follow your quads. Keep Flow::Cancel and #[listener(receive_cancelled)] on extraction as before."

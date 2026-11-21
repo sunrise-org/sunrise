@@ -2,24 +2,25 @@
 
 use crate::{BlockPos, GameMode, Text};
 
+// no wire: borrows the current client connection and integrated world.
 /// The connected server, not the reconnect target of an earlier session.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Its text borrows the host; copy it only to retain it beyond that borrow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct ClientServer {
-    /// The integrated world's display name. External connections do not retain
+pub struct ClientServer<'a> {
+    /// The integrated world's current display name. External connections do not retain
     /// a server display name; this is `None`, never the connecting player's name.
-    pub name: Option<String>,
+    pub name: Option<&'a str>,
     /// The joined address, with friend-invite secrets redacted. Memory
     /// connections have no address (`None`), not a made-up socket address.
-    pub address: Option<String>,
+    pub address: Option<&'a str>,
     /// This window owns the connected integrated server. A loopback address
     /// alone does not make this true.
     pub integrated_local: bool,
     /// Folder name relative to the instance's saves directory for the owned
     /// integrated world. Renaming the world in-game leaves this key unchanged.
     /// Connections to a server this window does not own return `None`.
-    pub save_folder: Option<String>,
+    pub save_folder: Option<&'a str>,
 }
 
 /// The local player's item use as the client sees it (`LivingEntity.isUsingItem`,

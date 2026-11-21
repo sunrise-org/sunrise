@@ -1,9 +1,9 @@
 //! Sole-owner main execution and root-commit raw publication.
 use super::Game;
 use mod_api::{
-    HandlerThread, IPayloadContext, PayloadAccepted, PayloadBytes, PayloadContextError,
-    PayloadDirection, PayloadId, PayloadProtocol, PayloadSendError, PayloadWork, PayloadWorkStatus,
-    PlayerRef, Text,
+    ConfigurationTaskError, ConfigurationTaskRef, HandlerThread, IPayloadContext, PayloadAccepted,
+    PayloadBytes, PayloadContextError, PayloadDirection, PayloadId, PayloadProtocol,
+    PayloadSendError, PayloadWork, PayloadWorkStatus, PlayerRef, Text,
 };
 use std::sync::Arc;
 use sunrise_client::raw_payloads::{Body, Endpoint, Incoming, Prepared, Side, connection::Epoch};
@@ -115,6 +115,11 @@ impl Game<'_> {
         };
         let reason = context.disconnect.take();
         let failure = context.failure.take().or_else(|| result.err());
+        if reason.is_some() {
+            // An explicit disconnect still commits ordinary work on success, but cannot
+            // advance configuration in the gap before the physical connection closes.
+            context.game.discard_configuration_completions(&seal);
+        }
         context.game.transaction_close(&seal, failure.is_none());
         if let Some(error) = failure.as_ref().filter(|_| incoming.raw) {
             // A raw channel's bytes come from any client; one declaring mod's
@@ -222,6 +227,37 @@ impl IPayloadContext for MainContext<'_, '_> {
             return Err(PayloadSendError::NotDroppable(id.clone()));
         }
         Ok(self.game.players_send_payload(players, id, bytes))
+    }
+    fn finish_configuration_task(
+        &mut self,
+        instance: ConfigurationTaskRef,
+    ) -> Result<(), ConfigurationTaskError> {
+        if self.endpoint.side() != Side::Server || self.epoch.phase != Phase::Configuration {
+            return Err(ConfigurationTaskError::WrongContext);
+        }
+        if self.disconnect.is_some() || !self.epoch.active() {
+            return Err(ConfigurationTaskError::Disconnected);
+        }
+        let (connection, ordinal) = mod_api::__private::configuration_task_parts(instance);
+        let session = self
+            .game
+            .configuration_session(connection)
+            .ok_or(ConfigurationTaskError::Disconnected)?;
+        let transport = self.endpoint.transport();
+        if !Arc::ptr_eq(session.transport(), transport) {
+            return Err(ConfigurationTaskError::WrongConnection);
+        }
+        if transport
+            .epoch()
+            .is_none_or(|epoch| !Arc::ptr_eq(&epoch, self.epoch))
+        {
+            return Err(ConfigurationTaskError::Disconnected);
+        }
+        let completion = session.prepare_finish(ordinal, Some(self.epoch.clone()))?;
+        if !self.game.journal_configuration_completion(None, completion) {
+            return Err(ConfigurationTaskError::WrongContext);
+        }
+        Ok(())
     }
     fn disconnect(&mut self, reason: Text) {
         self.disconnect = Some(reason);

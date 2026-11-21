@@ -9,6 +9,8 @@ pub trait Hooks {
     /// Reloading: published asset/data queries may refresh caches, but world
     /// handles and transactions remain unavailable.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_client_resources_reloaded",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         neoforge = "ClientResourceLoadFinishedEvent"

@@ -1,6 +1,7 @@
 use std::{error::Error, io::Write};
+use sunrise_core::vanilla_bytes::Writer;
 use sunrise_protocol::{
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Reader},
     packets::play::StopSound,
 };
 fn main() -> Result<(), Box<dyn Error>> {

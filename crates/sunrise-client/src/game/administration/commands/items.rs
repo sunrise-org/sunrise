@@ -2535,8 +2535,9 @@ mod builtin_component_delivery_tests {
     };
     use sunrise_core::nbt::Tag;
     use sunrise_core::position::ChunkPos;
+    use sunrise_core::vanilla_bytes::Writer;
     use sunrise_protocol::{
-        buf::{Codec, Reader, Writer},
+        buf::{Codec, Reader},
         item::{Slot, component},
         packets::{configuration::ClientInformation, play},
     };

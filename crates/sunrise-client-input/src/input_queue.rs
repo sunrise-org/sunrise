@@ -1,5 +1,5 @@
 //! The engine's input queues: the key presses and clicks that wait between the event that adds
-//! them (a key, a button, a pad, the agent socket, a mod's `click_mapping`) and the client tick
+//! them (a key, a button, a pad, the agent socket, a mod clicking a mapping) and the client tick
 //! that acts on them. A tick takes a bounded number of entries, oldest first, and leaves the rest
 //! queued for the next tick; a full queue refuses a new entry and says so in the log once. Human
 //! input reaches neither bound, so it acts in the same order and on the same tick as it would on an

@@ -18,5 +18,9 @@ pub trait Hooks {
         neoforge = "GetEnchantmentLevelEvent",
         target = "mod_api::item::enchantments::native_get_enchantment_level"
     )]
-    fn get_enchantment_level();
+    fn get_enchantment_level(
+        stack: &ItemStack,
+        target: Option<&Identifier>,
+        enchantments: &mut ItemEnchantments,
+    );
 }

@@ -6,10 +6,12 @@ pub trait Hooks {
 
 `register_cauldron_interaction` registers item and item-tag callbacks on both sides. See [Registering cauldron interactions](../how-to/world/cauldron-interactions.md) for the read-only decision, transactional fire, duplicate refusal and server-corrected prediction contract."]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "both",
         contract = "listen",
         context = "registration",
         neoforge = "RegisterCauldronInteractionEvent"
     )]
-    fn register_cauldron_interaction();
+    fn register_cauldron_interaction(interactions: &mut dyn CauldronInteractions);
 }

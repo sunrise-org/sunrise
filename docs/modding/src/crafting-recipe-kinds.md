@@ -21,40 +21,38 @@ Register crafting code in `Hooks::register`, which receives `RegistrationContext
 r.register_crafting_recipe_serializer("my_mod:diagonal", Diagonal);
 ```
 
-Implement `CraftingRecipeKind`. Its mod-owned `Value` must supply
-`Some(CraftingRecipeCodec::wire())` from `codec` and implement `Wire`; a missing
-codec refuses startup. `decode` reads the recipe JSON
-object with `type` removed. `write` writes an equivalent JSON object for Sunrise
-client synchronization. Known serializers that refuse malformed data skip that
-recipe alone, with the file and serializer in the diagnostic.
+Implement `CraftingRecipeKind` with a mod-owned `Value`. `decode` reads the
+recipe JSON object with `type` removed. `write` produces an equivalent JSON
+object for Sunrise client synchronization; the game adds the serializer's `type`.
+The loader retains the decoded `Value` with its owning serializer for that
+resource generation. Callbacks borrow that value directly; it does not need a
+local codec or a `Wire` implementation. A known serializer that refuses malformed
+data skips that recipe alone, with the file and serializer in the diagnostic.
 
 `matches` and `assemble` take `&dyn LoopContext` before the decoded value and an
 owned `CraftingGrid`: width, height and row-major optional stacks, including empty
 cells. `remaining_items` instead takes `&dyn CraftingRemainders`, which extends
 `LoopContext` with `default_remainder(cell: u32) -> Option<ItemStack>`.
-Callbacks must be pure and deterministic. The engine retains the owning
-handler with its value. Counts must be 1 through 99; encoded values are limited
-to 1 MiB. Invalid result keys/counts refuse the result. Invalid remainder keys,
-counts or vector lengths use default item remainders.
+Callbacks must be pure and deterministic. Counts must be 1 through 99.
+Invalid result keys or counts refuse the result. Invalid remainder keys, counts
+or vector lengths use default item remainders.
 
 ## Frozen tag reads and default remainders
 
-All three callbacks read the same owning resource generation's authoritative item
-tags with `is_in_tag(item, tag) -> Option<bool>`, `item_count(tag) -> Option<usize>`
-and `item_at(tag, index) -> Option<ItemKey>`. Count and index preserve the server's
-member order without allocating an iterator or member list. Reads allocate
-nothing and do no file I/O. `None` means tags or item keys are not ready (including
-client tags not yet synced); a matcher should then not match. Once loaded, an
-unknown tag returns `Some(false)` membership and `Some(0)` members; an out-of-range
-index returns `None`. Reload/sync publishes a new snapshot, not a mutable live tag
-service, so one callback cannot mix generations.
+All three callbacks read the same resource generation's authoritative item tags.
+Use `is_in_tag(item, tag) -> Option<bool>` for membership, or iterate the borrowed
+`&[ItemKey]` from `items_in_tag(tag)` in the server's tag order. `None` means tags
+or item keys were not ready at publication (including before a client receives
+its server's item tags), or a member of this tag could not be bound. A matcher
+should then not match; it never sees a partial list. Once loaded, a missing or
+empty tag has no members and membership is `Some(false)`. Lookup does not
+allocate or do I/O. Reload and sync publish a new snapshot, so one callback
+cannot mix generations.
 
-`RegistrationContext` does **not** resolve `TagKey`s. Resolve an identifier through
-`host.tags().key(&id)` in a hook that supplies a `Host` (for example `tags_updated`),
-and retain the process-lifetime key in state shared with the registered kind.
-Matching can return false until that state has its key. Keep the key across
-reloads; only the generation's membership changes. Registration-time key
-resolution is not part of this API.
+Keep the process-lifetime `TagKey` in the registered kind's state. Resolve it
+with `Registrar::tag_key` in `register`, or with `host.tags().key(&id)` in a hook
+with a `Host` (for example `tags_updated`). Keep the key across reloads; only the
+generation's membership changes.
 
 `default_remainder(cell)` reads that cell's original, **pre-take** stack and runs
 the caller's existing default rule, including `ItemPart::crafting_remainder` on
@@ -98,8 +96,12 @@ r.register_raw_recipe_serializer("my_mod:grinder_json", "my_mod:grinding");
 the crafting grid or a built-in station. The machine owns its matching and menu.
 For custom decode/write logic, implement `RecipeSerializer` and use
 `register_read_only_recipe_serializer(serializer_id, recipe_type_id, serializer)`.
-Its value follows the same explicit Wire codec rule. Type declarations may be
-forward references; startup validates them after all mods register.
+Like a crafting kind, it supplies `Value`, `decode` and `write` for JSON; the
+loader keeps its typed value with the owning serializer for the generation.
+The mod still reads the recipe's source JSON through `recipes_of_type`, not the
+serializer's native `Value`. Raw registration still bounds the compact JSON
+object without `type` to 1 MiB minus four bytes. Type declarations may be forward
+references; startup validates them after all mods register.
 
 Every engine serializer is registered too, including serializers in the
 `minecraft:` namespace. An **unregistered serializer refuses the entire recipe
@@ -111,9 +113,13 @@ skips a file quietly **before** serializer lookup. Unknown condition types retai
 the existing fatal load behavior. Malformed recipes of a known serializer retain
 the existing skip-one-file behavior; changing that is a separate task.
 
-Reload re-reads values and preserves startup registration. Joining Sunrise clients
-receive serializer-written content; vanilla clients receive no custom kind.
-`datapack_sync.recipe_types` selects actual recipe type IDs; the engine resolves
-each file's serializer to its reported type for filtering and replacement, including
-all serializers producing the same type. An empty registered crafting serializer still participates in sync
-so removing its last recipe clears stale client data.
+Reload decodes a fresh generation and preserves startup registration. Joining
+Sunrise clients receive serializer-written JSON under the existing recipe-content
+packet limits and decode it into their own generation. Vanilla clients receive
+no custom kind. `datapack_sync.recipe_types` selects actual recipe type IDs; the
+engine resolves each file's serializer to its recipe type for filtering and
+replacement, including all serializers producing the same type. An empty
+registered crafting serializer still participates in sync so removing its last
+recipe clears stale client data. Recipe placement and recipe-book sync keep
+their existing [transport](concepts/wire-types.md), including vanilla's display
+packets.

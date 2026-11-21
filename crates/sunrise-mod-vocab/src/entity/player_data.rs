@@ -1,6 +1,6 @@
 //! Refusals when a mod writes a player's inventory, ender chest or saved data.
 
-/// Why a write to an online player's inventory, ender chest, persistent data or hands was
+/// Why a write to an online player's inventory, ender chest or hands was
 /// refused. Nothing was written when one comes back.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -19,8 +19,6 @@ pub enum PlayerDataRefusal {
         /// The last slot there is: 42 for the inventory, 26 for the ender chest.
         last: u32,
     },
-    /// The compound would sit 512 levels deep or more in the player's file.
-    TooDeep,
     /// The game's item conversion boundary refused the supplied stack: an item the world
     /// lacks, a count or damage the item does not allow, malformed components.
     Stack(crate::StackWriteError),
@@ -33,6 +31,36 @@ impl From<crate::StackWriteError> for PlayerDataRefusal {
 }
 
 impl crate::NoBackend for PlayerDataRefusal {
+    fn no_backend() -> Self {
+        Self::Stale
+    }
+}
+
+/// Why [`crate::PlayerRef::set_persistent_data_key`] wrote nothing.
+// no wire: reports an in-process edit to the active player's saved data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PlayerPersistentDataError {
+    /// The player is no longer available to this host, or no world is in scope.
+    Stale,
+    /// The call was made on a client; this edit is the server's.
+    Client,
+    /// The player is dead; the new player a respawn makes is the one to edit.
+    Dead,
+    /// The value would nest a list or compound at depth 512 or more in the player file.
+    TooDeep,
+    /// The entry contains an NBT `End` value, a string or key exceeding the file's modified
+    /// UTF-8 field width, or a collection whose length does not fit the file's count field.
+    InvalidNbt,
+}
+
+impl crate::AccessRefusal for PlayerPersistentDataError {
+    fn unavailable() -> Self {
+        Self::Stale
+    }
+}
+
+impl crate::NoBackend for PlayerPersistentDataError {
     fn no_backend() -> Self {
         Self::Stale
     }

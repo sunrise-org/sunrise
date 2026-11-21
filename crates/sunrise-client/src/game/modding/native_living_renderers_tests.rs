@@ -5,8 +5,8 @@
 //! resource reload resolves it again.
 use super::Game;
 use mod_api::{
-    BlockEntityDrawContext, EntityRenderLayer, EntityRenderState, EntityRenderer, Hooks,
-    LayerTarget, Pose, PosedParts, RegisterEntityLayersEvent, RegisterEntityRenderersEvent,
+    BlockEntityDrawContext, EntityRenderLayer, EntityRenderState, EntityRenderer, FrameModel,
+    Hooks, LayerTarget, Pose, RegisterEntityLayersEvent, RegisterEntityRenderersEvent,
     RegistrationContext, RenderLivingPostEvent, RenderLivingPreEvent,
 };
 use std::sync::{
@@ -75,18 +75,20 @@ impl EntityRenderer for Flaky {
     }
 }
 
-/// A layer on the zombie: draws a quad 200 blocks up and records whether it had posed parts.
+/// Records whether the body model was present. When a replacement drew, adds a raised quad.
 struct Layer(Shared);
 impl EntityRenderLayer for Layer {
     fn submit(
         &self,
         entity: &EntityRenderState,
-        parts: Option<&PosedParts>,
+        model: Option<&dyn FrameModel>,
         draw: &mut dyn BlockEntityDrawContext,
     ) -> Result<(), String> {
-        let event = format!("layer {} parts {}", entity.id, parts.is_some());
+        let event = format!("layer {} model {}", entity.id, model.is_some());
         self.0.lock().unwrap().events.push(event);
-        raised_quad(draw, 200.0);
+        if model.is_none() {
+            raised_quad(draw, 200.0);
+        }
         Ok(())
     }
 }
@@ -117,9 +119,11 @@ impl Hooks for Scene {
         _: &RegistrationContext,
         event: &mut RegisterEntityLayersEvent<'_>,
     ) {
-        let target = LayerTarget::Entity("minecraft:zombie".into());
         let layer = Arc::new(Layer(self.heard.clone()));
-        event.layers.add(target, layer).unwrap();
+        for kind in ["minecraft:zombie", "minecraft:cow"] {
+            let target = LayerTarget::Entity(kind.into());
+            event.layers.add(target, layer.clone()).unwrap();
+        }
     }
     fn render_living_pre(
         &self,
@@ -137,9 +141,11 @@ impl Hooks for Scene {
         event: &mut RenderLivingPostEvent<'_>,
     ) {
         let mut heard = self.heard.lock().unwrap();
-        heard
-            .events
-            .push(format!("living_post {}", event.entity.id));
+        heard.events.push(format!(
+            "living_post {} model {}",
+            event.entity.id,
+            event.model.is_some()
+        ));
     }
 }
 
@@ -227,14 +233,21 @@ fn a_registered_living_type_draws_its_renderer_in_place_of_its_model() {
                 [
                     "living_pre 91",
                     "renderer 91 body 30 baby false Standing",
-                    "layer 91 parts false",
-                    "living_post 91"
+                    "layer 91 model false",
+                    "living_post 91 model false"
                 ]
             );
             let cow = frame(game, "minecraft:cow", 92);
             assert!(!cow.is_empty(), "an unregistered type draws its model");
             assert!(cow.iter().all(|v| above(v) < 3.0), "{cow:?}");
-            assert_eq!(events(heard), ["living_pre 92", "living_post 92"]);
+            assert_eq!(
+                events(heard),
+                [
+                    "living_pre 92",
+                    "layer 92 model true",
+                    "living_post 92 model true"
+                ]
+            );
         },
     );
 }
@@ -268,7 +281,7 @@ fn a_screens_entity_keeps_the_layers_beside_a_registered_renderer() {
             let heard = events(heard);
             assert_eq!(heard.len(), 2, "{heard:?}");
             assert!(heard[0].starts_with("renderer 93 "), "{heard:?}");
-            assert_eq!(heard[1], "layer 93 parts false");
+            assert_eq!(heard[1], "layer 93 model false");
         },
     );
 }

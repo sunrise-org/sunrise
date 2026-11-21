@@ -2,6 +2,7 @@
 //! once and share its geometry across positions. Resource failure recovery and
 //! resource-pack reloads remain separate work.
 use crate::{Result, sprites::Sprites};
+use mod_api::{__private::game::standalone_model_bake_context, StandaloneModelBakeError};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -143,6 +144,8 @@ pub struct StateModels {
     /// By state id: its definition in `choices` and the models it selects.
     states: Vec<Option<(usize, SelectedModels)>>,
     single_models: Vec<Option<u32>>,
+    /// In bake order without repeats, for bindings not covered by `single_models`.
+    alternative_models: Vec<Option<Box<[u32]>>>,
     /// Every transformed model once, with the variant it was baked from.
     baked: Vec<(Variant, BakedModel)>,
     /// Standalone models by id: their index in `baked`.
@@ -198,45 +201,68 @@ fn bake_resolved(
     })
 }
 
-/// `FaceBakery.bakeQuad`: use the same centered geometry and inverse face UV
-/// transformation as a blockstate variant, not the draw-time pose.
-fn bake_form(
+/// Assemble one slot from this generation's declared model files. Both the
+/// callback and every append must succeed before the catalog can publish it.
+fn bake_standalone_model(
     root: &crate::resource_source::ResourceSource,
     sprites: &mut Sprites,
     models: &crate::model_library::ParsedModels,
-    form: &mod_api::StandaloneModelForm,
-) -> Result<BakedModel> {
-    use mod_api::StandaloneModelForm;
-    match form {
-        StandaloneModelForm::Rotated {
-            model,
-            turns,
-            uvlock,
-            ..
-        } => {
-            let library = models.block_library(root, vec![model.clone()])?;
-            bake_variant(sprites, &library, model, *turns, *uvlock)
+    entry: &super::StandaloneBaker,
+) -> std::result::Result<BakedModel, String> {
+    let dependencies = &entry.registration.dependencies;
+    let library = models
+        .block_library(root, dependencies.clone())
+        .map_err(|error| error.to_string())?;
+    let mut combined = BakedModel {
+        ambient_occlusion: true,
+        particle: None,
+        faces: Vec::new(),
+        cube: None,
+    };
+    let mut failure: Option<StandaloneModelBakeError> = None;
+    let mut append = |id: &str, quarter_turns, uvlock| {
+        if let Some(error) = &failure {
+            return Err(error.clone());
         }
-        StandaloneModelForm::Combined { parts, .. } => {
-            let library = models.block_library(root, parts.clone())?;
-            let mut combined = BakedModel {
-                ambient_occlusion: true,
-                particle: None,
-                faces: Vec::new(),
-                cube: None,
-            };
-            for part in parts {
-                let baked = bake_variant(sprites, &library, part, [0; 3], false)?;
+        let baked = if dependencies.iter().any(|dependency| dependency == id) {
+            // Use the same centered geometry and inverse face UV transform as a blockstate variant.
+            bake_variant(sprites, &library, id, quarter_turns, uvlock).map_err(|error| {
+                StandaloneModelBakeError::DependencyBake {
+                    id: id.to_owned(),
+                    reason: error.to_string(),
+                }
+            })
+        } else {
+            Err(StandaloneModelBakeError::UndeclaredDependency(
+                id.to_owned(),
+            ))
+        };
+        match baked {
+            Ok(baked) => {
                 if combined.particle.is_none() {
                     combined.particle = baked.particle;
                 }
                 combined.ambient_occlusion &= baked.ambient_occlusion;
                 combined.faces.extend(baked.faces);
+                Ok(())
             }
-            combined.cube = super::cube::cube_styles(&combined.faces);
-            Ok(combined)
+            Err(error) => {
+                failure = Some(error.clone());
+                Err(error)
+            }
         }
+    };
+    let result = entry
+        .owner
+        .call("standalone model baker", "bake_standalone_model", || {
+            (entry.registration.bake)(&mut standalone_model_bake_context(&mut append))
+        })?;
+    if let Some(error) = failure {
+        return Err(error.to_string());
     }
+    result.map_err(|error| error.to_string())?;
+    combined.cube = super::cube::cube_styles(&combined.faces);
+    Ok(combined)
 }
 /// The definitions a blockstate file holds, bottom first: the layers of a
 /// file the pack overlay stacked (`packs::BLOCKSTATE_LAYERS`), else the
@@ -486,21 +512,46 @@ impl StateModels {
         }
         // Every variant of every definition was baked above.
         let choices: Vec<_> = choices.iter().map(|c| c.map(|v| index[&key(v)])).collect();
-        let single_models = states
-            .iter()
-            .map(|state| {
-                let (choice, selected) = state.as_ref()?;
-                choices[*choice].single_variant(selected).copied()
-            })
-            .collect();
-        Ok(Self {
+        Ok(Self::with_baked(choices, states, baked))
+    }
+
+    fn with_baked(
+        choices: Vec<CompiledChoices<u32>>,
+        states: Vec<Option<(usize, SelectedModels)>>,
+        baked: Vec<(Variant, BakedModel)>,
+    ) -> Self {
+        let mut single_models = Vec::with_capacity(states.len());
+        let mut alternative_models = Vec::with_capacity(states.len());
+        for state in &states {
+            let Some((definition, selected)) = state else {
+                single_models.push(None);
+                alternative_models.push(None);
+                continue;
+            };
+            let choice = &choices[*definition];
+            let single = choice.single_variant(selected).copied();
+            single_models.push(single);
+            if single.is_some() {
+                alternative_models.push(None);
+                continue;
+            }
+            let mut slots = Vec::new();
+            let listed = choice.each_alternative(selected, |&slot| {
+                if !slots.contains(&slot) {
+                    slots.push(slot);
+                }
+            });
+            alternative_models.push(listed.ok().map(|()| slots.into_boxed_slice()));
+        }
+        Self {
             choices,
             bounds: OnceLock::new(),
             states,
             single_models,
+            alternative_models,
             baked,
             standalone: BTreeMap::new(),
-        })
+        }
     }
     /// Bakes `names`, models no blockstate needs to name (vanilla's
     /// standalone models, NeoForge's `ModelEvent.RegisterStandalone`), as
@@ -546,27 +597,25 @@ impl StateModels {
         }
         Ok(())
     }
-    /// Bake dependencies atomically into one standalone slot; never publish a partial form.
-    pub(crate) fn bake_standalone_forms(
+    /// Bake each callback into a private assembly; publish only successful slots.
+    pub(super) fn bake_standalone_bakers(
         &mut self,
         root: &crate::resource_source::ResourceSource,
         sprites: &mut Sprites,
         models: &crate::model_library::ParsedModels,
-        forms: &[super::StandaloneFormRegistration],
+        bakers: &[super::StandaloneBaker],
     ) {
-        for entry in forms {
-            let id = entry.form.id();
+        for entry in bakers {
+            let id = &entry.registration.id;
             if self.standalone.contains_key(id) {
                 continue;
             }
-            let result = bake_form(root, sprites, models, &entry.form);
-            match result {
+            match bake_standalone_model(root, sprites, models, entry) {
                 Ok(model) => {
-                    self.standalone
-                        .insert(id.to_owned(), self.baked.len() as u32);
+                    self.standalone.insert(id.clone(), self.baked.len() as u32);
                     self.baked.push((
                         Variant {
-                            model: id.to_owned(),
+                            model: id.clone(),
                             rotations: [0; 3],
                             uv_lock: false,
                         },
@@ -574,8 +623,8 @@ impl StateModels {
                     ));
                 }
                 Err(error) => log::warn!(
-                    "Sunrise: mod {} standalone form {id} not loaded: {error}",
-                    entry.owner
+                    "Sunrise: mod {} standalone model {id} not loaded: {error}",
+                    entry.mod_id
                 ),
             }
         }
@@ -610,17 +659,12 @@ impl StateModels {
     /// Slots of every baked model `state` can select, in bake order without repeats: each
     /// weighted alternative and each selected multipart part (`CompiledChoices::each_alternative`).
     /// `None` for a state no definition binds.
-    pub fn state_slots(&self, state: BlockStateId) -> Option<Vec<u32>> {
-        let (choice, selected) = self.state(state)?;
-        let mut slots = Vec::new();
-        self.choices[*choice]
-            .each_alternative(selected, |&slot| {
-                if !slots.contains(&slot) {
-                    slots.push(slot);
-                }
-            })
-            .ok()?;
-        Some(slots)
+    pub fn state_slots(&self, state: BlockStateId) -> Option<&[u32]> {
+        let index = state.0 as usize;
+        match self.single_models.get(index)? {
+            Some(slot) => Some(std::slice::from_ref(slot)),
+            None => self.alternative_models[index].as_deref(),
+        }
     }
     pub fn collect(
         &self,

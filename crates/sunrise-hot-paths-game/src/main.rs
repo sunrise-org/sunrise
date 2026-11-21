@@ -11,10 +11,13 @@
 use mod_api::__private::native::BuiltMod;
 use mod_api::Side;
 use mod_api::{
+    Block, BlockEntityPart, BlockEntityTickEvent, BlockPart, BlockState, BlocksEvent,
     EntityTickListenedEvent, EntityTickPostEvent, EntityTickPreEvent, Hooks, HostSide, ModEntry,
-    ServerHost, ServerStartedEvent,
+    Registrar, RegistrationContext, ServerHost, ServerStartedEvent,
 };
-use sunrise_client::game::{HotPathsMods, note_hot_paths_listener_call};
+use sunrise_client::game::{
+    HotPathsMods, hot_paths_next_block_entity, note_hot_paths_listener_call,
+};
 
 const ID: &str = "hot_paths_listener";
 const BUILT: &[BuiltMod] = &[BuiltMod {
@@ -27,11 +30,73 @@ struct Listener;
 
 #[mod_api::__subscriptions]
 impl Hooks for Listener {
+    fn register(&self, registrar: &mut dyn Registrar, _: &RegistrationContext) {
+        let Ok(mode) = std::env::var("SUNRISE_BLOCK_ENTITY_VIEW_BENCH") else {
+            return;
+        };
+        let handle = mode.starts_with("handle_");
+        let write = mode.ends_with("_write");
+        let kind = registrar
+            .block_entity_type("progress")
+            .blocks(&["hot_paths_listener:progress"])
+            .build();
+        registrar
+            .block_entity_part(&kind, Progress { handle, write })
+            .unwrap();
+    }
+
+    fn blocks(&self, _: &RegistrationContext, event: &mut BlocksEvent<'_>) {
+        if std::env::var_os("SUNRISE_BLOCK_ENTITY_VIEW_BENCH").is_some() {
+            event
+                .register(Block::new("hot_paths_listener:progress", "minecraft:stone"))
+                .unwrap();
+        }
+    }
+
     fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
         event.listened = true;
     }
     fn entity_tick_pre(&self, _: HostSide<'_>, _: &mut EntityTickPreEvent<'_>) {}
     fn entity_tick_post(&self, _: HostSide<'_>, _: &mut EntityTickPostEvent<'_>) {}
+}
+
+struct Progress {
+    handle: bool,
+    write: bool,
+}
+
+#[mod_api::sunrise_part]
+impl BlockPart for Progress {}
+#[mod_api::sunrise_part]
+impl BlockEntityPart for Progress {
+    fn block_entity_tick(&self, event: &mut BlockEntityTickEvent<'_>) {
+        fn next_progress(state: BlockState, progress: i32) -> i32 {
+            progress + 1 + i32::from(state.ordinal())
+        }
+        let handle = std::hint::black_box(hot_paths_next_block_entity());
+        if self.handle {
+            let host = event.subject.host();
+            let level = handle.level(host).unwrap();
+            let pos = handle.position(host).unwrap();
+            let state = level.block_state(host, pos).unwrap();
+            let value = next_progress(state, handle.data_slots(host).unwrap()[0]);
+            if self.write {
+                assert!(handle.set_data_slot(host, 0, value).unwrap());
+            }
+            std::hint::black_box(value);
+        } else {
+            event
+                .subject
+                .with_view(|mut view| {
+                    let value = next_progress(view.state(), view.data_slots()[0]);
+                    if self.write {
+                        assert!(view.set_data_slot(0, value));
+                    }
+                    std::hint::black_box(value);
+                })
+                .unwrap();
+        }
+    }
 }
 
 struct FanoutListener(usize);
@@ -52,7 +117,6 @@ impl Hooks for FanoutListener {
 }
 
 fn main() -> sunrise_client::Result<()> {
-    sunrise_mod_host::prepare_main_stack();
     let startup = sunrise_client::entry::prepare();
     std::hint::black_box(&sunrise_mod_package::holder::CAPABILITY);
     let (entries, built): (Vec<_>, &'static [BuiltMod]) = match HotPathsMods::from_env()? {

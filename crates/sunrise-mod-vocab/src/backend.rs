@@ -1,4 +1,5 @@
 //! Host backends: what the game answers the API with.
+use crate::world::random::with_random_draw;
 use crate::*;
 
 /// Why a fake player's `perform_action` did nothing at all: it was refused before any of the
@@ -290,13 +291,16 @@ host_attachment_store!(
 macro_rules! level_random_draws {
     ($($host:ident),+) => { $(
         impl dyn $host + '_ {
-            /// Draw from the level's own random stream, in vanilla's order: `draw` gets the
-            /// stream and the level keeps it after. None on a non-authoritative level.
+            /// Borrow the hook's level stream (`Level.getRandom`) for the closure only:
+            /// `host.with_random(|rng| rng.next_int_bound(bound))`. Returns `None` without
+            /// invoking `draw` if the host does not lend an authoritative level stream.
+            ///
+            /// If `draw` unwinds, the seed and cached Gaussian revert to their state before
+            /// this call. Completed draws advance the live stream in vanilla's order. A
+            /// later panic does not undo an unjournaled draw; a transactional level writer
+            /// restores its first snapshot for that frame on abort.
             pub fn with_random<T>(&mut self, draw: impl FnOnce(&mut dyn RandomSource) -> T) -> Option<T> {
-                let mut random = self.random()?;
-                let drawn = draw(&mut random);
-                self.set_random(random);
-                Some(drawn)
+                with_random_draw(draw, |draw| self.lend_random(draw))
             }
         }
     )+ };

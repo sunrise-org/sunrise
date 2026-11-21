@@ -8,7 +8,6 @@ description = "Sunrise's mod files: content mods, modpacks and the registry inde
 
 [dependencies]
 sunrise-mod-vocab = { path = "../sunrise-mod-vocab" }
-sunrise-mod-api-macros = { path = "../sunrise-mod-api-macros" }
 sunrise-core = { path = "../sunrise-core" }
 sunrise-assets = { path = "../sunrise-assets", optional = true }
 # The uses table's file name and limit (`USES`, `MAX_USES`).

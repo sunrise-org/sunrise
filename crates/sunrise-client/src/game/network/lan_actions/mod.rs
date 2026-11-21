@@ -38,5 +38,20 @@ use sunrise_protocol::{
 use sunrise_world::entity_move::EntityMoveWorld;
 use winit::keyboard::KeyCode;
 
-include!(concat!(env!("OUT_DIR"), "/lan_action_modules.rs"));
+mod attack_checks;
+mod commands;
+mod death_state;
+mod effects;
+mod guest_body;
+mod hub_click;
+mod interaction;
+mod menus;
+mod mining;
+mod movement;
+mod packets;
+mod pickups;
+mod respawn;
+mod sleep;
+mod tick;
+mod turns;
 include!("shared.rs");

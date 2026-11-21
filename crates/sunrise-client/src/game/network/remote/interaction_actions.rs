@@ -13,6 +13,10 @@ impl Game<'_> {
 
     /// Minecraft.startUseItem: use one crosshair target, then the item itself.
     fn remote_use_inner(&mut self, attempt: mod_api::InteractionAttempt) {
+        // Another queued press in the same input drain cannot restart a capture.
+        if self.client_item_use.is_some() {
+            return;
+        }
         // Minecraft.startUseItem returns before resetting rightClickDelay
         // while a survival block break is active.
         if self.remote.as_ref().is_some_and(|r| r.is_destroying) {
@@ -34,8 +38,8 @@ impl Game<'_> {
             }
             return;
         }
-        // An item a mod claims: its use is the mod's, and the server never hears of it.
-        if self.mod_use_start() {
+        // A registered client item behavior consumes the click before target handling.
+        if self.start_client_item_use() {
             return;
         }
         // Resolve the crosshair once. A passing entity interaction keeps
@@ -177,6 +181,7 @@ impl Game<'_> {
         // A piercing weapon neither breaks blocks nor swings on its own.
         if self.clicks.miss_time > 0
             || self.using.is_some()
+            || self.client_item_use.is_some()
             || self
                 .held()
                 .is_some_and(|s| sunrise_client::spear::Kinetic::of(&s.item).is_some())
@@ -536,7 +541,10 @@ impl Game<'_> {
         // `KeyMapping.releaseAll` clears key.use; without this the button still
         // reads held and a use would start again on the first tick back.
         self.right = false;
-        sunrise_client::interaction_input::release_on_screen_open(&mut RemoteInputWorld(self));
+        // Clearing the mapping for a screen is a capture reset, not a use-key release.
+        if !self.end_client_item_use(false) {
+            sunrise_client::interaction_input::release_on_screen_open(&mut RemoteInputWorld(self));
+        }
     }
     /// `MultiPlayerGameMode.releaseUsingItem`: sends `RELEASE_USE_ITEM` and
     /// runs the client half of `Item.releaseUsing` (a Riptide launch moves the

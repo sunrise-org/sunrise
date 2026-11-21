@@ -370,56 +370,59 @@ impl Session {
         let thread_recorder = recorder.clone();
         let (address_owned, name_owned) = (address.to_owned(), name.to_owned());
         // Mod payload handlers run on this thread (the client's network root).
-        let thread = sunrise_guest_stack::spawn("sunrise-net".into(), move || {
-            sunrise_threads::favour_current();
-            let result = captured_payloads.map_err(Reason::plain).and_then(|_| {
-                run(
-                    local,
-                    &address_owned,
-                    &name_owned,
-                    auth.as_deref(),
-                    info,
-                    &lang,
-                    &send,
-                    &thread_writer,
-                    &thread_configuring,
-                    &thread_counters,
-                    &thread_cookies,
-                    &thread_far,
-                    transferred,
-                    &resources,
-                    lan,
-                    &thread_recorder,
-                    &thread_payloads,
-                )
-            });
-            thread_payloads.close();
-            thread_far.cancel();
-            let (why, from_server) = match result {
-                Ok(why) => (why, true),
-                Err(why) => {
-                    let from_server = why.from_server;
-                    (why, from_server)
+        let thread = std::thread::Builder::new()
+            .stack_size(sunrise_threads::GAME_THREAD_STACK_BYTES)
+            .name("sunrise-net".into())
+            .spawn(move || {
+                sunrise_threads::favour_current();
+                let result = captured_payloads.map_err(Reason::plain).and_then(|_| {
+                    run(
+                        local,
+                        &address_owned,
+                        &name_owned,
+                        auth.as_deref(),
+                        info,
+                        &lang,
+                        &send,
+                        &thread_writer,
+                        &thread_configuring,
+                        &thread_counters,
+                        &thread_cookies,
+                        &thread_far,
+                        transferred,
+                        &resources,
+                        lan,
+                        &thread_recorder,
+                        &thread_payloads,
+                    )
+                });
+                thread_payloads.close();
+                thread_far.cancel();
+                let (why, from_server) = match result {
+                    Ok(why) => (why, true),
+                    Err(why) => {
+                        let from_server = why.from_server;
+                        (why, from_server)
+                    }
+                };
+                if let Some(w) = thread_writer.lock().unwrap().take() {
+                    w.shutdown();
                 }
-            };
-            if let Some(w) = thread_writer.lock().unwrap().take() {
-                w.shutdown();
-            }
-            let _ = send.send(Event::Disconnected {
-                reason: why.text,
-                key: why.key,
-                from_server,
-            });
-        })
-        .inspect_err(|error| {
-            // No reader runs to report the end: say it here, or the session waits forever.
-            let _ = payload_events.send(Event::Disconnected {
-                reason: format!("network thread: {error}"),
-                key: None,
-                from_server: false,
-            });
-        })
-        .ok();
+                let _ = send.send(Event::Disconnected {
+                    reason: why.text,
+                    key: why.key,
+                    from_server,
+                });
+            })
+            .inspect_err(|error| {
+                // No reader runs to report the end: say it here, or the session waits forever.
+                let _ = payload_events.send(Event::Disconnected {
+                    reason: format!("network thread: {error}"),
+                    key: None,
+                    from_server: false,
+                });
+            })
+            .ok();
         let debug = std::env::var_os("SUNRISE_NET_DEBUG").is_some();
         Self {
             events,
@@ -446,8 +449,9 @@ impl Session {
         packet: mod_api::ServerboundPlayPacket,
     ) -> std::result::Result<PreparedPacket, mod_api::SendPacketError> {
         use mod_api::SendPacketError;
+        use sunrise_core::vanilla_bytes::Writer;
         use sunrise_protocol::{
-            buf::{Codec, Ident, Reader, Writer},
+            buf::{Codec, Ident, Reader},
             packets::custom_payload,
         };
         let id = match packet.id.namespace() {
@@ -1397,7 +1401,7 @@ fn configure(
                                 .map_err(|error| Reason::plain(error.to_string()))?,
                         }))?;
                     }
-                    let mut w = sunrise_protocol::buf::Writer::new();
+                    let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
                     w.string("sunrise");
                     reply(cfg::Serverbound::CustomPayload(cfg::CustomPayload {
                         channel: "minecraft:brand".into(),
@@ -1557,7 +1561,7 @@ fn send_identity(
     c: &mut Connection,
     identity: &sunrise_hooks::ClientIdentity,
 ) -> Result<(), sunrise_protocol::Error> {
-    let mut brand = sunrise_protocol::buf::Writer::new();
+    let mut brand = ::sunrise_core::vanilla_bytes::Writer::new();
     brand.string(&identity.brand);
     let brand = ("minecraft:brand", brand.data);
     for (channel, data) in std::iter::once(brand).chain(
@@ -1815,7 +1819,7 @@ mod tests {
                 )
             });
             let mut server = Connection::local(server);
-            let mut brand = sunrise_protocol::buf::Writer::new();
+            let mut brand = ::sunrise_core::vanilla_bytes::Writer::new();
             brand.string("sunrise");
             server
                 .send(
@@ -1883,7 +1887,7 @@ mod tests {
                     )
                 });
                 let mut server = Connection::local(server);
-                let mut brand = sunrise_protocol::buf::Writer::new();
+                let mut brand = ::sunrise_core::vanilla_bytes::Writer::new();
                 brand.string("vanilla");
                 let mut to_client = vec![cfg::Clientbound::CustomPayload(cfg::CustomPayload {
                     channel: "minecraft:brand".into(),
@@ -2047,7 +2051,7 @@ mod tests {
                 cfg::Serverbound::Pong(cfg::Ping { id: 17 }),
                 "an unidentified server received a mod announcement"
             );
-            let mut brand = sunrise_protocol::buf::Writer::new();
+            let mut brand = ::sunrise_core::vanilla_bytes::Writer::new();
             brand.string(server_brand);
             server
                 .send(
@@ -3119,7 +3123,7 @@ mod tests {
     #[test]
     fn server_brand_payload_is_decoded_and_invalid_or_unrelated_payloads_are_ignored() {
         let (send, events) = event_channel();
-        let mut writer = sunrise_protocol::buf::Writer::new();
+        let mut writer = ::sunrise_core::vanilla_bytes::Writer::new();
         writer.string("vanilla");
         let mut payload = cfg::CustomPayload {
             channel: "minecraft:brand".into(),

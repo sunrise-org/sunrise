@@ -68,7 +68,7 @@ impl Remote {
     /// (`minecraft:text_display`) and its position as last sent.
     pub(in crate::game) fn tracked_entity(&self, id: i32) -> Option<(&str, [f64; 3])> {
         if let Some(row) = self.general.rows.get(&id) {
-            return row.shown.then(|| (row.kind(), row.position));
+            return row.is_shown().then(|| (row.kind(), row.position));
         }
         self.entities
             .get(&id)

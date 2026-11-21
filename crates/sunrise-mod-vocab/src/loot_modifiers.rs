@@ -233,7 +233,7 @@ impl crate::world::server_reload::ServerReloadListener for GlobalLootModifierMan
     fn prepare(
         &self,
         _: &crate::world::server_reload::ServerReloadContext,
-    ) -> Result<Box<dyn crate::ReloadApply>, crate::ReloadResourceError> {
-        Ok(<dyn crate::ReloadApply>::new(|| {}))
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, crate::ReloadResourceError> {
+        Ok(Box::new(|| {}))
     }
 }

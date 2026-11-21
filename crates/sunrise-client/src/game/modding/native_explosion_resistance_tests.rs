@@ -2,7 +2,7 @@
 #![cfg(test)]
 use crate::game::Game;
 use crate::game::execution_role::ExecutionRole;
-use crate::game::native_entity_refs::tests::{run_on_guest_stack, with_game_role};
+use crate::game::native_entity_refs::tests::{run_with_game_stack, with_game_role};
 use mod_api::{
     Block, BlockPart, BlockState, BlocksEvent, EntityRef, ExplosionInteraction,
     ExplosionResistance::{self, NoResistance, Resists, Unavailable},
@@ -131,7 +131,7 @@ fn blast() -> ([f64; 3], f32, bool, ExplosionInteraction) {
 
 /// Runs `test` on a fresh game with the resisting mod.
 fn with_resisting_mod(test: impl Fn(&mut Game<'_>, &Resisting) + Send + Sync + 'static) {
-    run_on_guest_stack(move || {
+    run_with_game_stack(move || {
         let parts = Resisting::default();
         let mods: mod_api::Mods = vec![ModEntry::new("test", Box::new(parts.clone()))].into();
         mod_platform::testing::with_mods(mods.clone(), || {

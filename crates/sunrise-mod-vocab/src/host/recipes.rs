@@ -11,8 +11,9 @@ pub trait RecipesHost {
     /// the content mods (`.smod`) and the world's data packs, in file order: each
     /// one typed (`Recipe`: its ingredients, results, group, cooking time and
     /// experience, or its stonecutting, smithing or special crafting rule),
-    /// with its file as JSON for a mod's own type. The file's type field names its
-    /// serializer; this can differ from the reported recipe kind. Dynamic rules are not fixed
+    /// together with the original recipe JSON. Bound ingredient predicates are kept in
+    /// the resolved ingredients, not written into the JSON or sent to clients. The file's
+    /// type field names its serializer; this can differ from the reported recipe kind. Dynamic rules are not fixed
     /// outputs; use `LevelRef::recipe_for` for engine-matchable recipe types.
     /// Registered crafting kinds match through LevelRef::recipe_for. Cache other mod-owned
     /// types once per load/reload and match those in mod memory; those return
@@ -35,8 +36,10 @@ pub trait RecipesHost {
     /// of them, a bare id as `minecraft:` (as vanilla reads it); `test` says
     /// whether a stack fits. Items the game doesn't know are left out; None
     /// for missing tags, invalid ingredients or no known named items, and
-    /// outside a world. An existing-empty tag returns an empty ingredient.
-    /// Invalid JSON is refused with `RecipeJsonError::InvalidJson`.
+    /// outside a world. An existing-empty tag returns an empty ingredient. This helper
+    /// parses standalone JSON; it does not bind a mod's custom kind. To test a custom
+    /// ingredient already resolved at load, use [`Ingredient::test`]. Invalid JSON is
+    /// refused with `RecipeJsonError::InvalidJson`.
     #[access(PublishedResources)]
     fn recipe_ingredient(&self, json: &str) -> Result<Option<Ingredient>, RecipeJsonError>;
     /// Side: both.
@@ -58,7 +61,8 @@ pub trait RecipesHost {
     /// The validated category and icon of a custom recipe type, or None for
     /// an undeclared/invalid type, before resources load, or outside a world.
     /// Returns the first category in category-id order when a type has several.
-    /// Any invalid declaration refuses the complete generation.
+    /// This local declaration may include placement predicates; it is not the category
+    /// data sent to a remote client. Any invalid declaration refuses the complete generation.
     /// Rebuilt when the recipe table changes. Does not unlock any recipes.
     #[access(PublishedResources)]
     fn recipe_book_category(&mut self, kind: &str) -> Option<RecipeBookCategory>;
@@ -74,7 +78,8 @@ pub trait RecipesServerHost {
     /// items going back to the player's inventory (the grid's slots are cleared too). `use_max_items`
     /// places as many sets as the items allow (Shift), else one more than the grid holds when it
     /// already matches. Items are taken from the player's inventory and from what the menu's sources
-    /// lend. Returns whether items were missing: the grid was cleared and the answer for
+    /// lend. Candidate IDs and client displays do not replace the server's recheck of live stacks,
+    /// including custom predicates. Returns whether items were missing: the grid was cleared and the answer for
     /// `ghost`. Refused (and nothing changes) outside that hook, on a second call, for another recipe, a slot the menu
     /// lacks or hides, a repeated slot, an empty grid, a recipe larger than the slots given, a slot
     /// whose pickup a part refuses, or a player with no room for the cleared items outside creative mode.

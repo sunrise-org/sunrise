@@ -7,7 +7,9 @@ impl PartRegistrar {
         let attachment_types = self.attachment_types.clone();
         let tags = self.tags.clone();
         let keys = self.registry_keys.borrow().clone();
+        let menu_screen_factories = self.menu_screen_factories.clone();
         let menu_recipe_books = self.menu_recipe_books.clone();
+        let menu_slot_exclusions = self.menu_slot_exclusions.clone();
         let recipe_book_types = self.recipe_book_types.clone();
         let recipe_book_fields = self.recipe_book_fields.clone();
         let recipe_book_filters = self.recipe_book_filters.clone();
@@ -26,7 +28,9 @@ impl PartRegistrar {
                     registrar.attachment_types = attachment_types;
                     registrar.tags = tags;
                     *registrar.registry_keys.borrow_mut() = keys;
+                    registrar.menu_screen_factories = menu_screen_factories;
                     registrar.menu_recipe_books = menu_recipe_books;
+                    registrar.menu_slot_exclusions = menu_slot_exclusions;
                     registrar.recipe_book_types = recipe_book_types;
                     registrar.recipe_book_fields = recipe_book_fields;
                     registrar.recipe_book_filters = recipe_book_filters;
@@ -117,6 +121,7 @@ mod tests {
             r.block_entity_part(&kind, Callback).unwrap();
             cx.refuse("bootstrap failed: café\nmissing bridge");
             cx.refuse("ignored");
+            cx.warn("test.warn.bridge", &["missing"]);
             r.declare_fluid("foreign:after");
         }
     }
@@ -137,7 +142,13 @@ mod tests {
             &[]
         }
         fn register(&self, r: &mut dyn Registrar, cx: &RegistrationContext) {
-            cx.warn("test.warn.optional", &["jei"]);
+            // Diagnostics follow the borrowed context, not the dispatch thread's scope.
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(|| cx.warn("test.warn.optional", &["jei"]))
+                    .join()
+                    .unwrap();
+            });
             r.declare_fluid("soup");
         }
     }
@@ -154,13 +165,15 @@ mod tests {
                 .declared_fluids
                 .contains_key("warns:soup")
         );
-        assert_eq!(
-            registrar.warnings,
-            [(
-                "warns".to_owned(),
-                crate::LoadingMessage::new("test.warn.optional", &["jei"])
-            )]
-        );
+        let [(owner, warnings)] = registrar.warnings.as_slice() else {
+            panic!("expected warnings from one mod");
+        };
+        assert_eq!(*owner, "warns");
+        let [warning] = warnings.as_slice() else {
+            panic!("expected one warning");
+        };
+        assert_eq!(warning.key(), "test.warn.optional");
+        assert_eq!(warning.args(), ["jei"]);
     }
 
     struct WarnsPastTheCap;
@@ -169,7 +182,7 @@ mod tests {
             &[]
         }
         fn register(&self, _: &mut dyn Registrar, cx: &RegistrationContext) {
-            for i in 0..=mod_vocab::__private::MAX_LOADING_WARNINGS {
+            for i in 0..18 {
                 cx.warn("test.warn.many", &[&i.to_string()]);
             }
         }
@@ -184,13 +197,15 @@ mod tests {
         ];
         crate::__private::install_parts(&mods, &crate::parts::tests::rule_schema(), |_| false)
             .unwrap();
-        assert_eq!(
-            crate::__private::registration_warnings("warns"),
-            [crate::LoadingMessage::new("test.warn.optional", &["jei"])]
-        );
+        let warns = crate::__private::registration_warnings("warns");
+        assert_eq!(warns.len(), 1);
+        assert_eq!(warns[0].key(), "test.warn.optional");
+        assert_eq!(warns[0].args(), ["jei"]);
         assert!(crate::__private::registration_warnings("quiet").is_empty());
         let many = crate::__private::registration_warnings("many");
-        assert_eq!(many.len(), mod_vocab::__private::MAX_LOADING_WARNINGS);
+        assert_eq!(many.len(), 16);
+        assert_eq!(many[0].key(), "test.warn.many");
+        assert_eq!(many[0].args(), ["0"]);
         assert_eq!(many[15].args(), ["15"]);
     }
 
@@ -216,6 +231,12 @@ mod tests {
             registrar.refused,
             ["mod broken refused registration: bootstrap failed: café\nmissing bridge"]
         );
+        assert_eq!(registrar.warnings.len(), 1);
+        let (owner, warnings) = &registrar.warnings[0];
+        assert_eq!(*owner, "broken");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].key(), "test.warn.bridge");
+        assert_eq!(warnings[0].args(), ["missing"]);
         assert_eq!(
             registrar
                 .biome_regions

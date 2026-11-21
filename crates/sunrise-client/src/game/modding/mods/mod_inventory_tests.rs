@@ -95,14 +95,14 @@ impl mod_api::ServerReloadListener for Guard {
     fn prepare(
         &self,
         _: &mod_api::ServerReloadContext,
-    ) -> std::result::Result<Box<dyn mod_api::ReloadApply>, mod_api::ReloadResourceError> {
+    ) -> std::result::Result<Box<dyn FnOnce() + Send + 'static>, mod_api::ReloadResourceError> {
         if self.0.load(Ordering::Relaxed) {
             return Err(mod_api::ReloadResourceError::new(
                 mod_api::Identifier::parse("reload_guard:guard").unwrap(),
                 std::io::Error::other("inventory fixture rejected the new generation"),
             ));
         }
-        Ok(<dyn mod_api::ReloadApply>::new(|| {}))
+        Ok(Box::new(|| {}))
     }
 }
 #[mod_api::__subscriptions]

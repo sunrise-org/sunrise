@@ -63,6 +63,43 @@ pub enum PhaseContext {
     ChunkDisk,
 }
 
+/// How a game hook borrows its receiver. Free dispatchers have no game receiver.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Receiver {
+    Read,
+    #[default]
+    Write,
+    Associated,
+}
+
+impl Receiver {
+    pub(super) fn mutability(self) -> Option<bool> {
+        match self {
+            Self::Read => Some(false),
+            Self::Write => Some(true),
+            Self::Associated => None,
+        }
+    }
+}
+
+/// How a game target calls generated dispatch. This never changes the listener event.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchStyle {
+    /// The target takes the generated engine carrier.
+    #[default]
+    Carrier,
+    /// The target already owns the converted values and takes the vocabulary carrier.
+    ApiCarrier,
+    /// The target takes individual engine parameters.
+    Flat,
+    /// The target owns the whole crossing and calls the vocabulary dispatcher itself.
+    Direct,
+}
+
+pub(super) const EFFECT_TICK_TARGET: &str = "mod_api::parts::effects::dispatch_mob_effect_tick";
+
 /// The kind of thing whose Parts a scoped hook calls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -99,6 +136,16 @@ pub enum StackCount {
     Trim,
 }
 
+/// How a registration collector exposes its append-only output.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistrationAppend {
+    /// Generate an event method that stages one entry.
+    Register,
+    /// The vocabulary crate supplies the event methods in an inherent impl.
+    Custom,
+}
+
 /// One hook point: a moment the game tells mods about.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hook {
@@ -116,11 +163,15 @@ pub struct Hook {
     /// A replace hook whose output also names the mod that answered, or a collect hook whose
     /// entries each name the mod that pushed it.
     pub answered_by_mod: bool,
+    /// Clear an answered collector's private batch on refusal without cloning its owned entries.
+    pub owned_answer_batch: bool,
     /// A listener about one mod's own things: the event field naming that mod, whose
     /// subscription alone is told.
     pub owner: Option<String>,
     /// Validate a collector's edits at the per-listener ownership boundary.
     pub collect_validator: Option<String>,
+    /// Hide the output vector of a registration collector behind append-only methods.
+    pub registration_append: Option<RegistrationAppend>,
     /// The inert answer for a disabled content owner's subscribed block Part: Rust statements
     /// setting the answer, or `signal` to report engine inactivity separately from listener output.
     pub inert: Option<String>,
@@ -145,9 +196,14 @@ pub struct Hook {
     /// stamper from the counterpart's javadoc; documentation metadata, not the
     /// contract (a hook that listens can still name a cancellable event).
     pub cancellable: Option<bool>,
-    /// The parameters of a hook whose game target takes them as one generated `<Name>Call`
-    /// (name and type, in order, without a `Ticks` parameter); empty for a flat target.
+    /// Dispatch parameters (name and vocabulary type in order), apart from the Host/phase context.
     pub call: Vec<(String, String)>,
+    pub receiver: Receiver,
+    pub dispatch: DispatchStyle,
+    /// The engine passes its tick queue to the level host, not to the listener.
+    pub engine_ticks: bool,
+    /// Whether dispatch signals an inactive content owner to the engine.
+    pub engine_inert: bool,
     /// Admission policy for the mutable stack-list output; placement owns trimming.
     pub stack_count: Option<StackCount>,
     /// Rebuild a listener event from its original inputs for every subscriber.
@@ -274,6 +330,12 @@ struct HookEntry {
     context: Option<PhaseContext>,
     #[serde(default)]
     call: Vec<(String, String)>,
+    #[serde(default)]
+    receiver: Receiver,
+    #[serde(default)]
+    dispatch: DispatchStyle,
+    #[serde(default)]
+    engine: Vec<(String, String)>,
     stack_count: Option<StackCount>,
     #[serde(default)]
     event_per_listener: bool,
@@ -291,8 +353,11 @@ struct ModApiEntry {
     scope: Option<PartKind>,
     key: Option<String>,
     answered_by: Option<AnsweredBy>,
+    #[serde(default)]
+    owned_answer_batch: bool,
     owner: Option<String>,
     collect_validator: Option<String>,
+    registration_append: Option<RegistrationAppend>,
     isolate: Option<bool>,
     output_validator: Option<String>,
 }
@@ -357,20 +422,82 @@ impl Hook {
                     error: "stack_count requires a mutable Vec<ItemStack> collect output".into(),
                 });
             }
-            if !entry.call.is_empty() {
-                let output = entry
-                    .call
-                    .iter()
-                    .find(|(parameter, _)| Some(parameter) == api.out.as_ref())
-                    .and_then(|(_, ty)| syn::parse_str::<syn::Type>(ty).ok());
-                validate_stack_count_output(&name, output.as_ref())?;
+            let output = entry
+                .call
+                .iter()
+                .find(|(parameter, _)| Some(parameter) == api.out.as_ref())
+                .and_then(|(_, ty)| syn::parse_str::<syn::Type>(ty).ok());
+            validate_stack_count_output(&name, output.as_ref())?;
+        }
+        let effect = scope
+            .as_ref()
+            .is_some_and(|scope| scope.kind == PartKind::Effect);
+        if effect != (entry.target == EFFECT_TICK_TARGET)
+            || effect
+                && !matches!(
+                    name.as_str(),
+                    "apply_effect_tick" | "should_apply_effect_tick_this_tick"
+                )
+        {
+            return Err(CatalogError::InvalidHook {
+                hook: name,
+                error: format!("effect tick hooks must target {EFFECT_TICK_TARGET}"),
+            });
+        }
+        let mut engine_ticks = false;
+        let mut engine_inert = false;
+        let mut effect_factory = false;
+        let mut effect_count = false;
+        for (param, ty) in &entry.engine {
+            match (param.as_str(), ty.as_str()) {
+                ("ticks", "& mut Ticks") if !effect => engine_ticks = true,
+                ("inert", "& mut bool") if !effect => engine_inert = true,
+                ("tick_count", "i32") if name == "apply_effect_tick" && effect => {
+                    effect_count = true
+                }
+                ("make_call", "impl FnOnce (EffectKey , i32) -> ApplyEffectTickCall < '_ >")
+                    if effect =>
+                {
+                    effect_factory = true
+                }
+                _ => {
+                    return Err(CatalogError::InvalidHook {
+                        hook: name,
+                        error: format!("unsupported #[engine] parameter: {param}: {ty}"),
+                    });
+                }
             }
+        }
+        if engine_inert != (entry.inert.as_deref() == Some("signal")) {
+            return Err(CatalogError::InvalidHook {
+                hook: name,
+                error: "inert = \"signal\" requires #[engine] inert: &mut bool and vice versa"
+                    .into(),
+            });
+        }
+        if effect && (!effect_factory || effect_count != (name == "apply_effect_tick")) {
+            return Err(CatalogError::InvalidHook {
+                hook: name,
+                error:
+                    "effect dispatch requires the engine-only factory and an action-only tick count"
+                        .into(),
+            });
         }
         let answered_by_mod = api.answered_by.is_some();
         if answered_by_mod
             && (!matches!(api.contract, Contract::Replace | Contract::Collect) || scope.is_some())
         {
             return Err(CatalogError::AnsweredNeedsGlobalOutput(name));
+        }
+        if api.owned_answer_batch
+            && (!answered_by_mod
+                || api.contract != Contract::Collect
+                || api.registration_append.is_some())
+        {
+            return Err(CatalogError::InvalidHook {
+                hook: name.clone(),
+                error: "owned_answer_batch requires a private answered collect batch without registration_append".into(),
+            });
         }
         if api.owner.is_some() && (api.contract != Contract::Listen || scope.is_some()) {
             return Err(CatalogError::OwnerNeedsGlobalListener(name));
@@ -424,8 +551,10 @@ impl Hook {
             contract: api.contract,
             out: api.out,
             answered_by_mod,
+            owned_answer_batch: api.owned_answer_batch,
             owner: api.owner,
             collect_validator: api.collect_validator,
+            registration_append: api.registration_append,
             inert: entry.inert,
             isolate,
             output_validator: api.output_validator,
@@ -436,6 +565,10 @@ impl Hook {
             version: entry.version.unwrap_or(1),
             cancellable: entry.cancellable,
             call: entry.call,
+            receiver: entry.receiver,
+            dispatch: entry.dispatch,
+            engine_ticks,
+            engine_inert,
             stack_count: entry.stack_count,
             event_per_listener: entry.event_per_listener,
         })
@@ -497,8 +630,7 @@ pub const DECLARATIONS: &str = "crates/sunrise-mod-vocab/src/hooks";
 /// What the catalog was declared in before the declarations: a file here is refused, never ignored.
 pub(crate) const RETIRED: &[&str] = &["native-hooks.json", "tools/native-hook-fragments"];
 
-/// A declaration's inferred target, resolved to the definition's module by `Catalog::load`.
-/// Parsing declarations alone does not require engine sources (render-record generation).
+/// The default binding for a game hook in the same-named `native_hooks` module.
 fn default_target(name: &str, area: &str) -> String {
     format!("sunrise_client::game::native_hooks::{area}::Game<'_>::native_{name}")
 }
@@ -658,23 +790,45 @@ impl Declared {
                 match kind.as_str() {
                     "Hooks" => {
                         entry.insert("name".into(), name.clone().into());
-                        let call = function
-                            .sig
-                            .inputs
-                            .iter()
-                            .map(|input| match input {
-                                syn::FnArg::Typed(input) => Ok(serde_json::json!([
-                                    input.pat.to_token_stream().to_string(),
-                                    input.ty.to_token_stream().to_string()
-                                ])),
-                                syn::FnArg::Receiver(_) => {
-                                    Err(invalid(format!("{name}: a declaration has no receiver")))
+                        let mut call = Vec::new();
+                        let mut engine = Vec::new();
+                        let mut names = HashSet::new();
+                        for input in &function.sig.inputs {
+                            let syn::FnArg::Typed(input) = input else {
+                                return Err(invalid(format!(
+                                    "{name}: a declaration has no receiver"
+                                )));
+                            };
+                            let syn::Pat::Ident(pat) = &*input.pat else {
+                                return Err(invalid(format!("{name}: expected a named parameter")));
+                            };
+                            if pat.by_ref.is_some()
+                                || pat.mutability.is_some()
+                                || pat.subpat.is_some()
+                                || !names.insert(&pat.ident)
+                            {
+                                return Err(invalid(format!(
+                                    "{name}: expected a unique parameter name"
+                                )));
+                            }
+                            let params = match &input.attrs[..] {
+                                [] => &mut call,
+                                [attr] if matches!(&attr.meta, syn::Meta::Path(path) if path.is_ident("engine")) => {
+                                    &mut engine
                                 }
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        if !call.is_empty() {
-                            entry.insert("call".into(), call.into());
+                                _ => {
+                                    return Err(invalid(format!(
+                                        "{name}: only #[engine] is allowed on parameters"
+                                    )));
+                                }
+                            };
+                            params.push(serde_json::json!([
+                                pat.ident.to_string(),
+                                input.ty.to_token_stream().to_string()
+                            ]));
                         }
+                        entry.insert("call".into(), call.into());
+                        entry.insert("engine".into(), engine.into());
                         if let Some(doc) = doc(&function.attrs) {
                             entry.insert("doc".into(), doc.into());
                         }
@@ -686,8 +840,10 @@ impl Declared {
                             "scope",
                             "key",
                             "answered_by",
+                            "owned_answer_batch",
                             "owner",
                             "collect_validator",
+                            "registration_append",
                             "isolate",
                             "output_validator",
                         ] {
@@ -717,17 +873,6 @@ impl Catalog {
     /// then by name, so the order never depends on a list a PR edits.
     /// The retired JSON catalog is refused wherever it still exists.
     pub fn load(root: &Path) -> Result<Self, CatalogError> {
-        let mut catalog = Self::load_declarations(root)?;
-        crate::hook_targets::resolve(root, &mut catalog).map_err(|error| {
-            CatalogError::Declaration {
-                path: "native hook definitions".into(),
-                error,
-            }
-        })?;
-        Ok(catalog)
-    }
-
-    pub(crate) fn load_declarations(root: &Path) -> Result<Self, CatalogError> {
         let read_error = |path: &Path, e: std::io::Error| CatalogError::Read {
             path: path.display().to_string(),
             error: e.to_string(),
@@ -869,8 +1014,10 @@ impl Hook {
             contract: Contract::Listen,
             out: None,
             answered_by_mod: false,
+            owned_answer_batch: false,
             owner: None,
             collect_validator: None,
+            registration_append: None,
             inert: None,
             isolate: false,
             output_validator: None,
@@ -881,6 +1028,10 @@ impl Hook {
             version: 1,
             cancellable: None,
             call: Vec::new(),
+            receiver: Receiver::default(),
+            dispatch: DispatchStyle::default(),
+            engine_ticks: false,
+            engine_inert: false,
             stack_count: None,
             event_per_listener: false,
         }
@@ -1007,7 +1158,7 @@ mod tests {
             (&base, HOOK),
             (&index, "mod base;\nmod alpha;"),
         ]);
-        let catalog = Catalog::load_declarations(&root).unwrap();
+        let catalog = Catalog::load(&root).unwrap();
         let names = catalog
             .hooks
             .iter()
@@ -1015,10 +1166,10 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(names, ["one", "two"], "base.rs first, then by name");
         fs::remove_file(root.join(&index)).unwrap();
-        assert_eq!(Catalog::load_declarations(&root).unwrap().hooks.len(), 2);
+        assert_eq!(Catalog::load(&root).unwrap().hooks.len(), 2);
         fs::write(root.join(DECLARATIONS).join("not-valid.rs"), HOOK).unwrap();
         assert!(
-            Catalog::load_declarations(&root)
+            Catalog::load(&root)
                 .unwrap_err()
                 .to_string()
                 .contains("invalid hook declaration filename")

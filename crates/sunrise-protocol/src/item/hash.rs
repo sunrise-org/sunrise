@@ -462,7 +462,7 @@ impl Component {
             Self::PaintingVariant(i) => entry_with::<O>(names, "minecraft:painting_variant", *i)?,
             Self::Profile(p) => raw::profile_with::<O>(p),
             Self::TrimDirect { .. } => {
-                let mut writer = crate::buf::Writer::new();
+                let mut writer = ::sunrise_core::vanilla_bytes::Writer::new();
                 self.write(id, &mut writer);
                 raw::code_with::<O>(id, &writer.data, names)?
             }
@@ -971,7 +971,7 @@ mod tests {
         );
         // A stack kept as the server sent it hashes the patch it holds.
         use crate::buf::Codec as _;
-        let mut w = crate::buf::Writer::new();
+        let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
         crate::item::DelimitedSlot::write(&Some(stack.clone()), &mut w);
         let kept = crate::item::DelimitedSlot::read(&mut crate::buf::Reader::new(&w.data))
             .unwrap()
@@ -994,7 +994,7 @@ mod tests {
             Hashed::create(&stack, &Table),
             Err(StackHashError::Component(k::DAMAGE))
         );
-        let mut w = crate::buf::Writer::new();
+        let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
         crate::item::DelimitedSlot::write(&Some(stack), &mut w);
         let kept = crate::item::DelimitedSlot::read(&mut crate::buf::Reader::new(&w.data))
             .unwrap()

@@ -579,16 +579,11 @@ fn diagnostic(text: &str) -> Option<String> {
     Some(line)
 }
 
-/// External mixins traverse ordinary module declarations, not generated OUT_DIR includes.
-/// Prepare their input separately so neither the downloaded source nor a cached snapshot changes.
+/// External mixins read source, not generated OUT_DIR includes: a copy of `source` with the
+/// generated host forwarders written in, so neither the download nor a cached snapshot changes.
 pub fn prepare_mixins_source(source: &Path, prepared: &Path) -> Result<(), String> {
-    // sync removes old files, not their directories. A leftover area directory without its
-    // marker would make module discovery refuse the next revision after an interrupted build.
-    if prepared.exists() {
-        fs::remove_dir_all(prepared).map_err(|e| format!("{}: {e}", prepared.display()))?;
-    }
     let result = sync(source, prepared)
-        .and_then(|()| sunrise_platform::mod_build::api_gen::materialize_game_modules(prepared));
+        .and_then(|()| sunrise_platform::mod_build::api_gen::materialize_generated_host(prepared));
     if result.is_err() {
         let _ = fs::remove_dir_all(prepared);
     }
@@ -802,65 +797,33 @@ mod tests {
     }
 
     #[test]
-    fn mixins_input_materializes_modules_without_changing_the_download() {
-        let root = dir("mixins-area-input");
+    fn mixins_input_copies_the_source_without_changing_the_download() {
+        let root = dir("mixins-input");
         let source = root.join("download");
         let prepared = root.join("prepared");
         let src = source.join("crates/sunrise-client/src");
         let area = src.join("game/items");
-        let hooks = src.join("game/native_hooks");
         fs::create_dir_all(&area).unwrap();
-        fs::create_dir_all(&hooks).unwrap();
-        let game = "struct Game; mod native_hooks;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/game_modules.rs\"));\n";
-        let native = "include!(concat!(env!(\"OUT_DIR\"), \"/native_hook_modules.rs\"));\n";
+        let game = "struct Game;\n#[path = \"game/items/using_item.rs\"]\nmod using_item;\n";
         let helper = "use super::*; impl Game { fn area_helper(&mut self) {} }";
         fs::write(src.join("game.rs"), game).unwrap();
-        fs::write(area.join(".game-area"), "").unwrap();
         fs::write(area.join("using_item.rs"), helper).unwrap();
-        fs::write(hooks.join("mod.rs"), native).unwrap();
-        fs::write(
-            hooks.join("base.rs"),
-            "use super::super::*; impl Game { fn native_helper(&mut self) {} }",
-        )
-        .unwrap();
         prepare_mixins_source(&source, &prepared).unwrap();
-        // External tools parse ordinary mod declarations, without our expansion pass.
-        fn modules(path: &Path) -> Vec<String> {
-            syn::parse_file(&fs::read_to_string(path).unwrap())
-                .unwrap()
-                .items
-                .into_iter()
-                .filter_map(|item| match item {
-                    syn::Item::Mod(module) => Some(module.ident.to_string()),
-                    _ => None,
-                })
-                .collect()
-        }
         let output = prepared.join("crates/sunrise-client/src");
-        assert!(modules(&output.join("game.rs")).contains(&"using_item".into()));
-        assert_eq!(modules(&output.join("game/native_hooks/mod.rs")), ["base"]);
+        assert_eq!(fs::read_to_string(output.join("game.rs")).unwrap(), game);
         assert_eq!(
             fs::read_to_string(output.join("game/items/using_item.rs")).unwrap(),
             helper
         );
-        assert_eq!(fs::read_to_string(src.join("game.rs")).unwrap(), game);
-        assert_eq!(fs::read_to_string(hooks.join("mod.rs")).unwrap(), native);
-        let first = fs::read(output.join("game.rs")).unwrap();
-        // A failed older preparation may have left an area that the next source no longer has.
-        let stale_area = output.join("game/removed");
-        fs::create_dir_all(&stale_area).unwrap();
-        fs::write(stale_area.join(".game-area"), "").unwrap();
-        fs::write(stale_area.join("old.rs"), "fn old() {}").unwrap();
+        // A file the next source no longer has leaves the copy.
+        fs::remove_file(area.join("using_item.rs")).unwrap();
+        fs::write(src.join("game.rs"), "struct Game;\n").unwrap();
         prepare_mixins_source(&source, &prepared).unwrap();
-        assert!(!stale_area.exists());
-        assert_eq!(fs::read(output.join("game.rs")).unwrap(), first);
-        let invalid = src.join("game/unmarked");
-        fs::create_dir_all(&invalid).unwrap();
-        fs::write(invalid.join("misplaced.rs"), "fn misplaced() {}").unwrap();
-        let error = prepare_mixins_source(&source, &prepared).unwrap_err();
-        assert!(error.contains("missing .game-area marker"), "{error}");
-        assert!(!prepared.exists());
-        assert!(invalid.exists());
+        assert!(!output.join("game/items/using_item.rs").exists());
+        assert_eq!(
+            fs::read_to_string(src.join("game.rs")).unwrap(),
+            "struct Game;\n"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -12,6 +12,7 @@ pub trait Hooks {
     /// makes it stale: the click is refused and every write is undone. An invalid answer or
     /// a panic also refuses the click without falling back to the plain pickup.
     #[hook(
+        dispatch = "flat",
         side = "both",
         contract = "cancel",
         out = "canceled",
@@ -19,5 +20,9 @@ pub trait Hooks {
         cancellable = true,
         version = 4
     )]
-    fn item_stacked_on_other();
+    fn item_stacked_on_other(
+        event: &mod_api::item::menu::StackedOnOther,
+        result: &mut mod_api::item::menu::StackedOnOtherResult,
+        canceled: &mut bool,
+    );
 }

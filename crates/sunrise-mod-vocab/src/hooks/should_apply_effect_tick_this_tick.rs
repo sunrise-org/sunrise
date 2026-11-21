@@ -21,5 +21,6 @@ pub trait Hooks {
         tick_count: i32,
         amplifier: i32,
         apply: &mut bool,
+        #[engine] make_call: impl FnOnce(EffectKey, i32) -> ApplyEffectTickCall<'_>,
     );
 }

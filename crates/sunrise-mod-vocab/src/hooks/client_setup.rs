@@ -14,6 +14,7 @@ pub trait Hooks {
     /// Setup permits client resource reads, not world handles or transactions.
     /// The listener is a pure function of its `ClientHost` reads and its own state.
     #[hook(
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         neoforge = "FMLClientSetupEvent",

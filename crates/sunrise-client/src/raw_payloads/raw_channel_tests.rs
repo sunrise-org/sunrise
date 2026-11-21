@@ -207,7 +207,7 @@ fn raw_sends_reach_a_vanilla_peer_within_the_clientbound_limit() {
 fn a_raw_channel_keeps_the_vanilla_serverbound_limit() {
     with_vanilla_peer(|transport| {
         let decode = |len: usize| {
-            let mut body = sunrise_protocol::buf::Writer::new();
+            let mut body = ::sunrise_core::vanilla_bytes::Writer::new();
             body.string(CHANNEL);
             body.bytes(&vec![0; len]);
             play::Serverbound::decode_with_payload_codecs(

@@ -94,6 +94,7 @@ fn fixture() -> (Scratch, Assets, RenderAssets, MeshTables, Biomes) {
         model_gallery: vec![],
         animations: vec![],
         sprite_layers: BTreeMap::new(),
+        sprite_names: vec![None],
         file_layers: BTreeMap::new(),
         emissive: vec![],
         translucent_layers: vec![false],
@@ -185,6 +186,40 @@ fn fixture() -> (Scratch, Assets, RenderAssets, MeshTables, Biomes) {
     ))
     .unwrap();
     (Scratch(path), assets, render, tables, biomes)
+}
+
+#[test]
+fn baked_model_particle_uses_the_published_sprite_name_at_its_layer() {
+    let (_scratch, _, mut render, _, _) = fixture();
+    let key = render
+        .block_state_models(BlockStateId(1))
+        .iter()
+        .next()
+        .unwrap();
+    // Not the quad's texture, the model slot, or the first name in the atlas.
+    render.sprite_names = vec![
+        Some("fixture:block/other".into()),
+        None,
+        Some("fixture:block/particle".into()),
+    ];
+    for (_, model) in render.model_catalog.models_mut() {
+        model.particle = Some(2);
+    }
+    let name = render.baked_model(key).unwrap().particle.unwrap();
+    assert_eq!(name, "fixture:block/particle");
+    assert!(std::ptr::eq(
+        name,
+        render.sprite_names[2].as_deref().unwrap()
+    ));
+
+    render.sprite_names[2] = None;
+    assert_eq!(render.baked_model(key).unwrap().particle, None);
+    render.sprite_names.truncate(2);
+    assert_eq!(render.baked_model(key).unwrap().particle, None);
+    for (_, model) in render.model_catalog.models_mut() {
+        model.particle = None;
+    }
+    assert_eq!(render.baked_model(key).unwrap().particle, None);
 }
 
 #[test]

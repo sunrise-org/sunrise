@@ -31,6 +31,8 @@ pub trait Hooks {
     /// Uncached fall-flying, sleeping and spin-attack candidates keep vanilla's box.
     /// Candidate resolution dispatches 2–3 times per player tick with subscribers, never without.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "both",
         version = 2,
         contract = "collect",
@@ -39,5 +41,5 @@ pub trait Hooks {
         neoforge = "EntityEvent.Size",
         cancellable = false
     )]
-    fn entity_size();
+    fn entity_size(entity: EntityRef, pose: mod_api::Pose, old_size: [f32; 3], size: &mut [f32; 3]);
 }

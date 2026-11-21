@@ -45,7 +45,7 @@ using that state; local intent does not overwrite the authoritative flags.
 ## Toggle button position
 
 A menu that hosts a book reserves a 20 by 18 pixel spot for its toggle button with
-`Screen::recipe_book_toggle`, a `RecipeBookToggle { x, y, from }`: `x` pixels right of the menu's left edge,
+`MenuScreenLayout::recipe_book_toggle`, a `RecipeBookToggle { x, y, from }`: `x` pixels right of the menu's left edge,
 `y` pixels below the menu's top edge (`ToggleOrigin::Menu`) or below the window's centre
 (`ToggleOrigin::ScreenCentre`). The centre is vanilla's `height / 2` with integer division, so a screen that
 places its button at `height / 2 - 49` writes `RecipeBookToggle { x: 5.0, y: -49.0, from: ToggleOrigin::ScreenCentre }`

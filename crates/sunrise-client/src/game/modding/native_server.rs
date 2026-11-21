@@ -1,7 +1,7 @@
 //! Server commands and players for native mods (docs/modding/src/how-to/native-mods.md,
 //! "Server commands and players"): the commands mods add to the
 //! server's command tree (`native_register_commands`), a player's command
-//! reaching them (`native_run_mod_command`), and the helpers a server mod
+//! reaching its bound executor, and the helpers a server mod
 //! answers with: the players online, a line to one of them or to all, the
 //! command's feedback and the world's folder; and the acting
 //! player's plain items: count, take, give. They act on the server's own
@@ -36,7 +36,7 @@ use mod_api::{
 };
 use serde_json::{Map, Value, json};
 use std::sync::{
-    Mutex, PoisonError,
+    LazyLock, Mutex, PoisonError,
     atomic::{AtomicBool, Ordering},
 };
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
@@ -170,23 +170,24 @@ fn usage_nodes(
 /// only optional arguments follow it, at the lowest level of those executable usages.
 /// A command vanilla has (`vanilla`
 /// answers) or a usage that doesn't parse is left out, with why.
+#[cfg(test)]
 pub(super) fn command_tree(
     commands: &[mod_api::Command],
     vanilla: impl Fn(&str) -> bool,
     custom: &CommandArguments,
 ) -> (Value, HashMap<String, u8>, Vec<String>) {
-    command_tree_for(commands, vanilla, custom, false)
+    command_tree_for(commands, vanilla, custom, false, None)
 }
 
-/// [`command_tree`] for the client's own commands: an argument type that declares a suggestion
-/// provider is refused by name, because that provider answers on the server alone and a client
-/// tree has no server behind it. Every other argument kind builds exactly as on the server.
+/// Build the display tree for the client's own commands. An argument type that declares a
+/// suggestion provider is refused by name because a client command has no server to answer it.
+/// Every other argument kind builds exactly as on the server.
 pub(super) fn client_command_tree(
     commands: &[mod_api::Command],
     vanilla: impl Fn(&str) -> bool,
     custom: &CommandArguments,
 ) -> (Value, HashMap<String, u8>, Vec<String>) {
-    command_tree_for(commands, vanilla, custom, true)
+    command_tree_for(commands, vanilla, custom, true, None)
 }
 
 /// Whether `argument` declares a suggestion provider, read once per tree. A panic is logged and
@@ -206,16 +207,20 @@ fn declares_provider(kind: &str, argument: &Arc<dyn mod_api::CommandArgumentType
     }
 }
 
+// Executable paths (including argument names) mapped to the input registration slot.
+type CommandExecutorSlots = HashMap<Vec<String>, usize>;
+
 fn command_tree_for(
     commands: &[mod_api::Command],
     vanilla: impl Fn(&str) -> bool,
     custom: &CommandArguments,
     client: bool,
+    mut executors: Option<&mut CommandExecutorSlots>,
 ) -> (Value, HashMap<String, u8>, Vec<String>) {
     let mut root: Map<String, Value> = Map::new();
     let mut levels: HashMap<String, u8> = HashMap::new();
     let mut problems = Vec::new();
-    for command in commands {
+    for (slot, command) in commands.iter().enumerate() {
         let nodes = match usage_nodes(&command.usage, custom, client) {
             Ok(n) => n,
             Err(e) => {
@@ -256,6 +261,7 @@ fn command_tree_for(
             ));
             continue;
         }
+        let execution_level = u64::from(command.level.min(4));
         let mut children = &mut root;
         for (i, (name, node, _)) in nodes.iter().enumerate() {
             let runnable = nodes.get(i + 1).is_none_or(|n| n.2);
@@ -265,13 +271,22 @@ fn command_tree_for(
                 n["level"] = 4.into();
                 n
             });
-            if runnable {
-                entry["executable"] = true.into();
-                let level = entry["execution_level"]
+            // Permission and identity belong to the same usage. Keep the first
+            // accepted registration at this level; only a lower one replaces it.
+            if runnable
+                && entry["execution_level"]
                     .as_u64()
-                    .unwrap_or(4)
-                    .min(command.level.into());
-                entry["execution_level"] = level.into();
+                    .is_none_or(|old| execution_level < old)
+            {
+                entry["executable"] = true.into();
+                entry["execution_level"] = execution_level.into();
+                if let Some(executors) = executors.as_deref_mut() {
+                    let path = nodes[..=i]
+                        .iter()
+                        .map(|(name, _, _)| name.clone())
+                        .collect();
+                    executors.insert(path, slot);
+                }
             }
             let level = entry["level"]
                 .as_u64()
@@ -323,12 +338,24 @@ fn finish(children: &mut Value) {
     }
 }
 
-/// Add the already validated native report tree to the server's dispatcher.
+/// Add a validated native report for descriptor-only consumers.
 pub(super) fn register_dispatcher(
     dispatcher: &mut Dispatcher,
     tree: &Value,
     handler: &'static str,
     arguments: &CommandArguments,
+) {
+    register_command_nodes(dispatcher, tree, handler, arguments, None);
+}
+
+/// Add the report's nodes with the same grammar on both sides. The authoritative
+/// server also associates each runnable node ID with its registration path.
+fn register_command_nodes(
+    dispatcher: &mut Dispatcher,
+    tree: &Value,
+    handler: &'static str,
+    arguments: &CommandArguments,
+    executors: Option<&CommandExecutorSlots>,
 ) {
     fn add(
         dispatcher: &mut Dispatcher,
@@ -336,8 +363,11 @@ pub(super) fn register_dispatcher(
         children: &Map<String, Value>,
         handler: &'static str,
         arguments: &CommandArguments,
+        path: &mut Vec<String>,
+        on_executable: &mut impl FnMut(&[String], usize),
     ) {
         for (name, node) in children {
+            path.push(name.clone());
             let id = if node["type"] == "literal" {
                 dispatcher.literal(parent, name)
             } else {
@@ -356,14 +386,40 @@ pub(super) fn register_dispatcher(
                         .as_u64()
                         .expect("runnable usage level") as u8,
                 );
+                on_executable(path, id);
             }
             if let Some(children) = node["children"].as_object() {
-                add(dispatcher, id, children, handler, arguments);
+                add(
+                    dispatcher,
+                    id,
+                    children,
+                    handler,
+                    arguments,
+                    path,
+                    on_executable,
+                );
             }
+            path.pop();
         }
     }
+    let mut bindings = HashMap::new();
     if let Some(children) = tree["children"].as_object() {
-        add(dispatcher, 0, children, handler, arguments);
+        add(
+            dispatcher,
+            0,
+            children,
+            handler,
+            arguments,
+            &mut Vec::new(),
+            &mut |path: &[String], id| {
+                if let Some(executors) = executors {
+                    bindings.insert(id, executors[path]);
+                }
+            },
+        );
+    }
+    if executors.is_some() {
+        dispatcher.replace_executor_bindings(bindings);
     }
 }
 
@@ -1294,11 +1350,11 @@ impl Game<'_> {
 
     /// The stable name of a connected or acting player. None for a stale or
     /// unavailable player; displaced online players retain their identity.
-    pub(super) fn player_name(&self, player: PlayerRef) -> Option<String> {
+    pub(super) fn player_name(&self, player: PlayerRef) -> Option<&str> {
         if self.native_acting_player() == Some(player) {
-            return self.lan_acting_name.clone();
+            return self.lan_acting_name.as_deref();
         }
-        Some(self.online_player_record(player)?.name.clone())
+        Some(&self.online_player_record(player)?.name)
     }
 
     /// The dimension key of an online player (`ServerPlayer.level().dimension()`):
@@ -1356,30 +1412,31 @@ impl Game<'_> {
     /// The IP address the player connects from, without the port. Displaced connected
     /// players keep their address; an acting player with no known connection
     /// has an empty address. None for a stale or unavailable player.
-    pub(super) fn player_address(&self, player: PlayerRef) -> Option<String> {
+    pub(super) fn player_address(&self, player: PlayerRef) -> Option<&str> {
         if let Some(guest) = self.online_player_record(player) {
-            return Some(guest.address.ip().to_string());
+            return Some(guest.ip_address());
         }
-        (self.native_acting_player() == Some(player)).then(String::new)
+        (self.native_acting_player() == Some(player)).then_some("")
     }
 
     /// The brand the player's client announced when it connected (`ServerPlayer.clientBrand`),
     /// empty when it sent none. Displaced connected players keep theirs; an acting player with
     /// no known connection has an empty one. None for a stale or unavailable player.
-    pub(super) fn player_client_brand(&self, player: PlayerRef) -> Option<String> {
+    pub(super) fn player_client_brand(&self, player: PlayerRef) -> Option<&str> {
         if let Some(guest) = self.online_player_record(player) {
-            return Some(guest.brand.clone());
+            return Some(&guest.brand);
         }
-        (self.native_acting_player() == Some(player)).then(String::new)
+        (self.native_acting_player() == Some(player)).then_some("")
     }
 
-    /// The plugin channels the player's client announced (`minecraft:register` less
-    /// `minecraft:unregister`), kept by its connection from configuration on.
-    pub(super) fn player_announced_channels(&self, player: PlayerRef) -> Option<Vec<String>> {
+    /// A snapshot of the plugin channels the player's client announced (`minecraft:register`
+    /// less `minecraft:unregister`), kept by its connection from configuration on.
+    pub(super) fn player_announced_channels(&self, player: PlayerRef) -> Option<Arc<[String]>> {
+        static EMPTY: LazyLock<Arc<[String]>> = LazyLock::new(Arc::default);
         if let Some(guest) = self.online_player_record(player) {
             return Some(guest.sender.announced.list());
         }
-        (self.native_acting_player() == Some(player)).then(Vec::new)
+        (self.native_acting_player() == Some(player)).then(|| Arc::clone(&EMPTY))
     }
 
     /// Validate identity without requiring a live body: sending to an online
@@ -1705,7 +1762,7 @@ impl Game<'_> {
     pub(super) fn player_nickname(
         &self,
         player: PlayerRef,
-    ) -> Result<Option<String>, mod_api::PlayerWorldRefusal> {
+    ) -> Result<Option<&str>, mod_api::PlayerWorldRefusal> {
         use mod_api::PlayerWorldRefusal as Refusal;
         if !self.is_logical_server() {
             return Err(Refusal::Client);
@@ -1715,7 +1772,7 @@ impl Game<'_> {
         if !hub.online_players().any(|g| g.uuid == uuid) {
             return Err(Refusal::Stale);
         }
-        Ok(hub.nicknames.get(&uuid).cloned())
+        Ok(hub.nicknames.get(&uuid).map(String::as_str))
     }
     /// Hides that player (a vanish) from the players below permission
     /// `level`, or shows them again (None): from the next tick those players
@@ -1810,7 +1867,7 @@ impl Game<'_> {
         );
     }
     /// The player whose action or command a hook hears, as their state is
-    /// swapped in (`native_run_mod_command`, `native_right_click_block`,
+    /// swapped in (command executors, `native_right_click_block`,
     /// `native_use_on`, `native_break_block`...): None outside such a
     /// hook.
     pub(super) fn native_acting_player(&self) -> Option<PlayerRef> {
@@ -2001,9 +2058,7 @@ impl Game<'_> {
         // With no guest's turn running, `native_acting_id` is the world's owner: on a server
         // thread that owner is a guest too, whose state is theirs, not the `Game`'s own.
         let conn = self
-            .lan
-            .as_ref()
-            .and_then(|host| host.hub.holder_guest(uuid, self.dim.id()))
+            .native_player_holder(uuid)
             .filter(|g| !g.dead)
             .map(|g| g.conn);
         match conn {
@@ -2013,13 +2068,47 @@ impl Game<'_> {
         }
     }
 
+    fn native_player_holder(&self, uuid: u128) -> Option<&Guest> {
+        self.lan.as_ref()?.hub.holder_guest(uuid, self.dim.id())
+    }
+
+    /// Resolve a UUID-based item place in the acting state or a parked guest's own record.
+    /// Unlike a write, a read never initializes a body or the level owner's UUID.
+    pub(super) fn native_item_place_player(&self, uuid: u128) -> Option<PlayerRead<'_>> {
+        if self.lan_acting_uuid != Some(uuid) {
+            if let Some(guest) = self.native_player_holder(uuid) {
+                return (!guest.dead && !self.lan_guest_swaps.contains(&guest.conn))
+                    .then_some(PlayerRead::Guest(guest));
+            }
+            if self.lan_acting_uuid.is_some()
+                || self
+                    .level
+                    .player_uuid
+                    .map(sunrise_client::lan::playerdata::ints_uuid)
+                    != Some(uuid)
+            {
+                return None;
+            }
+        }
+        Some(PlayerRead::Acting {
+            mode: self.mode_id(),
+            body: Some(self.native_live_acting_body()?),
+            abilities: self.acting_abilities,
+            last_death: self.level.last_death.as_ref(),
+        })
+    }
+
+    pub(super) fn native_live_acting_body(&self) -> Option<&PlayerMotion> {
+        let body = self.player.as_ref()?;
+        if body.health.health() <= 0.0 {
+            return None;
+        }
+        Some(body)
+    }
+
     /// `f` for the acting player, whose state is in place: false when they are dead.
     fn native_as_acting(&mut self, f: impl FnOnce(&mut Self)) -> bool {
-        if self
-            .player
-            .as_ref()
-            .is_none_or(|p| p.health.health() <= 0.0)
-        {
+        if self.native_live_acting_body().is_none() {
             return false;
         }
         f(self);
@@ -2157,15 +2246,26 @@ impl Game<'_> {
     /// The shared command-node executor, also reached by functions and `execute`.
     pub(super) fn run_native_command(&mut self, context: Context) -> super::commands::R<i32> {
         use super::commands::err;
+        // Argument resolution uses node IDs from the parse. Never use them against a
+        // replacement tree, even if the new tree has the same command at the same ID.
+        let executor = context
+            .executor
+            .filter(|&key| self.ui.dispatcher.0.owns_executor(key))
+            .and_then(|key| {
+                self.native_commands
+                    .registered
+                    .as_ref()?
+                    .executors
+                    .get(key.slot())
+            })
+            .filter(|executor| mod_api::__private::mod_index_on(executor.mod_index))
+            .ok_or_else(|| err("command.unknown.command", &[]))?;
+        let owner = executor.owner;
+        let call = Arc::clone(&executor.call);
         let command = self.resolve_native_command(context)?;
         let origin = self.native_command_origin(self.ui.registries.permission)?;
-        let mut ran = false;
-        self.native_run_mod_command(&origin, &command, &mut ran);
-        if ran {
-            Ok(1)
-        } else {
-            Err(err("command.unknown.command", &[]))
-        }
+        let _scope = mod_api::__private::enter(owner, "command_executor");
+        call(self, &origin, &command).ok_or_else(|| err("command.unknown.command", &[]))
     }
 
     fn native_command_player_target(&self, target: super::commands::Target) -> Option<PlayerRef> {
@@ -3562,6 +3662,8 @@ mod tests {
         struct ChangingCommands {
             changed: Arc<AtomicBool>,
             registrations: Arc<AtomicUsize>,
+            calls: Arc<Mutex<Vec<Option<&'static str>>>>,
+            replacement: bool,
         }
         #[mod_api::__subscriptions]
         impl mod_api::Hooks for ChangingCommands {
@@ -3570,14 +3672,31 @@ mod tests {
                 _: &mut dyn mod_api::ServerHost,
                 event: &mut mod_api::RegisterCommandsEvent<'_>,
             ) {
-                self.registrations.fetch_add(1, Ordering::Relaxed);
-                event.commands.push(mod_api::Command::new(
-                    if self.changed.load(Ordering::Relaxed) {
+                let changed = self.changed.load(Ordering::Relaxed);
+                if !self.replacement {
+                    self.registrations.fetch_add(1, Ordering::Relaxed);
+                    let usage = if changed {
                         "after <n:integer>"
                     } else {
                         "before"
-                    },
-                ));
+                    };
+                    event
+                        .commands
+                        .push(mod_api::Command::new(usage).executes(|_, _, _| Some(1)));
+                }
+                if changed == self.replacement {
+                    let calls = self.calls.clone();
+                    let result = if self.replacement { 37 } else { 0 };
+                    event
+                        .commands
+                        .push(mod_api::Command::new("retained").executes(move |_, _, _| {
+                            calls
+                                .lock()
+                                .unwrap()
+                                .push(mod_api::content::crash::current_native_mod());
+                            Some(result)
+                        }));
+                }
             }
             fn player_commands_sent(
                 &self,
@@ -3589,20 +3708,34 @@ mod tests {
         }
         let changed = Arc::new(AtomicBool::new(false));
         let registrations = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::new(Mutex::new(Vec::new()));
         mod_platform::testing::with_mods(
-            vec![mod_api::ModEntry::new(
-                "refresh",
-                Box::new(ChangingCommands {
-                    changed: changed.clone(),
-                    registrations: registrations.clone(),
-                }),
-            )]
-            .into(),
+            [("refresh", false), ("replacement", true)]
+                .map(|(id, replacement)| {
+                    mod_api::ModEntry::new(
+                        id,
+                        Box::new(ChangingCommands {
+                            changed: changed.clone(),
+                            registrations: registrations.clone(),
+                            calls: calls.clone(),
+                            replacement,
+                        }),
+                    )
+                })
+                .into(),
             || {
                 super::super::native_guest_turn_tests::with_guests(|game| {
                     game.build_registries();
                     game.register_native_commands();
                     assert_eq!(registrations.load(Ordering::Relaxed), 1);
+                    let old_parse = game.ui.dispatcher.0.parse("retained", &game.ui.registries);
+                    let old_context = old_parse.executable().unwrap().0;
+                    let (result, outcome) = game.recording_command_outcome(|game| {
+                        game.execute_line("retained", game.server_source())
+                    });
+                    assert_eq!(result, Ok(0));
+                    assert_eq!(outcome, Some((true, 0)));
+                    assert_eq!(*calls.lock().unwrap(), [Some("refresh")]);
                     changed.store(true, Ordering::Relaxed);
                     game.register_native_commands();
                     assert_eq!(registrations.load(Ordering::Relaxed), 1);
@@ -3622,6 +3755,30 @@ mod tests {
                         2,
                         "requests coalesce"
                     );
+                    assert_eq!(
+                        game.run_native_command(old_context.clone())
+                            .unwrap_err()
+                            .key,
+                        "command.unknown.command"
+                    );
+                    assert_eq!(*calls.lock().unwrap(), [Some("refresh")]);
+                    assert_eq!(game.execute_line("retained", game.server_source()), Ok(37));
+                    assert_eq!(
+                        *calls.lock().unwrap(),
+                        [Some("refresh"), Some("replacement")]
+                    );
+                    assert!(mod_api::__private::set_mod_enabled("replacement", false));
+                    assert_eq!(
+                        game.execute_line("retained", game.server_source())
+                            .unwrap_err()
+                            .key,
+                        "command.unknown.command"
+                    );
+                    assert_eq!(
+                        *calls.lock().unwrap(),
+                        [Some("refresh"), Some("replacement")]
+                    );
+                    assert!(mod_api::__private::set_mod_enabled("replacement", true));
                     let commands = game.native_commands.registered.as_ref().unwrap();
                     assert!(!commands.levels.contains_key("before"));
                     assert!(commands.levels.contains_key("after"));
@@ -3703,21 +3860,6 @@ mod tests {
     fn native_typed_commands_reach_listeners_after_parse_and_source_resolution() {
         use mod_api::{CommandArgumentValue as Value, CommandInvocation};
         struct Commands(Arc<Mutex<Vec<(bool, CommandInvocation)>>>);
-        impl Commands {
-            fn record(&self, console: bool, command: &CommandInvocation) {
-                if command.literals == ["typed", "give"] {
-                    let Some(Value::Integer(amount)) = command.argument("amount") else {
-                        panic!("listener must receive an integer")
-                    };
-                    let Some(Value::Player(player)) = command.argument("who") else {
-                        panic!("listener must receive a resolved player")
-                    };
-                    assert_ne!(*amount, 0);
-                    assert_ne!(player.uuid(), 0);
-                }
-                self.0.lock().unwrap().push((console, command.clone()));
-            }
-        }
         #[mod_api::__subscriptions]
         impl mod_api::Hooks for Commands {
             fn register_commands(
@@ -3725,6 +3867,24 @@ mod tests {
                 _: &mut dyn mod_api::ServerHost,
                 event: &mut mod_api::RegisterCommandsEvent<'_>,
             ) {
+                let heard = self.0.clone();
+                let record = move |_: &mut dyn mod_api::ServerHost,
+                                   source: &mod_api::CommandSource,
+                                   command: &CommandInvocation| {
+                    if command.literals == ["typed", "give"] {
+                        let Some(Value::Integer(amount)) = command.argument("amount") else {
+                            panic!("executor must receive an integer")
+                        };
+                        let Some(Value::Player(player)) = command.argument("who") else {
+                            panic!("executor must receive a resolved player")
+                        };
+                        assert_ne!(*amount, 0);
+                        assert_ne!(player.uuid(), 0);
+                    }
+                    let console = matches!(source, mod_api::CommandSource::Console { .. });
+                    heard.lock().unwrap().push((console, command.clone()));
+                    Some(1)
+                };
                 event.commands.extend([
                     mod_api::Command::new("typed give <who:player> <amount:integer> [message:text]"),
                     mod_api::Command::new("typed data <word:word> <number:number> <enabled:boolean> <item:item> <pos:block_pos>"),
@@ -3733,18 +3893,7 @@ mod tests {
                     mod_api::Command::new("typed repeat <value:player> <value:integer>"),
                     mod_api::Command::new("typed at <pos:vec3>"),
                     mod_api::Command::op("protected <who:player>", 4),
-                ]);
-            }
-            fn run_mod_command(
-                &self,
-                _: &mut dyn mod_api::ServerHost,
-                event: &mut mod_api::RunModCommandEvent<'_>,
-            ) -> mod_api::Flow {
-                self.record(
-                    matches!(event.source, mod_api::CommandSource::Console { .. }),
-                    event.command,
-                );
-                mod_api::Flow::Cancel
+                ].map(|command| command.executes(record.clone())));
             }
         }
         let heard = Arc::new(Mutex::new(Vec::new()));
@@ -3940,25 +4089,23 @@ mod tests {
                 _: &mut dyn mod_api::ServerHost,
                 event: &mut mod_api::RegisterCommandsEvent<'_>,
             ) {
+                let heard = self.0.clone();
+                let execute = move |host: &mut dyn mod_api::ServerHost,
+                                    source: &CommandSource,
+                                    _: &mod_api::CommandInvocation| {
+                    heard.lock().unwrap().push(source.clone());
+                    host.commands()
+                        .feedback(mod_api::Text::literal("source answer"))
+                        .unwrap();
+                    Some(1)
+                };
                 event.commands.extend([
-                    mod_api::Command::new("origin"),
-                    mod_api::Command::op("denied", 4),
-                    mod_api::Command::new("unhandled"),
+                    mod_api::Command::new("origin").executes(execute.clone()),
+                    mod_api::Command::op("denied", 4).executes(execute),
+                    mod_api::Command::new("unhandled").executes(|_, _, _| None),
+                    // The selected executor's failure must not fall back to this usage.
+                    mod_api::Command::new("unhandled").executes(|_, _, _| Some(99)),
                 ]);
-            }
-            fn run_mod_command(
-                &self,
-                host: &mut dyn mod_api::ServerHost,
-                event: &mut mod_api::RunModCommandEvent<'_>,
-            ) -> mod_api::Flow {
-                if event.command.literals == ["unhandled"] {
-                    return mod_api::Flow::Continue;
-                }
-                self.0.lock().unwrap().push(event.source.clone());
-                host.commands()
-                    .feedback(mod_api::Text::literal("source answer"))
-                    .unwrap();
-                mod_api::Flow::Cancel
             }
         }
         let heard = Arc::new(Mutex::new(Vec::new()));
@@ -4042,21 +4189,22 @@ mod tests {
                 _: &mut dyn mod_api::ServerHost,
                 event: &mut mod_api::RegisterCommandsEvent<'_>,
             ) {
-                event.commands.extend([
-                    mod_api::Command::op("foo [value:integer]", 4),
-                    mod_api::Command::new("foo bar"),
-                    mod_api::Command::op("choice <a:integer>", 4),
-                    mod_api::Command::new("choice <a:integer> bar"),
-                    mod_api::Command::new("choice <b:word>"),
-                ]);
-            }
-            fn run_mod_command(
-                &self,
-                _: &mut dyn mod_api::ServerHost,
-                event: &mut mod_api::RunModCommandEvent<'_>,
-            ) -> mod_api::Flow {
-                self.0.lock().unwrap().push(event.command.clone());
-                mod_api::Flow::Cancel
+                event.commands.extend(
+                    [
+                        mod_api::Command::op("foo [value:integer]", 4),
+                        mod_api::Command::new("foo bar"),
+                        mod_api::Command::op("choice <a:integer>", 4),
+                        mod_api::Command::new("choice <a:integer> bar"),
+                        mod_api::Command::new("choice <b:word>"),
+                    ]
+                    .map(|command| {
+                        let heard = self.0.clone();
+                        command.executes(move |_, _, invocation| {
+                            heard.lock().unwrap().push(invocation.clone());
+                            Some(1)
+                        })
+                    }),
+                );
             }
         }
         let heard = Arc::new(Mutex::new(Vec::new()));
@@ -4200,31 +4348,48 @@ mod tests {
                 mod_api::Command::op("foo [value:integer]", 4),
                 mod_api::Command::op("foo", 2),
             ];
-            if reverse {
+            let (prefix_slot, argument_slot) = if reverse {
                 commands.reverse();
-            }
-            let (tree, _, problems) = tree(&commands);
-            assert!(problems.is_empty(), "{problems:?}");
+                (0, 1)
+            } else {
+                (1, 0)
+            };
+            commands.extend([
+                mod_api::Command::op("foo", 2), // The first accepted level-2 registration wins.
+                mod_api::Command::new("foo [value:word]"), // Rejected: parser conflict.
+            ]);
+            let arguments = HashMap::new();
+            let mut executors = HashMap::new();
+            let (tree, _, problems) = command_tree_for(
+                &commands,
+                |_| false,
+                &arguments,
+                false,
+                Some(&mut executors),
+            );
+            assert_eq!(problems.len(), 1, "{problems:?}");
             let mut dispatcher = Dispatcher::new();
-            register_dispatcher(
+            register_command_nodes(
                 &mut dispatcher,
                 &tree,
                 "native_mod_command",
-                &HashMap::new(),
+                &arguments,
+                Some(&executors),
             );
             for permission in 0..=4 {
                 let registries = sunrise_client::command::Registries {
                     permission,
                     ..Default::default()
                 };
-                assert_eq!(
-                    dispatcher.parse("foo", &registries).executable().is_ok(),
-                    permission >= 2
-                );
-                assert_eq!(
-                    dispatcher.parse("foo 7", &registries).executable().is_ok(),
-                    permission == 4
-                );
+                for (input, level, slot) in [("foo", 2, prefix_slot), ("foo 7", 4, argument_slot)] {
+                    let parsed = dispatcher.parse(input, &registries);
+                    if permission >= level {
+                        let (context, _) = parsed.executable().unwrap();
+                        assert_eq!(context.executor.unwrap().slot(), slot);
+                    } else {
+                        assert!(parsed.executable().is_err());
+                    }
+                }
             }
         }
     }

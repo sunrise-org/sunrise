@@ -72,17 +72,7 @@ fn matrix(mods: mod_api::Mods) {
                         }
                         game.refresh_client_pick(1.0);
                         game.swing = Default::default();
-                        let mut control = mod_api::ModBlockEntity::new(
-                            "prediction_fixture:prediction_control".into(),
-                            Default::default(),
-                        );
-                        control.data = vec![path, answer, i32::from(server_only)];
-                        game.native_block_entity_tick(
-                            &mut mod_api::BlockEntityTickReply::Changed,
-                            [0, 64, 0],
-                            &mut control,
-                        );
-                        assert!(control.data.is_empty());
+                        fixture::begin(path, answer, server_only);
                         let swings = game.swings_started;
                         sunrise_client::interaction_input::use_on_target(
                             &mut super::super::RemoteUseWorld(
@@ -90,11 +80,6 @@ fn matrix(mods: mod_api::Mods) {
                                 mod_api::InteractionAttempt::Press,
                             ),
                             path >= 3,
-                        );
-                        game.native_block_entity_tick(
-                            &mut mod_api::BlockEntityTickReply::Changed,
-                            [0, 64, 0],
-                            &mut control,
                         );
                         let stops = !server_only && (consumes || (path == 1 && answer == 4));
                         let packets = match (path, stops) {
@@ -106,7 +91,8 @@ fn matrix(mods: mod_api::Mods) {
                             (_, false) => [0, 2, 2],
                         };
                         assert_eq!(
-                            control.data, packets,
+                            fixture::finish(),
+                            packets,
                             "path={path} answer={answer} server_only={server_only}"
                         );
                         let placed = path == 1 && !stops;

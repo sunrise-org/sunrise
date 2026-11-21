@@ -15,8 +15,9 @@
 //! one real write, with its remesh, relight and logs, is at the root commit. A jukebox is
 //! told at the root commit from its record before and after, so a disc swapped in one
 //! transaction changes the song. A player's inventory (slots, armour, off hand, cursor) is kept
-//! whole on its first write, from wherever the player's state lives then: the local player's or
-//! a guest's, swapped in by `native_as_player`. An item a write drops from a player waits for
+//! whole on its first write, from wherever the player's state lives then: the acting fields
+//! or a parked guest's record. On abort, the journal follows that storage through guest turns.
+//! An item a write drops from a player waits for
 //! the root commit too. An item entity's stack is kept on its first write; one emptied stays,
 //! empty, until the root commit removes it. A guest's menu storage (ender chest, crafting grid,
 //! a mod's chest menu) is kept whole on its first write through a menu slot; a crafting grid
@@ -28,16 +29,18 @@
 //! An entity added inside one goes at an abort, one removed is only marked until the root
 //! commit, and mods hear of joins and leaves at the root commit (`transactions/entities.rs`).
 use super::{BlockEntity, BlockStateId, Game, machines::HopperState, maps::MapData};
-use mod_api::{Transaction, TransactionLifecycle, TransactionSeal};
+use mod_api::{LevelRef, Transaction, TransactionLifecycle, TransactionSeal};
 use std::collections::{BTreeMap, HashMap};
 use sunrise_client::{
     effects::EffectInstance,
     items::ItemStack,
+    lan::configuration_tasks::ConfigurationCompletion,
     living_attributes::ModifierChanges,
-    mobs::{Mob, StoredEffect, finalize::EffectModifierUndo},
+    mobs::{Mob, StoredEffect, finalize::EffectModifierUndo, gear::Gear},
     world::BlockEntityExtras,
 };
-use sunrise_core::position::BlockPos;
+use sunrise_core::{position::BlockPos, random::LegacyRandom};
+use sunrise_items::equipment::Equipment;
 use sunrise_mod_runtime::attachments::{Attachments, Holder};
 use sunrise_world::level::flags;
 
@@ -51,7 +54,7 @@ mod scratch;
 
 type Pos = (i32, i32, i32);
 /// The last pending value at this depth for a connection, menu generation and data index.
-type MenuDataJournal = BTreeMap<(u32, u64, u16), i32>;
+type MenuDataJournal = BTreeMap<(u32, u64, usize), i32>;
 type ComposterRandoms =
     HashMap<(mod_api::DimensionKey, (i32, i32)), HashMap<Pos, sunrise_core::random::LegacyRandom>>;
 
@@ -61,6 +64,8 @@ type ComposterRandoms =
 pub(super) struct OpenTransactions {
     levels: Vec<Level>,
     closing: Option<TransactionLifecycle>,
+    /// Root completions, including those from transactions committed by its listeners.
+    closing_configuration_completions: Vec<ConfigurationCompletion>,
     /// How many writes the journals have been asked to keep, ever: a whole-state epoch that no
     /// restore moves back. A decision that read a player's inventory or a container's slots
     /// compares it before and after its listeners ran; an equal rewrite counts as a write.
@@ -82,6 +87,12 @@ pub(super) struct OpenTransactions {
 }
 
 impl OpenTransactions {
+    fn player_write(&mut self) -> Option<&mut Level> {
+        self.player_writes = self.player_writes.wrapping_add(1);
+        self.writes = self.writes.wrapping_add(1);
+        self.last_mut()
+    }
+
     pub(super) fn journal_modifier_changes(&mut self, id: u32, changes: ModifierChanges) {
         if let Some(level) = self.last_mut() {
             level.modifier_changes.entry(id).or_default().merge(changes);
@@ -100,6 +111,29 @@ impl OpenTransactions {
             {
                 kept.keep_explicit_write(attribute, id);
             }
+        }
+    }
+
+    /// Keep a resident row just before its first write, without relinquishing the loan.
+    pub(in crate::game) fn journal_block_entity_loan(
+        &mut self,
+        pos: Pos,
+        loan: &sunrise_client::block_entities::BlockEntityLoan<'_>,
+        chunks: &sunrise_client::chunk_map::ChunkMap,
+        name: Option<&sunrise_core::nbt::Tag>,
+        hopper: Option<HopperState>,
+    ) {
+        self.writes = self.writes.wrapping_add(1);
+        if let Some(level) = self.last_mut() {
+            level.block_entities.entry(pos).or_insert_with(|| Kept {
+                entity: Some(BlockEntity::Mod(Box::new(loan.entity.clone()))),
+                generation: Some(loan.identity.generation),
+                attachments: loan.attachments.cloned(),
+                hopper,
+                name: name.cloned(),
+                extras: BlockEntityExtras::capture(chunks, pos),
+                contents_watches: loan.contents_watches.snapshot(loan.identity),
+            });
         }
     }
 
@@ -133,11 +167,18 @@ impl std::ops::DerefMut for OpenTransactions {
 struct ClosingPhase<'a, 'g> {
     game: &'a mut Game<'g>,
     outer: Option<TransactionLifecycle>,
+    keep_completions: usize,
 }
 
 impl Drop for ClosingPhase<'_, '_> {
     fn drop(&mut self) {
         self.game.transactions.closing = self.outer;
+        // An abort or unwind discards the completions this close added, even if a listener
+        // catches the panic and the enclosing root close continues.
+        self.game
+            .transactions
+            .closing_configuration_completions
+            .truncate(self.keep_completions);
     }
 }
 
@@ -188,16 +229,18 @@ pub(super) struct Level {
     slots: HashMap<(Pos, usize), KeptSlot>,
     /// Each block's original state and the combined update flags of its writes.
     blocks: HashMap<Pos, KeptBlock>,
-    /// Level.random before the first transactional level write drew from it.
-    level_random: Option<sunrise_core::random::LegacyRandom>,
+    /// Level.random in this frame's own dimension before its first draw.
+    level_random: Option<LegacyRandom>,
+    /// Other levels drawn from at this depth. Only those draws allocate a map entry.
+    parked_level_randoms: HashMap<LevelRef, LegacyRandom>,
     /// Composter-local random streams before this depth first evaluated their layers.
     composter_randoms: ComposterRandoms,
     /// Each quart cell before this transaction first wrote it.
     biomes: HashMap<Pos, u16>,
-    /// Each player's inventory before this transaction first wrote it, by UUID.
-    players: HashMap<u128, KeptPlayer>,
+    /// Each player's inventory and saved data before this transaction first wrote them.
+    players: HashMap<JournaledPlayer, KeptPlayer>,
     /// Ender storage has one journal shared by player and menu writes.
-    ender_items: HashMap<u128, Vec<Option<ItemStack>>>,
+    ender_items: HashMap<JournaledPlayer, Vec<Option<ItemStack>>>,
     /// Synced player health and its unpublished update events before set_health.
     player_health: HashMap<u128, KeptPlayerHealth>,
     /// Mob health and synchronization dirtiness before set_health.
@@ -256,6 +299,8 @@ pub(super) struct Level {
     pub(in crate::game) trades: super::lan_trade_decisions::Journal,
     pub(in crate::game) packets: Option<sunrise_client::lan::conn::transaction_packets::Scope>,
     captured_packets: Vec<sunrise_client::lan::conn::transaction_packets::Packets>,
+    /// Configuration advances only once the root has published every deferred send.
+    configuration_completions: Vec<ConfigurationCompletion>,
     action: Option<decision::ActiveAction>,
     /// The scratch stacks (`ItemPlace::Scratch`), live: kept by the outermost transaction only.
     scratch: HashMap<u64, scratch::Scratch>,
@@ -346,21 +391,37 @@ struct KeptMobEffects {
     dirty: bool,
 }
 
+/// Storage identity, not a public player handle. Fake players in different levels
+/// can share a UUID; their hub connections still distinguish their records.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum JournaledPlayer {
+    Local(u128),
+    Guest(u32),
+}
+
+enum PlayerStorageHome {
+    Game,
+    Guest(usize),
+}
+
 #[derive(Clone)]
 struct KeptPlayer {
     player_extra: Option<sunrise_core::nbt::Tag>,
     inventory: Vec<Option<ItemStack>>,
     armor: [Option<ItemStack>; 4],
     offhand: Option<ItemStack>,
-    equipment: sunrise_items::equipment::Equipment,
+    equipment: Equipment,
     carried: Option<ItemStack>,
 }
 
-/// A mob's or an armor stand's equipment as a transaction first wrote it
-/// (#932): the same eight slots, restored their own way.
+/// The raw slots before the first write, with a mob's separate gear overlay.
+/// Projecting the slots here would bake the overlay into the resident stacks.
 enum KeptEquipment {
-    Mob(Vec<Option<ItemStack>>),
-    Stand(Vec<Option<ItemStack>>),
+    Mob {
+        slots: Box<Equipment>,
+        gear: Option<Box<Gear>>,
+    },
+    Stand(Box<Equipment>),
 }
 
 struct KeptClick {
@@ -499,10 +560,60 @@ fn frame_token() -> u64 {
 }
 
 impl Level {
+    /// Keep the first snapshot for this stream. `None` names the frame's own level.
+    pub(super) fn keep_level_random(
+        &mut self,
+        owner: Option<LevelRef>,
+        before: impl FnOnce() -> LegacyRandom,
+    ) {
+        match owner {
+            Some(level) if self.dimension.map(super::Dim::key) != Some(level.dimension()) => {
+                self.parked_level_randoms
+                    .entry(level)
+                    .or_insert_with(before);
+            }
+            _ => {
+                self.level_random.get_or_insert_with(before);
+            }
+        }
+    }
+
+    fn keep_player(
+        &mut self,
+        owner: JournaledPlayer,
+        ender_items: &[Option<ItemStack>],
+        capture: impl FnOnce() -> KeptPlayer,
+    ) {
+        self.ender_items
+            .entry(owner)
+            .or_insert_with(|| ender_items.to_vec());
+        self.players.entry(owner).or_insert_with(capture);
+    }
+
     /// Keeps chested mob `id`'s item list's length, `len`, before `entity_slots` grows it, if
     /// this transaction hasn't yet.
     pub(super) fn keep_mob_length(&mut self, id: u32, len: usize) {
         self.mob_lengths.entry(id).or_insert(len);
+    }
+
+    /// Keep a resolved equipment row at its first write in this transaction.
+    /// `mob_gear` is absent for a stand; a mob's overlay may itself be absent.
+    pub(super) fn keep_equipment(
+        &mut self,
+        id: u32,
+        equipment: &Equipment,
+        mob_gear: Option<&Option<Box<Gear>>>,
+    ) {
+        self.equipment.entry(id).or_insert_with(|| {
+            let slots = Box::new(equipment.clone());
+            match mob_gear {
+                Some(gear) => KeptEquipment::Mob {
+                    slots,
+                    gear: gear.clone(),
+                },
+                None => KeptEquipment::Stand(slots),
+            }
+        });
     }
 }
 
@@ -522,9 +633,6 @@ impl Game<'_> {
     }
     /// Opens a transaction and gives back its write and close tokens.
     fn open_storage_transaction(&mut self) -> (u64, u64) {
-        if let Some(scope) = &mut self.block_entity_tick_items {
-            scope.open_transaction();
-        }
         let (token, close_token) = (frame_token(), frame_token());
         if self.transactions.is_empty() {
             self.world.block_entities.defer_retirement();
@@ -540,9 +648,6 @@ impl Game<'_> {
         });
         #[cfg(test)]
         self.trace_storage_attempt("open".into());
-        if let Some(key) = &mut self.block_entity_tick_key {
-            key.unbalanced = true;
-        }
         (token, close_token)
     }
     /// Closes the transaction `seal` ends, first aborting every one opened inside it and left
@@ -586,6 +691,37 @@ impl Game<'_> {
         let level = self.transactions.last()?;
         Some(mod_api::__private::transaction_of(level.token))
     }
+    /// Stage completion on the current frame, or on the callback's own frame even if it
+    /// left a child open. A missing frame never publishes anything.
+    pub(in crate::game) fn journal_configuration_completion(
+        &mut self,
+        seal: Option<&TransactionSeal>,
+        completion: ConfigurationCompletion,
+    ) -> bool {
+        let frame = match seal {
+            Some(seal) => self.transaction_frame_for_seal(seal),
+            None => self.transactions.last_mut(),
+        };
+        let Some(frame) = frame else {
+            return false;
+        };
+        frame.configuration_completions.push(completion);
+        true
+    }
+    /// Discard this handler's completions without rolling back its other committed effects.
+    /// Any children it abandoned will be aborted by `transaction_close`.
+    pub(in crate::game) fn discard_configuration_completions(&mut self, seal: &TransactionSeal) {
+        if let Some(frame) = self.transaction_frame_for_seal(seal) {
+            frame.configuration_completions.clear();
+        }
+    }
+    fn transaction_frame_for_seal(&mut self, seal: &TransactionSeal) -> Option<&mut Level> {
+        let (token, close) = mod_api::__private::seal_tokens(seal);
+        self.transactions
+            .iter_mut()
+            .rev()
+            .find(|level| level.token == token && level.close_token == close)
+    }
     /// `transaction_depth`: how deeply `tx` is nested, 0 for the outermost.
     pub(in crate::game) fn transaction_depth(&self, tx: &Transaction) -> Option<u32> {
         let named = mod_api::__private::transaction_token(tx);
@@ -614,21 +750,42 @@ impl Game<'_> {
         // The root's own close, not one a root-commit listener opened: what the transactions
         // removed is final now, so it retires (`defer_retirement`).
         let root = self.transactions.is_empty() && outer.is_none();
-        let guard = ClosingPhase { game: self, outer };
+        let keep_completions = self.transactions.closing_configuration_completions.len();
+        let mut guard = ClosingPhase {
+            game: self,
+            outer,
+            keep_completions,
+        };
         #[cfg(test)]
         guard
             .game
             .trace_storage_attempt(if commit { "commit" } else { "abort" }.into());
+        let commit = commit
+            && !(level.packets.is_some()
+                && sunrise_client::lan::conn::transaction_packets::Scope::refused());
         guard.game.close_level(level, commit);
         if root {
             guard.game.world.block_entities.publish_retirement();
+            if commit {
+                for completion in guard
+                    .game
+                    .transactions
+                    .closing_configuration_completions
+                    .drain(..)
+                {
+                    completion.publish();
+                }
+            }
+        } else if commit {
+            guard.keep_completions = guard
+                .game
+                .transactions
+                .closing_configuration_completions
+                .len();
         }
     }
     /// What closing `level` does, with the closing phase already set.
     fn close_level(&mut self, mut level: Level, commit: bool) {
-        let commit = commit
-            && !(level.packets.is_some()
-                && sunrise_client::lan::conn::transaction_packets::Scope::refused());
         if let Some(scope) = level.packets.take()
             && commit
             && let Some(packets) = scope.finish()
@@ -640,17 +797,26 @@ impl Game<'_> {
             merchant_corrections.append(&mut level.trades.correct_on_abort);
         }
         let departed = std::mem::take(&mut level.departed);
-        if let Some(scope) = &mut self.block_entity_tick_items {
-            scope.close_transaction(commit);
-        }
-        if let Some(key) = &mut self.block_entity_tick_key {
-            key.unbalanced = self.transactions.len() != key.transaction_depth;
-        }
         debug_assert_eq!(
             level.dimension,
             Some(self.dim),
             "transaction closed in a different level"
         );
+        // A nested operation can briefly put another dimension in place. Its inline snapshot
+        // belongs to that stream, not to the parent's in-place slot.
+        let child_random_owner = if commit
+            && level.level_random.is_some()
+            && self
+                .transactions
+                .last()
+                .is_some_and(|outer| outer.dimension != level.dimension)
+        {
+            self.native_lifecycle
+                .epoch()
+                .map(|epoch| self.level_ref(epoch, self.dim.key()))
+        } else {
+            None
+        };
         let lifetimes = std::mem::take(&mut level.lifetimes);
         match (commit, self.transactions.last_mut()) {
             (true, Some(outer)) => {
@@ -681,8 +847,15 @@ impl Game<'_> {
                         })
                         .or_insert(block);
                 }
-                if outer.level_random.is_none() {
-                    outer.level_random = level.level_random;
+                if let Some(before) = level.level_random {
+                    if outer.dimension == level.dimension {
+                        outer.keep_level_random(None, || before);
+                    } else if let Some(owner) = child_random_owner {
+                        outer.keep_level_random(Some(owner), || before);
+                    }
+                }
+                for (owner, before) in level.parked_level_randoms {
+                    outer.keep_level_random(Some(owner), || before);
                 }
                 for (chunk, randoms) in level.composter_randoms {
                     let kept = outer.composter_randoms.entry(chunk).or_default();
@@ -693,8 +866,8 @@ impl Game<'_> {
                 for (pos, biome) in level.biomes {
                     outer.biomes.entry(pos).or_insert(biome);
                 }
-                for (uuid, kept) in level.players {
-                    outer.players.entry(uuid).or_insert(kept);
+                for (owner, kept) in level.players {
+                    outer.players.entry(owner).or_insert(kept);
                 }
                 for (uuid, kept) in level.player_health {
                     outer.player_health.entry(uuid).or_insert(kept);
@@ -730,8 +903,8 @@ impl Game<'_> {
                 for (id, len) in level.mob_lengths {
                     outer.mob_lengths.entry(id).or_insert(len);
                 }
-                for (uuid, kept) in level.ender_items {
-                    outer.ender_items.entry(uuid).or_insert(kept);
+                for (owner, kept) in level.ender_items {
+                    outer.ender_items.entry(owner).or_insert(kept);
                 }
                 for (conn, kept) in level.menus {
                     outer.menus.entry(conn).or_insert(kept);
@@ -744,6 +917,9 @@ impl Game<'_> {
                 }
                 outer.menu_data.extend(level.menu_data);
                 outer.captured_packets.extend(level.captured_packets);
+                outer
+                    .configuration_completions
+                    .extend(level.configuration_completions);
                 for (holder, kept) in level.attachments {
                     outer.attachments.entry(holder).or_insert(kept);
                 }
@@ -773,6 +949,9 @@ impl Game<'_> {
                 }
             }
             (true, None) => {
+                self.transactions
+                    .closing_configuration_completions
+                    .append(&mut level.configuration_completions);
                 // The commit is in place before the effects run: a join one causes (a placed
                 // item's leftover spawning) never announces what the transaction added and removed.
                 self.commit_entity_journal(lifetimes, |game| game.root_commit(level));
@@ -1004,19 +1183,16 @@ impl Game<'_> {
             level.attachments.insert(holder, kept);
         }
     }
-    /// Keeps the inventory of the player whose state is in `Game` now, `uuid`, as it is, if a
-    /// transaction is open and hasn't yet. Called inside `native_as_player`.
+    /// Keeps the inventory of `uuid`, whose state is acting in `Game` now, on its first
+    /// write in the open frame.
     pub(super) fn journal_player(&mut self, uuid: u128) {
-        self.transactions.player_writes = self.transactions.player_writes.wrapping_add(1);
-        self.transactions.writes = self.transactions.writes.wrapping_add(1);
-        let Some(level) = self.transactions.last_mut() else {
+        let Some(level) = self.transactions.player_write() else {
             return;
         };
-        level
-            .ender_items
-            .entry(uuid)
-            .or_insert_with(|| self.ender_items.clone());
-        level.players.entry(uuid).or_insert_with(|| KeptPlayer {
+        let owner = self
+            .lan_acting
+            .map_or(JournaledPlayer::Local(uuid), JournaledPlayer::Guest);
+        level.keep_player(owner, &self.ender_items, || KeptPlayer {
             player_extra: self.level.player_extra.clone(),
             inventory: self.inventory.clone(),
             armor: self.armor.clone(),
@@ -1024,6 +1200,51 @@ impl Game<'_> {
             equipment: self.equipment.clone(),
             carried: self.carried.clone(),
         });
+    }
+    /// The same journal for a player resolved to their own parked record at `index`.
+    pub(super) fn journal_parked_player(&mut self, index: usize) {
+        let Some(level) = self.transactions.player_write() else {
+            return;
+        };
+        let guest = &self.lan.as_ref().expect("resolved guest").hub.guests[index];
+        level.keep_player(
+            JournaledPlayer::Guest(guest.conn),
+            &guest.ender_items,
+            || KeptPlayer {
+                player_extra: guest.saved.clone(),
+                inventory: guest.inventory.clone(),
+                armor: guest.armor.clone(),
+                offhand: guest.offhand.clone(),
+                equipment: guest.equipment.clone(),
+                carried: guest.carried.clone(),
+            },
+        );
+    }
+
+    /// Follow the actual storage, even when public handles cannot resolve the player.
+    /// Each outstanding swap holds the immediately preceding actor in the inner guest's row.
+    fn player_storage_home(&self, owner: JournaledPlayer) -> Option<PlayerStorageHome> {
+        let parked_in = match owner {
+            JournaledPlayer::Local(uuid) => {
+                let local = self
+                    .level
+                    .player_uuid
+                    .map(sunrise_client::lan::playerdata::ints_uuid);
+                if local != Some(uuid) {
+                    return None;
+                }
+                self.lan_guest_swaps.first().copied()
+            }
+            JournaledPlayer::Guest(conn) => self
+                .lan_guest_swaps
+                .iter()
+                .position(|&swapped| swapped == conn)
+                .map_or(Some(conn), |i| self.lan_guest_swaps.get(i + 1).copied()),
+        };
+        match parked_in {
+            Some(conn) => self.guest_index(conn).map(PlayerStorageHome::Guest),
+            None => Some(PlayerStorageHome::Game),
+        }
     }
     /// Called with the target player's body swapped in, before set_health changes it.
     pub(super) fn journal_player_health(&mut self) {
@@ -1142,8 +1363,8 @@ impl Game<'_> {
         if grid.is_none() && native.is_none() {
             return;
         }
-        let uuid = player.uuid();
-        let ender = (!level.ender_items.contains_key(&uuid)).then(|| {
+        let owner = JournaledPlayer::Guest(conn);
+        let ender = (!level.ender_items.contains_key(&owner)).then(|| {
             if self.lan_acting == Some(conn) {
                 self.ender_items.clone()
             } else {
@@ -1158,7 +1379,7 @@ impl Game<'_> {
                 level.native_menu_slots.insert(generation, slots);
             }
             if let Some(ender) = ender {
-                level.ender_items.insert(uuid, ender);
+                level.ender_items.insert(owner, ender);
             }
         }
     }
@@ -1224,15 +1445,11 @@ impl Game<'_> {
         if level.equipment.contains_key(&id) {
             return;
         }
-        let mob = || self.mobs.iter().find(|m| m.id == id && !m.removed);
-        let kept = if let Some(mob) = mob() {
-            KeptEquipment::Mob(mob.equipment_stacks().iter().cloned().collect())
+        if let Some(mob) = self.mobs.iter().find(|m| m.id == id && !m.removed) {
+            level.keep_equipment(id, &mob.extra.equipment, Some(&mob.extra.gear));
         } else if let Some(stand) = self.armor_stands.iter().find(|a| a.id == id) {
-            KeptEquipment::Stand(stand.equipment.iter().cloned().collect())
-        } else {
-            return;
-        };
-        level.equipment.insert(id, kept);
+            level.keep_equipment(id, &stand.equipment, None);
+        }
     }
     /// `drop_plain` by the player whose state is in `Game` now, `uuid`: at once, or at the root
     /// commit inside a transaction.
@@ -1296,15 +1513,27 @@ impl Game<'_> {
             block.replay_removal = true;
         }
     }
-    pub(super) fn journal_set_level_random(&mut self, random: sunrise_core::random::LegacyRandom) {
-        self.journal_level_random();
-        *self.world.random = random;
-    }
     pub(super) fn journal_level_random(&mut self) {
-        if let Some(level) = self.transactions.last_mut() {
-            level
-                .level_random
-                .get_or_insert_with(|| (*self.world.random).clone());
+        self.journal_active_level_random(LegacyRandom::clone);
+    }
+
+    /// Keep an engine or restricted-writer draw from the stream currently in place.
+    pub(super) fn journal_active_level_random(
+        &mut self,
+        before: impl FnOnce(&LegacyRandom) -> LegacyRandom,
+    ) {
+        let owner = match self.transactions.last() {
+            None => return,
+            Some(frame) if frame.dimension == Some(self.dim) => None,
+            Some(_) => {
+                let Some(epoch) = self.native_lifecycle.epoch() else {
+                    return;
+                };
+                Some(self.level_ref(epoch, self.dim.key()))
+            }
+        };
+        if let Some(frame) = self.transactions.last_mut() {
+            frame.keep_level_random(owner, || before(&self.world.random));
         }
     }
     pub(super) fn journal_orb_merge(
@@ -1514,14 +1743,18 @@ impl Game<'_> {
             }
         }
     }
-    pub(in crate::game) fn pending_menu_data(&self, key: (u32, u64, u16)) -> Option<i32> {
+    pub(in crate::game) fn pending_menu_data(&self, key: (u32, u64, usize)) -> Option<i32> {
         self.transactions
             .iter()
             .rev()
             .find_map(|level| level.menu_data.get(&key).copied())
     }
 
-    pub(in crate::game) fn journal_menu_data(&mut self, key: (u32, u64, u16), value: i32) -> bool {
+    pub(in crate::game) fn journal_menu_data(
+        &mut self,
+        key: (u32, u64, usize),
+        value: i32,
+    ) -> bool {
         let Some(level) = self.transactions.last_mut() else {
             return false;
         };
@@ -1657,22 +1890,15 @@ impl Game<'_> {
         let equipment = std::mem::take(&mut level.equipment);
         for (id, kept) in equipment {
             match kept {
-                KeptEquipment::Mob(stacks) => {
-                    let Some(mob) = self.mobs.iter_mut().find(|m| m.id == id && !m.removed) else {
-                        continue;
-                    };
-                    for (slot, stack) in stacks.into_iter().enumerate() {
-                        mob.set_equipment_stack(slot, stack);
+                KeptEquipment::Mob { slots, gear } => {
+                    if let Some(mob) = self.mobs.iter_mut().find(|m| m.id == id && !m.removed) {
+                        mob.extra.equipment = *slots;
+                        mob.extra.gear = gear;
                     }
                 }
-                // An armor stand keeps no live attribute map of its gear; the
-                // plain write puts its slots back as they were.
-                KeptEquipment::Stand(stacks) => {
-                    let Some(stand) = self.armor_stands.iter_mut().find(|a| a.id == id) else {
-                        continue;
-                    };
-                    for (slot, stack) in stacks.into_iter().enumerate() {
-                        stand.equipment.set(slot, stack);
+                KeptEquipment::Stand(slots) => {
+                    if let Some(stand) = self.armor_stands.iter_mut().find(|a| a.id == id) {
+                        stand.equipment = *slots;
                     }
                 }
             }
@@ -1785,6 +2011,11 @@ impl Game<'_> {
         }
         if let Some(random) = level.level_random {
             *self.world.random = random;
+        }
+        for (owner, before) in level.parked_level_randoms {
+            if let Some(random) = self.level_random_mut(owner) {
+                *random = before;
+            }
         }
         // The shapes are back: the neighbours that read them (a fluid beside it) are told, as
         // the publish told them.
@@ -1955,28 +2186,39 @@ impl Game<'_> {
             self.score.board.restore(saved);
             self.sync_score_registries();
         }
-        for (uuid, kept) in level.ender_items {
-            if self.native_acting_id() == uuid {
-                self.ender_items = kept;
-            } else if let Some(host) = self.lan.as_mut()
-                && let Some(index) = host
-                    .hub
-                    .guests
-                    .iter()
-                    .position(|g| g.placed && g.uuid == uuid)
-            {
-                host.hub.guests.update(index, |g| g.ender_items = kept);
+        for (owner, kept) in level.ender_items {
+            match self.player_storage_home(owner) {
+                Some(PlayerStorageHome::Game) => self.ender_items = kept,
+                Some(PlayerStorageHome::Guest(index)) => {
+                    let host = self.lan.as_mut().expect("resolved guest");
+                    host.hub.guests.update(index, |g| g.ender_items = kept);
+                }
+                None => {}
             }
         }
-        for (uuid, kept) in level.players {
-            self.native_as_player(uuid, |g| {
-                g.level.player_extra = kept.player_extra;
-                g.inventory = kept.inventory;
-                g.armor = kept.armor;
-                g.offhand = kept.offhand;
-                g.equipment = kept.equipment;
-                g.carried = kept.carried;
-            });
+        for (owner, kept) in level.players {
+            match self.player_storage_home(owner) {
+                Some(PlayerStorageHome::Game) => {
+                    self.level.player_extra = kept.player_extra;
+                    self.inventory = kept.inventory;
+                    self.armor = kept.armor;
+                    self.offhand = kept.offhand;
+                    self.equipment = kept.equipment;
+                    self.carried = kept.carried;
+                }
+                Some(PlayerStorageHome::Guest(index)) => {
+                    let host = self.lan.as_mut().expect("resolved guest");
+                    host.hub.guests.update(index, |g| {
+                        g.saved = kept.player_extra;
+                        g.inventory = kept.inventory;
+                        g.armor = kept.armor;
+                        g.offhand = kept.offhand;
+                        g.equipment = kept.equipment;
+                        g.carried = kept.carried;
+                    });
+                }
+                None => {}
+            }
         }
     }
 }
@@ -2037,7 +2279,7 @@ mod tests {
                 };
                 self.seen.lock().unwrap().push((
                     level.block_state(host, [2, 64, 2]),
-                    hand.stack(host).map(|s| {
+                    hand.with_stack(host, |s| {
                         mod_api::__private::item_key_id(s.item())
                             .unwrap()
                             .to_string()
@@ -2046,11 +2288,10 @@ mod tests {
                 Flow::Cancel
             }
             fn item_toss(&self, host: &mut dyn ServerHost, event: &mut ItemTossEvent) -> Flow {
-                let potion = event.item.stack(host).is_some_and(|stack| {
-                    mod_api::__private::item_key_id(stack.item())
-                        .is_some_and(|id| id == "minecraft:potion")
+                let potion = event.item.with_stack(host, |stack| {
+                    mod_api::__private::item_key_id(stack.item()) == Some("minecraft:potion")
                 });
-                if potion {
+                if potion == Some(true) {
                     let level = host.level("minecraft:overworld").unwrap();
                     self.drops
                         .lock()
@@ -2947,7 +3188,7 @@ mod tests {
                 entity: id,
                 slot: 0,
             };
-            assert!(place.stack(host).is_none());
+            assert!(place.with_stack(host, |_| ()).is_none());
             assert_eq!(place.insert(host, tx, &stick, 1), 1);
             Err::<(), ()>(())
         });
@@ -2962,7 +3203,7 @@ mod tests {
         let result = host.transaction(|host, _| {
             host.transaction(|host, _| {
                 host.transaction(|host, tx| {
-                    assert!(place.stack(host).is_none());
+                    assert!(place.with_stack(host, |_| ()).is_none());
                     assert_eq!(place.insert(host, tx, &stick, 1), 1);
                     Ok::<_, ()>(())
                 })?;
@@ -2989,21 +3230,20 @@ mod tests {
             });
             let host: &mut dyn ServerHost = &mut game;
             assert_eq!(
-                place(0).stack(host),
+                place(0).with_stack(host, |stack| stack.project()).flatten(),
                 Some(sticks(5).try_into_api().unwrap()),
                 "{kind}"
             );
-            assert_eq!(place(1).stack(host), None, "{kind}");
+            assert_eq!(place(1).with_stack(host, |_| ()), None, "{kind}");
             let _ = host.transaction(|host, tx| Ok::<_, ()>(place(0).exchange(host, tx, &rod, 1)));
             let host: &mut dyn ServerHost = &mut game;
             assert_eq!(
-                place(0).stack(host),
+                place(0).with_stack(host, |stack| stack.project()).flatten(),
                 Some(sticks(4).try_into_api().unwrap()),
                 "{kind}"
             );
-            let rod = place(1)
-                .stack(host)
-                .map(|s| mod_api::__private::item_key_id(s.item()).unwrap());
+            let rod =
+                place(1).with_stack(host, |s| mod_api::__private::item_key_id(s.item()).unwrap());
             assert_eq!(rod, Some("minecraft:blaze_rod"), "{kind}");
         }
 
@@ -3018,14 +3258,20 @@ mod tests {
         let host: &mut dyn ServerHost = &mut game;
         let _ = host.transaction(|host, tx| {
             assert_eq!(entity.extract(host, tx, &stick, 4), 4);
-            assert!(entity.stack(host).is_none());
+            assert!(entity.with_stack(host, |_| ()).is_none());
             Err::<(), ()>(())
         });
         let host: &mut dyn ServerHost = &mut game;
-        assert_eq!(entity.stack(host), Some(sticks(4).try_into_api().unwrap()));
+        assert_eq!(
+            entity.with_stack(host, |stack| stack.project()).flatten(),
+            Some(sticks(4).try_into_api().unwrap())
+        );
         let _ = host.transaction(|host, tx| Ok::<_, ()>(entity.exchange(host, tx, &rod, 1)));
         let host: &mut dyn ServerHost = &mut game;
-        assert_eq!(entity.stack(host), Some(sticks(3).try_into_api().unwrap()));
+        assert_eq!(
+            entity.with_stack(host, |stack| stack.project()).flatten(),
+            Some(sticks(3).try_into_api().unwrap())
+        );
         assert_eq!(count(&game), items + 1);
         let host: &mut dyn ServerHost = &mut game;
         let _ = host.transaction(|host, tx| Ok::<_, ()>(entity.extract(host, tx, &stick, 3)));

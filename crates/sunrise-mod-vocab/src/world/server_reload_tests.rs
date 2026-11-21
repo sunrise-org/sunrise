@@ -9,46 +9,44 @@ fn files() -> FileToIdConverter {
 #[test]
 fn registry_views_and_explicit_order_before_vanilla() {
     let mut listeners = ServerListenerRegistry::new();
-    let first = Arc::new(Boundary);
-    let second = Arc::new(Boundary);
+    let [first, functions, last, mod_first, mod_second] = [
+        "minecraft:first",
+        "minecraft:function_library",
+        "minecraft:last",
+        "test_mod:first",
+        "test_mod:second",
+    ]
+    .map(id);
     listeners
-        .add_listener(id("test_mod:first"), files(), first.clone())
+        .add_listener(mod_first.clone(), files(), Arc::new(Boundary))
         .unwrap();
     listeners
-        .add_listener(id("test_mod:second"), files(), second.clone())
+        .add_listener(mod_second.clone(), files(), Arc::new(Boundary))
         .unwrap();
-    assert_eq!(
-        listeners.get_last_vanilla_listener(),
-        VanillaServerListeners::functions()
-    );
-    assert_eq!(
-        listeners.get_registry(),
-        [
-            VanillaServerListeners::first(),
-            VanillaServerListeners::functions(),
-            VanillaServerListeners::last(),
-            id("test_mod:first"),
-            id("test_mod:second"),
-        ]
-    );
+    assert_eq!(listeners.get_last_vanilla_listener(), &functions);
+    assert!(listeners.get_registry().iter().eq([
+        &first,
+        &functions,
+        &last,
+        &mod_first,
+        &mod_second,
+    ]));
     listeners
-        .add_dependency(id("test_mod:second"), VanillaServerListeners::functions())
+        .add_dependency(mod_second.clone(), functions.clone())
         .unwrap();
-    assert!(
-        listeners
-            .get_graph()
-            .contains(&(id("test_mod:second"), VanillaServerListeners::functions()))
-    );
+    assert!(listeners.get_graph().iter().eq([
+        (&first, &functions),
+        (&functions, &last),
+        (&first, &mod_first),
+        (&mod_first, &last),
+        (&first, &mod_second),
+        (&mod_second, &last),
+        (&mod_second, &functions),
+    ]));
     let sorted = listeners.finish().unwrap().listeners;
     assert_eq!(
         sorted.into_iter().map(|entry| entry.id).collect::<Vec<_>>(),
-        [
-            VanillaServerListeners::first(),
-            id("test_mod:second"),
-            VanillaServerListeners::functions(),
-            id("test_mod:first"),
-            VanillaServerListeners::last(),
-        ]
+        [first, mod_second, functions, mod_first, last]
     );
 }
 
@@ -92,8 +90,8 @@ fn retained_listeners_read_back_typed_from_the_resources() {
         fn prepare(
             &self,
             _: &ServerReloadContext,
-        ) -> Result<Box<dyn ReloadApply>, ReloadResourceError> {
-            Ok(<dyn ReloadApply>::new(|| {}))
+        ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
+            Ok(Box::new(|| {}))
         }
     }
     let mut listeners = ServerListenerRegistry::new();

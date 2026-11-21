@@ -7,10 +7,12 @@ pub trait Hooks {
     /// owner's own `panel_search` reaching its box, on the first frame that
     /// draws it, with no player edit. Act on it when it is yours.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_panel_event",
+        dispatch = "flat",
         side = "client",
         version = 2,
         contract = "listen",
         neoforge = "none (Sunrise-only; NeoForge has no counterpart)"
     )]
-    fn panel_event();
+    fn panel_event(mod_id: &str, event: &PanelEvent);
 }

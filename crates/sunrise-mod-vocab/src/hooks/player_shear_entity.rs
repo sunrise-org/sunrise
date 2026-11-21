@@ -9,11 +9,19 @@ pub trait Hooks {
     /// stack keeps its item and count; if not, the click is spent and nothing is
     /// sheared.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_player_shear_entity",
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "cancel",
         neoforge = "none (NeoForge has no such event; Bukkit's PlayerShearEntityEvent)",
         cancellable = true
     )]
-    fn player_shear_entity();
+    fn player_shear_entity(
+        player: u128,
+        name: &str,
+        entity_id: i32,
+        off_hand: bool,
+        cancel: &mut bool,
+    );
 }

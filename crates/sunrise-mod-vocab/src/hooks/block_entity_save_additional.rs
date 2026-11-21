@@ -5,10 +5,11 @@ pub trait Hooks {
     /// (`BlockEntity.saveAdditional`). Edits affect only the output; the entity,
     /// its inventory, identity, position, and engine-managed attachments and
     /// shapes are not changed. Parts of the entity's type run in dispatch order.
-    /// For a type without a declared container, `tag` holds the persisted `Items`,
-    /// modelled stacks included, and the listener may replace or remove that field:
-    /// its edit is what is saved. A declared container's slots are engine-owned
-    /// inventory, serialized by the engine after the listeners run.
+    /// For a holder without declared inventory slots, `tag` holds any persisted
+    /// `Items` as mod-owned NBT. Canonical-looking item rows keep their saved list
+    /// order; they are not reconstructed in slot order. The listener may replace or
+    /// remove this field. Declared slots remain engine-owned inventory, serialized
+    /// by the engine after the listeners run.
     /// `event.pos` and `event.level` are the instance's own `worldPosition` and level, read-only and
     /// filled by the engine, so a listener can find its live state by dimension and position, including
     /// during unload or a removed block's loot roll. Every call has a level: the hook is not asked
@@ -27,6 +28,8 @@ pub trait Hooks {
     /// This is not the one-time attachment notice `block_entity_on_load`, nor
     /// the client sync payload `block_entity_update_tag`.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         event_per_listener = true,
@@ -34,7 +37,13 @@ pub trait Hooks {
         key = "id",
         target = "sunrise_client::game::native_hooks::block_entity_save_additional::GameLevel<'_>::native_block_entity_save_additional",
         neoforge = "none (vanilla BlockEntity.saveAdditional; NeoForge adds no event for this moment)",
-        version = 3
+        version = 4
     )]
-    fn block_entity_save_additional();
+    fn block_entity_save_additional(
+        id: mod_api::BlockEntityTypeKey,
+        entity: BlockEntityRef,
+        pos: [i32; 3],
+        level: LevelRef,
+        tag: &mut Compound,
+    );
 }

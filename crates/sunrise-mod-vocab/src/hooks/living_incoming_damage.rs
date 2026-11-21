@@ -26,6 +26,7 @@ pub trait Hooks {
     /// attachments, level sounds, and the own random of the entities the hit lends; the hurt entity
     /// is in the middle of its hit.
     #[hook(
+        dispatch = "api_carrier",
         side = "server",
         contract = "cancel",
         out = "canceled",

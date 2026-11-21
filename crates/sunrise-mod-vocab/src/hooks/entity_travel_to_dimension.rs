@@ -25,11 +25,17 @@ pub trait Hooks {
     /// from upstream: replaces `player_portal`, which covered only server
     /// players through portals.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "cancel",
         neoforge = "EntityTravelToDimensionEvent",
         cancellable = true
     )]
-    fn entity_travel_to_dimension();
+    fn entity_travel_to_dimension(
+        entity: EntityRef,
+        dimension: &str,
+        cause: &str,
+        cancel: &mut bool,
+    );
 }

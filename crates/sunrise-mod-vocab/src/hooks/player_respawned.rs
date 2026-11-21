@@ -15,6 +15,8 @@ pub trait Hooks {
     /// when no chunks had to load. Not for the End exit, which isn't a respawn
     /// here (as for `player_respawned`). Server-side.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_player_respawn_position",
+        dispatch = "api_carrier",
         side = "server",
         contract = "listen",
         neoforge = "PlayerRespawnPositionEvent"
@@ -35,9 +37,11 @@ pub trait Hooks {
     /// food and experience reset, with their state swapped in. Once for each
     /// death that ends in a respawn, on a server; not for the End-exit one.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_player_respawned",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "PlayerEvent.PlayerRespawnEvent"
     )]
-    fn player_respawned();
+    fn player_respawned(player: u128, name: &str);
 }

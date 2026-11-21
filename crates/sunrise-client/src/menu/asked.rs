@@ -1,12 +1,10 @@
-//! The slot rules one click was answered: `menu_slot_rules` is asked once for each slot, stack
-//! and set of the slot's own answers while a click plans, and the click's later steps
-//! (`tryRemove`, `allowModification`, a quick move a mod left to the game) reuse that answer, so
-//! the server and the client's prediction ask the same number of times.
-use super::*;
+//! Reuse slot-rule answers during a click, including across continuations and a quick move a
+//! mod left to the game. The slot, stack, own answers and staged reads must still match.
+use super::{slot_context::SlotReads, *};
 use std::cell::RefCell;
 
-/// A question to the rules: the menu slot, the stack and the slot's own answers.
-type Question = (usize, ItemStack, (bool, bool, u32));
+/// A question to the rules: the menu slot, the stack, the slot's own answers and staged reads.
+type Question = (usize, ItemStack, (bool, bool, u32), SlotReads);
 
 /// What one click was answered by `menu_slot_rules`: `mayPlace`, `mayPickup` and the maximum
 /// for each question it asked.
@@ -45,7 +43,7 @@ impl Menu {
     }
 
     /// `click`, starting from the answers `asked` the server got for this click before it
-    /// reached the menu (the pickup rule `menu_quick_move` is preceded by): not asked again.
+    /// reached the menu (the pickup rule `menu_quick_move` is preceded by), reused while valid.
     pub fn click_asked(
         &mut self,
         env: &Env,
@@ -80,8 +78,7 @@ impl Menu {
     }
 
     /// `apply_menu_slot_rules` for menu slot `s` of menu type `id`: during a click, asked once
-    /// for each stack and set of the slot's own answers (`own`), then answered from the click's
-    /// record.
+    /// for each stack and set of the slot's own answers (`own`) while the staged reads match.
     pub(super) fn ask_slot_rules(
         &self,
         env: &Env,
@@ -92,32 +89,27 @@ impl Menu {
         item_max: u32,
     ) -> (bool, bool, u32) {
         let index = self.state.slots[s].index;
-        let ask = || {
-            apply_menu_slot_rules(
-                env.slot_rules,
-                id,
-                index,
-                stack,
-                self.slot_context(env, s),
-                own,
-                item_max,
-            )
+        let context = self.slot_context(env, s);
+        let ask = |context: SlotContext<'_>| {
+            apply_menu_slot_rules(env.slot_rules, id, index, stack, context, own, item_max)
         };
         let known = self.planning.0.borrow().as_ref().map(|asked| {
             asked
                 .0
                 .iter()
-                .find(|((slot, held, mine), _)| *slot == s && held == stack && *mine == own)
+                .find(|((slot, held, mine, reads), _)| {
+                    *slot == s && held == stack && *mine == own && reads.matches(context)
+                })
                 .map(|(_, answer)| *answer)
         });
         match known {
-            None => ask(),
+            None => ask(context),
             Some(Some(answer)) => answer,
             // Not held across the ask: the rules may read other menus.
             Some(None) => {
-                let answer = ask();
+                let (answer, reads) = context.record(ask);
                 if let Some(asked) = self.planning.0.borrow_mut().as_mut() {
-                    asked.0.push(((s, stack.clone(), own), answer));
+                    asked.0.push(((s, stack.clone(), own, reads), answer));
                 }
                 answer
             }

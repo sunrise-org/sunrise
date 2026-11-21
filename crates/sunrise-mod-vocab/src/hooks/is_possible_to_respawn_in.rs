@@ -10,6 +10,8 @@ pub trait Hooks {
     /// answer; the host is read-only. This does not choose a bed or anchor's
     /// stand-up position (see `respawn_position`).
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "server",
         contract = "replace",
         scope = "block",
@@ -18,5 +20,5 @@ pub trait Hooks {
         host = "read",
         neoforge = "none (vanilla Block.isPossibleToRespawnInThis)"
     )]
-    fn is_possible_to_respawn_in();
+    fn is_possible_to_respawn_in(state: BlockState, answer: &mut Option<bool>);
 }

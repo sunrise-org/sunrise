@@ -1,0 +1,11 @@
+ids = [
+    "hook:menu_slot_rules",
+    "hook:menu_slot_rules.context",
+    "type:MenuSlotRulesEvent.context",
+    "type:MenuSlotContext",
+    "type:MenuSlotContext.slots",
+    "handle:MenuSlotContext::new",
+    "handle:MenuSlotContext::slot",
+]
+why = "Slot rules now read the click planner's staged slots on demand instead of receiving a copied matrix. The planner can ask again when a slot the rule read changes, and validation and apply replay the stored answers. The hook moves from version 5 to 6."
+migrate = "Replace `event.context.slots[container as usize][index].as_ref()` with `event.context.slot(container, index)`. `slot` now returns `Option<ItemStack>`: drop `.cloned()` on that result, or use `.as_ref()` on a locally bound result when you need `Option<&ItemStack>`. Keep the same container and backing index, including result slot 0; `Player` still returns `None`. Name the context as `MenuSlotContext<'_>` and retain only the stacks or metadata you need, not the context; it is no longer an owned, cloneable or Wire value. If you construct it in tests, replace `MenuSlotContext::new(player, pos, slots)` with `MenuSlotContext::new(player, pos, &read)` using a closure `read(MenuContainer, usize) -> Option<ItemStack>`; for an empty context, use `MenuSlotContext::new(None, None, &|_, _| None)` instead of `default()`. The `MenuPart::menu_slot_rules` listener signature is unchanged."

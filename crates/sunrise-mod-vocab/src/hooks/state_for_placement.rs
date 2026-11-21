@@ -58,6 +58,8 @@ block requires creative operator permission. If the selected block spans cells, 
 before returning it: `setPlacedBy` does not recheck its companion cell.
 "##]
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "both",
         version = 3,
         contract = "replace",
@@ -67,5 +69,11 @@ before returning it: `setPlacedBy` does not recheck its companion cell.
         target = "sunrise_client::game::native_hooks::base::LevelView<'_>::native_state_for_placement",
         neoforge = "none (vanilla Block.getStateForPlacement; NeoForge adds no event or extension for it)"
     )]
-    fn state_for_placement();
+    fn state_for_placement(
+        dimension: LevelDimension,
+        state: BlockState,
+        context: &PlacementContext,
+        fluid: mod_api::FluidState,
+        answer: &mut Option<Option<BlockState>>,
+    );
 }

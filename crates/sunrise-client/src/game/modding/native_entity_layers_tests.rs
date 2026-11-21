@@ -7,7 +7,7 @@ use super::entity_type_rows::EntityTypeRows;
 use super::native_entity_layers::LayerRegistration;
 use mod_api::{
     BlockEntityDrawContext, EntityLayers, EntityRenderLayer, EntityRenderState, EntityRenderer,
-    LayerTarget, PlayerModel, PosedParts,
+    FrameModel, LayerTarget, PlayerModel,
 };
 use std::{
     collections::BTreeMap,
@@ -65,7 +65,7 @@ impl EntityRenderLayer for Raised {
     fn submit(
         &self,
         entity: &EntityRenderState,
-        _: Option<&PosedParts>,
+        _: Option<&dyn FrameModel>,
         draw: &mut dyn BlockEntityDrawContext,
     ) -> Result<(), String> {
         let call = self.calls.fetch_add(1, Ordering::Relaxed);
@@ -300,7 +300,7 @@ fn a_living_type_draws_its_layers_in_the_order_they_were_added() {
 }
 
 /// The one lookup a mob gets a frame finds its own type's or player model's layers and nothing for a
-/// type without: what decides whether the draw keeps its posed parts, and what draws over it.
+/// type without: what decides whether the draw keeps its final model, and what draws over it.
 #[test]
 #[ignore = "daily"]
 fn a_mob_looks_up_only_its_own_types_or_models_layers() {

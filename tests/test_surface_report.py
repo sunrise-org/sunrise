@@ -155,30 +155,28 @@ echo '{{}}' > "$3"
                                                with_internals=with_internals, own_base_tool=own)
             return code, text, (work / "calls").read_text()
 
-    def test_a_base_the_head_tool_cannot_read_is_exported_by_the_bases_own_tool(self):
-        code, text, calls = self.run_report(base_export=1, own_export=0)
+    def test_the_bases_own_export_is_augmented_with_the_heads_catalog_reader(self):
+        code, text, calls = self.run_report(own_export=0, with_internals=True)
         self.assertEqual(code, 0)
-        self.assertTrue(text.startswith("The base was exported by its own sunrise-stage: the head's sunrise-stage "
-                                        "cannot read the base tree (sunrise-stage surface: unknown key `access`).\n"),
-                        text)
+        self.assertIn("The base was exported by its own sunrise-stage.\n", text)
         self.assertIn("Surface: report\n", text)
         own, catalogs = (next(call.split() for call in calls.splitlines() if call.startswith(prefix))
                          for prefix in ("own ", "surface-catalogs "))
         self.assertEqual(own[:2], ["own", "surface"])
-        self.assertEqual(own[2:], catalogs[1:])
+        self.assertEqual(catalogs[1:], [*own[2:], "--with-internals"])
         self.assertLess(calls.index("surface-catalogs "), calls.index("surface-diff "))
 
-    def test_a_base_neither_tool_can_read_fails_naming_both(self):
-        code, text, calls = self.run_report(base_export=1, own_export=1)
+    def test_an_unreadable_base_fails_naming_the_selected_exporter(self):
+        code, text, calls = self.run_report(own_export=1)
         self.assertEqual(code, 1)
-        self.assertEqual(text, "No surface report: the head's sunrise-stage cannot read the base tree "
-                               "(sunrise-stage surface: unknown key `access`), nor can the base's own "
+        self.assertEqual(text, "No surface report: the base's own sunrise-stage could not export its tree "
                                "(sunrise-stage surface: base.rs: older form).\n")
         self.assertNotIn("surface-diff", calls)
-        # With no base tool to fall back on, the unreadable base fails too.
-        code, text, _ = self.run_report(base_export=1)
+        code, text, calls = self.run_report(base_export=1)
         self.assertEqual(code, 1)
-        self.assertTrue(text.startswith("No surface report: the head's sunrise-stage cannot read the base tree"), text)
+        self.assertEqual(text, "No surface report: the head's sunrise-stage cannot read the base tree "
+                               "(sunrise-stage surface: unknown key `access`).\n")
+        self.assertNotIn("surface-diff", calls)
 
     def test_a_base_surface_of_another_schema_fails_with_one_line(self):
         code, text, _ = self.run_report(diff_exit=2, diff_err="surface schema 1, this tool reads 2")
@@ -202,8 +200,6 @@ echo '{{}}' > "$3"
 
             def export(command, **_kwargs):
                 tool, action, root, path, *flags = command
-                if root == str(base) and tool != "old-tool":
-                    return subprocess.CompletedProcess(command, 1, "", "unsupported old source")
                 if action == "surface-catalogs":
                     self.assertEqual(Path(root), work / "schema-reset")
                     self.assertEqual(json.loads(Path(path).read_text())["hash"], "checkpoint-hash")
@@ -212,21 +208,23 @@ echo '{{}}' > "$3"
                     return subprocess.CompletedProcess(command, 0, "", "")
                 self.assertEqual(flags, ["--with-loops"] if root == str(head) else [])
                 schema, digest = {
-                    "old": (2, "old-hash"),
-                    "new": (3, "some-new-change"),
-                    "schema-reset": (3, "checkpoint-hash"),
-                }[Path(root).name]
+                    ("old", "old-tool"): (2, "old-hash"),
+                    ("new", "stage"): (3, "some-new-change"),
+                    ("schema-reset", "checkpoint-tool"): (3, "checkpoint-hash"),
+                }[(Path(root).name, tool)]
                 Path(path).write_text(json.dumps({"schema": schema, "hash": digest}))
                 return subprocess.CompletedProcess(command, 0, "", "")
 
             with (mock.patch.object(surface_report.subprocess, "run", side_effect=export),
                   mock.patch.object(surface_report, "unpack") as unpack,
+                  mock.patch.object(surface_report, "tree_tool", return_value="checkpoint-tool") as tree_tool,
                   mock.patch.object(surface_report, "compare", return_value=(1, "later change refused")) as compare):
                 code, text = surface_report.report("stage", base, head, work, True, own_base_tool=lambda: "old-tool")
                 self.assertEqual(code, 1)
                 self.assertIn("Audited schema 2 → 3 reset", text)
                 self.assertIn("later change refused", text)
-                unpack.assert_called_once_with("checked", work / "schema-reset")
+                unpack.assert_called_once_with("checked", work / "schema-reset", ())
+                tree_tool.assert_called_once_with(work / "schema-reset", work)
                 self.assertEqual(compare.call_args.args[1:5], (work / "schema-reset", head, work, True))
                 self.assertEqual(json.loads((work / "base.json").read_text())["hash"], "checkpoint-with-loops")
 
@@ -419,52 +417,43 @@ class MainTests(unittest.TestCase):
         self.assertTrue(report.call_args.kwargs["with_internals"])
         find_base.assert_not_called()
 
-    @unittest.skipUnless(shutil.which("bash"), "needs bash for the stub tools")
-    def test_local_audit_builds_the_bases_own_tool_only_when_asked(self):
-        def audit(folder, *flags, readable=False):
-            """--trees on stub tools; the diff records which exports it compared. Each tree holds a marker file the
-            exporters read, so the diff shows which tree each export came from."""
-            for tree in ("base", "head"):
-                (folder / tree).mkdir(exist_ok=True)
-                (folder / tree / "marker").write_text(tree)
-            head_tool, own_tool = folder / "head-stage", folder / "own-stage"
-            refuse = "" if readable else 'case "$2" in */base) exit 1;; esac'
-            head_tool.write_text(f"""#!/bin/bash
-if [ "$1" = surface ]; then {refuse}
-  echo "{{\\"by\\": \\"head:$(cat "$2/marker")\\"}}" > "$3"; exit 0
-fi
-[ "$1" = surface-catalogs ] && exit 0
-cat "$2" "$3" > {folder}/compared
-""")
-            own_tool.write_text("""#!/bin/bash
-echo "{\\"by\\": \\"own:$(cat "$2/marker")\\"}" > "$3"
-""")
-            head_tool.chmod(0o755)
-            own_tool.chmod(0o755)
-            built = []
+    def local_audit(self, *flags, readable=True):
+        compared = []
 
-            def tree_tool(tree, work):
-                built.append(tree)
-                return str(own_tool)
+        def stage(command, **_):
+            tool, action, first, second, *_ = command
+            if action == "surface":
+                if not readable and (tool, first) == ("head-stage", "before"):
+                    return subprocess.CompletedProcess(command, 1, "", "unsupported older source")
+                # Both tools can read the same source but generate different records for it.
+                Path(second).write_text(json.dumps({"tree": first, "wire": tool == "base-stage"}))
+            elif action == "surface-diff":
+                compared.extend(json.loads(Path(path).read_text()) for path in (first, second))
+            return subprocess.CompletedProcess(command, 0, "", "")
 
-            code, _, _ = self.run_main(argv=["--trees", str(folder / "base"), str(folder / "head"), *flags],
-                                       tool=str(head_tool), tree_tool=tree_tool)
-            compared = folder / "compared"
-            exports = [json.loads(line)["by"] for line in compared.read_text().splitlines()] if compared.exists() else []
-            return code, built, exports
+        tree_tool = mock.Mock(return_value="base-stage")
+        with mock.patch.object(surface_report.subprocess, "run", side_effect=stage):
+            code, out, _ = self.run_main(argv=["--trees", "before", "after", *flags], tool="head-stage",
+                                         tree_tool=tree_tool)
+        return code, out, tree_tool, compared
 
-        cases = [
-            # Source only by default: nothing of the base's is built, and no diff runs.
-            ((), False, lambda folder: (1, [], [])),
-            # Asked to, BASE's own tool exports BASE, and the diff compares that export with HEAD's.
-            (("--build-base-tool",), False, lambda folder: (0, [folder / "base"], ["own:base", "head:head"])),
-            # A base the head's tool reads needs nothing built, flag or not.
-            (("--build-base-tool",), True, lambda folder: (0, [], ["head:base", "head:head"])),
-        ]
-        for flags, readable, expected in cases:
-            with self.subTest(flags=flags, readable=readable), tempfile.TemporaryDirectory() as directory:
-                folder = Path(directory)
-                self.assertEqual(audit(folder, *flags, readable=readable), expected(folder))
+    def test_local_audit_does_not_build_without_opt_in(self):
+        code, out, tree_tool, compared = self.local_audit()
+        self.assertEqual(code, 0, out)
+        tree_tool.assert_not_called()
+        self.assertEqual(compared, [{"tree": "before", "wire": False}, {"tree": "after", "wire": False}])
+        code, out, tree_tool, compared = self.local_audit(readable=False)
+        self.assertEqual(code, 1, out)
+        self.assertIn("unsupported older source", out)
+        tree_tool.assert_not_called()
+        self.assertEqual(compared, [])
+
+    def test_requested_base_tool_preserves_the_record_even_if_the_head_can_export_the_base(self):
+        code, out, tree_tool, compared = self.local_audit("--build-base-tool")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(compared, [{"tree": "before", "wire": True}, {"tree": "after", "wire": False}])
+        tree_tool.assert_called_once()
+        self.assertEqual(tree_tool.call_args.args[0], Path("before"))
 
     @unittest.skipUnless(shutil.which("bash"), "needs bash for the stub tools")
     def test_a_commit_both_comparisons_need_is_built_once(self):
@@ -473,10 +462,9 @@ echo "{\\"by\\": \\"own:$(cat "$2/marker")\\"}" > "$3"
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
             head_tool, own_tool = folder / "head-stage", folder / "own-stage"
-            # The head's tool refuses every fetched tree (they all hold a marker); the own tool reads the marker.
+            # The head's tool succeeds on the base, but produces the checkout's record instead of the base's.
             head_tool.write_text(f"""#!/bin/bash
 if [ "$1" = surface ]; then
-  [ -f "$2/marker" ] && exit 1
   echo '{{"by": "checkout"}}' > "$3"; exit 0
 fi
 [ "$1" = surface-catalogs ] && exit 0

@@ -9,14 +9,15 @@ This script reads source text only (no build) and fails on:
    that does not define the one item it is named after (its own impls and `use` lines may sit beside it); a name with
    a file in both folders; and a `shared.rs` that defines stand-ins in `mod stubs` (only `use` lines stay there) or
    has a `mod api` again.
-2. A type named in a hook's signature (`crates/sunrise-mod-vocab/src/hooks/*.rs`) that no dispatch-test fixture
-   defines or re-exports.
+2. A type named in a generated dispatch signature (`crates/sunrise-mod-vocab/src/hooks/*.rs`) that no
+   dispatch-test fixture defines or re-exports. Raw render hooks do not generate dispatch, and `#[engine]`
+   parameters are not part of the listener signature.
 
 Known false negatives (these still surface only in the rollup's build):
 - names the generator introduces rather than the hook signature: `Answered<T>` from `answered_by`, an `out =`
-  output type such as `StandaloneModelForm`, `BlockEntityTickReply` from tick dispatch;
-- a derive or a method the generated dispatch needs on an existing stub (`#[derive(Clone)]`,
-  `__begin_tick_listener`), and a stand-in whose shape (fields, variants, generics) no longer fits;
+  output type such as `StandaloneModelRegistration`;
+- a derive or a method the generated dispatch needs on an existing stub, and a stand-in whose shape
+  (fields, variants, generics) no longer fits;
 - names are matched by their last segment: a stand-in, trait or impl target is one name across the files read, so
   two different types of the same name in different modules count as one;
 - the source scanner does not nest block comments: `/* a /* b */ c */` ends at the first `*/`, and its tail is
@@ -39,7 +40,8 @@ FOLDERS = ("stubs", "api")
 HOOKS = "crates/sunrise-mod-vocab/src/hooks"
 # Names a hook signature may use without a fixture: the prelude, std and generic placeholders the generator keeps.
 STD = {"Option", "Some", "None", "Vec", "String", "Box", "Result", "Ok", "Err", "Arc", "Rc", "Self", "HashMap",
-       "BTreeMap", "HashSet", "BTreeSet", "Cow", "Duration", "PhantomData", "Fn", "FnMut", "FnOnce", "Send", "Sync"}
+       "BTreeMap", "HashSet", "BTreeSet", "Cow", "Duration", "Path", "PhantomData", "Fn", "FnMut", "FnOnce", "Send",
+       "Sync"}
 NAMED = re.compile(r"\b(struct|enum|trait|type|union|fn|mod|const|static)\s+([A-Za-z_]\w*)")
 
 
@@ -202,19 +204,31 @@ def check_fixture_files(root):
 
 
 HOOK = re.compile(r"#\[hook\((?:[^()]|\([^()]*\))*\)\]\s*fn\s+(\w+)\s*(<[^>]*>)?\s*\(")
+TARGET = re.compile(r'\btarget\s*=\s*(?:r#*)?"')
+ENGINE = re.compile(r"\s*#\[\s*engine\s*\]")
 
 
 def signature(text, start):
-    """The parameters and return type of the fn whose `(` is at `start - 1`: up to its body or `;`."""
+    """The listener parameters and return type of the fn whose `(` is at `start - 1`."""
+    parts = []
+    in_parameters = True
     depth = 1
     for i in range(start, len(text)):
-        if text[i] in ";{" and depth == 0:
-            return text[start:i]
-        if text[i] in "([<{":
+        char = text[i]
+        if char in ";{" and depth == 0:
+            break
+        if in_parameters and char in ",)" and depth == 1:
+            if not ENGINE.match(text, start):
+                parts.append(text[start:i])
+            start = i + 1
+            in_parameters = char == ","
+        if char in "([<{":
             depth += 1
-        elif text[i] in ")]>}" and not (text[i] == ">" and text[i - 1] == "-"):
+        elif char in ")]>}" and not (char == ">" and text[i - 1] == "-"):
             depth -= 1
-    return text[start:]
+    else:
+        i = len(text)
+    return " ".join([*parts, text[start:i]])
 
 
 def check_hook_types(root):
@@ -223,15 +237,21 @@ def check_hook_types(root):
     for path in fixtures.rglob("*.rs"):
         known |= defined_names(strip(path.read_text()))
     hook_files = sorted((root / HOOKS).glob("*.rs"))
-    texts = {path: strip(path.read_text()) for path in hook_files}
-    for text in texts.values():
+    texts = {}
+    for path in hook_files:
+        source = path.read_text()
+        text = strip(source)
+        texts[path] = source, text
         known |= {m.group(2) for m in NAMED.finditer(text)}
-    if not any(HOOK.search(text) for text in texts.values()):
+    if not any(HOOK.search(text) for _, text in texts.values()):
         return [f"{HOOKS}: no `#[hook(...)] fn` found; the hook-signature check would check nothing. If the "
                 "declaration form changed, update tools/hotspots/check_stand_ins.py."]
     missing = {}
-    for path, text in texts.items():
+    for path, (source, text) in texts.items():
         for match in HOOK.finditer(text):
+            target = TARGET.search(text, match.start(), match.end())
+            if target and source.startswith("mod_render::render::", target.end()):
+                continue
             generics = set(re.findall(r"\b([A-Z]\w*)", match.group(2) or ""))
             for name in re.findall(r"\b([A-Z]\w*)", signature(text, match.end())):
                 if name not in known and name not in generics:

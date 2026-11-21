@@ -18,6 +18,7 @@ pub trait Hooks {
     /// not recheck block state or entity liveness. Server checks and item-specific
     /// rays (including buckets and brushes) are unchanged. No NeoForge 26.3 counterpart.
     #[hook(
+        dispatch = "api_carrier",
         side = "client",
         version = 2,
         contract = "collect",

@@ -102,3 +102,18 @@ time, so the same seed gives the same result on a slow machine and a fast one.
 
 Resolve block states once per placement, or keep the `BlockKey`s from registration, rather than
 resolving names for every block.
+
+## Choosing a tree decorator's ground
+
+`alter_ground` (NeoForge's `AlterGroundEvent`) lets a mod replace the ground provider of an
+`AlterGroundDecorator`, such as the one that puts podzol under a spruce. To change only some
+placements, wrap the `event.provider` you found and delegate the other positions to it with
+`wrapped.state_at(level, pos)`.
+
+A `GroundStateProvider::state_at` returns `Option<BlockState>`. `GroundLevel::block_state(pos)`
+reads the region's canonical `BlockState`, and `GroundLevel::decorator_state(pos)` asks the
+decorator's own provider for an `Option<BlockState>`. Compare or return those values directly;
+for a fixed replacement, capture a state resolved through `host.block_state_id(name)` during
+setup. There is no game `Host` in the provider. `None` tries the next position down; a state the
+placing registry does not have stops the feature. Use `level.random()` for any draws so they stay
+in order with the decorator's own.

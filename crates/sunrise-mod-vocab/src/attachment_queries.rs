@@ -11,6 +11,7 @@ pub trait AttachmentQueries: Host {
     /// Later changes appear only in fresh queries. This is a residency view: an
     /// entity removed but not yet swept may still appear; stale writes fail.
     /// Construction never clones or decodes values; iteration decodes lazily.
+    /// Use this snapshot in process; it is not an attachment save or sync record.
     fn query<'key, T: Send + Sync + 'static>(
         &self,
         key: &'key AttachmentType<T>,
@@ -37,7 +38,7 @@ pub trait AttachmentQueriesMut: ServerHost {
 }
 impl<H: ServerHost + ?Sized> AttachmentQueriesMut for H {}
 
-// no wire: borrowed runtime attachment rows retain storage lifetimes and write authority.
+// no wire: retains a native snapshot and a borrowed attachment key.
 /// A server write-through snapshot. Values and membership remain captured.
 #[non_exhaustive]
 pub struct AttachmentQueryMut<'key, T: 'static> {

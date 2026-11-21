@@ -1,5 +1,6 @@
 use super::*;
-use crate::game::api_values::TryIntoApi;
+use keybinds::VanillaMappingSlot;
+use mod_api::{MappingError, VanillaKeyMappingRef};
 
 /// Helpers for native mods, kept as stable as the hook points.
 // Native mods use these; nothing in Sunrise does.
@@ -21,53 +22,79 @@ impl Game<'_> {
     pub(in crate::game) fn modifiers(&self) -> ClientModifiers {
         ClientModifiers::new(crate::game::glfw_modifiers(self.modifiers))
     }
-    /// A vanilla mapping (`key.forward`, `key.jump`, `key.attack`…): whether
-    /// it is held (`KeyMapping.isDown`), and its key's name as Controls shows
-    /// it. None for a mapping it doesn't answer for.
-    pub(in crate::game) fn mapping(
+    pub(in crate::game) fn vanilla_key_mapping(
         &self,
         name: &str,
-    ) -> Result<Option<mod_api::KeyMapping>, mod_api::TextFormError> {
-        let Some(down) = self.mapping_held(name) else {
-            return Ok(None);
-        };
-        Ok(Some(mod_api::KeyMapping {
-            down,
-            label: keybinds::display_name(self.settings.keys.get(name)).try_into_api()?,
-        }))
-    }
-    /// `mapping` without its label: whether it is held, and a hash of the key it is bound to.
-    pub(in crate::game) fn mapping_state(&self, name: &str) -> Option<(bool, u64)> {
-        use std::hash::{Hash, Hasher};
-        let down = self.mapping_held(name)?;
-        let mut binding = std::collections::hash_map::DefaultHasher::new();
-        self.settings.keys.get(name).hash(&mut binding);
-        Some((down, binding.finish()))
-    }
-    /// Whether the key or mouse button the vanilla mapping `name` is bound to is physically down.
-    pub(in crate::game) fn mapping_physical_down(
-        &self,
-        name: &str,
-    ) -> Result<Option<bool>, mod_api::LevelReadError> {
-        // The mappings `mapping` and `mapping_state` answer for, and no others.
-        if self.mapping_held(name).is_none() {
-            return Ok(None);
+    ) -> Result<VanillaKeyMappingRef, MappingError> {
+        if !self.options.execution_role.is_client() {
+            return Err(MappingError::Unavailable);
         }
-        Ok(Some(self.is_key_down(self.settings.keys.get(name))))
+        let generation = self
+            .mod_keys
+            .client_generation()
+            .ok_or(MappingError::Unavailable)?;
+        let slot = VanillaMappingSlot::by_name(name)
+            .ok_or_else(|| MappingError::Unknown { key: name.into() })?;
+        Ok(mod_api::__private::vanilla_key_mapping_ref(
+            generation,
+            slot.index(),
+        ))
     }
-    /// Whether the vanilla mapping `name` is held, for `mapping` and `mapping_state`.
-    fn mapping_held(&self, name: &str) -> Option<bool> {
-        let &(_, key) = MAPPINGS.iter().find(|m| m.0 == name)?;
-        Some(match key {
-            Some(k) => self.movement_key_held(k),
-            // Attack and use read the logical mapping, not the physical mouse's state.
-            None => {
-                if name == "key.use" {
-                    self.right
-                } else {
-                    self.left
-                }
-            }
+
+    /// Validate an API mapping handle before using it to index the current bindings.
+    pub(in crate::game) fn vanilla_mapping_slot(
+        &self,
+        mapping: VanillaKeyMappingRef,
+    ) -> Result<VanillaMappingSlot, MappingError> {
+        if !self.options.execution_role.is_client() {
+            return Err(MappingError::Unavailable);
+        }
+        let (generation, index) = mod_api::__private::vanilla_key_mapping_parts(mapping);
+        if self.mod_keys.client_generation() != Some(generation) {
+            return Err(MappingError::Stale);
+        }
+        VanillaMappingSlot::from_index(index).ok_or(MappingError::Stale)
+    }
+
+    pub(in crate::game) fn vanilla_key_mapping_binding(
+        &self,
+        mapping: VanillaKeyMappingRef,
+    ) -> Result<&str, MappingError> {
+        let slot = self.vanilla_mapping_slot(mapping)?;
+        Ok(self.settings.keys.binding_at(slot))
+    }
+
+    pub(in crate::game) fn vanilla_key_mapping_is_down(
+        &self,
+        mapping: VanillaKeyMappingRef,
+    ) -> Result<bool, MappingError> {
+        let slot = self.vanilla_mapping_slot(mapping)?;
+        match (slot.definition().2, slot.default_input()) {
+            ("movement", Some(Ok(key))) => Ok(self.movement_key_held(key)),
+            ("gameplay", Some(Err(MouseButton::Left))) => Ok(self.left),
+            ("gameplay", Some(Err(MouseButton::Right))) => Ok(self.right),
+            _ => Err(MappingError::NoLogicalState),
+        }
+    }
+
+    pub(in crate::game) fn vanilla_key_mapping_physical_down(
+        &self,
+        mapping: VanillaKeyMappingRef,
+    ) -> Result<bool, MappingError> {
+        let slot = self.vanilla_mapping_slot(mapping)?;
+        Ok(match self.settings.keys.physical_at(slot) {
+            Some(Ok(key)) => self.physical_keys.contains(&key),
+            Some(Err(button)) => self.physical_buttons.contains(&button),
+            None => false,
         })
+    }
+
+    pub(in crate::game) fn vanilla_key_mapping_translated_key_message(
+        &self,
+        mapping: VanillaKeyMappingRef,
+    ) -> Result<Text, MappingError> {
+        Ok(keybinds::display_name(
+            self.vanilla_key_mapping_binding(mapping)?,
+        ))
     }
 }

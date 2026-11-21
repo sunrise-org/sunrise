@@ -1,16 +1,10 @@
-//! Windows executables' resources, shared by the build scripts of the game's executables
-//! (`crates/sunrise-client/build.rs`, `crates/sunrise-official/build.rs`, which include it with
-//! `#[path]`). Embeds Sunrise's icon (`packaging/icons/sunrise.ico`) as icon resource 1: Explorer
-//! and the task bar show it, and the window takes it as its icon. The optional Segment Heap
-//! manifest (`crates/sunrise-client/windows-segment-heap.manifest`, the package's
-//! `windows-segment-heap` feature) is embedded in the same resource compilation.
+//! Windows resources shared by the `sunrise-game` and `sunrise-official` build scripts.
+//! Embeds Sunrise's icon (`packaging/icons/sunrise.ico`) as icon resource 1: Explorer and the
+//! taskbar show it, and the window takes it as its icon. The `windows-segment-heap` feature also
+//! embeds `crates/sunrise-client/windows-segment-heap.manifest` in the same resource compilation.
 
-#[path = "../executable_link.rs"]
-pub mod executable_link;
-
-/// The resources and the stack size of the executable `bin` of the package being built; nothing
-/// for other targets than Windows.
-pub fn resources(bin: &str) {
+/// Embed the executable's resources on Windows; do nothing for other targets.
+pub fn resources() {
     let manifest_dir = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let ico = manifest_dir
         .join("../..")
@@ -18,22 +12,6 @@ pub fn resources(bin: &str) {
     let target_os =
         std::env::var("CARGO_CFG_TARGET_OS").expect("Cargo must provide the build target OS");
     println!("cargo:rerun-if-changed={}", ico.display());
-    println!(
-        "cargo:rerun-if-changed={}",
-        manifest_dir
-            .join("../../packaging/executable_link.rs")
-            .display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        manifest_dir
-            .join("../sunrise-guest-stack/src/guest_stack_constants.rs")
-            .display()
-    );
-    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
-    for arg in executable_link::arguments(&target_os, &target_env) {
-        println!("cargo:rustc-link-arg-bin={bin}={arg}");
-    }
     if target_os == "windows" {
         println!("cargo:rerun-if-env-changed=WINDRES");
         println!("cargo:rerun-if-env-changed=AR");

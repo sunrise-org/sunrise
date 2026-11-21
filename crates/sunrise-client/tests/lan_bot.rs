@@ -305,7 +305,7 @@ fn a_lan_guest_sees_the_signed_in_owners_skin() {
     let Some(resources) = resources() else {
         return;
     };
-    let textures = login::Property {
+    let textures = sunrise_core::profile::AccountProperty {
         name: "textures".into(),
         value: "e30=".into(),
         signature: Some("c2lnbmVk".into()),
@@ -430,7 +430,7 @@ fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
         }
     }
     for book_type in [-1, 4] {
-        let mut wire = sunrise_protocol::buf::Writer::new();
+        let mut wire = ::sunrise_core::vanilla_bytes::Writer::new();
         wire.varint(book_type);
         wire.bool(true);
         wire.bool(true);

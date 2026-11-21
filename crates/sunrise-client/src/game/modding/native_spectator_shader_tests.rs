@@ -19,12 +19,12 @@ impl Hooks for Vision {
         _: &RegistrationContext,
         event: &mut RegisterEntitySpectatorShadersEvent<'_>,
     ) {
-        event.shaders.push(EntitySpectatorShader {
+        event.register(EntitySpectatorShader {
             entity: "minecraft:cow".into(),
             shader: "example:cow_vision".into(),
         });
         // Vanilla's creeper registered first: this one is skipped.
-        event.shaders.push(EntitySpectatorShader {
+        event.register(EntitySpectatorShader {
             entity: "minecraft:creeper".into(),
             shader: "example:pink".into(),
         });

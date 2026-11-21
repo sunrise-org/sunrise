@@ -57,11 +57,13 @@ type is not registered, a mod pushes `Refuse`, a pick names a state the block la
 or a model id that doesn't read, or no state is picked. A file several packs provide binds each pack's
 layer on its own, as vanilla does: a refused layer leaves the states to the layers below it."#]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "client",
         contract = "collect",
         out = "definitions",
         context = "registration",
         neoforge = "RegisterBlockStateModels"
     )]
-    fn register_block_state_models();
+    fn register_block_state_models(definitions: &mut Vec<String>);
 }

@@ -25,17 +25,23 @@ struct Script {
     take_write: bool,
     take_cancel: bool,
     take_bad_xp: bool,
+    take_new_top: Option<u32>,
+    take_new_bottom: Option<u32>,
 }
 
 thread_local! {
     static SCRIPT: RefCell<Script> = RefCell::new(Script::default());
     static DISPATCHES: Cell<usize> = const { Cell::new(0) };
+    static PLACE_TOP_COUNT: Cell<Option<u32>> = const { Cell::new(None) };
+    static TAKE_TOP_COUNT: Cell<Option<u32>> = const { Cell::new(None) };
     static TAKE_XP: Cell<Option<i32>> = const { Cell::new(None) };
     static REPLACED: Cell<bool> = const { Cell::new(false) };
 }
 
 fn script(script: Script) {
     DISPATCHES.set(0);
+    PLACE_TOP_COUNT.set(None);
+    TAKE_TOP_COUNT.set(None);
     TAKE_XP.set(None);
     REPLACED.set(false);
     SCRIPT.with(|s| *s.borrow_mut() = script);
@@ -86,9 +92,10 @@ impl Hooks for Mod {
     fn grindstone_place(
         &self,
         host: &mut dyn ServerHost,
-        event: &mut GrindstonePlaceEvent,
+        event: &mut GrindstonePlaceEvent<'_>,
     ) -> mod_api::Flow {
         DISPATCHES.set(DISPATCHES.get() + 1);
+        PLACE_TOP_COUNT.set(event.inputs.top.map(mod_api::ItemStack::count));
         assert!(host.transaction_current().is_some());
         let s = SCRIPT.with(|s| s.borrow().clone());
         if s.replace_backing {
@@ -98,11 +105,11 @@ impl Hooks for Mod {
             write_dirt(host);
         }
         if s.place_output {
-            event.place.output = Some(dirt(1));
-            event.place.xp = 5;
+            event.edits.output = Some(dirt(1));
+            event.edits.xp = 5;
         }
         if s.place_bad_xp {
-            event.place.xp = -2;
+            event.edits.xp = -2;
         }
         if s.place_cancel {
             event.cancelled = true;
@@ -116,10 +123,11 @@ impl Hooks for Mod {
     fn grindstone_take(
         &self,
         host: &mut dyn ServerHost,
-        event: &mut GrindstoneTakeEvent,
+        event: &mut GrindstoneTakeEvent<'_>,
     ) -> mod_api::Flow {
         DISPATCHES.set(DISPATCHES.get() + 1);
-        TAKE_XP.set(Some(event.take.xp));
+        TAKE_TOP_COUNT.set(event.inputs.top.map(mod_api::ItemStack::count));
+        TAKE_XP.set(Some(event.edits.xp));
         assert!(host.transaction_current().is_some());
         let s = SCRIPT.with(|s| s.borrow().clone());
         if s.replace_backing {
@@ -128,8 +136,10 @@ impl Hooks for Mod {
         if s.take_write {
             write_dirt(host);
         }
+        event.edits.new_top = s.take_new_top.map(dirt);
+        event.edits.new_bottom = s.take_new_bottom.map(dirt);
         if s.take_bad_xp {
-            event.take.xp = -2;
+            event.edits.xp = -2;
         }
         if s.take_cancel {
             event.cancelled = true;
@@ -262,6 +272,44 @@ fn a_place_listener_sets_the_grindstone_result() {
                 game.lan.as_ref().unwrap().hub.guests[0].carried,
                 Some(ItemStack::new("minecraft:dirt", 1))
             );
+        });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_place_answer_does_not_validate_borrowed_inputs() {
+    with_mod(|| {
+        with_guests(|game| {
+            let window = open_grindstone(game);
+            let mut top = enchanted_sword(game, 200);
+            // Load a count above the sword's stack limit without the click's insertion rules.
+            top.count = 2;
+            let bottom = enchanted_sword(game, 150);
+            let host = game.lan.as_mut().unwrap();
+            host.menus
+                .get_mut(&12)
+                .unwrap()
+                .station
+                .as_mut()
+                .unwrap()
+                .menu
+                .load_slot(0, Some(top.clone()));
+            host.hub.guests.update(0, |g| {
+                g.carried = Some(bottom.clone());
+            });
+            script(Script {
+                place_output: true,
+                ..Script::default()
+            });
+
+            click(game, window, 1, 0);
+
+            assert_eq!(DISPATCHES.get(), 1);
+            assert_eq!(PLACE_TOP_COUNT.get(), Some(2));
+            assert_eq!(slot(game, 0), Some(top));
+            assert_eq!(slot(game, 1), Some(bottom));
+            assert_eq!(slot(game, 2), Some(ItemStack::new("minecraft:dirt", 1)));
         });
     });
 }
@@ -472,23 +520,89 @@ fn placed(game: &mut crate::game::Game<'_>) -> (i32, ItemStack) {
 
 #[test]
 #[ignore = "daily"]
+fn a_take_answer_validates_only_the_remainders() {
+    with_mod(|| {
+        with_guests(|game| {
+            let (window, mut top) = placed(game);
+            let bottom = enchanted_sword(game, 150);
+            // Model a resident stack that can be read but could not be written by a mod.
+            top.count = 2;
+            let menu = &mut game
+                .lan
+                .as_mut()
+                .unwrap()
+                .menus
+                .get_mut(&12)
+                .unwrap()
+                .station
+                .as_mut()
+                .unwrap()
+                .menu;
+            menu.load_slot(0, Some(top.clone()));
+            menu.load_slot(1, Some(bottom.clone()));
+            let result = Some(ItemStack::new("minecraft:dirt", 1));
+            assert_eq!(slot(game, 2), result);
+
+            script(Script {
+                take_new_top: Some(2),
+                take_new_bottom: Some(65), // Dirt stacks to 64.
+                take_cancel: true,         // An invalid remainder takes precedence.
+                ..Script::default()
+            });
+            click(game, window, 2, 0);
+            assert_eq!(TAKE_TOP_COUNT.get(), Some(2));
+            assert_eq!(slot(game, 0), Some(top));
+            assert_eq!(slot(game, 1), Some(bottom));
+            assert_eq!(slot(game, 2), result);
+            assert_eq!(game.lan.as_ref().unwrap().hub.guests[0].carried, None);
+            assert!(game.orbs.is_empty());
+
+            script(Script {
+                take_new_top: Some(2),
+                ..Script::default()
+            });
+            click(game, window, 2, 0);
+            assert_eq!(TAKE_TOP_COUNT.get(), Some(2));
+            assert_eq!(slot(game, 0), Some(ItemStack::new("minecraft:dirt", 2)));
+            assert_eq!(slot(game, 1), None);
+            assert_eq!(slot(game, 2), None);
+            assert_eq!(game.lan.as_ref().unwrap().hub.guests[0].carried, result);
+            assert_eq!(
+                game.orbs
+                    .iter()
+                    .map(|orb| orb.value as u32 * orb.count)
+                    .sum::<u32>(),
+                5
+            );
+            assert!(game.transactions.is_empty());
+        });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn a_cancelled_take_keeps_the_click_and_undoes_the_listener_write() {
     with_mod(|| {
         with_guests(|game| {
             let (window, original) = placed(game);
+            let events = game.lan_events.len();
             script(Script {
                 take_write: true,
                 take_cancel: true,
+                take_bad_xp: true,
+                take_new_top: Some(1),
                 ..Script::default()
             });
             click(game, window, 2, 0);
-            // The result is still taken and the inputs stay, but the listener's write is undone.
+            // The result is taken, but the remainders, XP, sound and listener writes are skipped.
             assert_eq!(
                 game.lan.as_ref().unwrap().hub.guests[0].carried,
                 Some(ItemStack::new("minecraft:dirt", 1))
             );
             assert_eq!(slot(game, 0), Some(original));
             assert_eq!(inventory(game, 20), 0);
+            assert!(game.orbs.is_empty());
+            assert_eq!(game.lan_events.len(), events);
             assert!(game.transactions.is_empty());
         });
     });

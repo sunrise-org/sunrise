@@ -20,11 +20,13 @@ pub trait Hooks {
 
 - **`container_loot_filled(context, drops)`**: Sunrise addition. Each block or chest vehicle fill exposes its rolled list before shuffle, splitting and placement. Each double-chest half fires separately. Replace, remove or add stacks; empty stacks disappear, oversized counts are trimmed to the effective maximum, and excess stacks that cannot fit are discarded. Context names the table, dimension, block position or entity id and block centre or entity position. Only a player open that initiates the fill names an opener; hopper, comparator, break, explosion and command accesses give None. Filled containers and block or mob drops do not fire it. The read-only level Host permits reads and only the list is writable. No API snapshots are built without listeners, and the roll and placement draws are unchanged. Invalid components retain the previous accepted list with the standard refusal warning."#]
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "server",
         contract = "collect",
         out = "drops",
         stack_count = "trim",
         target = "sunrise_client::game::native_hooks::container_loot_filled::GameLevel<'_>::native_container_loot_filled"
     )]
-    fn container_loot_filled();
+    fn container_loot_filled(context: &ContainerLootFilled<'_>, drops: &mut Vec<ItemStack>);
 }

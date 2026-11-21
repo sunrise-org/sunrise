@@ -5,6 +5,7 @@ Call `host.disconnect(reason)` through `ClientHost` to leave the joined server o
 ## Holding outgoing play packets
 
 Call `host.hold_packets()` to start an ordered hold and receive its opaque `HoldId`.
+Keep the issued ID locally to release or discard the hold; it has no `Wire` encoding.
 While a hold is active, another `hold_packets()` returns
 `HoldError::Limit { packets: 256, bytes: 1_048_576 }` and leaves the first hold intact.
 Uncancelled packets from `client_packet_send` queue in creation order;
@@ -30,24 +31,57 @@ No packet inspection or editing beyond the existing `ClientPacket` view is provi
 
 ## Configuration tasks before play
 
-The server's `register_configuration_tasks` hook runs once per connecting client,
-after the built-in registry, tag and resource-pack steps. Append
-`ConfigurationTask::new(type_id)` to its task list. Every peer gets these tasks,
-including vanilla clients.
+The server's `register_configuration_tasks` hook (version 2) runs once per
+connecting client, including vanilla clients, after the built-in registry, tag
+and resource-pack steps. Use `event.connection.has_channel(host, &channel)`
+to check what the peer negotiated before registering a task.
 
-`configuration_task_start` runs once for the active type. Use the event's
-`ConfigurationConnection` to check `has_channel`, send a registered configuration
-payload with `send_payload`, and `finish(host, task_type)`. Keep the connection
-capability if a payload reply handler will finish the task later. In a main-thread
-payload handler, obtain the server host from `IPayloadContext::server_host`.
-Alternatively, `configuration_task_tick` checks the task each server tick and
-sets `finished` when it is complete. The next task starts only after completion.
+Implement `ConfigurationTask` on a `Send + 'static` struct and pass an instance
+to `event.register(task)`. Its `task_type(&self) -> &Identifier` supplies a
+namespaced ID, read once at registration. The ID must be nonempty and unique
+among all tasks registered for that connection. `register` returns
+`ConfigurationTaskRegistrationError::EmptyType` or `DuplicateType(id)` for an
+invalid submission. The first refusal aborts registration and admission and
+supplies the disconnect diagnostic, even if its result is ignored.
 
-A wrong task type, refused payload send, explicit `fail`, or callback panic closes
-that client with the configuration-error reason. Check the channel before sending
-to an optional or vanilla peer, then finish immediately or explain why it cannot
-join. Sends use the existing negotiated payload transport and publish on transaction
-commit. A callback panic aborts its transaction.
+The server calls `start` once on that instance, then calls the optional `tick`
+at most once each later server tick while it waits. Both methods take
+`&mut self`, `host: &mut dyn ServerHost` and `context: &mut ConfigurationTaskContext<'_>`.
+Keep state shared by `start` and `tick` in the task struct. Tasks run in
+registration order without holding the connection's task lock.
+
+| Task callback operation | Call |
+| --- | --- |
+| Check whether the peer negotiated a channel | `context.has_channel(host, &channel)` |
+| Send a configuration payload | `context.send_payload(host, &channel, bytes)` |
+| Complete the task | `context.finish()` |
+| Abort admission with a reason | `context.fail(reason)` |
+
+For delayed completion, capture `context.instance()` in server-local state when
+you send the **original challenge**. Match the reply to that challenge and pass
+its saved instance to `cx.finish_configuration_task(instance)` in a server
+main-thread configuration payload handler. Never look up whichever task happens
+to be running when the reply arrives, and never send the instance over the wire.
+Use `cx.reply(&channel, bytes)` for a final reply on the same connection. For a
+network-thread handler, use `enqueue_work` and complete from the main-thread work.
+
+A different live connection's instance returns `WrongConnection`; an instance
+that is no longer the running one on this configuration returns `StaleTask`.
+The wrong side, phase, executor or a missing transaction returns `WrongContext`;
+an ended connection or configuration epoch returns `Disconnected`. A refusal
+advances neither task. Tasks, contexts, instance and connection capabilities,
+and task errors have no `Wire` encoding.
+
+Completion publishes only after the outermost transaction commits and publishes
+its deferred sends (including replies). A child commit hands the request to its
+parent; an abort discards it. Repeated callback requests coalesce, and `fail`
+wins over `finish`. An explicit payload-handler disconnect discards the request
+even if the rest of the handler succeeds.
+
+A refused task payload send, explicit `fail`, or callback panic aborts the task
+callback and closes that client with the configuration-error reason. Check the
+channel before sending to an optional or vanilla peer, then request completion
+or explain why it cannot join.
 
 There is **no per-task timeout**. A client answering keep-alives can remain in
 configuration indefinitely while its task waits. The connection's ordinary idle
@@ -56,19 +90,25 @@ and keep-alive checks still apply.
 ## Typed payloads
 
 A typed payload sends a value of your own type on a registered channel. Its body is the value's
-`PayloadCodec` encoding (vanilla's network encoding), with nothing around it, so a peer reads it
-as an ordinary registered payload.
+[Wire](../../concepts/wire-types.md) encoding, with no extra envelope. Wire uses
+little-endian numbers and lengths; it is not the vanilla packet codec. Use a raw channel
+when another implementation requires a specific byte format.
 
-Derive `PayloadCodec` for the value, register it in `Hooks::register`, and keep the token the
+Use owned `String` fields, not static strings or interned level keys: the network codec never
+interns incoming text. The registrar also refuses Wire forms that allocate outside the shared
+budget, such as `Identifier`, `SpawnerKey`, `CustomSpawners`, `ModelPart`, JSON values and `Text`,
+even in nested fields. Send bounded owned fields and convert explicitly where you need those types.
+
+Derive `Wire` for the value, register it in `Hooks::register`, and keep the token the
 registrar returns:
 
 ```rust,ignore
 use mod_api::*;
 use std::sync::OnceLock;
 
-#[derive(PayloadCodec)]
+#[derive(Wire)]
 struct Counter {
-    counter: VarInt,
+    counter: i32,
 }
 
 static REPLY: OnceLock<ToClient<Counter>> = OnceLock::new();
@@ -78,13 +118,13 @@ fn register(r: &mut dyn Registrar) {
     let mut view = payloads.registrar("1");
     // The server answers each counter with the next one.
     view.play_to_server_typed::<Counter>(PayloadId("example:count".into()), |value, cx| {
-        let counter = value.counter.0.checked_add(1).ok_or("counter is too large")?;
-        let next = Counter { counter: VarInt(counter) };
+        let counter = value.counter.checked_add(1).ok_or("counter is too large")?;
+        let next = Counter { counter };
         REPLY.get().unwrap().reply(cx, &next).map(drop).map_err(|e| format!("{e:?}"))
     });
     let reply = view.play_to_client_typed::<Counter>(
         PayloadId("example:count_reply".into()),
-        |value, _| Ok(log::info!("server counted {}", value.counter.0)),
+        |value, _| Ok(log::info!("server counted {}", value.counter)),
     );
     let _ = REPLY.set(reply);
 }
@@ -112,7 +152,9 @@ fn register(r: &mut dyn Registrar) {
   are NeoForge's `PacketDistributor` `sendToAllPlayers`, `sendToPlayersInDimension`,
   `sendToPlayersNear` and `sendToPlayersTrackingChunk`. A player whose send is refused (no
   channel, gone since the list was read, backpressure) is skipped and not counted; only a
-  stale token or an encode failure is an `Err`, before anything is sent.
+  stale token or an encode failure is an `Err`, before anything is sent. `send_in_level` and
+  `send_near` use the level's online-player visit and return `Ok(0)` for a stale or
+  unavailable level, after the same token and encoding checks.
 - **To the players tracking an entity.** `send_tracking_entity(host, entity, and_self, &value)`
   sends to the entity's trackers (`ChunkMap.TrackedEntity.seenBy`, NeoForge's
   `sendToPlayersTrackingEntity`; `EntityRef::trackers(host)` is the same list), and
@@ -128,8 +170,12 @@ fn register(r: &mut dyn Registrar) {
   it is published when the root transaction commits, and an abort publishes nothing.
 - **Schema negotiation.** The derive gives the value type a schema fingerprint (field types in
   order, variant positions; not names), and it is part of the negotiated version. A peer whose
-  type has another shape is refused at join when the payload is required; when both sides
-  declared it `optional()`, it is absent and a send returns `UnsupportedPeer`.
+  type has another encoding is refused at join when the payload is required; when both sides
+  declared it `optional()`, it is absent and a send returns `UnsupportedPeer`. A body that kept
+  its encoding (for example, a record of `u8` and `bool`) still negotiates with the old codec.
+  The fingerprint describes the negotiated encoding, not what a field or variant means.
+  If you reorder fields or variants that have the same encoding, or reuse a position for a
+  different meaning, bump the registrar's application version even if the fingerprint is unchanged.
 - **Named errors.** `PayloadSendError::StaleToken` for a token the registrar did not hand out
   as it claims (forged, from another load, read as another type, or its mod off);
   `EncodeFailed` for a value the peer could not decode (a bound or the allocation budget),

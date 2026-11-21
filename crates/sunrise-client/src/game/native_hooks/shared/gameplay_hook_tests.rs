@@ -1,21 +1,4 @@
 #[test]
-fn native_ingredient_stays_hookable() {
-    let source = include_str!("../../../crafting/native_hooks.rs").replace("\r\n", "\n");
-    let at = source.find("pub fn native_ingredient(").unwrap();
-    let start = source[..at].rfind("///").unwrap();
-    let body = &source[start..start + source[start..].find("\n}\n").unwrap()];
-    for line in body.lines() {
-        assert!(
-            !line.contains("cfg"),
-            "a cfg in the ingredient hook: {line}"
-        );
-        for mac in ["!(", "![", "! {", "!{"] {
-            assert!(!line.contains(mac), "a macro: {line}");
-        }
-    }
-}
-
-#[test]
 fn loot_table_load_stays_hookable() {
     let source = include_str!("../../../../../sunrise-world/src/loot.rs").replace("\r\n", "\n");
     // From its doc comment's last line, so an attribute above it counts.

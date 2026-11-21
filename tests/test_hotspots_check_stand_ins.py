@@ -65,6 +65,20 @@ class StandInsTest(unittest.TestCase):
         self.assertIn("hook `placed` names type `Face`, which has no dispatch-test stand-in. Add "
                       f"{check.FIXTURES}/api/Face.rs", found[0])
 
+    def test_only_types_used_by_generated_dispatch_need_stand_ins(self):
+        self.write(f"{check.HOOKS}/engine.rs", '''pub trait Hooks {
+    #[hook(target = "mod_render::render::draw")]
+    fn draw(draw: &mut RawDraw<'_>);
+
+    #[hook(target = "game::Game::native_tick", /* target = "mod_render::render::tick" */)]
+    fn tick(#[engine] make: impl FnOnce(EngineKey, i32) -> EngineCall<'_>,
+            directory: &std::path::Path, event: Missing) -> Reply;
+}
+''')
+        found = check.problems(self.root)
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("hook `tick` names type `Missing`", found[0])
+
     def test_a_missing_shared_rs_fails_naming_it(self):
         (self.root / f"{check.FIXTURES}/shared.rs").unlink()
         self.assertEqual(check.problems(self.root), [f"{check.FIXTURES}/shared.rs: missing; "

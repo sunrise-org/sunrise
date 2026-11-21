@@ -18,6 +18,7 @@ pub trait Hooks {
     /// the template's answer. On either host, `container_signal` reads stored
     /// slots without generating deferred loot.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "replace",
         scope = "block",
@@ -26,5 +27,11 @@ pub trait Hooks {
         target = "sunrise_client::game::native_hooks::place_liquid::GameLevel<'_>::native_place_liquid",
         neoforge = "none (vanilla LiquidBlockContainer.placeLiquid)"
     )]
-    fn place_liquid();
+    fn place_liquid(
+        pos: BlockPos,
+        state: BlockState,
+        fluid: mod_api::FluidState,
+        answer: &mut Option<bool>,
+        #[engine] ticks: &mut Ticks,
+    );
 }

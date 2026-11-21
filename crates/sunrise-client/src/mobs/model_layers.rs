@@ -1,7 +1,13 @@
 //! Engine registration and vanilla resource conversion for model layers.
 use super::Part;
-use mod_api::{LayerDefinition, ModelPart, ModelPolygon, ModelVertex, PartPose};
-use std::{collections::HashMap, sync::OnceLock};
+use mod_api::{
+    __private::game::{CallbackOwner, LayerDefinitionRegistration},
+    Answered, LayerDefinition, ModelPart, ModelPolygon, ModelVertex, PartPose,
+};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::OnceLock,
+};
 
 /// A vanilla layer's part tree from `entity-models.json`.
 pub fn from_part(part: &Part) -> ModelPart {
@@ -31,29 +37,46 @@ pub fn from_part(part: &Part) -> ModelPart {
 
 static REGISTERED: OnceLock<HashMap<String, LayerDefinition>> = OnceLock::new();
 
-/// Keeps the layers native mods registered (`native_register_layer_definitions`),
-/// once at start. An id is `<namespace>:<path>#<layer>` (NeoForge's
-/// `ModelLayerLocation`) in a namespace other than vanilla's; one that isn't,
-/// or that another layer has already, is logged and left out.
-pub fn register(layers: Vec<(String, LayerDefinition)>) {
-    let mut kept = HashMap::new();
-    for (id, layer) in layers {
-        if !is_mod_layer_id(&id) {
-            log::warn!("model layer {id:?} is not <namespace>:<path>#<layer> in a mod's namespace");
-            continue;
+/// Call each accepted mod supplier in registration order and publish the realized layers once
+/// at client startup. Reject invalid IDs and duplicates without calling their suppliers.
+pub fn register(layers: Vec<Answered<LayerDefinitionRegistration>>) {
+    let mut assembled = false;
+    REGISTERED.get_or_init(|| {
+        assembled = true;
+        let mut seen = HashSet::new();
+        let mut definitions = HashMap::new();
+        for entry in &layers {
+            let LayerDefinitionRegistration { id, supplier, .. } = &entry.answer;
+            let mod_id = entry.mod_id;
+            if !is_mod_layer_id(id) {
+                log::warn!(
+                    "Mod {mod_id}: model layer {id:?} is not <namespace>:<path>#<layer> in a mod's namespace"
+                );
+                continue;
+            }
+            if !seen.insert(id.as_str()) {
+                log::warn!("Mod {mod_id}: model layer {id} is registered twice; the first is kept");
+                continue;
+            }
+            let Some(owner) = CallbackOwner::new(mod_id) else {
+                log::warn!("Model layer {id} has no installed owner {mod_id}");
+                continue;
+            };
+            match owner.call("model layer supplier", "build_layer_definition", supplier) {
+                Ok(definition) => {
+                    definitions.insert(id.clone(), definition);
+                }
+                Err(error) => log::warn!("Model layer {id}: {error}"),
+            }
         }
-        if kept.contains_key(&id) {
-            log::warn!("model layer {id} is registered twice; the first is kept");
-            continue;
-        }
-        kept.insert(id, layer);
-    }
-    if REGISTERED.set(kept).is_err() {
+        definitions
+    });
+    if !assembled {
         log::warn!("model layers were registered already; these are left out");
     }
 }
 
-/// The layer a native mod registered as `id`.
+/// The realized definition of the layer a native mod registered as `id`.
 pub fn registered(id: &str) -> Option<&'static LayerDefinition> {
     REGISTERED.get()?.get(id)
 }
@@ -85,6 +108,84 @@ fn is_mod_layer_id(id: &str) -> bool {
 mod tests {
     use super::*;
     use mod_api::{CubeDeformation, CubeListBuilder, MeshDefinition};
+
+    #[test]
+    fn suppliers_only_run_for_the_first_valid_ids_at_freeze() {
+        use mod_api::__private::game::RegistrationContextNew;
+        use mod_api::{Hooks, ModEntry, RegisterLayerDefinitionsEvent, RegistrationContext};
+        use std::sync::{Arc, Mutex};
+
+        struct Layers(&'static [(&'static str, i32)], Arc<Mutex<Vec<i32>>>);
+        #[mod_api::__subscriptions]
+        impl Hooks for Layers {
+            fn register_layer_definitions(
+                &self,
+                _: &RegistrationContext,
+                event: &mut RegisterLayerDefinitionsEvent<'_>,
+            ) {
+                for &(id, offset) in self.0 {
+                    let calls = self.1.clone();
+                    event.register(id, move || {
+                        calls.lock().unwrap().push(offset);
+                        let mut mesh = MeshDefinition::new();
+                        mesh.add_or_replace_child(
+                            mesh.root(),
+                            "head",
+                            CubeListBuilder::create(),
+                            PartPose::offset(0.0, offset as f32, 0.0),
+                        );
+                        LayerDefinition::create(mesh, 64, 32)
+                    });
+                }
+            }
+        }
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        mod_platform::testing::with_mods(
+            vec![
+                ModEntry::new(
+                    "first",
+                    Box::new(Layers(
+                        &[("minecraft:golem#main", 1), ("first:golem#main", 6)],
+                        calls.clone(),
+                    )),
+                ),
+                ModEntry::new(
+                    "second",
+                    Box::new(Layers(
+                        &[("first:golem#main", 9), ("second:golem#main", 12)],
+                        calls.clone(),
+                    )),
+                ),
+            ]
+            .into(),
+            || {
+                let mut suppliers = Vec::new();
+                mod_api::dispatch_register_layer_definitions(
+                    &RegistrationContext::new(),
+                    &mut suppliers,
+                );
+                assert!(calls.lock().unwrap().is_empty());
+                register(suppliers);
+                assert_eq!(*calls.lock().unwrap(), [6, 12]);
+
+                assert!(registered("minecraft:golem#main").is_none());
+                for _ in 0..2 {
+                    let model = registered("first:golem#main").unwrap().bake_root();
+                    assert_eq!(model.get_child("head").unwrap().y, 6.0);
+                }
+
+                let mut late = Vec::new();
+                mod_api::dispatch_register_layer_definitions(
+                    &RegistrationContext::new(),
+                    &mut late,
+                );
+                register(late);
+                assert_eq!(*calls.lock().unwrap(), [6, 12]);
+            },
+        );
+    }
+
     #[test]
     fn layer_ids_are_a_mods_own_model_and_layer() {
         assert!(is_mod_layer_id("mymod:golem#main"));

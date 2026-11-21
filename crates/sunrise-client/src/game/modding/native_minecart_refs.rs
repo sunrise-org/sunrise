@@ -318,7 +318,7 @@ mod tests {
             assert_eq!(loaded.display_offset(game), Some(3));
 
             // A state the registry doesn't know is refused; None clears.
-            let invalid = mod_api::BlockStateRecord::new(lit.block(), u16::MAX).into();
+            let invalid = mod_api::__private::block_state_from_ordinal(lit.block(), u16::MAX);
             assert!(!cart.set_custom_display_block(game, Some(invalid)));
             assert_eq!(cart.custom_display_block(game), Some(Some(lit)));
             assert!(cart.set_custom_display_block(game, None));

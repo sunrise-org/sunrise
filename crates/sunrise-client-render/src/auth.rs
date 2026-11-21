@@ -539,7 +539,7 @@ pub fn own_textures(session: &AuthSession) -> Option<crate::skins::Textures> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct JoinedProfile {
     pub uuid: u128,
-    pub properties: Vec<sunrise_protocol::packets::login::Property>,
+    pub properties: Vec<sunrise_core::profile::AccountProperty>,
 }
 
 /// HttpDiscoveryService.buildQuery: `URLEncoder.encode(value, UTF-8)`.
@@ -602,7 +602,7 @@ pub fn parse_joined(body: &str) -> Option<JoinedProfile> {
         .into_iter()
         .flatten()
         .filter_map(|p| {
-            Some(sunrise_protocol::packets::login::Property {
+            Some(sunrise_core::profile::AccountProperty {
                 name: p.get("name")?.as_str()?.to_owned(),
                 value: p.get("value")?.as_str()?.to_owned(),
                 signature: p

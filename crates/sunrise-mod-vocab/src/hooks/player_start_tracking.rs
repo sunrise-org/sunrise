@@ -18,11 +18,13 @@ pub trait Hooks {
     /// remove or teleport entities from here. No player's state is swapped in.
     /// Server-side.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_player_start_tracking",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         version = 2,
         neoforge = "PlayerEvent.StartTracking",
         cancellable = false
     )]
-    fn player_start_tracking();
+    fn player_start_tracking(player: u128, name: &str, entity: u32, uuid: u128, kind: &str);
 }

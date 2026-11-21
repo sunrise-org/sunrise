@@ -41,7 +41,7 @@ fn profession_mod_missing_refused_before_pairing() {
     login_profile(&mut c, "Owner");
     c.send(&login::Serverbound::LoginAcknowledged(sunrise_protocol::packets::Empty).encode())
         .unwrap();
-    let mut brand = sunrise_protocol::buf::Writer::new();
+    let mut brand = ::sunrise_core::vanilla_bytes::Writer::new();
     brand.string("sunrise");
     for (channel, data) in [
         ("minecraft:brand", brand.data),

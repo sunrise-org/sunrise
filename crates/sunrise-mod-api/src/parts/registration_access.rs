@@ -40,9 +40,7 @@ pub(crate) const REGISTRATION_ACCESS: RegistrationAccess = RegistrationAccess {
         with_registering_keys(|keys| keys.map(|keys| names(keys, kind).id(slot).is_some()))
     },
     name: |kind, slot| {
-        with_registering_keys(|keys| {
-            keys.and_then(|keys| names(keys, kind).id(slot).map(str::to_owned))
-        })
+        with_registering_keys(|keys| registry_name_snapshot(names(keys?, kind), slot))
     },
     in_scope: || REGISTERING_KEYS.with_borrow(Option::is_some),
     install: install_parts,

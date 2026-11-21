@@ -1,32 +1,29 @@
-//! The context a `menu_slot_rules` ask is given: which of the menu's containers the slot is in,
-//! and one copy of the containers' slots for the parts per click plan, built only when a part
-//! listens (see [`SlotSnapshot`]).
+//! The staged slot view lent to a `menu_slot_rules` ask and the reads needed to replay its answer.
 use super::{
     CONTAINER_MAX, Env, GRID, ItemStack, MAIN, Menu, PLAYER, RESULT, SlotContext, SlotRules,
 };
-use mod_api::{MenuContainer, MenuSlotContext};
-use std::cell::OnceCell;
+use mod_api::MenuContainer;
+use std::cell::RefCell;
 
-/// The parts' copy of a menu's slots (`MenuSlotContext`) for one click plan: empty until the
-/// first ask a part answers fills it, then shared by every ask of the plan, so a click copies
-/// the slots at most once and a menu no part answers never. The menu empties it on every
-/// mutation; a LAN click's view holds one for the click. A copy of a menu starts empty.
-#[derive(Debug, Default)]
-pub struct SlotSnapshot(OnceCell<MenuSlotContext>);
-
-impl SlotSnapshot {
-    /// The plan's copy, built by `build` on the first call.
-    pub fn get_or_init(&self, build: impl FnOnce() -> MenuSlotContext) -> &MenuSlotContext {
-        self.0.get_or_init(build)
-    }
-    pub(crate) fn clear(&mut self) {
-        self.0.take();
-    }
+/// A slot rule's dependency on the planner's view. Store only what the rule read, including
+/// empty slots; replaying the rule does not rebuild or convert the menu's slot matrix.
+#[derive(Clone, Debug)]
+pub(super) struct SlotReads {
+    player: Option<u128>,
+    pos: Option<[i32; 3]>,
+    container: MenuContainer,
+    slots: Vec<(MenuContainer, usize, Option<ItemStack>)>,
 }
 
-impl Clone for SlotSnapshot {
-    fn clone(&self) -> Self {
-        Self::default()
+impl SlotReads {
+    /// Compare through the view so an enclosing record depends on this comparison too. Even
+    /// a replay miss depends on the slot that caused it: a later stage could match this answer.
+    pub(super) fn matches(&self, context: SlotContext<'_>) -> bool {
+        (self.player, self.pos, self.container) == (context.player, context.pos, context.container)
+            && self
+                .slots
+                .iter()
+                .all(|(container, index, stack)| context.slot(*container, *index) == stack.as_ref())
     }
 }
 
@@ -50,6 +47,30 @@ pub fn lan_container(i: usize, container: Option<&[Option<ItemStack>]>) -> MenuC
 }
 
 impl SlotContext<'_> {
+    pub(super) fn record<R>(self, ask: impl FnOnce(SlotContext<'_>) -> R) -> (R, SlotReads) {
+        let reads = RefCell::new(Vec::new());
+        let trace = |container, index, stack: Option<&ItemStack>| {
+            if let Some(outer) = self.trace {
+                outer(container, index, stack);
+            }
+            let mut reads = reads.borrow_mut();
+            if !reads.iter().any(|&(c, i, _)| (c, i) == (container, index)) {
+                reads.push((container, index, stack.cloned()));
+            }
+        };
+        let answer = ask(SlotContext {
+            trace: Some(&trace),
+            ..self
+        });
+        let reads = SlotReads {
+            player: self.player,
+            pos: self.pos,
+            container: self.container,
+            slots: reads.into_inner(),
+        };
+        (answer, reads)
+    }
+
     /// What slot `index` of `container` holds, keyed as `MenuSlotContext::slot`.
     pub fn slot(&self, container: MenuContainer, index: usize) -> Option<&ItemStack> {
         let slots = match container {
@@ -57,22 +78,27 @@ impl SlotContext<'_> {
                 if self.main_crafting.is_some_and(|crafting| {
                     crafting.grid_slots().contains(&index) || index == crafting.result
                 }) {
-                    return None;
+                    &[]
+                } else {
+                    self.slots
                 }
-                self.slots
             }
             MenuContainer::Grid => self.grid,
             MenuContainer::Result => self.result,
             _ => &[],
         };
-        slots.get(index)?.as_ref()
+        let stack = slots.get(index).and_then(Option::as_ref);
+        if let Some(trace) = self.trace {
+            trace(container, index, stack);
+        }
+        stack
     }
 }
 
 impl Menu {
     /// Who and where this menu's `menu_slot_rules` ask about menu slot `s` is: the env's
     /// player, the menu's block (`set_block_pos`), `s`'s container and the menu's own
-    /// containers, with the menu's snapshot cell.
+    /// staged containers.
     pub(super) fn slot_context<'s>(&'s self, env: &Env, s: usize) -> SlotContext<'s> {
         let container = self
             .state
@@ -87,7 +113,7 @@ impl Menu {
             main_crafting: None,
             grid: &self.state.containers[GRID],
             result: &self.state.containers[RESULT],
-            snapshot: Some(&self.state.slot_snapshot),
+            trace: None,
         }
     }
 }

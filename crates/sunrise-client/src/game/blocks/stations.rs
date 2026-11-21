@@ -659,7 +659,7 @@ impl Game<'_> {
         if !mod_api::__private::listened(mod_api::HookId::AnvilUpdate) {
             return;
         }
-        let Some(left) = s.inputs[0].clone() else {
+        let Some(left) = s.inputs[0].as_ref() else {
             return;
         };
         match &s.anvil_answer {
@@ -667,16 +667,13 @@ impl Game<'_> {
                 s.anvil = answer.clone();
             }
             _ => {
-                let mut update = crate::menu::AnvilUpdate::new(
+                let inputs = crate::menu::AnvilUpdateInputs {
                     left,
-                    s.inputs[1].clone(),
-                    Some(name.clone()),
-                    &s.anvil,
-                );
-                let mut cancel = false;
+                    right: s.inputs[1].as_ref(),
+                    name: Some(&name),
+                };
                 let (player, entity_id) = (self.own_uuid(), self.own_entity_id());
-                self.api_anvil_update(player, entity_id, s.pos, &mut update, &mut cancel);
-                update.answer(cancel, &mut s.anvil);
+                self.api_anvil_update(player, entity_id, s.pos, inputs, &mut s.anvil);
                 s.anvil_answer = Some((s.inputs.clone(), name, s.anvil.clone()));
             }
         }
@@ -2600,7 +2597,7 @@ mod tests {
         impl Hooks for Listener {
             fn anvil_update(&self, _: HostSide<'_>, event: &mut AnvilUpdateEvent<'_>) -> Flow {
                 self.0.fetch_add(1, Ordering::Relaxed);
-                event.update.xp_cost = -7;
+                event.edits.xp_cost = -7;
                 Flow::Continue
             }
         }
@@ -2634,6 +2631,84 @@ mod tests {
             });
         });
     }
+    #[test]
+    #[ignore = "daily"]
+    fn anvil_update_validates_only_a_changed_output() {
+        use super::{AnvilResult, ItemStack, Kind, Station};
+        use mod_api::{
+            AnvilUpdateEvent, Flow, Hooks, HostSide, ItemStack as ApiStack, ModEntry, StackResult,
+        };
+
+        struct Listener;
+        #[mod_api::__subscriptions]
+        impl Hooks for Listener {
+            fn anvil_update(&self, _: HostSide<'_>, event: &mut AnvilUpdateEvent<'_>) -> Flow {
+                assert_eq!(event.inputs.left.count(), 2, "captured an over-limit stack");
+                assert_eq!(event.edits.output, StackResult::Keep);
+                assert_eq!((event.edits.xp_cost, event.edits.material_cost), (1, 1));
+                event.edits.xp_cost = -7;
+                event.edits.material_cost = -2;
+                let item = event.inputs.left.item();
+                match event.inputs.name {
+                    Some("same") => {
+                        event.edits.output = StackResult::Set(event.inputs.vanilla_output.cloned());
+                    }
+                    Some("replace") => {
+                        event.edits.output = StackResult::Set(Some(ApiStack::of(item)));
+                    }
+                    Some("clear") => event.edits.output = StackResult::Set(None),
+                    Some("invalid") => {
+                        let invalid = ApiStack::new(item, 3).unwrap();
+                        event.edits.output = StackResult::Set(Some(invalid));
+                        event.edits.material_cost = 4;
+                    }
+                    Some("cancel") => return Flow::Cancel,
+                    _ => {}
+                }
+                Flow::Continue
+            }
+        }
+
+        let mods = vec![ModEntry::new("listener", Box::new(Listener))].into();
+        mod_platform::testing::with_mods(mods, || {
+            super::super::native_entity_refs::tests::with_game(|game| {
+                let mut station = Station::new(Kind::Anvil, [0; 3]);
+                let sword = |count| ItemStack::new("minecraft:iron_sword", count);
+                station.inputs[0] = Some(sword(2));
+                let vanilla = AnvilResult {
+                    result: Some(sword(2)),
+                    cost: 1,
+                    repair_item_count_cost: 1,
+                    only_renaming: true,
+                };
+                for (name, output, only_renaming) in [
+                    ("keep", Some(2), true),
+                    ("same", Some(2), true),
+                    ("replace", Some(1), false),
+                    ("clear", None, false),
+                ] {
+                    station.anvil = vanilla.clone();
+                    game.update_anvil_answer(&mut station, name.into());
+                    assert_eq!(
+                        station.anvil,
+                        AnvilResult {
+                            result: output.map(sword),
+                            cost: -7,
+                            repair_item_count_cost: 0,
+                            only_renaming,
+                        },
+                        "{name}",
+                    );
+                }
+                for name in ["invalid", "cancel"] {
+                    station.anvil = vanilla.clone();
+                    game.update_anvil_answer(&mut station, name.into());
+                    assert_eq!(station.anvil, AnvilResult::default(), "{name}");
+                }
+            });
+        });
+    }
+
     #[test]
     #[ignore = "daily"]
     fn resource_tooltip_uses_inventory_lines_and_explicit_flags() {

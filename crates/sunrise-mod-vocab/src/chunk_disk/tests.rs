@@ -1,5 +1,11 @@
 use super::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::testing::TestReader;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+use sunrise_core::nbt::{Limits, NamedTag, write_named};
+use sunrise_mod_runtime::attachments::ATTACHMENTS_KEY;
 
 const VALUE: AttachmentType<i32> = AttachmentType {
     namespace: "disk_fixture",
@@ -21,8 +27,8 @@ fn store(value: i32) -> Attachments {
     VALUE.set(&mut store, Holder::Level, value).unwrap();
     store
 }
-fn context(phase: ChunkDiskPhase) -> ChunkDiskContextWire {
-    ChunkDiskContextWire::new(
+fn context(phase: ChunkDiskPhase) -> ChunkDiskContext {
+    ChunkDiskContext::new(
         WorldEpoch::new(17),
         Identifier::parse("minecraft:overworld").unwrap(),
         [2, -3],
@@ -36,10 +42,9 @@ fn read(entries: &Compound) -> i32 {
         .unwrap()
 }
 fn run(job: &ChunkDiskJob) -> Result<Compound, ChunkDiskFailure> {
-    job.run(&OwningWorldgen::new(&|_| None, &|_, _| None, &|_, _, _| {
-        None
-    }))
-    .clone()
+    let reader = TestReader::default();
+    job.run(&OwningWorldgen::new(&reader, &|_, _, _| None))
+        .clone()
 }
 struct Listener {
     calls: Arc<AtomicUsize>,
@@ -75,6 +80,15 @@ fn with_listener(mode: u8, apply: impl FnOnce(Arc<AtomicUsize>)) {
         .into(),
         || apply(calls),
     );
+}
+
+#[test]
+fn host_borrows_the_captured_context() {
+    let captured = context(ChunkDiskPhase::Save);
+    let reader = TestReader::default();
+    let resources = OwningWorldgen::new(&reader, &|_, _, _| None);
+    let host: &dyn ChunkDiskHost = &OwningChunkDisk::new(&captured, &resources);
+    assert!(std::ptr::eq(host.job(), &captured));
 }
 
 #[test]
@@ -135,35 +149,101 @@ fn opaque(value: Tag) -> Compound {
 }
 
 #[test]
-fn value_65537_depth_65_total_1048577_refused_without_truncation() {
-    let oversize = opaque(Tag::ByteArray(vec![0; 65_537]));
-    assert_eq!(
-        ChunkDiskData::from_nbt(oversize).unwrap_err().reason,
-        "encoded attachment exceeds 65536 bytes"
-    );
-    let mut deep = Tag::Int(8);
-    for _ in 0..65 {
-        deep = Tag::Compound(Compound::from_iter([("nested".into(), deep)]));
+fn mixed_list_value_budget_includes_the_name_and_both_wrappers() {
+    let mixed = |len| Tag::List(vec![Tag::Byte(1), Tag::ByteArray(vec![0; len])]);
+    // Eight bytes for the named tag, five for the list header, eight for
+    // the two wrappers, one for the byte and four for the array length.
+    let value = mixed(65_510);
+    let disk = write_named(
+        &NamedTag {
+            name: "value".into(),
+            tag: value.clone(),
+        },
+        Limits::saved(),
+    )
+    .unwrap();
+    assert_eq!(disk.len(), 65_536);
+    assert!(ChunkDiskData::from_nbt(opaque(value)).is_ok());
+    let refusal = ChunkDiskData::from_nbt(opaque(mixed(65_511))).unwrap_err();
+    assert_eq!(refusal.key, "unknown:value");
+    assert_eq!(refusal.reason, "encoded attachment exceeds 65536 bytes");
+}
+
+#[test]
+fn value_depth_budget_includes_the_mixed_list_wrapper() {
+    let mut value = Tag::List(vec![Tag::Byte(1), Tag::Int(2)]);
+    for _ in 0..62 {
+        value = Tag::List(vec![value]);
     }
-    assert_eq!(
-        ChunkDiskData::from_nbt(opaque(deep)).unwrap_err().reason,
-        "attachment depth exceeds 64"
+    assert!(ChunkDiskData::from_nbt(opaque(value.clone())).is_ok());
+    let refusal = ChunkDiskData::from_nbt(opaque(Tag::List(vec![value]))).unwrap_err();
+    assert_eq!(refusal.reason, "attachment depth exceeds 64");
+}
+
+#[test]
+fn chunk_budget_counts_framing_and_modified_utf8_for_empty_namespaces() {
+    let empty = || Tag::Compound(Compound::new());
+    let mut entries: Compound = ('a'..='o')
+        .map(|c| (c.to_string().repeat(65_535).as_str().into(), empty()))
+        .collect();
+    // The 23-byte attachment frame and 15 namespaces at 65,539 bytes each
+    // leave 65,468 bytes. The remaining namespace, envelope and value cost
+    // 5 + 5 + 12 bytes before the array, and the last empty namespace costs 20.
+    entries.insert(
+        "x".into(),
+        Tag::compound([(
+            "v",
+            Tag::compound([("value", Tag::ByteArray(vec![0; 65_426]))]),
+        )]),
     );
-    let mut names = Compound::new();
-    for index in 0..18 {
-        names.insert(
-            format!("binding{index}").as_str().into(),
-            Tag::Compound(Compound::from_iter([(
-                "value".into(),
-                Tag::ByteArray(vec![0; 60_000]),
-            )])),
-        );
-    }
-    let total = Compound::from_iter([("unknown".into(), Tag::Compound(names))]);
+    let mut last = "\0".repeat(8);
+    entries.insert(last.as_str().into(), empty());
+    let disk = write_named(
+        &NamedTag {
+            name: ATTACHMENTS_KEY.into(),
+            tag: Tag::Compound(entries.clone()),
+        },
+        Limits::saved(),
+    )
+    .unwrap();
+    assert_eq!(disk.len(), 1_048_576);
     assert_eq!(
-        ChunkDiskData::from_nbt(total).unwrap_err().reason,
-        "chunk attachments exceed 1048576 bytes"
+        ChunkDiskData::from_nbt(entries.clone())
+            .unwrap()
+            .finish()
+            .unwrap(),
+        entries
     );
+    entries.remove(&last.as_str().into());
+    last.push('a');
+    entries.insert(last.as_str().into(), empty());
+    let refusal = ChunkDiskData::from_nbt(entries).unwrap_err();
+    assert_eq!(refusal.reason, "chunk attachments exceed 1048576 bytes");
+}
+
+#[test]
+fn codec_output_that_would_truncate_on_disk_refuses_the_job() {
+    let long_string = AttachmentType {
+        codec: Some(sunrise_mod_runtime::attachments::AttachmentCodec {
+            encode: |_| {
+                Ok(Compound::from_iter([(
+                    "text".into(),
+                    Tag::String("界".repeat(21_846).as_str().into()),
+                )]))
+            },
+            decode: |_| Ok(7),
+        }),
+        ..VALUE
+    };
+    let mut data = ChunkDiskData::from_nbt(store(7).to_nbt()).unwrap();
+    let refusal = data.set(&long_string, 8).unwrap_err();
+    assert_eq!(refusal.key, "disk_fixture:value");
+    assert_eq!(refusal.reason, "modified UTF-8 exceeds 65535 bytes");
+    assert_eq!(data.finish().unwrap_err(), refusal);
+}
+
+#[test]
+fn unknown_attachment_survives_typed_edit() {
     let mut data = ChunkDiskData::from_nbt(opaque(Tag::Int(7))).unwrap();
     data.set(&VALUE, 8).unwrap();
     let result = data.finish().unwrap();

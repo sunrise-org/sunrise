@@ -103,13 +103,10 @@ impl EntityRenderer for Missile {
         draw: &mut dyn BlockEntityDrawContext,
     ) -> Result<(), String> {
         *self.seen.lock().unwrap() = Some(entity.clone());
-        let fuel = entity
-            .attachments
-            .as_ref()
-            .ok_or("no snapshot")?
-            .get(&FUEL)
-            .map(|value| value.copied())
-            .map_err(|e| format!("{e:?}"))?;
+        let fuel = match &entity.attachments {
+            Some(snapshot) => snapshot.get(&FUEL).map_err(|e| format!("{e:?}"))?.copied(),
+            None => None,
+        };
         *self.fuel.lock().unwrap() = fuel;
         let extent = fuel.unwrap_or(1) as f32;
         let corners = [
@@ -378,55 +375,35 @@ fn a_row_is_drawn_by_its_types_renderer_at_the_frames_pose_reading_its_synced_fi
 
 #[test]
 #[ignore = "daily"]
-fn an_oversized_unread_field_does_not_stop_general_submission() {
-    use sunrise_mod_runtime::attachments::{AttachmentSync, Holder};
+fn a_synced_field_larger_than_the_old_render_cap_reaches_submit() {
+    use sunrise_mod_runtime::attachments::AttachmentSync;
     in_scene(
-        "an_oversized_unread_field_does_not_stop_general_submission",
+        "a_synced_field_larger_than_the_old_render_cap_reaches_submit",
         |game, scene| {
-            // A valid synced field too big for the render projection, ordered
-            // before the only field the renderer reads.
-            let padding_bytes = 70 * 1024;
             game.handle_packet(attachment_packet(
                 5,
                 true,
                 vec![AttachmentSync {
                     namespace: "test".into(),
-                    name: "a_padding".into(),
-                    value: Some([("bytes".into(), Tag::ByteArray(vec![0; padding_bytes]))].into()),
-                }],
-            ))
-            .unwrap();
-            let held = &game.remote.as_ref().unwrap().attachments[&Holder::Entity(5)];
-            let value = held
-                .entry("test", "a_padding")
-                .unwrap()
-                .unwrap()
-                .saved()
-                .unwrap();
-            assert!(matches!(value.get(&"value".into()), Some(Tag::Compound(c))
-                if matches!(c.get(&"bytes".into()), Some(Tag::ByteArray(b)) if b.len() == padding_bytes)));
-
-            let max_x = |frame: &[Vertex]| {
-                assert_eq!(frame.len(), 4);
-                frame
-                    .iter()
-                    .map(|v| v.pos[0])
-                    .fold(f32::NEG_INFINITY, f32::max)
-            };
-            assert_eq!(max_x(&frame(game, 1.0)), 5.0);
-            assert_eq!(*scene.missile.fuel.lock().unwrap(), None);
-
-            game.handle_packet(attachment_packet(
-                5,
-                false,
-                vec![AttachmentSync {
-                    namespace: "test".into(),
                     name: "fuel".into(),
-                    value: Some([("n".into(), Tag::Int(11))].into()),
+                    value: Some(
+                        [
+                            ("bytes".into(), Tag::ByteArray(vec![0; 70 * 1024])),
+                            ("n".into(), Tag::Int(11)),
+                        ]
+                        .into(),
+                    ),
                 }],
             ))
             .unwrap();
-            assert_eq!(max_x(&frame(game, 1.0)), 15.0);
+            let out = frame(game, 1.0);
+            assert_eq!(out.len(), 4);
+            assert_eq!(
+                out.iter()
+                    .map(|v| v.pos[0])
+                    .fold(f32::NEG_INFINITY, f32::max),
+                15.0,
+            );
             assert_eq!(*scene.missile.fuel.lock().unwrap(), Some(11));
         },
     );
@@ -650,7 +627,7 @@ fn integrated_scene(test: &str, place: fn(&mut Game<'_>, [f64; 3]) -> u32) {
     ) {
         return;
     }
-    sunrise_guest_stack::run_on_guest_stack(move || {
+    crate::game::native_entity_refs::tests::run_with_game_stack(move || {
         mod_platform::__private::initialize().unwrap();
         let mods = vec![mod_api::ModEntry::new(
             "general_render_fixture",
@@ -703,9 +680,8 @@ fn integrated_scene(test: &str, place: fn(&mut Game<'_>, [f64; 3]) -> u32) {
                         .as_ref()
                         .unwrap()
                         .general
-                        .rows
-                        .get(&(id as i32))
-                        .is_some_and(|r| r.shown)
+                        .shown(id as i32)
+                        .is_some()
                 };
                 poll_until(game, ready);
                 let check_quad = |g: &mut Game<'_>| {

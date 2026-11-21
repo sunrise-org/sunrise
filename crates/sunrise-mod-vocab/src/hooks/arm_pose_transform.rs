@@ -11,9 +11,16 @@ pub trait Hooks {
     /// non-finite component is ignored. The ordinary swing and species animations
     /// still run afterward.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         neoforge = "HumanoidModel.ArmPose"
     )]
-    fn arm_pose_transform();
+    fn arm_pose_transform(
+        pose: mod_api::CustomArmPose,
+        humanoid: &mod_api::HumanoidRenderState<'_>,
+        right_arm: bool,
+        angles: &mut mod_api::ArmAngles,
+    );
 }

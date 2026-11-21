@@ -43,7 +43,6 @@
     "sunrise-java-properties": "engine",
     "sunrise-system": "engine",
     "sunrise-threads": "engine",
-    "sunrise-guest-stack": "engine",
     "sunrise-deflate": "engine",
     "sunrise-world": "engine",
     "cargo-sunrise-mod": "tool",
@@ -122,7 +121,6 @@
       "sunrise-mod-api-macros",
       "sunrise-game-discovery",
       "sunrise-threads",
-      "sunrise-guest-stack",
       "sunrise-deflate",
       "sunrise-java-properties"
     ],

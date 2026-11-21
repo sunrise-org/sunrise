@@ -1,6 +1,6 @@
-"""Source-only ignored-test inventory, using sunrise-game-discovery's canonical module traversal.
+"""Source-only ignored-test inventory, using sunrise-game-discovery's module traversal.
 
-The small Rust tool parses source with syn and calls the same game-area discovery as the build script.
+The small Rust tool parses source with syn and follows each crate's `mod` items as the compiler does.
 It never builds the game or loads prepared data. One invocation covers every workspace and test target.
 """
 import json

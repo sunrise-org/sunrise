@@ -1,6 +1,7 @@
 //! One living entity's draw (`LivingEntityRenderer.submit` and the layers, hooks, outline
 //! and beam around it). The ordered entity pass shares one `LivingFrame` across its mob runs.
 use super::*;
+use sunrise_client::mobs::render::FrameDraw;
 
 /// What the mob pass works out once a frame for every living entity it draws.
 #[derive(Clone, Copy)]
@@ -112,12 +113,21 @@ impl Game<'_> {
             .then(|| self.remote_player_name(mob.id))
             .flatten()
             .map(|name| PlayerRender { name, local: false });
-        let pre = self.mod_render_pre(mob, who, listened, alpha as f32, camera, packed, out);
-        let Some(hidden) = pre else {
+        let mut frame_draw = FrameDraw::default();
+        if !self.mod_render_pre(
+            mob,
+            who,
+            listened,
+            alpha as f32,
+            camera,
+            packed,
+            &mut frame_draw,
+            out,
+        ) {
             // What the mods drew in its place is culled as the entity's own would be.
             self.cull_entity_vertices(out, entity_start);
             return;
-        };
+        }
         // A mod's renderer for the type (`register_entity_renderers`) draws in place of its
         // model and vanilla layers; the mods' layers and post hooks still follow.
         let modded =
@@ -153,7 +163,12 @@ impl Game<'_> {
                 mob.species(),
                 Species::Blaze | Species::MagmaCube | Species::GlowSquid | Species::SulfurCube
             );
-        let (mut skinned, mut parts, added) = (None, None, self.mod_layers(mob));
+        // AvatarRenderer.shouldRenderLayers: a spectator draws no layers.
+        let layers = sunrise_client::mobs::render::layers_shown(mob);
+        let added = if layers { self.mod_layers(mob) } else { None };
+        let mut skinned = None;
+        frame_draw.capture_model = !modded
+            && (added.is_some() || (listened && self.mob_render_post_listened(who.is_some())));
         if posable {
             let mut models = self.skin_models.borrow_mut();
             let mut frame = self.skin_frame.borrow_mut();
@@ -166,8 +181,7 @@ impl Game<'_> {
                 &lookup,
                 packed,
                 self,
-                hidden,
-                (listened || added.is_some()).then_some(&mut parts),
+                &mut frame_draw,
                 out,
                 &mut skin,
             );
@@ -182,8 +196,7 @@ impl Game<'_> {
                     packed,
                     self,
                     &armor,
-                    hidden,
-                    (listened || added.is_some()).then_some(&mut parts),
+                    &mut frame_draw,
                     out,
                 );
             } else if layers_only {
@@ -195,11 +208,11 @@ impl Game<'_> {
                     packed,
                     self,
                     &armor,
-                    (listened || added.is_some()).then_some(&mut parts),
+                    &mut frame_draw,
                     out,
                 );
             } else {
-                sunrise_client::mobs::render::render_with_hidden(
+                sunrise_client::mobs::render::render_with_frame(
                     mob,
                     alpha as f32,
                     camera,
@@ -207,12 +220,12 @@ impl Game<'_> {
                     packed,
                     self,
                     &armor,
-                    hidden,
-                    (listened || added.is_some()).then_some(&mut parts),
+                    &mut frame_draw,
                     out,
                 );
             }
         }
+        let model = frame_draw.model();
         // HDR output: mobs that are light shine by their kind, as blocks do (entity.wgsl
         // fs_hdr_mark); a tier's window lifts only their bright texels.
         if let Some(tier) = match mob.species() {
@@ -224,8 +237,6 @@ impl Game<'_> {
                 v.layer |= u32::from(tier) << 16;
             }
         }
-        // AvatarRenderer.shouldRenderLayers: a spectator draws no layers.
-        let layers = sunrise_client::mobs::render::layers_shown(mob);
         if is_player && layers {
             // PlayerRenderer's CapeLayer, WingsLayer, ParrotOnShoulderLayer
             // and SpinAttackEffectLayer. Only the cape hides with the body;
@@ -255,9 +266,9 @@ impl Game<'_> {
                 let skin = (skinning && silhouette_on_gpu).then_some(&mut skinned);
                 self.mob_block_geometry(mob, camera, alpha, packed, skin, out);
             }
-            self.mod_layer_geometry(mob, who, parts, added, alpha as f32, camera, packed, out);
+            self.mod_layer_geometry(mob, who, model, added, alpha as f32, camera, packed, out);
         }
-        self.mod_render_post(mob, who, parts, alpha as f32, camera, packed, out);
+        self.mod_render_post(mob, who, model, alpha as f32, camera, packed, out);
         if let Some(rgb) = outline {
             self.mark_outline(&out[entity_start..], rgb);
             if let Some(((first, _, _), _)) = skinned {

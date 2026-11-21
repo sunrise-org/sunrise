@@ -25,11 +25,9 @@ its published sky light, even outside build height or in an unloaded column. See
 [Level hosts](../../concepts/hooks-and-the-host.md#level-hosts) for the boundary rules.
 
 `ClientHost::playing()` is true while the player is in the world with nothing over it: no screen, title, sign
-editor or book, so keys and zoom apply. `ClientHost::mapping(name)` reads a vanilla key mapping (`key.forward`,
-`key.left`, `key.back`, `key.right`, `key.jump`, `key.sneak`, `key.sprint`, `key.attack`, `key.use`) as a
-`Result<Option<KeyMapping>, TextFormError>`. `Ok(Some(mapping))` contains the held state in
-`mapping.down` and the bound key's Controls label in `mapping.label`. Other names return
-`Ok(None)`; an invalid label returns `TextFormError`, including components deeper than 512 nodes. Both read without `&mut`, so the HUD and screen hooks can ask them.
+editor or book, so keys and zoom apply. A HUD or screen hook can read held state, the current binding,
+or its Controls label using a [live vanilla mapping](input.md#reading-live-vanilla-mappings) retained
+from `client_setup`.
 
 `ClientHost::select_hotbar_slot(slot)` chooses the local player's hotbar slot (0 to 8) as a number key
 does (`Inventory.setSelectedSlot`), and sends nothing itself. The game sends the carried-item packet
@@ -148,7 +146,9 @@ again within the same client level, the old handle reads again. A login, a recon
 into another level replaces the client level: the old handle stays stale for good, and the mod calls
 `host.level` again once the server reopens the level. A respawn in the same level drops the viewed
 levels too, but keeps the client level, so the old handle reads again after the reopen. Writes,
-server-only reads, the other level reads and the entity reads (`entities_in`) refuse a viewed level.
+server-only reads and the other level reads refuse viewed levels. In particular,
+`visit_entities_in` and `ray_trace_nearest_entity` return `Err(LevelReadError::Unavailable)`
+for a current handle to an open viewed level; they do not query the displayed level instead.
 
 ## Crosshair reads
 
@@ -169,6 +169,23 @@ behind a targeted entity.
 `ClientHost::view_hit()` and `raycast(distance)` cast their own ray along the view, up
 to 1024 blocks, and hit blocks in loaded chunks only: far terrain is never hit. Both
 return `None` on a miss.
+
+To query the displayed level independently of the committed crosshair pick, use
+[`visit_entities_in`](../world/spawning.md#visiting-entities-in-a-box) for a box, or
+`ray_trace_nearest_entity` for one entity hit. The latter clips only entity boxes,
+not blocks, and uses the segment and exclusions you supply, not vanilla's pick policy.
+For example, filter the ray using a shared read from the same client host:
+
+```rust,ignore
+let hit = level.ray_trace_nearest_entity(host, from, to, margin, exclude, &mut |hit| {
+    hit.entity.kind(host) == Some(wanted_kind)
+})?;
+```
+
+`Ok(None)` means no hit passed the predicate, not that the read was refused. The
+predicate sees all geometric hits in spatial traversal order; on an exact
+squared-distance tie the first visited wins. See [entity rays](../world/spawning.md#finding-the-nearest-entity-hit)
+for the geometry and when to keep the ordered all-hit query.
 
 A client `EntityRef` supports `bounding_box(host)`, `eye_height(host)` and
 `eye_position(host)`. For the local player these use the current predicted body and pose;
@@ -198,10 +215,11 @@ These read the local player as the client sees it. They take no mod-controlled n
   then, among equal list orders, spectators last, team name and name) and stop at the 80 it draws. Header and footer are `None` when empty. It is what
   this client has been sent and changes as the server updates the list; `None` outside a world.
   There is no NeoForge call for this: it is Sunrise's own read.
-- `ClientHost::local_item_use()` is the item in use: `ItemUse { hand, ticks_used, ticks_remaining }`
+- `ClientHost::local_item_use()` reports ordinary item use: `ItemUse { hand, ticks_used, ticks_remaining }`
   (`isUsingItem`, `getUsedItemHand`, `getTicksUsingItem`, `getUseItemRemainingTicks`).
   `ticks_used + ticks_remaining` is the use duration. It is `None` when no item is in use or no world
-  is open.
+  is open. Track intercepted main-hand input through [`ClientItemUseBehavior` callbacks](../../concepts/parts/item-and-tag-parts.md#intercept-main-hand-client-input)
+  instead; interception does not make the player use or block with the item.
 - `ClientHost::creative_search_items()` returns the built creative search tab's display order,
   for ranking stacks in inventory sorters. It requests the catalog with the local player's permission
   and Operator Items Tab option. A cache miss can fire the creative build hook, so this read needs a

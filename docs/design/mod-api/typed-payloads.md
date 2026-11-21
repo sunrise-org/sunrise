@@ -1,7 +1,6 @@
 # Registered payloads and the typed-payload design
 
 > The native registration, token checks and ordered transport below still apply.
-> Former WebAssembly guest dispatch and its retry contract are historical.
 > See [typed networking](../../modding/src/how-to/client/networking.md) for the current native API.
 
 The registered **raw** transport implements [#2882](https://github.com/arismoko/horizon/issues/2882).
@@ -76,11 +75,6 @@ Each connection holds the receiving turn until the main root publishes or rolls
 back. Later deliveries stay in order and keep their original ingress credit.
 Disconnect or phase replacement cancels work from the old epoch and wakes a
 dedicated receiver waiting for that turn.
-
-**Historical WebAssembly dispatch:** A guest group could return `Busy` before a
-callback started. The receiving transport retained its body and holder snapshot at
-the head under the original deadline and ingress lease. Nested cross-group guest
-calls refused rather than waiting.
 
 ## Admission, sending, and context
 
@@ -207,41 +201,34 @@ impl Hooks for MyMod {
 }
 ```
 
-## Stage 2: the value codec
+## The value codec
 
-`crates/sunrise-mod-vocab/src/content/payload_codec.rs` holds the pure codec half of stage 2, exported from `mod_api`, and `#[derive(PayloadCodec)]` writes a type's codec from its fields. It is the part that touches neither registration nor delivery, so it stands apart from the raw transport of [#2882](https://github.com/arismoko/horizon/issues/2882). The typed handler adapter decodes a received body with it, and the token sends encode one.
+Typed bodies use the same `mod_api::wire::Wire` format as other structured mod data.
+The derive writes fields in declaration order, with a little-endian `u32` tag before
+an enum's fields and little-endian `u32` lengths for variable-length values. Raw
+channels still carry the caller's bytes; use them to speak a different encoding.
 
-| Item | Contract |
-| --- | --- |
-| `PayloadCodec` | The trait a payload's value type implements: `encode(&self, &mut PayloadWriter)`, `decode(&mut PayloadReader) -> Result<Self, PayloadDecodeError>` and `schema(visiting) -> u64`, its fingerprint. Both see only the buffer, never a `Host`. Implemented for `bool`, `u8`, `i8`, `i16`, `u16`, `i32`, `i64`, `f32`, `f64`, `VarInt`, `VarLong`, `String`, `Vec<T>`, `Option<T>` and `Box<T>` |
-| Encoding | Vanilla's network encoding, so a ported payload keeps its exact bytes: big-endian numbers, VarInt and VarLong, a VarInt byte length before a string or byte array, a VarInt count before a list, one boolean byte before an optional value |
-| `decode_payload::<T>(body)` | The whole body as one `T`; a byte left over is `Trailing { bytes }` |
-| `encode_payload(&value, limit)` | The body, or `PayloadEncodeError`; the byte limit is the caller's (the transport's frame bound), checked before the buffer grows |
-| `PAYLOAD_MAX_DEPTH` | 64. Each list, each present option and each `nested` level counts one; level 65 is `TooDeep` |
-| `PAYLOAD_MAX_STRING_BYTES`, `PAYLOAD_MAX_LIST_ENTRIES` | 4096 each, the defaults of `String` and `Vec<T>`. A schema with another bound calls `str_within(limit)`, `bytes(limit)` or `list(limit, read)` itself, so these are not a transport ceiling |
-| `PAYLOAD_DECODE_BUDGET` | 8,388,608 bytes of allocation for one value. A list is charged `count * size_of::<T>()` before it is reserved, an owned string its length, so a small body cannot ask for a large allocation |
-| `#[derive(PayloadCodec)]` | The generated codec, in `crates/sunrise-mod-api-macros/src/payload.rs`. A struct is its fields in declaration order with nothing between them. An enum is a VarInt tag, the variant's position from 0 whatever its discriminant, then that variant's fields; a tag no variant has is `InvalidDiscriminant`. Each field goes through its own `PayloadCodec`, so the bounds above hold inside a derived type, and it adds no nesting level of its own. An enum with no variants, a union and a field without a codec do not compile |
-| `PayloadDecodeError` | `UnexpectedEnd`, `VarIntTooLong`, `NegativeLength`, `LengthOverLimit`, `Utf8`, `TooDeep`, `InvalidDiscriminant`, `NonFinite`, `BudgetExhausted`, `Trailing`, `InvalidValue`; has a Wire form |
-| `PayloadEncodeError` | `TooLarge`, `LengthOverLimit`, `TooDeep`, `NonFinite`, `BudgetExhausted`; has a Wire form. An encoder refuses what the peer's decoder would refuse, its allocation budget included |
-
-A length is read as a signed VarInt and checked for sign and bound before anything is reserved or copied; strings and byte arrays are borrowed from the body. A boolean other than 0 or 1 is refused (vanilla reads any non-zero byte as true). `finite_f32` and `finite_f64` are how a schema declares a finite float. No decode path indexes, and none panics on any input.
-
-Two things this stage does not do. The bounded field kinds of [#811](https://github.com/arismoko/horizon/issues/811) (`DatapackFieldKind`) are not merged with this reader: they describe JSON entries the game decodes, are named for datapacks, and their issue is in flight; a shared name for the two belongs to whoever lands second. And the budget counts what the reader's own primitives allocate, not what a hand-written codec allocates beside them; native code has to obey the contract, as the section above says.
-
-
-Strings use a 4096 UTF-8 byte default, not a character count. A schema may pass 3N bytes to `str_within` for a vanilla N-character limit. Each box, list and present option consumes one of 64 nesting levels; boxes charge their inner allocation size before decoding.
+`encode_payload(&value, limit)` uses the transport's byte limit. `decode_payload::<T>(body)`
+reads exactly one value and refuses trailing bytes. Both return `WireError`. The
+bounded payload path counts indirections (lists, present options and boxes) and
+explicit `Reader::nested` / `Writer::nested` frames, not derived record frames; its
+limit is `PAYLOAD_MAX_DEPTH`. The string byte and collection count caps are
+`PAYLOAD_MAX_STRING_BYTES` and `PAYLOAD_MAX_LIST_ENTRIES`. Both directions charge
+`PAYLOAD_DECODE_BUDGET`, including storage for shared ownership. Writer resets do
+not erase the enclosing ceiling, spent budget or first failure. Ordinary Wire
+readers and writers keep their own limits.
 
 ## Typed registration and tokens (#813 step 4b-1)
 
-A typed payload is an ordinary raw declaration whose body is exactly `encode_payload(&value)`.
+A typed payload is an ordinary raw declaration whose body is exactly `encode_payload(&value, limit)`.
 There is no second route and no envelope: the typed layer is registration, a token and two sends.
 
 ```rust,ignore
 use mod_api::*;
 
-#[derive(PayloadCodec)]
+#[derive(Wire)]
 struct Counter {
-    counter: VarInt,
+    counter: i32,
 }
 
 static DOWN: std::sync::OnceLock<ToClient<Counter>> = std::sync::OnceLock::new();
@@ -252,7 +239,8 @@ fn register(r: &mut dyn Registrar) {
     let _up: ToServer<Counter> = view.play_to_server_typed(
         PayloadId("example:counter".into()),
         |value: Counter, cx: &mut dyn IPayloadContext| {
-            let reply = Counter { counter: VarInt(value.counter.0 + 1) };
+            let counter = value.counter.checked_add(1).ok_or("counter is too large")?;
+            let reply = Counter { counter };
             DOWN.get().unwrap().reply(cx, &reply).map(drop).map_err(|e| format!("{e:?}"))
         },
     );
@@ -266,14 +254,13 @@ fn register(r: &mut dyn Registrar) {
 
 | Item | Contract |
 | --- | --- |
-| Registration | `play_to_server_typed::<T>(id, handler) -> ToServer<T>`, `play_to_client_typed -> ToClient<T>`, `play_bidirectional_typed -> (ToServer<T>, ToClient<T>)`, and the `configuration_*` and `common_*` forms, on the same `PayloadRegistrar` view as the raw methods: its version, `optional()` and `executes_on(...)` apply. A typed value needs only `PayloadCodec`: the transport queues the encoded body as `PayloadBytes`. `T` is the only generic (`play_to_server_typed::<T>(id, handler)`). The handler is `Fn(T, &mut dyn IPayloadContext) -> Result<(), String>`; a typed clientbound handler is given at registration |
-| Schema | `#[derive(PayloadCodec)]` writes `T`'s fingerprint: leaf kinds and bounds, field schemas in declaration order, variant positions. Field, variant and type names are not part of it; a type that holds itself has a finite one. A hand-written codec returns a leaf of its own name and version. The declaration's negotiated version is `<version>+payload-schema.<16 hex digits>`; a raw declaration's version cannot contain that marker |
+| Registration | `play_to_server_typed::<T>(id, handler) -> ToServer<T>`, `play_to_client_typed -> ToClient<T>`, `play_bidirectional_typed -> (ToServer<T>, ToClient<T>)`, and the `configuration_*` and `common_*` forms, on the same `PayloadRegistrar` view as the raw methods: its version, `optional()` and `executes_on(...)` apply. A typed value implements `Wire`. `T` is the only generic (`play_to_server_typed::<T>(id, handler)`). The handler is `Fn(T, &mut dyn IPayloadContext) -> Result<(), String>`; a typed clientbound handler is given at registration |
+| Schema | `Wire::describe` gives `T` a structural fingerprint: leaf encodings, fields in declaration order and variant positions. Names are not part of it. The ancestor stack gives recursive records finite fingerprints. Retained formats keep their fingerprints; changed number, tag and length encodings carry new ones. The declaration's negotiated version is `<version>+payload-schema.<16 hex digits>`; a raw declaration's version cannot contain that marker |
 | Admission | Another schema under one application version is `Mismatch::Schema`: refused, naming both versions, when either end requires the declaration; absent when both ends are optional, so a send returns `UnsupportedPeer`. Another application version stays a version mismatch, optional or not |
-| Token | `ToServer<T>` and `ToClient<T>` carry a `PayloadToken`: the id, the declaration's slot in its load's typed table, the load, the protocol, the one direction it sends in and the schema of `T`. The token has a separate Wire form. A token remembers the schema of the type it is held as, computed once when it is registered or read as that type. A token grants nothing: the host checks it against the frozen table before every send (`Host::check_payload_token`, `IPayloadContext::check_payload_token`), and a forged, other-load or other-type token, or one whose owner is off, is `PayloadSendError::StaleToken` with nothing encoded or sent |
+| Token | `ToServer<T>` and `ToClient<T>` carry a `PayloadToken`: the id, the declaration's slot in its load's typed table, the load, the protocol, the one direction it sends in and the schema of `T`. A token remembers the schema of the type it is held as, computed once when it is registered or read as that type. A token grants nothing: the host checks it against the frozen table before every send (`Host::check_payload_token`, `IPayloadContext::check_payload_token`), and a forged, other-load or other-type token, or one whose owner is off, is `PayloadSendError::StaleToken` with nothing encoded or sent |
 | Sending | `ToServer::send(host: &mut dyn ClientHost, &value)` goes through `ClientHost::send_payload_to_server`; `ToClient::send(host: &mut dyn ServerHost, player, &value)` through `PlayerRef::send_payload`; `reply(context, &value)` on either through `IPayloadContext::reply`. Each returns the raw send's results. The encoder refuses what the peer's decoder would refuse (`EncodeFailed` naming the id) before any bytes are queued, its allocation budget included: the writer charges `PAYLOAD_DECODE_BUDGET` by the reader's rules, with 64-bit sizes on every target. A wrong direction does not compile: a `ToServer` has no send to a player |
-| Receiving | The adapter runs `decode_payload::<T>(body)`. A body that is not one `T` (a negative length, a count past its bound, nesting past 64, a trailing byte) fails the session by name, as a raw handler's error does, with no callback and nothing reserved before the bound is checked. A callback that panics is disabled for every connection, raw or typed: the transaction rolls back, no reply goes out, the session closes and a later message for it is refused without running it |
+| Receiving | The adapter runs `decode_payload::<T>(body)`. A body that is not one `T` (a count past its bound, nesting past 64, a trailing byte) fails the session by name, as a raw handler's error does, with no callback and nothing reserved before the bound is checked. A callback that panics is disabled for every connection, raw or typed: the transaction rolls back, no reply goes out, the session closes and a later message for it is refused without running it |
 | Load refusals | Two owners of one id refuse load, naming the first. A typed id has one declaration: declaring it again in another protocol, typed or raw, refuses load, so a token's protocol is the only one its id exists in and a send in the other phase is `WrongProtocol`. The refused registration's token names load 0 and is always stale |
-| Historical WebAssembly guest route | The typed value itself never crossed Wire; its encoded body and its token did. The guest decoded and ran its handler, and the host checked the token like a native token. That dispatch route no longer exists. |
 | Cost | Registration and reading a token as a type walk the schema. A declared payload with no traffic makes no codec call; a send or reply checks its token with two `u64` compares and one table lookup, with no schema walk and no allocation before it encodes |
 
 ## Remaining typed work in #813
@@ -284,16 +271,6 @@ envelope/numeric-slot proposal and 32-per-tick acceptance row are removed. The t
 layer above keeps registration and helpers outside object-safe Host dispatch, delegates
 to the same raw transport and binds its token to the checked declaration, type,
 protocol, direction and load.
-
-Share schema/value codec primitives with #811. Wire is an ABI representation, not
-permission to serialize Rust pointers, memory layouts, or `Any`. `PayloadCodec` encodes
-the typed value into bytes that the transport queues as `PayloadBytes`. The payload
-token's Wire representation is separate. Structured codecs must check signed lengths,
-overflow, remaining bytes, cumulative allocation,
-depth, discriminants, and registry references before allocating; require complete
-consumption. Per-schema bounds must not silently reinstate a lower generic transport
-ceiling. Native arbitrary allocation/process-aborting panics cannot be sandboxed.
-Errors must abort the active transaction and discard staged sends. The removed guest route also treated traps as aborts.
 
 Configuration snapshots still need revisioned atomic publication and acknowledgement
 before admission, without overwriting local config files. They use this transport; they
@@ -333,8 +310,3 @@ malformed structured values, sender identity, ordered application, next-turn
 replies, root rollback, stale epochs, and resource pressure with progress after
 drain. Raw transport tests do not prove the unfinished configuration-snapshot or
 attachment contracts.
-
-### Historical guest route
-
-The original plan also checked guest traps and measured copies and allocations for
-guest Wire transfer; it did not assume zero-copy transfer. Neither is a native test requirement.

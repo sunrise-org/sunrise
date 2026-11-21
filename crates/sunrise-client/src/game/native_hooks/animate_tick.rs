@@ -2,9 +2,9 @@
 //! called inside the pick.
 use super::*;
 use crate::game::api_values::block_state::block_listens;
-use crate::game::api_values::{random_to_api, random_to_engine};
 use std::cell::RefCell;
 use std::rc::Rc;
+use sunrise_core::random::LegacyRandom;
 
 /// The level's random (`ClientLevel.random`) while a part's `animate_tick` holds it as
 /// `event.random`: one stream for the part's draws and the game's own draws during the call
@@ -58,7 +58,12 @@ impl Game<'_> {
         let Some(level) = self.native_client_level() else {
             return;
         };
-        let lent: LentRandom = Rc::new(RefCell::new(random_to_api(self.particles.level_random())));
+        let lent: LentRandom = Rc::new(RefCell::new(mod_api::LegacyRandomSource::from(<(
+            u64,
+            Option<f64>,
+        )>::from(
+            &*self.particles.level_random(),
+        ))));
         let mut random = LevelRandom(lent.clone());
         let outer = self.lent_level_random.replace(lent.clone());
         self.native_animate_tick(super::fire::AnimateTickCall {
@@ -68,7 +73,8 @@ impl Game<'_> {
             random: &mut random,
         });
         self.lent_level_random = outer;
-        *self.particles.level_random() = random_to_engine(&lent.borrow());
+        *self.particles.level_random() =
+            LegacyRandom::from(<(u64, Option<f64>)>::from(&*lent.borrow()));
     }
 
     /// Runs `f`, which draws from the particle engine's level random (the limiter's roll of
@@ -82,9 +88,12 @@ impl Game<'_> {
         let Some(lent) = self.lent_level_random.clone() else {
             return f(self);
         };
-        *self.particles.level_random() = random_to_engine(&lent.borrow());
+        *self.particles.level_random() =
+            LegacyRandom::from(<(u64, Option<f64>)>::from(&*lent.borrow()));
         let out = f(self);
-        *lent.borrow_mut() = random_to_api(self.particles.level_random());
+        *lent.borrow_mut() = mod_api::LegacyRandomSource::from(<(u64, Option<f64>)>::from(
+            &*self.particles.level_random(),
+        ));
         out
     }
 

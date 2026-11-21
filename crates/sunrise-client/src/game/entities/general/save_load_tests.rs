@@ -1276,8 +1276,14 @@ fn a_general_row_has_its_declared_kind_and_is_selectable_by_type() {
         game.build_registries();
         let _world = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
 
-        assert_eq!(robot.kind(game).unwrap().id(game), "mymod:robot");
-        assert_eq!(ghost.kind(game).unwrap().id(game), "mymod:ghost");
+        assert_eq!(
+            robot.kind(game).unwrap().id(game).as_deref(),
+            Some("mymod:robot")
+        );
+        assert_eq!(
+            ghost.kind(game).unwrap().id(game).as_deref(),
+            Some("mymod:ghost")
+        );
         assert!(game.as_console(|game| game.run_command("kill @e[type=mymod:robot]")));
         assert_eq!(robot.position(game), None);
         assert_eq!(ghost.position(game), Some([0.5, 64.0, 0.5]));

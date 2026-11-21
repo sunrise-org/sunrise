@@ -102,9 +102,7 @@ impl Game<'_> {
         let (entity, block, face, at) = self.pearl_hit(hit);
         let entity_kind = entity
             .and_then(|id| self.entity(id))
-            .and_then(|entity| self.entity_kind(entity))
-            .map(|kind| kind.id(self))
-            .unwrap_or_default();
+            .and_then(|entity| self.entity_kind(entity)?.id(self));
         let mut canceled = false;
         self.native_projectile_impact(mod_api::__private::ProjectileImpactCall {
             dimension: self.dim.id(),
@@ -112,7 +110,7 @@ impl Game<'_> {
             kind,
             owner,
             entity,
-            entity_kind: &entity_kind,
+            entity_kind: entity_kind.as_deref().unwrap_or_default(),
             block,
             face,
             at,

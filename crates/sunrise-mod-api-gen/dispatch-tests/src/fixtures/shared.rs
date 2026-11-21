@@ -1,4 +1,5 @@
 //! Shared exception: dispatch infrastructure and cross-area fixture types/tests; no new hooks.
+use mod_api::mod_api::BlockEntityTypeKey;
 use mod_api::mod_api::client::hud_layout::GuiDraw;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -127,11 +128,11 @@ mod generated {
             pub id: String,
         }
         pub(super) use super::super::ItemStack;
-        // The generated standalone-model dispatch builds the stub `Answered` and names the type through this path.
+        // Generated registration dispatch builds the stub `Answered` through this path.
         pub(super) use super::super::Answered;
         pub(super) use super::super::{
-            Command, Config, DeclarationError, Dispensed, Hand, InteractionResult, MapDecoration,
-            MapInfo, Screen, Zoom,
+            Command, CommandRegistration, Config, DeclarationError, Dispensed, InteractionResult,
+            MapDecoration, MapInfo, Zoom,
         };
         #[derive(Clone)]
         pub struct FluidModel;
@@ -141,9 +142,8 @@ mod generated {
     }
     include!(concat!(env!("OUT_DIR"), "/mod_api_generated.rs"));
     pub(super) use self::mod_api::InlineImageReplacement;
-    pub(super) use self::mod_api::{
-        BlockEntityTickReply, BlockFace, BlockKey, BlockState, CrosshairTarget,
-    };
+    use self::mod_api::StandaloneModelRegistration;
+    pub(super) use self::mod_api::{BlockFace, BlockKey, BlockState, CrosshairTarget};
     pub use sunrise_mod_api_macros::__subscriptions;
 }
 use generated::*;
@@ -333,7 +333,7 @@ impl Parts {
     fn menu<'k>(&self, _: impl FnOnce() -> Option<&'k str>) -> &[&'static dyn MenuPart] {
         &self.menus
     }
-    fn menu_screen(&self, _: &str, _: Option<&str>) -> &[&'static dyn MenuPart] {
+    fn menu_for_opener(&self, _: &str, _: Option<&str>) -> &[&'static dyn MenuPart] {
         &self.menus
     }
     fn fluid<'k>(&self, _: impl FnOnce() -> Option<&'k str>) -> &[&'static dyn FluidPart] {
@@ -597,8 +597,9 @@ impl MenuPart for Mod {
         let context = event.context;
         assert_eq!((context.player, context.pos), (Some(7), Some([1, 2, 3])));
         assert_eq!(event.container, MenuContainer::Grid);
-        assert_eq!(context.slots.len(), 2);
-        assert!(context.slots[1][0].is_none() && context.slots[1][1].is_some());
+        assert!(context.slot(MenuContainer::Grid, 0).is_none());
+        let stack = context.slot(MenuContainer::Grid, 1).unwrap();
+        assert_eq!((stack.item.as_ref(), stack.count), ("planks", 4));
         event.may_place = false;
         event.max_stack = self.id;
     }
@@ -705,5 +706,5 @@ fn part(id: u32, calls: &Arc<Mutex<Vec<u32>>>) -> &'static Mod {
 
 mod stubs {
     pub(super) use super::generated::mod_api::LivingRef;
-    pub(super) use crate::tests::mod_api::mod_api::{BlockEntityTickReply, DamageContainer};
+    pub(super) use crate::tests::mod_api::mod_api::DamageContainer;
 }

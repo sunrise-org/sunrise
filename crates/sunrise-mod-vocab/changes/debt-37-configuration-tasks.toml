@@ -1,0 +1,92 @@
+ids = [
+    "hook:register_configuration_tasks",
+    "hook:register_configuration_tasks.tasks",
+    "type:RegisterConfigurationTasksEvent.tasks",
+    "handle:RegisterConfigurationTasksEvent::register",
+    "type:ConfigurationTask",
+    "type:ConfigurationTask.id",
+    "handle:ConfigurationTask::new",
+    "trait:ConfigurationTask",
+    "method:ConfigurationTask::task_type",
+    "method:ConfigurationTask::start",
+    "method:ConfigurationTask::tick",
+    "type:ConfigurationTaskRegistrationError",
+    "type:ConfigurationTaskRegistrationError.EmptyType",
+    "type:ConfigurationTaskRegistrationError.DuplicateType",
+    "hook:configuration_task_start",
+    "hook:configuration_task_start.connection",
+    "hook:configuration_task_start.task_type",
+    "method:Hooks::configuration_task_start",
+    "type:ConfigurationTaskStartEvent",
+    "type:ConfigurationTaskStartEvent.connection",
+    "type:ConfigurationTaskStartEvent.task_type",
+    "hook:configuration_task_tick",
+    "hook:configuration_task_tick.connection",
+    "hook:configuration_task_tick.task_type",
+    "hook:configuration_task_tick.finished",
+    "method:Hooks::configuration_task_tick",
+    "type:ConfigurationTaskTickEvent",
+    "type:ConfigurationTaskTickEvent.connection",
+    "type:ConfigurationTaskTickEvent.task_type",
+    "type:ConfigurationTaskTickEvent.finished",
+    "type:ConfigurationConnection",
+    "handle:ConfigurationConnection::send_payload",
+    "handle:ConfigurationConnection::finish",
+    "handle:ConfigurationConnection::fail",
+    "method:prelude::ConfigurationTasksServerHost::configuration_send_payload",
+    "method:prelude::ConfigurationTasksServerHost::configuration_finish",
+    "method:prelude::ConfigurationTasksServerHost::configuration_fail",
+    "type:ConfigurationTaskRef",
+    "type:ConfigurationTaskContext",
+    "handle:ConfigurationTaskContext::instance",
+    "handle:ConfigurationTaskContext::has_channel",
+    "handle:ConfigurationTaskContext::send_payload",
+    "handle:ConfigurationTaskContext::finish",
+    "handle:ConfigurationTaskContext::fail",
+    "type:ConfigurationTaskError",
+    "type:ConfigurationTaskError.WrongType",
+    "type:ConfigurationTaskError.NotRunning",
+    "type:ConfigurationTaskError.StaleTask",
+    "type:ConfigurationTaskError.WrongConnection",
+    "type:ConfigurationTaskError.WrongContext",
+    "method:IPayloadContext::finish_configuration_task",
+]
+why = "Each connection now owns its ordered task instances, so their state stays with them and only the registered task runs. A delayed reply cannot complete a newer task or another connection's task. Completion publishes after the outermost commit and its deferred sends, so rollback cannot advance the queue."
+migrate = """
+In `Hooks::register_configuration_tasks` (now version 2), replace \
+`event.tasks.push(ConfigurationTask::new(id))` with `event.register(MyTask { id, ... })`. \
+Define `MyTask: Send + 'static` and implement `ConfigurationTask`; replace the old record's \
+`id` field with your own, returned by `task_type(&self) -> &Identifier`. A nonempty type \
+must be unique per connection. Handle `ConfigurationTaskRegistrationError::EmptyType` and \
+`DuplicateType(id)`; the first refusal aborts admission even if ignored. The event still \
+provides `connection`, `player` and `name`, and `event.connection.has_channel(host, channel)` \
+still works in registration.
+
+Move `configuration_task_start` and `configuration_task_tick` into `ConfigurationTask::start` \
+and optional `ConfigurationTask::tick`, each taking `&mut self, host: &mut dyn ServerHost, \
+context: &mut ConfigurationTaskContext<'_>`. Read your own field instead of `event.task_type` \
+and keep state on `self`. In either callback, replace `event.connection.has_channel(host, channel)` \
+with `context.has_channel(host, channel)`, and `event.connection.send_payload(host, channel, bytes)` \
+with `context.send_payload(host, channel, bytes)`. If calling `host.configuration_send_payload` \
+directly, pass `context.instance()` instead of `event.connection`. Replace \
+`connection.finish(host, task_type)`, `host.configuration_finish(connection, task_type)` or \
+`event.finished = true` with `context.finish()`. Replace `connection.fail(host, reason)` and \
+`host.configuration_fail(connection, reason)` with `context.fail(reason)`.
+
+For delayed completion, save `context.instance()` in server-local state for the original \
+challenge. Pass that saved value to `cx.finish_configuration_task(instance)` in a server \
+main-thread configuration payload handler, and use `cx.reply(channel, bytes)` to send its reply. \
+Never substitute the task that is current at reply time. Completion publishes after the outermost \
+transaction commits and publishes its deferred sends; abort, handler failure or an explicit \
+handler disconnect discards the request. Custom `IPayloadContext` implementations must implement \
+`finish_configuration_task(&mut self, instance: ConfigurationTaskRef) -> Result<(), ConfigurationTaskError>` \
+and return `WrongContext` where no server main-thread configuration transaction is available.
+
+Replace matches on `WrongType` or `NotRunning` with `StaleTask` for a noncurrent instance. \
+Handle `WrongConnection` for another live peer's instance, `WrongContext` for the wrong \
+side, phase, executor or missing transaction, and `Disconnected` for an ended connection or \
+configuration epoch. Send refusals still use `Payload`. `ConfigurationTask`, \
+`ConfigurationConnection` and `ConfigurationTaskError` no longer implement `Wire`; keep task \
+objects, contexts, connection and instance capabilities, and errors local. Transmit only \
+your own challenge and reply data.
+"""

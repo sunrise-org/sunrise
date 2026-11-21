@@ -13,9 +13,11 @@ pub trait Hooks {
     /// recipes. A recipe's recipe book ids are not part of what arrives:
     /// `recipe_book_ids` answers them. Client-side.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_recipes_received",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         neoforge = "RecipesReceivedEvent"
     )]
-    fn recipes_received();
+    fn recipes_received(recipe_types: &[String]);
 }

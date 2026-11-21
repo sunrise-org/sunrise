@@ -11,11 +11,8 @@ pub struct Keys {
     pub jump: bool,
     pub shift: bool,
     pub sprint: bool,
-    /// A movement-input listener explicitly holds sprint off this local tick.
-    /// A replayed tick (`MotionWorld::replayed_tick`) takes the sprint state it is given instead.
-    pub sprint_suppressed: bool,
-    /// A controller stick's move vector (`[left, forward]`, Sunrise's own),
-    /// used instead of the keys' direction while it is pushed.
+    /// A sampled stick or listener-edited move vector (`[left, forward]`),
+    /// used instead of deriving the direction from the keys.
     pub analog: Option<[f32; 2]>,
 }
 impl Keys {
@@ -95,7 +92,7 @@ impl Conditions {
     }
 }
 impl SprintState {
-    /// `LocalPlayer.aiStep`'s sprint phase, with a mod's optional tick suppression.
+    /// `LocalPlayer.aiStep`'s sprint phase.
     /// The default vanilla window is seven ticks; options can select 0..10.
     /// The setter runs for every native request, including repeated true requests.
     pub fn tick<E>(
@@ -115,13 +112,6 @@ impl SprintState {
         self.previous_shift = keys.shift;
         if old_shift || (conditions.slow_item && !conditions.passenger) || keys.backward {
             self.trigger_time = 0;
-        }
-        if keys.sprint_suppressed {
-            self.trigger_time = 0;
-            if conditions.sprinting {
-                set_sprinting(false)?;
-            }
-            return Ok(());
         }
         let mut sprinting = conditions.sprinting;
         if conditions.can_start(forward) {

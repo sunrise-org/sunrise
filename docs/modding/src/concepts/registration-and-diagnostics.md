@@ -19,7 +19,10 @@ even if the caller ignores the error. The startup error and log identify the sub
 declaration kind, ID, and reason.
 
 If your `Hooks::register` bootstrap cannot complete, call `cx.refuse("reason")` and return.
-The registration error path reports the refusal without panicking or exiting from the hook.
+Sunrise records the refusal directly against the mod whose `register` hook is running. It does
+not panic or exit the hook for you. Like `warn`, `refuse` only records diagnostics in
+`Hooks::register`; it has no effect in other hooks. These reports are separate from the native
+block and item declaration errors described above.
 
 ## Registration refusal
 
@@ -35,8 +38,9 @@ The registration error path reports the refusal without panicking or exiting fro
 For log locations and filtering, see [Find your mod's diagnostics](../how-to/read-the-game-log.md).
 
 A problem that should not stop your mod, such as a missing optional integration or a setting it
-corrected, is a warning: `cx.warn("mymod.warn.no_jei", &["jei"])` inside `Hooks::register`
-(NeoForge's `ModLoadingIssue.warning`).
+corrected, is a warning: `cx.warn("mymod.warn.no_jei", &["jei"])` inside `Hooks::register`.
+Like NeoForge's `ModLoader.addLoadingIssue` with `ModLoadingIssue.withAffectedMod`, the
+registration records the warning against the mod that reported it.
 
 - The key is a translation key in your mod's own `lang/` files; the arguments fill its `%s` in
   order.

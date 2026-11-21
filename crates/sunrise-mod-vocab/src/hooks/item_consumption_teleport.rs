@@ -9,6 +9,8 @@ pub trait Hooks {
     /// cancelling that the block at `pos` still has the block id and properties it
     /// judged; if not, the block is not changed.
     #[hook(
+        receiver = "read",
+        dispatch = "api_carrier",
         side = "server",
         contract = "cancel",
         out = "cancel",
@@ -45,6 +47,8 @@ pub trait Hooks {
     /// heard: the listeners aren't called for that consumption and the teleport goes on as
     /// vanilla's.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_item_consumption_teleport",
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         version = 2,
@@ -52,5 +56,11 @@ pub trait Hooks {
         neoforge = "EntityTeleportEvent.ItemConsumption",
         cancellable = true
     )]
-    fn item_consumption_teleport();
+    fn item_consumption_teleport(
+        consumer: mod_api::LivingRef,
+        consumed: &mod_api::ItemStack,
+        from: [f64; 3],
+        target: &mut [f64; 3],
+        cancel: &mut bool,
+    );
 }

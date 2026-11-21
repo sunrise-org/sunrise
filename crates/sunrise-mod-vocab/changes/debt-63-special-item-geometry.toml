@@ -1,0 +1,55 @@
+ids = [
+  "hook:register_special_model_renderer",
+  "method:SpecialModelRenderers::register",
+  "trait:SpecialModelRenderer",
+  "method:SpecialModelRenderer::extract",
+  "assoc:SpecialModelRenderer::Argument",
+  "method:SpecialModelRenderer::extract_argument",
+  "method:SpecialModelRenderer::submit",
+  "handle:SpecialModelRendererRegistry::into_renderers",
+  "type:SpecialModelPolicy",
+  "type:SpecialModelPolicy.Stack",
+  "type:SpecialModelPolicy.Frame",
+  "type:SpecialModelPart",
+  "type:SpecialModelPart.content",
+  "type:SpecialModelPart.transform",
+  "type:SpecialModelPart.tints",
+  "handle:SpecialModelPart::IDENTITY",
+  "handle:SpecialModelPart::new",
+  "handle:SpecialModelPart::stack",
+  "handle:SpecialModelPart::with_transform",
+  "handle:SpecialModelPart::translated",
+  "handle:SpecialModelPart::with_tints",
+  "type:SpecialPartContent",
+  "type:SpecialPartContent.Model",
+  "type:SpecialPartContent.Stack",
+  "type:SpecialModelContext",
+  "handle:SpecialModelContext::STACK",
+  "type:SpecialModelConfig",
+  "handle:SpecialModelConfig::decode",
+  "type:SpecialModelFactory",
+  "handle:SpecialModelFactory::new",
+  "trait:SpecialModelBakeContext",
+  "method:SpecialModelBakeContext::bake_model",
+  "method:SpecialModelBakeContext::bake_geometry",
+  "type:SpecialModelQuad",
+  "handle:SpecialModelQuad::new",
+  "type:SpecialModelGeometry",
+  "type:SpecialModelStack",
+  "handle:SpecialModelStack::item",
+  "handle:SpecialModelStack::count",
+  "handle:SpecialModelStack::get",
+  "type:SpecialModelCollector",
+  "handle:SpecialModelCollector::with_pose",
+  "handle:SpecialModelCollector::submit_geometry",
+  "handle:SpecialModelCollector::submit_stack",
+  "type:SpecialModelTints",
+]
+why = '''`8019bce5490` used named-model recipes so renderers could choose and pose pack geometry while the game retained the ordinary item draw state. The recipes used Wire for the guest boundary, not for storage or networking. `685572c8626` kept the unchanged-stack cache and added frame-scoped answers for time- and display-dependent rendering. The native API now bakes resource geometry once per node per load, then extracts a fresh typed argument and submits directly on each draw, without either answer cache. A refused submission rolls back the whole special layer without disturbing sibling layers.'''
+migrate = '''
+- Keep the same `register_special_model_renderer` hook and event. Replace `event.renderers.register(kind, policy, renderer)` with `event.renderers.register(kind, factory)`. Make the factory with `SpecialModelFactory::new(|fields| fields.decode::<MyConfig>(), |config, bake| { ... })`, where `MyConfig` derives `serde::Deserialize` and the bake closure returns `Ok(MyRenderer { ... })`. Move reads of the inline model's `Tag` fields into typed decoding; `type` is excluded. If there is no configuration, use `|_| Ok(())`. `SpecialModelRendererRegistry::into_renderers()` still returns the map and replacement reports; map values are now `SpecialModelFactory`, not `(SpecialModelPolicy, Arc<dyn SpecialModelRenderer>)`.
+- Replace `extract(host, stack, config, context) -> Result<Vec<SpecialModelPart>, String>` with `type Argument`, `extract_argument(host, &SpecialModelStack) -> Self::Argument`, and `submit(&argument, context, collector) -> Result<(), String>`. Read `stack.item()`, `stack.count()` and typed effective components with `stack.get(&descriptor)` during extraction. If extraction can fail, use `Result<DrawArgument, String>` as the argument and propagate its error from `submit`. Keep decoded configuration on the baked renderer. Drop both `SpecialModelPolicy` variants and `SpecialModelContext::STACK`; every `submit` receives the actual display, game time and partial tick even for an unchanged stack. `SpecialModelContext` no longer implements `Wire`: read it in the callback, not as a serialized renderer input.
+- Replace `SpecialModelPart::new(model)` and `SpecialPartContent::Model(model)` with `bake.bake_model(&model_id)?` for a `String` model id in the bake closure, then `collector.submit_geometry(&lease, tints)?` in `submit`. For custom quads, obtain the lease from `bake.bake_geometry(&quads)?`. Keep the leases on the baked renderer and recreate them on reload. Replace `SpecialModelPart::stack(stack, display)` and `SpecialPartContent::Stack { stack, display }` with `collector.submit_stack(&stack, display)?`.
+- Replace `part.transform` and `with_transform(matrix)` with `collector.with_pose(matrix, |child| ...)`, submitting to `child`. For `translated([x, y, z])` after a transform, add `x`, `y`, and `z` to its translation entries at indices 3, 7, and 11. For identity, drop `SpecialModelPart::IDENTITY` and submit on the current collector. Replace `part.tints` and `with_tints(palette)` with `SpecialModelTints::Indexed(palette.into())` for an existing `Vec<u32>` palette, `Uniform(argb)` for one tint across all quads, or `Untinted` for white. Nested stacks keep their own tints and foil.
+- Delete `MAX_SPECIAL_MODEL_PARTS` checks: the 256-part recipe limit is gone, not replaced by a submission count limit. The separate `MAX_NESTED_STACK_PARTS` expansion budget and cycle refusal still apply. Propagate collector errors with `?`; even an ignored collector refusal discards the enclosing layer. Rebuild native mods.
+'''

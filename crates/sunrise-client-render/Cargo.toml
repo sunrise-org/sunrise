@@ -7,7 +7,6 @@ rust-version.workspace = true
 description = "The client's world data, rendering and screens: chunks, meshing, light, streaming, the renderer, the HUD, menus and settings; no gameplay"
 
 [dependencies]
-sunrise-guest-stack = { path = "../sunrise-guest-stack" }
 # The settings stores of the crates above the engine (docs/layers.md, "Platform registries").
 sunrise-hooks = { path = "../sunrise-hooks" }
 sunrise-mod-runtime = { path = "../sunrise-mod-runtime" }

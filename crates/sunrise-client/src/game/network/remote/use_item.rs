@@ -11,10 +11,6 @@ impl Game<'_> {
         let Some(held) = self.with_hand(hand, |g| g.held().cloned()) else {
             return false;
         };
-        // Client-owned input items use mod_use_start instead of server item use.
-        if self.native_input.claimant(&held.item).is_some() {
-            return false;
-        }
         let seq = self.next_sequence();
         self.send(S::UseItem(play::UseItem {
             hand: hand_id(hand),
@@ -154,9 +150,8 @@ impl Game<'_> {
     /// its crumbs until the server's USE_ITEM_COMPLETE. The server sends the
     /// stack, its hunger and the sounds.
     pub(super) fn remote_tick_using(&mut self) {
+        self.tick_client_item_use();
         let Some((slot, ticks)) = self.using else {
-            // A mod's use the game reset (the server stopping the use...).
-            self.end_mod_use();
             return;
         };
         let stack = self.stack_in(slot).cloned();
@@ -168,17 +163,12 @@ impl Game<'_> {
                 r.use_item = item;
             } else if r.use_item != item {
                 self.using = None;
-                self.end_mod_use();
                 return;
             }
         }
         // Another hotbar slot picked: LivingEntity.updatingUsingItem sees a
         // different stack in the hand. The off hand keeps its item.
         let in_hand = slot == self.selected || slot == crate::game::shield::OFFHAND_SLOT;
-        // A mod's item: held until the button lets go, counted for the mod.
-        if self.mod_use_tick(slot, ticks, !self.right || !in_hand) {
-            return;
-        }
         // A client cancel skips this tick's effects; the countdown and release continue.
         if let Some(s) = stack.as_ref().filter(|_| in_hand)
             && !self.use_item_ticked(s, ticks)

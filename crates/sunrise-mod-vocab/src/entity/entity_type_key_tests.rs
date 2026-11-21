@@ -34,4 +34,5 @@ fn entity_type_key_derive_checks_host_slots_and_round_trips() {
         registry_keys::entity_type_key_id(zombie).as_deref(),
         Some("minecraft:zombie")
     );
+    assert!(registry_keys::entity_type_key_id(EntityTypeKey(u32::MAX)).is_none());
 }

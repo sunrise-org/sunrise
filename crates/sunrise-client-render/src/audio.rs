@@ -195,7 +195,7 @@ struct Mixer {
     cameras: Vec<([f64; 3], Basis, u32)>,
     /// Per-source gain/pan/step cache for one buffer, reused across callbacks.
     voices: Vec<(ChannelId, [f32; 3], f64)>,
-    /// Mods' audio streams (`ClientHost::open_audio_stream`).
+    /// Mods' push and pull audio streams, separate from vanilla's channels.
     streams: Vec<streams::StreamVoice>,
     /// Each `SoundSource`'s volume for a stream: master times the group, as every sound's.
     stream_gain: [f32; 11],
@@ -948,11 +948,13 @@ fn mix_with_effects(
 fn mix_pieces(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
     let most = MAX_MIX_FRAMES * channels.max(1);
     if data.len() <= most || !mixer.effects_heard() {
-        return mix(mixer, data, channels, rate);
+        mix(mixer, data, channels, rate);
+    } else {
+        for piece in data.chunks_mut(most) {
+            mix(mixer, piece, channels, rate);
+        }
     }
-    for piece in data.chunks_mut(most) {
-        mix(mixer, piece, channels, rate);
-    }
+    streams::request_pull(&mixer.streams, data.len() / channels, rate);
 }
 // Only the output stream mixes; a build without one (no `audio` feature) never does.
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
@@ -1884,17 +1886,20 @@ impl Audio {
             }
         }
     }
-    /// Opens a stream for the mod `owner` (`ClientHost::open_audio_stream`): the ring is
-    /// allocated here, and the mod pushes PCM into it from any thread.
+    /// Opens a mod stream. The shared worker reads `source` on demand if supplied; otherwise
+    /// the mod pushes PCM from any thread. Both paths use the separate mod stream pool.
     pub fn open_stream(
         &self,
         owner: &str,
         spec: &mod_api::StreamSpec,
+        source: Option<Box<dyn mod_api::AudioStream>>,
     ) -> std::result::Result<Arc<dyn mod_api::AudioStreamSource>, mod_api::AudioRefusal> {
         if !self.backend.live {
             return Err(mod_api::AudioRefusal::NoOutput);
         }
-        self.backend.streams.open(&self.backend.mixer, owner, spec)
+        self.backend
+            .streams
+            .open(&self.backend.mixer, owner, spec, source)
     }
     /// Places each entity-placed stream at its entity's position as `resolve` finds it now, or
     /// leaves it unplaced where it finds none. Called once a frame; it does nothing, and locks
@@ -2437,13 +2442,6 @@ impl Audio {
     #[doc(hidden)]
     pub fn backend_live_for_bench(&mut self) {
         self.backend.live = true;
-    }
-    /// Each open mod stream's `prebuffer_ms` and how many times it ran dry, for a test of a mod's
-    /// pacing that has no device.
-    // hidden: a measurement read for the compiled-guest daily test in sunrise-client, not an API.
-    #[doc(hidden)]
-    pub fn stream_underruns_for_bench(&self) -> Vec<(u32, u32)> {
-        self.backend.streams.underruns()
     }
 }
 impl Sounds for Audio {

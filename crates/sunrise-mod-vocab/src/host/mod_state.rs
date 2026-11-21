@@ -8,7 +8,8 @@ pub trait ModStateHost {
     /// Capture a SNAPSHOT of the current dimension's attachment residency and values.
     /// Later changes require a fresh query. Removed-but-unswept entities may appear;
     /// writes through stale holders fail. Values are neither cloned nor eagerly decoded.
-    /// An undeclared id is refused with the calling package and attachment id.
+    /// The batch is local, not a save or sync record. An undeclared id is refused
+    /// with the calling package and attachment id.
     #[access(WorldOnly)]
     fn attachment_query(
         &self,
@@ -27,7 +28,8 @@ pub trait ModStateHost {
 pub trait ModStateServerHost {
     /// Side: server.
     /// Validate captured residency against the current dimension immediately before
-    /// an ordinary journaled attachment write. This does not open a transaction.
+    /// an ordinary journaled attachment write. The token comes from a captured row,
+    /// not from disk or the network. This does not open a transaction.
     #[access(WorldOnly)]
     fn attachment_validate_write(
         &self,
@@ -61,13 +63,20 @@ pub trait ModStateServerHost {
     #[access(WorldOnly)]
     fn transaction_depth(&self, tx: &Transaction) -> Option<u32>;
     /// Side: server.
-    /// Asks for `Hooks::scheduled_task` to be called with `token` after `delay_ticks` server
-    /// ticks (`MinecraftServer.tell(new TickTask(getTickCount() + delay, ..))`; 0 and 1 both
-    /// mean the next tick, and a paused server does not advance it). Tasks due together run in
-    /// the order they were scheduled. Only inside a mod's hook; the task belongs to that mod and
-    /// is dropped with the world.
+    /// Runs the calling mod's `task` once after `delay_ticks` server ticks, after the due tick's
+    /// start hook. Both 0 and 1 mean the next tick; a paused server does not advance the delay.
+    /// Tasks due together run in the order they were scheduled.
+    ///
+    /// Move owned data into the closure, not the current host or event. The task gets a fresh
+    /// server host on the same thread. Journaled writes commit on return or roll back on panic;
+    /// other due tasks still run before the first panic resumes. Tasks whose owners are disabled
+    /// when due are discarded. Pending tasks are dropped with the world and are not saved.
     #[access(WorldOnly)]
-    fn schedule_task(&mut self, delay_ticks: u32, token: u64) -> Result<TaskId, ScheduleError>;
+    fn schedule_task(
+        &mut self,
+        delay_ticks: u32,
+        task: Box<dyn FnOnce(&mut dyn ServerHost)>,
+    ) -> Result<TaskId, ScheduleError>;
     /// Side: server.
     /// Withdraws a task the calling mod scheduled: true if it was still waiting.
     #[access(WorldOnly)]

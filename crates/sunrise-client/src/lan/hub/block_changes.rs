@@ -102,7 +102,7 @@ impl Hub {
             // handed the column to summarize again (`handoff::changed`).
             let unsent = |g: &Guest, key: &(i32, i32)| {
                 self.here(g)
-                    && g.address == crate::lan::conn::MEMORY_ADDRESS
+                    && g.address() == crate::lan::conn::MEMORY_ADDRESS
                     && !g.sent_chunks.contains(key)
             };
             for key in &bulk {

@@ -1534,7 +1534,7 @@ mod tests {
             stack
         };
 
-        let mut r = sunrise_protocol::buf::Writer::new();
+        let mut r = ::sunrise_core::vanilla_bytes::Writer::new();
         r.f32(2.0);
         r.varint(2); // Drink
         r.varint(0); // Direct sound
@@ -1565,7 +1565,7 @@ mod tests {
         assert!(consumable(&stack_removed, &items).is_none());
 
         // Wire patch with on_consume_effects and registered sound holder
-        let mut r = sunrise_protocol::buf::Writer::new();
+        let mut r = ::sunrise_core::vanilla_bytes::Writer::new();
         r.f32(1.6);
         r.varint(2); // Drink
         r.varint(1); // Registered sound holder (id 0 + 1)
@@ -1836,8 +1836,9 @@ mod tests {
 
     #[test]
     fn merchant_water_cost_survives_the_offer_packet() {
+        use sunrise_core::vanilla_bytes::Writer;
         use sunrise_protocol::{
-            buf::{Codec, Reader, Writer},
+            buf::{Codec, Reader},
             packets::play::{NetOffer, Offers},
         };
         let mut components = vec![String::new(); component::POTION_CONTENTS as usize + 1];
@@ -2019,7 +2020,8 @@ mod tests {
     /// the inventory stream, including fields that do not affect the pose.
     #[test]
     fn kinetic_patches_survive_inventory_bytes() {
-        use sunrise_protocol::{buf::Writer, item::Slot, registry::SyncedNames};
+        use sunrise_core::vanilla_bytes::Writer;
+        use sunrise_protocol::{item::Slot, registry::SyncedNames};
         let mut components = vec![String::new(); component::KINETIC_WEAPON as usize + 1];
         components[component::KINETIC_WEAPON as usize] = "minecraft:kinetic_weapon".into();
         let mut sounds = vec![String::new(); 703];
@@ -2175,7 +2177,8 @@ mod tests {
     /// sync, including the integrated server's window (#5721).
     #[test]
     fn unbreakable_survives_inventory_sync() {
-        use sunrise_protocol::buf::{Codec, Reader, Writer};
+        use sunrise_core::vanilla_bytes::Writer;
+        use sunrise_protocol::buf::{Codec, Reader};
         use sunrise_protocol::item::Slot;
         let mut components = vec![String::new(); component::UNBREAKABLE as usize + 1];
         components[component::DAMAGE as usize] = "minecraft:damage".into();
@@ -2230,7 +2233,8 @@ mod tests {
     /// the stack, not from its item (#14641). A removed one stays removed.
     #[test]
     fn a_stacks_tool_and_attribute_modifiers_cross_the_wire() {
-        use sunrise_protocol::buf::{Codec, Reader, Writer};
+        use sunrise_core::vanilla_bytes::Writer;
+        use sunrise_protocol::buf::{Codec, Reader};
         use sunrise_protocol::item::Slot;
         let mut components = vec![String::new(); component::TOOL as usize + 1];
         components[component::ATTRIBUTE_MODIFIERS as usize] =
@@ -2430,7 +2434,8 @@ mod tests {
     /// through the packet's bytes, so its tooltip names the Bad Omen level.
     #[test]
     fn an_ominous_bottle_keeps_its_amplifier_across_the_wire() {
-        use sunrise_protocol::buf::{Codec, Reader, Writer};
+        use sunrise_core::vanilla_bytes::Writer;
+        use sunrise_protocol::buf::{Codec, Reader};
         use sunrise_protocol::item::Slot;
         let mut components = vec![String::new(); 80];
         components[component::OMINOUS_BOTTLE_AMPLIFIER as usize] =
@@ -2488,7 +2493,7 @@ mod tests {
             network.component(component::TRIM),
             Some(Component::TrimDirect { .. })
         ));
-        let mut writer = sunrise_protocol::buf::Writer::new();
+        let mut writer = ::sunrise_core::vanilla_bytes::Writer::new();
         sunrise_protocol::item::Slot::write(&Some(network), &mut writer);
         let mut reader = Reader::new(&writer.data);
         let decoded = sunrise_protocol::item::Slot::read(&mut reader)
@@ -2681,7 +2686,8 @@ mod tests {
     /// as the ominous banner rather than a white one (#12530).
     #[test]
     fn a_raid_banner_keeps_its_component_values_across_the_wire() {
-        use sunrise_protocol::buf::{Codec, Reader, Writer};
+        use sunrise_core::vanilla_bytes::Writer;
+        use sunrise_protocol::buf::{Codec, Reader};
         use sunrise_protocol::item::Slot;
         let mut components = vec![String::new(); component::BANNER_PATTERNS as usize + 1];
         for (id, name) in [
@@ -2752,7 +2758,7 @@ mod tests {
             extra,
             ..edited.clone()
         };
-        edited.copy_changed_components_from(snapshot, &["minecraft:item_name".to_owned()]);
+        edited.apply_component_fields_from(snapshot, std::iter::once("minecraft:item_name"));
         assert!(!edited.data().unwrap().ominous_banner);
         let (received, _) = round_trip(edited.clone());
         assert_eq!(
@@ -2798,7 +2804,8 @@ mod tests {
     /// its client picked, and a client's tooltip names the server's.
     #[test]
     fn a_painting_keeps_its_variant_across_the_wire() {
-        use sunrise_protocol::buf::{Codec, Reader, Writer};
+        use sunrise_core::vanilla_bytes::Writer;
+        use sunrise_protocol::buf::{Codec, Reader};
         use sunrise_protocol::item::Slot;
         let mut components = vec![String::new(); 110];
         components[109] = "minecraft:painting/variant".into();
@@ -2862,8 +2869,9 @@ mod tests {
     /// component leaves it none, and a host sends both on as they came.
     #[test]
     fn a_stacks_own_attribute_modifiers_cross_the_wire() {
+        use sunrise_core::vanilla_bytes::Writer;
         use sunrise_items::item_data::ModifierRow;
-        use sunrise_protocol::buf::{Codec, Reader, Writer};
+        use sunrise_protocol::buf::{Codec, Reader};
         use sunrise_protocol::item::Slot;
         let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let mut components = vec![String::new(); 17];
@@ -2950,7 +2958,8 @@ mod tests {
     /// client's stack, whose own placement puts the text on the sign (#8102).
     #[test]
     fn a_signs_text_crosses_the_wire() {
-        use sunrise_protocol::buf::{Reader, Writer};
+        use sunrise_core::vanilla_bytes::Writer;
+        use sunrise_protocol::buf::Reader;
         use sunrise_protocol::item::Slot;
         let mut components = vec![String::new(); 120];
         components[118] = "minecraft:sign_text_front".into();
@@ -3005,7 +3014,8 @@ mod tests {
     /// `item_model.rs`'s `custom_data_at`).
     #[test]
     fn custom_data_and_custom_model_data_survive_lan_sync() {
-        use sunrise_protocol::buf::{Reader, Writer};
+        use sunrise_core::vanilla_bytes::Writer;
+        use sunrise_protocol::buf::Reader;
         use sunrise_protocol::item::Slot;
         let mut components = vec![String::new(); component::CUSTOM_MODEL_DATA as usize + 1];
         components[component::CUSTOM_DATA as usize] = "minecraft:custom_data".into();
@@ -3063,7 +3073,8 @@ mod tests {
 
     #[test]
     fn rarity_survives_lan_sync_and_enchantment_upgrade() {
-        use sunrise_protocol::buf::{Reader, Writer};
+        use sunrise_core::vanilla_bytes::Writer;
+        use sunrise_protocol::buf::Reader;
         use sunrise_protocol::item::Slot;
         use sunrise_protocol::registry::Ids;
         let mut components = vec![String::new(); component::RARITY as usize + 1];
@@ -3113,7 +3124,8 @@ mod tests {
     /// component is a `!minecraft:max_stack_size` patch.
     #[test]
     fn a_stack_keeps_its_max_stack_size_across_the_wire() {
-        use sunrise_protocol::buf::{Reader, Writer};
+        use sunrise_core::vanilla_bytes::Writer;
+        use sunrise_protocol::buf::Reader;
         use sunrise_protocol::item::Slot;
         let mut components = vec![String::new(); 2];
         components[component::CUSTOM_DATA as usize] = "minecraft:custom_data".into();

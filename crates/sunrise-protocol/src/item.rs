@@ -3,10 +3,11 @@
 //! client sends back in container clicks (HashedStack).
 use crate::{
     Result,
-    buf::{Codec, Reader, Writer, pack_block_pos, unpack_block_pos},
+    buf::{Codec, Reader, pack_block_pos, unpack_block_pos},
 };
 use std::sync::Arc;
 use sunrise_core::nbt::Tag;
+use sunrise_core::vanilla_bytes::Writer;
 
 #[doc(hidden)]
 pub mod custom;

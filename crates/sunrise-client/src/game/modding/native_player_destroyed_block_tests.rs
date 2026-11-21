@@ -1,7 +1,7 @@
 //! `player_destroyed_block` heard through the game's own break path: a creative and a survival
 //! break are heard once with the removed state; a break `break_block` cancels and a piston's
 //! are not heard.
-use super::native_entity_refs::tests::with_game;
+use super::native_entity_refs::tests::{collect_all_entities, with_game};
 use sunrise_client::{command::args::GameMode, items::ItemStack, motion::PlayerMotion};
 use sunrise_core::{geometry::Vec3, position::BlockPos};
 
@@ -233,12 +233,11 @@ struct Seen {
 /// Item entities in the overworld.
 fn items(host: &dyn mod_api::Host) -> usize {
     let level = host.level("minecraft:overworld").expect("the overworld");
-    level
-        .all_entities(host)
+    collect_all_entities(host, level)
         .unwrap_or_default()
         .into_iter()
         .filter(|entity| {
-            entity.kind(host).map(|kind| kind.id(host)).as_deref() == Some("minecraft:item")
+            entity.kind(host).and_then(|kind| kind.id(host)).as_deref() == Some("minecraft:item")
         })
         .count()
 }

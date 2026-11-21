@@ -17,5 +17,5 @@ pub trait Hooks {
         neoforge = "ItemAttributeModifierEvent",
         target = "mod_api::item::item_attributes::native_item_attribute_modifier"
     )]
-    fn item_attribute_modifier();
+    fn item_attribute_modifier(stack: &ItemStack, modifiers: &mut ItemAttributeModifiers);
 }

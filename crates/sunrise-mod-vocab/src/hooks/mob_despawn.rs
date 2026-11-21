@@ -10,6 +10,8 @@ pub trait Hooks {
 - Listeners run on replayed ticks, so they are pure functions of their inputs. Tick-time effect: one `listened` branch per mob per tick with no listeners; the answer sits in a `Mob` field that costs one byte and is reset after the mob's tick.
 - Beyond NeoForge: none. `Despawn` is plain data, `#[non_exhaustive]`."#]
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "server",
         version = 3,
         contract = "listen",
@@ -18,5 +20,5 @@ pub trait Hooks {
         neoforge = "MobDespawnEvent",
         cancellable = false
     )]
-    fn mob_despawn();
+    fn mob_despawn(dimension: &str, mob: MobRef, kind: &str, pos: [f64; 3], result: &mut Despawn);
 }

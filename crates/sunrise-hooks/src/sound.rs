@@ -1,5 +1,5 @@
-//! The volume of the audio mods make themselves (`ClientHost::open_audio_stream`), which a crate
-//! above the engine sets: 1 plays it as the mods ask, 0 plays none of it. The engine owns the
+//! The volume of mods' pull and push audio streams, which a crate above the engine sets:
+//! 1 plays it as the mods ask, 0 plays none of it. The engine owns the
 //! value and reads it where it mixes; a crate pushes it when its setting changes, never per frame.
 //! Nothing set, the mods' audio plays as asked.
 use std::sync::atomic::{AtomicU32, Ordering};

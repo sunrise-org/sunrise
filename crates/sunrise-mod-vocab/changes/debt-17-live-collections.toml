@@ -1,0 +1,29 @@
+ids = [
+    "handle:LevelRef::all_entities",
+    "handle:LevelRef::entities_in",
+    "handle:LevelRef::online_players",
+    "handle:TeamRef::members",
+    "handle:LevelRef::visit_all_entities",
+    "handle:LevelRef::visit_entities_in",
+    "handle:LevelRef::visit_online_players",
+    "handle:TeamRef::visit_members",
+    "handle:LevelRef::ray_trace_nearest_entity",
+    "type:TeamMembersReadError",
+    "type:TeamMembersReadError.Stale",
+    "type:TeamMembersReadError.Unavailable",
+]
+why = "Entity, player and team reads no longer build lists for callers that only need to inspect values or stop at a match. The scoped visits preserve order and visibility, distinguish a valid empty collection from a refused read, and borrow team names instead of copying them. A nearest-only entity ray can filter without collecting and sorting all hits."
+migrate = '''
+Import `core::ops::ControlFlow::{Break, Continue}`. Move the body of the old loop into a visitor:
+
+- `level.all_entities(host)` → `level.visit_all_entities(host, &mut |entity| { /* use EntityRef */ Continue(()) })`.
+- `level.entities_in(host, min, max)` → `level.visit_entities_in(host, min, max, &mut |entity| { /* use EntityRef */ Continue(()) })`.
+- `level.online_players(host)` → `level.visit_online_players(host, &mut |player| { /* use PlayerRef */ Continue(()) })`.
+- `team.members(host)` → `team.visit_members(host, &mut |name| { /* use &str */ Continue(()) })`. Replace destructuring `ScoreHolder::Name(name)` with using `name` directly as `&str`. To keep it, call `name.to_owned()` inside the callback; for a later scoreboard write, pass `ScoreHolder::Name(owned_name)`.
+
+Return `Break(())` to stop, saving any match in a captured variable. `Ok(Break(()))` means the visitor stopped; `Ok(Continue(()))` means the visit completed, including a valid empty result. Where the old call returned `None`, the new call returns `Err(LevelReadError::Stale)` for a stale level or `Err(LevelReadError::Unavailable)` when the query cannot read it (including invalid spatial bounds). Team visits return `Err(TeamMembersReadError::Stale)` for a removed team or an earlier open, or `Err(TeamMembersReadError::Unavailable)` when the server scoreboard cannot be read. Neither error runs the visitor. The all-entity visit refuses before any callback if any eligible lookup member cannot resolve, even if the visitor would stop at the first one.
+
+A visitor can make shared reads on the same host. If you used the old list to do mutable work, push the handles or owned names you need into your own list in the visitor, handle the visit result, then use the mutable host after the visit returns.
+
+If you only needed one hit from `level.ray_trace_entities(host, from, to, margin, exclude)?.into_iter().find(accept)` (where `accept` takes `&EntityRayHit`), use `level.ray_trace_nearest_entity(host, from, to, margin, exclude, &mut |hit| accept(&hit))`. Handle `Ok(Some(hit))` for a match, `Ok(None)` for no accepted hit, and `Err(LevelReadError::Stale)` or `Err(LevelReadError::Unavailable)` for refusal. The predicate now runs once per geometric hit in spatial order, not distance order. The smallest accepted squared distance wins, with the first visited hit winning exact ties. Keep `ray_trace_entities` if you need every hit or depend on processing hits nearest first.
+'''

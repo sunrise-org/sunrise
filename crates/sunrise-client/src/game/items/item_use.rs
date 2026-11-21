@@ -1334,7 +1334,7 @@ pub(super) mod interact_vibration_tests {
                 let call = self.0.fetch_add(1, Ordering::Relaxed);
                 if event
                     .stack
-                    .is_some_and(|stack| stack.item().id(host) == "minecraft:rotten_flesh")
+                    .is_some_and(|stack| stack.item().id(host) == Some("minecraft:rotten_flesh"))
                 {
                     return Some(false);
                 }

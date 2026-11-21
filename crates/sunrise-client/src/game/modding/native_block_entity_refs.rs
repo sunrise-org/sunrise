@@ -25,14 +25,14 @@ impl Game<'_> {
     }
 
     /// Find a block entity in a loaded chunk of an open level, or on a client in
-    /// the level it shows. An entity taken out for its tick cannot be read in that tick.
+    /// the level it shows.
     pub(super) fn block_entity(&self, level: LevelRef, pos: [i32; 3]) -> Option<BlockEntityRef> {
         let world = self.native_level_read_world(level)?;
         world_block_entity(world, level, pos)
     }
 
-    /// `block_entity`, also for a block entity taken out for its own tick: its generation
-    /// stays in place while it is out.
+    /// `block_entity`, also for a block entity temporarily detached for a menu operation:
+    /// its generation stays in place while it is out.
     pub(super) fn block_entity_identity(
         &self,
         level: LevelRef,
@@ -146,12 +146,12 @@ impl Game<'_> {
         world_block_entity_data(world, self.pack.assets.registry, self.res.items(), entity)
     }
 
-    /// The vanilla lock's item predicate, if present on a loaded block entity.
-    pub(super) fn block_entity_lock(&self, entity: BlockEntityRef) -> Option<Compound> {
+    /// The resident lock, independent of the block entity's synthesized save payload.
+    pub(super) fn block_entity_lock(&self, entity: BlockEntityRef) -> Option<&Compound> {
         let (world, _) = self.native_block_entity_target(entity)?;
         let [x, y, z] = entity.fields().position;
         match world.block_lock((x, y, z))? {
-            Tag::Compound(lock) => Some(lock.clone()),
+            Tag::Compound(lock) => Some(lock),
             _ => None,
         }
     }
@@ -259,13 +259,6 @@ impl Game<'_> {
         entity: BlockEntityRef,
         values: Vec<i32>,
     ) -> Result<bool, BlockEntityDataError> {
-        let limit = usize::from(sunrise_mod_package::content::MAX_MENU_SLOTS);
-        if values.len() > limit {
-            return Err(BlockEntityDataError::TooManySlots {
-                count: values.len() as u64,
-                limit: limit as u64,
-            });
-        }
         let key = self
             .native_block_entity_write_key(entity)
             .ok_or(BlockEntityDataError::Stale)?;
@@ -1340,9 +1333,17 @@ mod tests {
             guest.kind = sunrise_client::lan::guest::GuestKind::Network;
             game.lan.as_mut().unwrap().hub.guests.insert(0, guest);
             assert!(player.open_menu(game, chest).unwrap());
+            assert_eq!(chest.lock(game), None);
+            assert!(chest.set_lock(game, Some(Compound::new())).unwrap());
+            assert_eq!(chest.lock(game), Some(&Compound::new()));
             let stick_lock = compound("{items:\"minecraft:stick\"}");
             assert!(chest.set_lock(game, Some(stick_lock.clone())).unwrap());
-            assert_eq!(chest.lock(game), Some(stick_lock));
+            let lock = chest.lock(game).unwrap();
+            assert_eq!(lock, &stick_lock);
+            let Some(Tag::Compound(resident)) = game.world.block_lock((0, 64, 0)) else {
+                panic!("the lock was not stored with the block entity");
+            };
+            assert!(std::ptr::eq(lock, resident));
             assert!(!player.open_menu(game, chest).unwrap());
             {
                 let value = Some(sunrise_client::items::ItemStack::new("minecraft:stick", 1));
@@ -1364,6 +1365,7 @@ mod tests {
                     .update(0, |g| g.inventory[0] = value);
             }
             assert!(chest.set_lock(game, None).unwrap());
+            assert_eq!(chest.lock(game), None);
             assert!(player.open_menu(game, chest).unwrap());
             assert!(player.open_menu(game, furnace).unwrap());
 
@@ -1576,8 +1578,8 @@ mod tests {
             );
             assert_eq!(slot3(game), Some(3));
             assert_eq!(
-                chest.kind(game).map(|kind| kind.id(game)),
-                Some("minecraft:chest".to_owned())
+                chest.kind(game).and_then(|kind| kind.id(game)),
+                Some("minecraft:chest")
             );
             assert_eq!(chest.position(game), Some([0, 64, 0]));
             assert!(
@@ -1808,7 +1810,7 @@ mod tests {
             assert!(!write(
                 game,
                 [0, 64, 0],
-                mod_api::BlockStateRecord::new(api_stone.block(), u16::MAX).into(),
+                mod_api::__private::block_state_from_ordinal(api_stone.block(), u16::MAX),
                 flags
             ));
             assert_eq!(game.world.chunks.len(), chunks);

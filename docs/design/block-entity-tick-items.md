@@ -1,8 +1,7 @@
 # Dropped-item writes during mod block-entity ticks
 
-> The native contract below still applies. WebAssembly mods were removed; the parts about guests are history.
-> The tick overlay and atomic publication still apply.
-> See [dropped-item writes during block-entity ticks](../modding/src/how-to/world/block-entity-item-drops.md) for the current native API.
+> Historical design. The tick overlay was removed; a mod can use an ordinary transaction to commit
+> dropped-item writes with its subject edits. See [Dropped items during block-entity ticks](../modding/src/how-to/world/block-entity-item-drops.md).
 
 This design implements the port's transactional requirement tracked in #2846, not vanilla or NeoForge behavior. NeoForge adds no event, deferral or drop capture around a block entity's tick; newly spawned item entities join immediately. Its block-break and entity death/shear captures are separate mechanisms. This overlay exists only to keep existing-item host writes atomic with acceptance of the port's mod block-entity snapshot.
 

@@ -48,10 +48,12 @@ or otherwise refused (`DrawError::TextRefused`), and a label past the quads left
 label through any wall, which vanilla does only for the names its own renderers choose; the call
 sends nothing and reads nothing the client does not already hold."#]
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         neoforge = "SubmitCustomGeometryEvent",
         cancellable = false
     )]
-    fn submit_custom_geometry();
+    fn submit_custom_geometry(view: &mod_api::WorldRenderView, draw: &mut dyn WorldDrawContext);
 }

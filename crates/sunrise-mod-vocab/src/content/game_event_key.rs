@@ -1,5 +1,5 @@
 //! Load-owned game-event identities.
-use crate::{Host, NoBackend};
+use crate::{Host, NoBackend, RegistryName};
 /// An entry of the startup `minecraft:game_event` registry. Reloading world data
 /// preserves this identity; it belongs to the installed mod load.
 // no wire: slot_keys! encodes the u32 and validates it against the current host registry.
@@ -21,8 +21,10 @@ impl NoBackend for GameEventKeyError {
     }
 }
 impl GameEventKey {
-    /// Read the exact namespaced id, refusing an unknown slot without panicking.
-    pub fn id(self, host: &dyn Host) -> Result<String, GameEventKeyError> {
+    /// Pin the exact namespaced id without borrowing the host. Returns
+    /// [`GameEventKeyError::Unavailable`] without a backend, or
+    /// [`GameEventKeyError::InvalidKey`] for an unknown slot.
+    pub fn id(self, host: &dyn Host) -> Result<RegistryName, GameEventKeyError> {
         crate::backend_of(host)
             .ok_or(GameEventKeyError::Unavailable)?
             .game_event_key_id(self)

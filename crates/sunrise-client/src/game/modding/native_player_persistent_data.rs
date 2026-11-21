@@ -1,74 +1,143 @@
-//! The compound mods keep on a server player (NeoForge's `Entity.getPersistentData`), read and
-//! replaced whole, for mods that carry a player between servers.
-use super::{Game, native_server::PlayerRead};
-use mod_api::{PlayerDataRefusal, PlayerRef};
-use sunrise_core::nbt::{Compound, Tag};
+//! Scoped access to the compound mods keep on a server player (NeoForge's
+//! `Entity.getPersistentData`).
+use super::{Game, native_player_inventory::PlayerWriteRefusal, native_server::PlayerRead};
+use mod_api::{Compound, JavaString, PlayerPersistentDataError, PlayerRef, Tag};
+use sunrise_core::nbt::{Limits, clone_tag};
 
-/// The key of the mods' compound in a player's saved data (NeoForge's `Entity.PERSISTED_NBT_TAG`).
+/// The key NeoForge writes the mods' compound under in the player file.
 const PERSISTENT_DATA: &str = "NeoForgeData";
-/// The sub-compound a death respawn and the first End exit carry over.
+/// The entry a death respawn and the first End exit carry over.
 const PLAYER_PERSISTED: &str = "PlayerPersisted";
 
-/// The mods' compound in a player's saved data; empty when there is none.
-fn persistent_data(saved: Option<&Tag>) -> Compound {
-    match saved.and_then(|t| t.get(PERSISTENT_DATA)) {
-        Some(Tag::Compound(data)) => data.clone(),
-        _ => Compound::new(),
+impl From<PlayerWriteRefusal> for PlayerPersistentDataError {
+    fn from(error: PlayerWriteRefusal) -> Self {
+        match error {
+            PlayerWriteRefusal::Stale => Self::Stale,
+            PlayerWriteRefusal::Client => Self::Client,
+            PlayerWriteRefusal::Dead => Self::Dead,
+        }
     }
 }
 
-/// Puts `data` in a player's saved data as the mods' compound; an empty one takes the key away.
-fn set_persistent_data(saved: &mut Option<Tag>, data: Compound) {
-    if !matches!(saved, Some(Tag::Compound(_))) {
-        *saved = Some(Tag::Compound(Compound::new()));
+/// Check one new subtree at its real depth in the player file, including the compound wrappers
+/// that NBT emits for mixed lists and single empty-key compounds inside compound lists.
+fn check_saved_value(tag: &Tag, depth: usize) -> Result<(), PlayerPersistentDataError> {
+    use PlayerPersistentDataError::{InvalidNbt, TooDeep};
+    let limit = Limits::saved().max_depth;
+    if depth >= limit && matches!(tag, Tag::Compound(_) | Tag::List(_)) {
+        return Err(TooDeep);
     }
-    let Some(Tag::Compound(root)) = saved else {
-        return;
-    };
-    if data.is_empty() {
-        root.remove(&PERSISTENT_DATA.into());
-    } else {
-        root.insert(PERSISTENT_DATA.into(), Tag::Compound(data));
+    match tag {
+        Tag::End => Err(InvalidNbt),
+        Tag::String(s) if s.modified_utf8_len() > usize::from(u16::MAX) => Err(InvalidNbt),
+        Tag::ByteArray(values) if i32::try_from(values.len()).is_err() => Err(InvalidNbt),
+        Tag::IntArray(values) if i32::try_from(values.len()).is_err() => Err(InvalidNbt),
+        Tag::LongArray(values) if i32::try_from(values.len()).is_err() => Err(InvalidNbt),
+        Tag::Compound(data) => {
+            for (key, value) in data {
+                if key.modified_utf8_len() > usize::from(u16::MAX) {
+                    return Err(InvalidNbt);
+                }
+                check_saved_value(value, depth + 1)?;
+            }
+            Ok(())
+        }
+        Tag::List(values) => {
+            if i32::try_from(values.len()).is_err() {
+                return Err(InvalidNbt);
+            }
+            let compound_list = values.first().is_some_and(|first| {
+                first.id() == 10 || values.iter().skip(1).any(|value| value.id() != first.id())
+            });
+            for value in values {
+                let wrapped = compound_list
+                    && match value {
+                        Tag::Compound(data) => {
+                            data.len() == 1
+                                && data.keys().next().is_some_and(|key| key.0.is_empty())
+                        }
+                        _ => true,
+                    };
+                if wrapped && depth + 1 >= limit {
+                    return Err(TooDeep);
+                }
+                check_saved_value(value, depth + 1 + usize::from(wrapped))?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }
 
 impl Game<'_> {
     /// The mods' compound on a player: the acting player's saved data is the level's for their
     /// turn, another's is their record's.
-    pub(super) fn player_persistent_data(&self, player: PlayerRef) -> Option<Compound> {
+    pub(super) fn player_persistent_data(&self, player: PlayerRef) -> Option<&Compound> {
         if self.remote.is_some() {
             return None;
         }
-        Some(match self.player_handle_read(player)? {
-            PlayerRead::Acting { .. } => persistent_data(self.level.player_extra.as_ref()),
-            PlayerRead::Guest(g) => persistent_data(g.saved.as_ref()),
-        })
+        let saved = match self.player_handle_read(player)? {
+            PlayerRead::Acting { .. } => self.level.player_extra.as_ref(),
+            PlayerRead::Guest(g) => g.saved.as_ref(),
+        };
+        match saved?.get(PERSISTENT_DATA)? {
+            Tag::Compound(data) => Some(data),
+            _ => None,
+        }
     }
 
-    /// Replaces the mods' compound on a living player, in their turn so it lands in the record
-    /// that is saved. Data that would sit 512 levels deep or more in the player's file
-    /// (`isTooDeep`, as `/data merge` refuses it) is refused with nothing written.
-    pub(super) fn player_set_persistent_data(
+    /// Edits one checked key in the player's turn, so the write reaches the same record the
+    /// save and transaction journal use. Only the submitted value needs to be copied.
+    pub(super) fn player_set_persistent_data_key(
         &mut self,
         player: PlayerRef,
-        data: Compound,
-    ) -> Result<(), PlayerDataRefusal> {
+        key: &JavaString,
+        value: Option<&Tag>,
+    ) -> Result<(), PlayerPersistentDataError> {
         self.player_write_gate(player)?;
-        // The compound sits one level under the root of the player's file.
-        if data
-            .values()
-            .any(|tag| sunrise_client::nbt_path::too_deep(tag, 2))
-        {
-            return Err(PlayerDataRefusal::TooDeep);
+        if let Some(value) = value {
+            if key.modified_utf8_len() > usize::from(u16::MAX) {
+                return Err(PlayerPersistentDataError::InvalidNbt);
+            }
+            // The root is at depth 0, NeoForgeData at depth 1, and this entry at depth 2.
+            check_saved_value(value, 2)?;
         }
-        let set = self.native_as_player_handle(player, |game| {
+        let written = self.native_as_player_handle(player, |game| {
+            if value.is_none()
+                && !matches!(game.level.player_extra.as_ref().and_then(|saved| saved.get(PERSISTENT_DATA)),
+                    Some(Tag::Compound(data)) if data.contains_key(key))
+            {
+                return;
+            }
             game.journal_player(player.uuid());
-            set_persistent_data(&mut game.level.player_extra, data);
+            let saved = &mut game.level.player_extra;
+            if let Some(Tag::Compound(data)) = saved.as_mut().and_then(|tag| tag.get_mut(PERSISTENT_DATA)) {
+                match value {
+                    Some(value) => {
+                        let value = clone_tag(value);
+                        if let Some(entry) = data.get_mut(key) {
+                            *entry = value;
+                        } else {
+                            data.insert(key.clone(), value);
+                        }
+                    }
+                    None => {
+                        data.remove(key);
+                    }
+                }
+            } else if let Some(value) = value {
+                let data = Tag::Compound(Compound::from([(key.clone(), clone_tag(value))]));
+                if let Some(Tag::Compound(root)) = saved {
+                    root.insert(PERSISTENT_DATA.into(), data);
+                } else {
+                    *saved = Some(Tag::compound([(PERSISTENT_DATA, data)]));
+                }
+            }
         });
-        if set {
+        if written {
             Ok(())
         } else {
-            Err(PlayerDataRefusal::Stale)
+            Err(PlayerPersistentDataError::Stale)
         }
     }
 
@@ -84,16 +153,20 @@ impl Game<'_> {
     }
 }
 
-/// Drops every key of the mods' compound but `PlayerPersisted`, whatever its type; an empty
-/// compound leaves the key away.
+/// Carries only `PlayerPersisted`, whatever its type. With no data to carry, the new
+/// player has no stored compound.
 fn keep_player_persisted(saved: &mut Option<Tag>) {
-    let data = persistent_data(saved.as_ref());
-    let mut kept = Compound::new();
-    if let Some(persisted) = data.get(&PLAYER_PERSISTED.into()) {
-        kept.insert(PLAYER_PERSISTED.into(), persisted.clone());
-    }
-    if saved.is_some() {
-        set_persistent_data(saved, kept);
+    let Some(Tag::Compound(root)) = saved else {
+        return;
+    };
+    let data_key = PERSISTENT_DATA.into();
+    let persisted_key = PLAYER_PERSISTED.into();
+    if let Some(Tag::Compound(data)) = root.get_mut(&data_key)
+        && let Some(value) = data.remove(&persisted_key)
+    {
+        *data = Compound::from([(persisted_key, value)]);
+    } else {
+        root.remove(&data_key);
     }
 }
 
@@ -110,6 +183,25 @@ mod tests {
         saved.insert("Other".into(), Tag::Int(1));
         saved.insert(PERSISTENT_DATA.into(), Tag::Compound(data));
         Some(Tag::Compound(saved))
+    }
+
+    #[test]
+    fn saved_depth_counts_mixed_list_wrappers() {
+        fn mixed_at_depth(depth: usize) -> Tag {
+            // The sole empty-key compound has to be wrapped, as does the scalar.
+            let mut tag = Tag::List(vec![Tag::compound([("", Tag::Int(1))]), Tag::Int(2)]);
+            for _ in 2..depth {
+                tag = Tag::compound([("next", tag)]);
+            }
+            tag
+        }
+        // An entry starts at 2. A list at 509 can hold the wrapper at 510 and
+        // its compound at 511. Pushing the list one deeper puts that compound at 512.
+        assert_eq!(check_saved_value(&mixed_at_depth(509), 2), Ok(()));
+        assert_eq!(
+            check_saved_value(&mixed_at_depth(510), 2),
+            Err(PlayerPersistentDataError::TooDeep)
+        );
     }
 
     /// Only `PlayerPersisted` is kept, of any type; the player file's other keys stay.

@@ -22,6 +22,8 @@ pub trait Hooks {
     /// `ability` alone, and fast. An item with no such part costs one table lookup.
     /// A client without this mod predicts vanilla here; the server corrects it.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "both",
         contract = "listen",
         scope = "item",
@@ -29,5 +31,5 @@ pub trait Hooks {
         host = "read",
         neoforge = "IItemExtension.canPerformAction"
     )]
-    fn can_perform_action();
+    fn can_perform_action(stack: &ItemStack, ability: &str, can_perform: &mut bool);
 }

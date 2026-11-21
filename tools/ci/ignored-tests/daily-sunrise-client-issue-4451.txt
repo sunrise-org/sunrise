@@ -80,8 +80,6 @@ sunrise-client game::block_entity_part_state_tests::a_save_or_unload_during_a_tr
 sunrise-client game::block_entity_part_state_tests::one_position_replaced_twice_in_an_aborted_transaction_gets_its_original_back lib daily resources
 sunrise-client game::block_entity_part_state_tests::part_state_is_per_block_entity_through_ticks_transactions_and_replacement lib daily resources
 sunrise-client game::block_entity_part_state_tests::part_state_saves_with_its_chunk_and_reloads_under_a_fresh_handle lib daily resources
-sunrise-client game::block_entity_tick_item_preconditions_tests::finalization_never_retargets_stale_items_or_replaced_placeholders lib daily resources
-sunrise-client game::block_entity_tick_items_tests::native_tick_publishes_or_rejects_item_proposals_with_writeback lib daily resources
 sunrise-client game::block_entity_ticks::add_blocks_tests::vanilla_template_membership_creates_ticks_and_saves lib daily child-process
 sunrise-client game::block_entity_ticks::furnace_changed_tests::a_finished_smelt_marks_the_chunk lib daily resources
 sunrise-client game::block_entity_ticks::furnace_changed_tests::a_refuel_while_lit_marks_the_chunk lib daily resources
@@ -1056,7 +1054,7 @@ sunrise-client game::mod_api_host::attachment_membership_tests::attachment_off_w
 sunrise-client game::mod_recipe_property_tests::tests::host_and_slot_prediction_use_replacement_property_generation lib daily resources
 sunrise-client game::model_baking_completed_tests::a_client_mod_hears_model_baking_completed_once_per_load_and_keeps_its_handles lib daily resources
 sunrise-client game::model_baking_completed_tests::a_failed_reload_fires_no_model_baking_completed lib daily resources
-sunrise-client game::model_baking_completed_tests::standalone_forms_resolve_as_one_model_and_republish_after_resource_reload lib daily resources
+sunrise-client game::model_baking_completed_tests::standalone_bakers_resolve_as_one_model_and_republish_after_resource_reload lib daily resources
 sunrise-client game::mods::tests::a_declared_type_spawns_with_its_merged_row_not_its_content_row lib daily resources
 sunrise-client game::mods::tests::a_mods_declared_attribute_reaches_rows_the_live_map_saves_and_sync lib daily resources
 sunrise-client game::mods::tests::a_mods_declared_entity_attributes_reach_spawn_and_the_live_map lib daily resources
@@ -1628,7 +1626,6 @@ sunrise-client game::native_item_places::tests::living_equipment_moves_through_t
 sunrise-client game::native_item_places::tests::one_by_one_shows_one_bucket_of_sixteen_and_fills_one lib daily resources
 sunrise-client game::native_item_places::tests::scoped_boat_slots_use_the_open_menu_and_refuse_a_removed_owner lib daily resources
 sunrise-client game::native_item_places::tests::stand_equipment_effects_wait_for_root_commit lib daily resources
-sunrise-client game::native_item_places::tests::whole_stack_component_edit_preserves_slot_and_refuses_item_or_count_changes lib daily resources
 sunrise-client game::native_item_places::tests::whole_stack_component_edit_rolls_back_with_its_transaction lib daily resources
 sunrise-client game::native_key_mappings::tests::opening_and_closing_a_direct_screen_discards_pending_clicks lib daily resources
 sunrise-client game::native_key_mappings_tests::a_control_socket_key_counts_as_a_window_key lib daily resources
@@ -2054,7 +2051,7 @@ sunrise-client game::pad::parity_tests::a_keyboard_release_keeps_the_sneak_the_p
 sunrise-client game::pad::parity_tests::a_release_from_a_screen_can_not_strand_the_pads_attack lib daily resources
 sunrise-client game::pad::parity_tests::a_spectators_bumpers_set_the_flying_speed_as_the_wheel_does lib daily resources
 sunrise-client game::pad::parity_tests::bumpers_step_the_hotbar_where_the_wheel_does lib daily resources
-sunrise-client game::pad::parity_tests::mapping_state_reads_what_mapping_reads_and_follows_the_binding lib daily resources
+sunrise-client game::pad::parity_tests::resolved_mapping_reads_live_state_and_binding lib daily resources
 sunrise-client game::pad::parity_tests::pad_number_actions_select_the_hotbar_as_their_keys_do lib daily resources
 sunrise-client game::pad::parity_tests::pad_smooth_camera_binding_toggles_the_cinematic_camera lib daily resources
 sunrise-client game::pad::parity_tests::readers_of_the_movement_keys_see_the_stick lib daily resources

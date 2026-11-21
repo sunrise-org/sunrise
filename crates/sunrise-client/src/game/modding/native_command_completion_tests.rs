@@ -12,8 +12,9 @@ use sunrise_client::{
     command::{MOD_COMMAND, Registries},
     lan::{Joined, NetConfig, Out, PlayerSender, guest::Guest, hub::HubConfig},
 };
+use sunrise_core::vanilla_bytes::Writer;
 use sunrise_protocol::{
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Reader},
     ids,
     packets::{configuration::ClientInformation, play},
 };

@@ -1,5 +1,5 @@
 //! Cargo-facing generation: the mod API's and the game's generated files.
-use super::{Catalog, Target, free_function_source, host, sources};
+use super::{Catalog, Target, game_hook_sources, host, sources};
 use std::{fs, path::Path};
 mod vocab_boundary;
 
@@ -31,7 +31,7 @@ pub fn write_if_changed(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> std:
 /// Generate only this crate's files, tracking every source read by the generator.
 /// `root` is supplied at run time by the consuming crate's build script.
 pub fn generate(root: &Path, out_dir: &Path, target: Target) -> Result<(), String> {
-    track(root, !matches!(&target, Target::Vocab))?;
+    track(root)?;
     let inventory = if matches!(target, Target::Vocab) {
         let path = root.join("tools/layering/mod_vocab_state.json");
         crate::rerun_if_changed(&path.display());
@@ -47,27 +47,19 @@ pub fn generate(root: &Path, out_dir: &Path, target: Target) -> Result<(), Strin
     if matches!(&target, Target::Client) {
         crate::rerun_if_staged(root);
     }
-    let generated = sources(root, super::FillMode::Require)?;
     let outputs = match target {
         Target::Client => vec![
-            (
-                "native_hook_modules.rs",
-                sunrise_game_discovery::native_hook_modules(root)?,
-            ),
-            ("lan_action_modules.rs", {
-                let directory = root.join("crates/sunrise-client/src/game/network/lan_actions");
-                sunrise_game_discovery::lan_action_modules(
-                    &directory,
-                    Catalog::modules(&directory).map_err(|e| e.to_string())?,
-                )?
-            }),
-            ("game_host_modules.rs", game_host_modules(root)?),
-            ("mod_api_fire_generated.rs", generated.fire),
+            (HOST_OUTPUT, game_host_generated(root)?),
+            ("mod_api_fire_generated.rs", game_hook_sources(root)?.fire),
             // The mob tick's goal read view (#1077), included beside the
             // engine's `GoalCx` in `mobs/part_goals.rs`.
-            ("mod_api_goal_view_generated.rs", generated.goal_view),
+            (
+                "mod_api_goal_view_generated.rs",
+                host::generate_goal_view(root)?,
+            ),
         ],
         Target::Vocab => {
+            let generated = sources(root)?;
             write_vocab_output(
                 out_dir,
                 super::parts::OUTPUT,
@@ -173,14 +165,15 @@ mod generated_visibility_tests {
     }
 }
 
-/// The game's side of the host traits: one module for each area file of `game/host/`.
-pub(crate) fn game_host_modules(root: &Path) -> Result<String, String> {
-    let mut modules = sunrise_game_discovery::host_modules(root)?;
-    modules.push_str(&format!(
+/// The game's side of the host traits, which `game/host/mod.rs` includes.
+pub(crate) const HOST_OUTPUT: &str = "game_host_generated.rs";
+
+/// The generated forwarders from each host area's trait to the inherent `Game` functions.
+pub(crate) fn game_host_generated(root: &Path) -> Result<String, String> {
+    Ok(format!(
         "mod generated {{\n{}\n}}\n",
         host::game_forwarders(root)?
-    ));
-    Ok(modules)
+    ))
 }
 
 /// Generate the native-only raw render records, without trait dispatch or subscriptions.
@@ -190,12 +183,8 @@ pub fn generate_render(root: &Path, out_dir: &Path) -> Result<(), String> {
     for module in Catalog::modules(&declarations)? {
         crate::rerun_if_changed(&declarations.join(format!("{module}.rs")).display());
     }
-    crate::rerun_if_changed(
-        &root
-            .join("crates/sunrise-mod-render/src/render.rs")
-            .display(),
-    );
-    let source = super::dispatch::render(root, &Catalog::load_declarations(root)?)?.render_dispatch;
+    let generated = super::dispatch::render(&Catalog::load(root)?)?;
+    let source = generated.render_dispatch;
     use syn::spanned::Spanned;
     let file = syn::parse_file(&source).map_err(|error| error.to_string())?;
     let lines: Vec<_> = std::iter::once(0)
@@ -216,6 +205,12 @@ pub fn generate_render(root: &Path, out_dir: &Path) -> Result<(), String> {
     }
     syn::parse_file(&records).map_err(|error| error.to_string())?;
     write_if_changed(out_dir.join("native_render_generated.rs"), records)
+        .and_then(|()| {
+            write_if_changed(
+                out_dir.join("native_render_fire_generated.rs"),
+                generated.fire,
+            )
+        })
         .map_err(|error| error.to_string())
 }
 
@@ -231,9 +226,6 @@ fn render_records_need_no_game_sources() {
             fs::copy(&path, declarations.join(path.file_name().unwrap())).unwrap();
         }
     }
-    let raw = "crates/sunrise-mod-render/src/render.rs";
-    fs::create_dir_all(root.join(raw).parent().unwrap()).unwrap();
-    fs::copy(workspace.join(raw), root.join(raw)).unwrap();
     assert!(!root.join("crates/sunrise-client").exists());
     generate_render(&root, &root).unwrap();
     let generated = fs::read_to_string(root.join("native_render_generated.rs")).unwrap();
@@ -248,7 +240,7 @@ fn render_records_need_no_game_sources() {
     fs::remove_dir_all(root).unwrap();
 }
 
-pub(super) fn track(root: &Path, all_game: bool) -> Result<(), String> {
+pub(super) fn track(root: &Path) -> Result<(), String> {
     fn directory(path: &Path, extension: &str, recursive: bool) -> Result<(), String> {
         // Track the directory as well: adding a helper source or fragment changes the inputs.
         crate::rerun_if_changed(&path.display());
@@ -278,27 +270,6 @@ pub(super) fn track(root: &Path, all_game: bool) -> Result<(), String> {
         "rs",
         false,
     )?;
-    if all_game {
-        directory(&root.join("crates/sunrise-client/src/game"), "rs", true)?;
-        crate::rerun_if_changed(&root.join("crates/sunrise-client/src/game.rs").display());
-    } else {
-        directory(
-            &root.join("crates/sunrise-client/src/game/native_hooks"),
-            "rs",
-            false,
-        )?;
-    }
-    for hook in Catalog::load(root)?.hooks {
-        if let Some((krate, path)) = free_function_source(&hook.target) {
-            let (module, _) = path.rsplit_once("::").ok_or("target missing module")?;
-            let path = root
-                .join("crates")
-                .join(krate)
-                .join("src")
-                .join(format!("{}.rs", module.replace("::", "/")));
-            crate::rerun_if_changed(&path.display());
-        }
-    }
     Ok(())
 }
 

@@ -448,23 +448,26 @@ pub(in crate::game) fn preload_sync_data(item_data: &Arc<ItemData>) -> Option<Sy
     let root = item_data.root().to_owned();
     let item_data = Arc::clone(item_data);
     // Loading recipes asks mods' ingredient and recipe property set hooks.
-    sunrise_guest_stack::spawn("Server data preload".into(), move || {
-        let none = sunrise_world::loot::PackOverlay::NONE;
-        SyncData::load(
-            item_data.root(),
-            &none,
-            item_data.defaults(),
-            server_sources(item_data.root(), &item_data, &none)
-                .map_err(|error| error.to_string())?
-                .as_ref(),
-        )
-    })
-    .map(|worker| SyncPreload {
-        root,
-        generation,
-        worker,
-    })
-    .ok()
+    std::thread::Builder::new()
+        .stack_size(sunrise_threads::GAME_THREAD_STACK_BYTES)
+        .name("Server data preload".into())
+        .spawn(move || {
+            let none = sunrise_world::loot::PackOverlay::NONE;
+            SyncData::load(
+                item_data.root(),
+                &none,
+                item_data.defaults(),
+                server_sources(item_data.root(), &item_data, &none)
+                    .map_err(|error| error.to_string())?
+                    .as_ref(),
+            )
+        })
+        .map(|worker| SyncPreload {
+            root,
+            generation,
+            worker,
+        })
+        .ok()
 }
 
 impl SyncPreload {

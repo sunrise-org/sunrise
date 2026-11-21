@@ -7,12 +7,24 @@ use crate::*;
 #[sunrise_mod_api_macros::host_area]
 pub trait LevelEntitiesBackend {
     /// Side: server.
-    /// Every available member of the server level's entity lookup
-    /// (`ServerLevel.getAllEntities`), including spectators and entities outside
-    /// any spatial query. Dragon parts are not lookup members.
-    /// Returns None on a remote client, for a stale handle or a parked level.
-    /// Returns None while any lookup member is temporarily extracted, rather
-    /// than returning an incomplete list.
+    /// Visit members of the server level's entity lookup (`ServerLevel.getAllEntities`),
+    /// including spectators and entities outside any spatial query. Dragon parts are not
+    /// lookup members. Vehicles being removed are skipped.
+    ///
+    /// The visitor can make shared reads on the same host, including another visit.
+    /// No residency guard is held while it runs. Return `ControlFlow::Break(())` to stop;
+    /// the visit returns `Ok(ControlFlow::Break(()))`. Returning `Continue(())` for every
+    /// member gives `Ok(ControlFlow::Continue(()))`, including when there are no members.
+    ///
+    /// This does not build a result list. It first checks that **every** eligible
+    /// lookup member resolves. An unavailable member returns [`LevelReadError::Unavailable`]
+    /// before the first callback, even if the callback would have stopped on the first member.
+    ///
+    /// A stale level returns [`LevelReadError::Stale`]. A parked level or a call
+    /// outside server world access returns [`LevelReadError::Unavailable`]. Neither
+    /// calls the visitor. If you need to write through the host, collect the handles
+    /// you need and use them after the visit.
+    ///
     /// Order is lookup admission order, preserved across temporary extraction;
     /// removal and re-admission moves an entity to the end. An entity spawned
     /// during play is admitted as it spawns, even when its id comes later. A
@@ -28,56 +40,83 @@ pub trait LevelEntitiesBackend {
     /// `entity_entering_section`. Entities kept outside the residency families
     /// (lingering potion clouds, lightning bolts, eyes of ender) are not
     /// members.
-    /// Allocates a result buffer, not one allocation per entity; sorting is
-    /// O(n log n), followed by one authoritative handle lookup per candidate.
     #[access(WorldOnly)]
-    fn level_all_entities(&self, level: LevelRef) -> Option<Vec<EntityRef>>;
+    fn level_visit_all_entities(
+        &self,
+        level: LevelRef,
+        visit: &mut dyn FnMut(EntityRef) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, LevelReadError>;
     /// Side: both.
-    /// Entities whose bounding boxes intersect this box (`Level.getEntities`).
-    /// Face-only contact does not intersect; spectator players are excluded.
-    /// Returns None for a stale handle or a parked level: its entity handles
-    /// cannot resolve until the level is in place, and for a bound that is not
-    /// finite (NaN or infinite). A minimum above its maximum is the same box
-    /// with the two swapped, as vanilla's `AABB`. On a client (`ClientLevel`),
-    /// the entities the server tracks to it, other players among them, and the
-    /// window's own player, with the same walk.
-    /// None there before login and for a level it does not show. The walk
-    /// is in entity-list order, then item frames and paintings, followed by players. Every entity list is walked
-    /// once per call: O(entities) regardless of the box. Each overlapping mob
-    /// resolves through a mob-list scan: O(K*N) for K overlapping mobs and N mobs. Tridents do not
-    /// resolve. On the server block displays, item displays, text displays, markers and
-    /// interactions are included using physical boxes (zero-sized for displays and markers),
-    /// not display culling bounds. Eyes of ender and leash knots are not yet returned.
-    /// Other special entities
-    /// are not on the entity-list walk. The dragon follows ordinary entities;
-    /// its eight intersecting parts follow players in vanilla hash-table order (`Level.getEntities`).
-    /// During `hears_projectile_impacts`, the projectile list is taken out of
-    /// the game and is not visible; it is restored for `projectile_impact`.
+    /// Visit readable entities whose bounding boxes intersect this box (`Level.getEntities`).
+    /// Face-only contact does not intersect. Inverted bounds are swapped on each axis,
+    /// as in vanilla's `AABB`.
+    ///
+    /// The visitor can make shared reads on the same host, including another visit.
+    /// No residency guard is held while it runs. Return `ControlFlow::Continue(())`
+    /// to keep visiting; `ControlFlow::Break(())` stops before checking any later match.
+    /// The result is `Ok(ControlFlow::Continue(()))` on completion (including an empty
+    /// query) or `Ok(ControlFlow::Break(()))` on an early stop. No result list is built.
+    /// Collect the handles you need only if you need them after the visit, for example
+    /// to write through the host.
+    ///
+    /// A stale level returns [`LevelReadError::Stale`]. Non-finite bounds, a parked
+    /// server level, a client that has not logged in or is not displaying this level,
+    /// or unavailable world access return [`LevelReadError::Unavailable`]. A refused
+    /// visit does not call the visitor.
+    ///
+    /// The walk uses entity-list order, then item frames and paintings in join order
+    /// (frames first on ties), then the dragon's body. On the server, block, item and text
+    /// displays, markers, interactions and fishing hooks come next, then placed guests
+    /// other than spectators. Displays and markers use zero-sized physical boxes,
+    /// not rendering bounds. The client walks the entities it tracks, including tracked
+    /// players, then its own player if not spectating. The dragon's intersecting parts
+    /// come last on either side, in vanilla part-table order.
+    ///
+    /// Unresolved handles are skipped, including held-out server entities. Tridents
+    /// that do not resolve, eyes of ender and leash knots are not visited. The projectile
+    /// list is temporarily absent during `hears_projectile_impacts`; it is visible again
+    /// during `projectile_impact`.
     #[access(WorldOnly)]
-    fn level_entities_in(
+    fn level_visit_entities_in(
         &self,
         level: LevelRef,
         min: [f64; 3],
         max: [f64; 3],
-    ) -> Option<Vec<EntityRef>>;
+        visit: &mut dyn FnMut(EntityRef) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, LevelReadError>;
     /// Side: server.
-    /// `ServerLevel.players`: the online players in this level, parked or in
-    /// place, each once under their own UUID, also during a guest's turn. Fake
-    /// players are not listed, as vanilla's list leaves out connectionless
-    /// players; a player displaced by a nested guest turn is not listed either,
-    /// since its handle cannot resolve until that turn ends. None on a client
-    /// and for a stale handle.
+    /// Visit `ServerLevel.players` in level player order, without building a list.
+    /// In the active level, the local or acting player comes first, then the placed
+    /// guests in server order. A parked level has only its placed guests. Each
+    /// resolvable player is visited once under their own UUID. Fake players and
+    /// players displaced by a nested guest turn are skipped.
+    ///
+    /// The visitor can make shared reads on the same host. Return `ControlFlow::Continue(())`
+    /// to keep visiting or `ControlFlow::Break(())` to stop. The visit returns
+    /// `Ok(ControlFlow::Break(()))` if stopped or `Ok(ControlFlow::Continue(()))` on
+    /// completion, including a level with no players. A stale level returns
+    /// [`LevelReadError::Stale`]; a client or unavailable world access returns
+    /// [`LevelReadError::Unavailable`]. Neither error calls the visitor. Collect
+    /// the players you need up front if you need mutable host access afterwards.
     #[access(WorldOnly)]
-    fn level_online_players(&self, level: LevelRef) -> Option<Vec<PlayerRef>>;
+    fn level_visit_online_players(
+        &self,
+        level: LevelRef,
+        visit: &mut dyn FnMut(PlayerRef) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, LevelReadError>;
     /// Side: server.
     /// Every entity the segment from `from` to `to` passes through, nearest first: the test
     /// `ProjectileUtil.getEntityHitResult` makes on each candidate, each entity's box grown by
     /// `margin` on every side and clipped against the segment. A ray that starts inside a box
-    /// does not hit that entity, as in vanilla. `exclude` (the shooter) is skipped. Vanilla's
-    /// filter (`canHitEntity`, `isPickable`) is the caller's: take the first hit it accepts.
-    /// Candidates are those `entities_in` finds, so spectators are not hit and the same kinds
-    /// are left out. None for a negative or non-finite margin, a non-finite point, and where
-    /// `entities_in` is None (a stale handle, a parked level).
+    /// does not hit that entity, as in vanilla. `exclude` (the shooter) is skipped. Hits
+    /// at equal returned distances keep spatial traversal order. Candidates are those
+    /// [`LevelRef::visit_entities_in`] finds, so the same kinds are left out. Returns
+    /// an empty list on a valid miss and `None` for invalid ray geometry or a refused
+    /// spatial query.
+    ///
+    /// Use this when you need every hit or must process hits in nearest-first order.
+    /// If you just need the nearest hit matching a filter (such as `canHitEntity` or
+    /// `isPickable`), use [`LevelRef::ray_trace_nearest_entity`] instead.
     #[access(WorldOnly)]
     fn level_ray_trace_entities(
         &self,
@@ -87,6 +126,32 @@ pub trait LevelEntitiesBackend {
         margin: f64,
         exclude: Option<EntityRef>,
     ) -> Option<Vec<EntityRayHit>>;
+    /// Side: both.
+    /// The nearest accepted hit on the segment from `from` to `to`, without collecting hits.
+    /// Uses the candidates of [`LevelRef::visit_entities_in`] in the segment's bounds padded
+    /// by `margin`. Each candidate's box is grown by `margin` before clipping. A ray starting
+    /// inside a grown box does not hit it, and `exclude` (for example, the shooter) is skipped.
+    ///
+    /// `accept` runs once per geometric hit in spatial traversal order, not distance order.
+    /// It can make shared reads on the same host; no residency guard is held. Among the hits
+    /// for which it returns `true`, the smallest squared distance from `from` wins. An exact
+    /// tie in squared distance keeps the first visited hit. Use [`LevelRef::ray_trace_entities`]
+    /// if you need an ordered list or your filter depends on testing nearer hits first.
+    ///
+    /// Returns `Ok(Some(hit))` on a match or `Ok(None)` when no hit is accepted. A stale
+    /// level returns [`LevelReadError::Stale`]. A negative or non-finite margin, non-finite
+    /// endpoints or padded bounds, a parked or undisplayed level, or unavailable world
+    /// access return [`LevelReadError::Unavailable`]. A refusal does not call `accept`.
+    #[access(WorldOnly)]
+    fn level_ray_trace_nearest_entity(
+        &self,
+        level: LevelRef,
+        from: [f64; 3],
+        to: [f64; 3],
+        margin: f64,
+        exclude: Option<EntityRef>,
+        accept: &mut dyn FnMut(EntityRayHit) -> bool,
+    ) -> Result<Option<EntityRayHit>, LevelReadError>;
 }
 /// The handles' writes of the `level_entities` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

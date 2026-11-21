@@ -2,16 +2,24 @@
 //! `sunrise:general_entity` spawn adds one, the vanilla packets keyed by its network id move and
 //! remove it as they do any tracked entity, and its declared fields are its synced attachments
 //! (`Remote::attachments`). The server sends every row its first attachment snapshot (empty or
-//! not) after the spawn, in another payload: a row is shown only once both are here, so it is
-//! never seen without its initial fields. No mod code runs here: a row's behaviour is the
-//! server's.
+//! not) in another payload: a row is shown only once it has a published attachment generation.
+//! Render extraction retains that generation, not the live synced holder. The row's behaviour is
+//! the server's.
 use super::{Game, Lerp, Remote};
 use crate::game::general::general_type_catalog;
 use indexmap::IndexMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use sunrise_client::join_seq::JoinSeq;
 use sunrise_core::geometry::{Aabb, Vec3};
-use sunrise_protocol::general_entity::{self, Message};
+use sunrise_mod_runtime::attachments::{Attachments, Holder};
+use sunrise_protocol::{
+    general_entity::{self, Message},
+    retained::OwnedHeap,
+};
+
+// Bound retained native backing per complete generation, not packet size or individual fields.
+// This also covers a generation assembled from multiple deltas.
+const RENDER_SNAPSHOT_BYTES: usize = 64 << 20;
 
 /// One general row the server shows the window.
 #[derive(Clone, Debug, PartialEq)]
@@ -29,13 +37,57 @@ pub(in crate::game) struct RemoteGeneral {
     pub previous_rotation: [f32; 2],
     /// Client ticks since the spawn.
     pub age: u32,
-    /// Its first attachment snapshot has arrived too: the row is shown, with its fields.
-    pub shown: bool,
-    /// Frozen synced fields, rebuilt at the packet boundary once the first snapshot arrives.
+    // Deltas can form a complete generation only after the initial sync, even if that first
+    // generation was refused for rendering.
+    received_initial_snapshot: bool,
+    /// The last whole generation published at spawn or sync. Until then the row is not shown.
     pub render_attachments: Option<mod_api::EntityRenderAttachments>,
 }
 
 impl RemoteGeneral {
+    pub(in crate::game) fn new(
+        type_slot: usize,
+        uuid: u128,
+        position: [f64; 3],
+        rotation: [f32; 2],
+    ) -> Self {
+        Self {
+            join: JoinSeq::next(),
+            type_slot,
+            uuid,
+            position,
+            previous: position,
+            rotation,
+            previous_rotation: rotation,
+            age: 0,
+            received_initial_snapshot: false,
+            render_attachments: None,
+        }
+    }
+
+    pub(in crate::game) fn is_shown(&self) -> bool {
+        self.render_attachments.is_some()
+    }
+
+    fn attachments_arrived(&mut self, id: i32, replace: bool, attachments: &Attachments) {
+        self.received_initial_snapshot |= replace;
+        if !self.received_initial_snapshot {
+            return;
+        }
+        let Some(generation) = mod_api::__private::game::capture_entity_render_attachments(
+            attachments,
+            RENDER_SNAPSHOT_BYTES,
+            OwnedHeap::owned_heap_bytes,
+        ) else {
+            log::warn!(
+                "Sunrise: synced render attachments for {} entity {id} not published: generation exceeds the {RENDER_SNAPSHOT_BYTES}-byte retention budget",
+                self.kind()
+            );
+            return;
+        };
+        self.render_attachments = Some(generation);
+    }
+
     pub(in crate::game) fn bounds(&self) -> Aabb {
         let [x, y, z] = self.position;
         general_type_catalog().bounds(self.type_slot, Vec3::new(x, y, z))
@@ -51,6 +103,8 @@ impl RemoteGeneral {
 pub(in crate::game) struct RemoteGenerals {
     /// Client entity lookup order: inserts append; removing one keeps the others in order.
     pub rows: IndexMap<i32, RemoteGeneral>,
+    /// Ids whose whole attachment snapshot arrived before an entity spawn.
+    snapshots_before_spawn: HashSet<i32>,
     /// Type keys this client's catalog does not hold, each warned about once.
     unknown: std::collections::HashSet<String>,
     /// Whether a spawn for an id already held was refused before, warned about once.
@@ -61,28 +115,42 @@ pub(in crate::game) struct RemoteGenerals {
 
 impl RemoteGenerals {
     pub(in crate::game) fn shown(&self, id: i32) -> Option<&RemoteGeneral> {
-        self.rows.get(&id).filter(|row| row.shown)
+        self.rows.get(&id).filter(|row| row.is_shown())
     }
 
     /// Forget every row: a world change or a respawn into another dimension.
     pub fn clear(&mut self) {
         self.rows.clear();
+        self.snapshots_before_spawn.clear();
     }
 
-    /// A whole attachment snapshot for entity `id` arrived: a row waiting for it is shown.
-    pub fn attachments_arrived(
-        &mut self,
-        id: i32,
-        replace: bool,
-        attachments: &sunrise_mod_runtime::attachments::Attachments,
-    ) {
-        if let Some(row) = self.rows.get_mut(&id) {
-            row.shown |= replace;
-            if row.shown {
-                row.render_attachments =
-                    Some(mod_api::EntityRenderAttachments::from_synced(attachments));
-            }
+    /// The underlying replica was cleared. The last published generations can still draw,
+    /// but deltas cannot publish a new one until there is a complete replica again.
+    pub(super) fn reset_attachment_sync(&mut self) {
+        self.snapshots_before_spawn.clear();
+        for row in self.rows.values_mut() {
+            row.received_initial_snapshot = false;
         }
+    }
+
+    /// Publish after the complete message has been applied. A delta before the initial sync
+    /// cannot open the visibility gate; after it, a successful capture can.
+    pub fn attachments_arrived(&mut self, id: i32, replace: bool, attachments: &Attachments) {
+        match self.rows.get_mut(&id) {
+            Some(row) => row.attachments_arrived(id, replace, attachments),
+            None if replace => {
+                self.snapshots_before_spawn.insert(id);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Remote {
+    /// Discard the mirror and its initial sync state.
+    pub(in crate::game) fn clear_attachments(&mut self) {
+        self.attachments.clear();
+        self.general.reset_attachment_sync();
     }
 }
 
@@ -130,34 +198,21 @@ impl Game<'_> {
         let Some(r) = self.remote.as_mut() else {
             return;
         };
-        // The snapshot may come first: a removal drops what the client held of an id, so a
-        // copy held now is this row's.
-        let attachments = r
-            .attachments
-            .get(&sunrise_mod_runtime::attachments::Holder::Entity(id as u32));
-        let shown = attachments.is_some();
         if r.general.rows.contains_key(&id) {
             if !std::mem::replace(&mut r.general.duplicate, true) {
                 log::warn!("Sunrise: the server sent general entity {id} twice; the first stays");
             }
             return;
         }
-        r.general.rows.insert(
-            id,
-            RemoteGeneral {
-                join: JoinSeq::next(),
-                type_slot,
-                uuid,
-                position,
-                previous: position,
-                rotation,
-                previous_rotation: rotation,
-                age: 0,
-                shown,
-                render_attachments: attachments
-                    .map(|map| mod_api::EntityRenderAttachments::from_synced(map)),
-            },
-        );
+        let mut row = RemoteGeneral::new(type_slot, uuid, position, rotation);
+        // A whole snapshot can already be here. A map made by a delta (or a local read) is
+        // insufficient: neither establishes the row's initial synced state.
+        if r.general.snapshots_before_spawn.remove(&id)
+            && let Some(attachments) = r.attachments.get(&Holder::Entity(id as u32))
+        {
+            row.attachments_arrived(id, true, attachments);
+        }
+        r.general.rows.insert(id, row);
         self.persist
             .uuids
             .insert(id as u32, sunrise_client::lan::playerdata::uuid_ints(uuid));
@@ -211,6 +266,7 @@ impl Game<'_> {
     /// The server removed general row `id` from the window.
     pub(super) fn forget_remote_general(r: &mut Remote, id: i32) {
         r.general.rows.shift_remove(&id);
+        r.general.snapshots_before_spawn.remove(&id);
     }
 }
 
@@ -245,24 +301,10 @@ mod tests {
     use super::*;
     use sunrise_protocol::packets::play::{self, Clientbound as C};
 
-    fn row(at: [f64; 3]) -> RemoteGeneral {
-        RemoteGeneral {
-            join: JoinSeq::next(),
-            type_slot: 0,
-            uuid: 1,
-            position: at,
-            previous: at,
-            rotation: [0.0, 0.0],
-            previous_rotation: [0.0, 0.0],
-            age: 0,
-            shown: true,
-            render_attachments: None,
-        }
-    }
-
     #[test]
     fn a_move_is_reached_in_three_ticks_and_each_tick_keeps_the_one_before() {
-        let mut rows = IndexMap::from([(5, row([0.0, 70.0, 0.0]))]);
+        let row = RemoteGeneral::new(0, 1, [0.0, 70.0, 0.0], [0.0, 0.0]);
+        let mut rows = IndexMap::from([(5, row)]);
         let mut lerps = HashMap::from([(
             5,
             Lerp {
@@ -312,6 +354,90 @@ mod tests {
         }
     }
 
+    #[test]
+    fn an_over_budget_generation_does_not_replace_or_open_visibility() {
+        use mod_api::{AttachmentCodec, AttachmentError, AttachmentType};
+        use sunrise_core::nbt::{Compound, Tag};
+        use sunrise_mod_runtime::attachments::AttachmentSync;
+
+        const FUEL: AttachmentType<i32> = AttachmentType {
+            namespace: "mymod",
+            name: "fuel",
+            default: || 0,
+            codec: Some(AttachmentCodec {
+                encode: |n| Ok([("n".into(), Tag::Int(*n))].into()),
+                decode: |c| match c.get(&"n".into()) {
+                    Some(Tag::Int(n)) => Ok(*n),
+                    _ => Err(AttachmentError::Decode),
+                },
+            }),
+            sync: true,
+            copy_on_death: false,
+        };
+        mod_platform::__private::initialize().unwrap();
+        let _phase =
+            mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::Registration);
+        let declare = || vec![mod_api::ModEntry::new("mymod", Box::new(Declare))];
+        mod_platform::testing::with_mods(declare().into(), || {
+            mod_platform::__private::part_tests::install_parts_fixture(&declare()).unwrap();
+            let slot = general_type_catalog().slot("mymod:missile").unwrap();
+            let mut generals = RemoteGenerals::default();
+            for id in [5, 8] {
+                generals
+                    .rows
+                    .insert(id, RemoteGeneral::new(slot, 1, [0.0; 3], [0.0; 2]));
+            }
+            let mut replica = Attachments::default();
+            let sync = |holder: &mut Attachments, name: &str, value: Option<Compound>| {
+                holder.apply_sync(AttachmentSync {
+                    namespace: "mymod".into(),
+                    name: name.into(),
+                    value,
+                });
+            };
+            let fuel = |n| Some([("n".into(), Tag::Int(n))].into());
+            // OwnedHeap charges retained capacity. Reserve it without filling a large payload.
+            // Either binding fits in isolation; their combined generation exceeds 64 MiB.
+            let large =
+                || Some([("bytes".into(), Tag::ByteArray(Vec::with_capacity(40 << 20)))].into());
+            sync(&mut replica, "fuel", fuel(7));
+            sync(&mut replica, "large_a", large());
+            generals.attachments_arrived(5, true, &replica);
+
+            sync(&mut replica, "fuel", fuel(11));
+            sync(&mut replica, "large_b", large());
+            generals.attachments_arrived(5, false, &replica);
+            generals.attachments_arrived(8, true, &replica);
+            let published_fuel = |rows: &RemoteGenerals, id| {
+                *rows
+                    .shown(id)
+                    .unwrap()
+                    .render_attachments
+                    .as_ref()
+                    .unwrap()
+                    .get(&FUEL)
+                    .unwrap()
+                    .unwrap()
+            };
+            assert_eq!(published_fuel(&generals, 5), 7);
+            assert!(generals.shown(8).is_none());
+
+            sync(&mut replica, "large_a", None);
+            for id in [5, 8] {
+                generals.attachments_arrived(id, false, &replica);
+                assert_eq!(published_fuel(&generals, id), 11);
+            }
+
+            generals.reset_attachment_sync();
+            let mut replica = Attachments::default();
+            sync(&mut replica, "fuel", fuel(3));
+            generals.attachments_arrived(5, false, &replica);
+            assert_eq!(published_fuel(&generals, 5), 11);
+            generals.attachments_arrived(5, true, &replica);
+            assert_eq!(published_fuel(&generals, 5), 3);
+        });
+    }
+
     fn spawn(id: i32, key: &str, at: [f64; 3]) -> C {
         spawn_facing(id, key, at, 0.0)
     }
@@ -334,8 +460,12 @@ mod tests {
     /// The server's whole snapshot of entity `id`'s synced attachments: `value` in
     /// `mymod:fuel`, or nothing synced.
     fn snapshot(id: u32, value: Option<i32>) -> C {
+        attachment_packet(id, true, value)
+    }
+
+    fn attachment_packet(id: u32, replace: bool, value: Option<i32>) -> C {
         use sunrise_core::nbt::Tag;
-        use sunrise_mod_runtime::attachments::{AttachmentSync, Holder};
+        use sunrise_mod_runtime::attachments::AttachmentSync;
         let changes = value.map_or_else(Vec::new, |n| {
             vec![AttachmentSync {
                 namespace: "mymod".into(),
@@ -348,7 +478,7 @@ mod tests {
             data: sunrise_protocol::attachment_sync::encode(
                 &sunrise_protocol::attachment_sync::Message {
                     holder: Holder::Entity(id),
-                    replace: true,
+                    replace,
                     changes,
                 },
             )
@@ -543,7 +673,7 @@ mod tests {
         let rows = &game.remote.as_ref().unwrap().general.rows;
         let mut ids: Vec<i32> = rows
             .iter()
-            .filter(|(_, row)| row.shown)
+            .filter(|(_, row)| row.is_shown())
             .map(|(&id, _)| id)
             .collect();
         ids.sort_unstable();
@@ -747,6 +877,9 @@ mod tests {
         mod_platform::testing::with_mods(declare().into(), || {
             mod_platform::__private::part_tests::install_parts_fixture(&declare()).unwrap();
             crate::game::item_entities::thrown_items_tests::with_remote_game(|game| {
+                // Out-of-order deltas create a replica map, not an initial generation.
+                game.handle_packet(attachment_packet(5, false, Some(99)))
+                    .unwrap();
                 game.handle_packet(spawn(5, "mymod:missile", [0.5, 70.0, 0.5]))
                     .unwrap();
                 game.handle_packet(spawn(6, "other:unknown", [0.5, 70.0, 0.5]))
@@ -757,11 +890,14 @@ mod tests {
                 assert_eq!(held.keys().collect::<Vec<_>>(), [&5]);
                 assert_eq!(held[&5].position, [0.5, 70.0, 0.5]);
                 assert_eq!(held[&5].uuid, 0x77);
-                // First pairing: the spawn alone shows nothing; with its snapshot, the row and
-                // its value are there together.
+                // A spawn and deltas still show nothing; the whole snapshot opens the gate.
+                assert!(held[&5].render_attachments.is_none());
+                game.handle_packet(attachment_packet(5, false, Some(12)))
+                    .unwrap();
                 assert!(shown(game).is_empty());
                 game.handle_packet(snapshot(5, Some(9))).unwrap();
                 assert_eq!(shown(game), [5]);
+                assert!(rows(game)[&5].render_attachments.is_some());
                 let fuel = |game: &Game<'_>, id: u32| {
                     let held = game.remote.as_ref().unwrap();
                     let map = held
@@ -785,6 +921,7 @@ mod tests {
                 game.handle_packet(spawn(8, "mymod:missile", [0.5, 70.0, 0.5]))
                     .unwrap();
                 assert_eq!(shown(game), [5, 8]);
+                assert!(rows(game)[&8].render_attachments.is_some());
                 game.handle_packet(C::EntityPositionSync(play::EntityPositionSync {
                     id: 5,
                     path: play::PositionPath::Linear([3.5, 70.0, 0.5]),

@@ -67,12 +67,15 @@ impl Ingredient {
                             .is_some_and(|rule| rule.matches(stack)),
                     );
                 }
-                if let Some((kind, data)) = &self.custom {
+                if let Some(predicate) = &self.custom {
                     if !guard() {
                         return None;
                     }
-                    let mut accept = true;
-                    native_ingredient_test(context, kind, data, stack, &mut accept);
+                    let reader = sunrise_client_render::api_context::LoopReader(context);
+                    let defaults = self.component_defaults.get(stack.item.as_ref());
+                    let accept = super::stack::with_ingredient_stack(stack, defaults, |view| {
+                        predicate.test(&reader.context(), view)
+                    });
                     if !guard() {
                         return None;
                     }

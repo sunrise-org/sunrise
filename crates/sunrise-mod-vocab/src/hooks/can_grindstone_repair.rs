@@ -32,5 +32,5 @@ pub trait Hooks {
         target = "sunrise_client_lib::stations::native_can_grindstone_repair",
         neoforge = "IItemExtension.canGrindstoneRepair"
     )]
-    fn can_grindstone_repair();
+    fn can_grindstone_repair(stack: &mod_api::ItemStack, can_repair: &mut bool);
 }

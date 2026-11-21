@@ -1,7 +1,7 @@
 use super::*;
 use crate::item::crafting::Shape;
 use crate::world::snapshots::LootEntity;
-use crate::{Ingredient, ItemPlace, RecipeSlotDisplay, Tag, Text};
+use crate::{ItemPlace, RecipeSlotDisplay, Tag, Text};
 
 fn round<T: Wire>(value: &T, initial: u16) {
     let mut out = Writer::new();
@@ -16,38 +16,6 @@ fn round<T: Wire>(value: &T, initial: u16) {
 }
 
 #[test]
-fn ingredient_at_limit_decodes_and_one_record_past_returns_wire_error() {
-    let mut ingredient = Ingredient::of(vec!["minecraft:stone".into()]);
-    for _ in 1..MAX_DEPTH {
-        let mut parent = Ingredient::of(vec!["minecraft:stone".into()]);
-        parent.children = Some((Shape::Compound, vec![ingredient]));
-        ingredient = parent;
-    }
-    let mut at_limit = Writer::new();
-    at_limit.put(&ingredient);
-    assert_eq!(at_limit.error(), None);
-    assert_eq!(
-        Reader::decode::<Ingredient>(at_limit.bytes()).unwrap(),
-        ingredient
-    );
-    // Write a complete extra record without charging its envelope to the
-    // writer. This is hostile input, not a truncated failed encoder output.
-    let parent = Ingredient::of(vec![]);
-    let mut past_limit = Writer::new();
-    past_limit.put(&parent.items);
-    past_limit.put(&parent.order);
-    past_limit.put(&parent.custom);
-    past_limit.put(&Some((Shape::Compound, vec![ingredient])));
-    past_limit.put(&parent.rule);
-    past_limit.put(&parent.display);
-    assert_eq!(past_limit.error(), None);
-    assert!(matches!(
-        Reader::decode::<Ingredient>(past_limit.bytes()),
-        Err(WireError::Depth)
-    ));
-}
-
-#[test]
 fn structural_families_fit_a_small_stack() {
     // Verify that the depth limit also bounds stack use.
     std::thread::Builder::new()
@@ -55,15 +23,10 @@ fn structural_families_fit_a_small_stack() {
         .spawn(|| {
             // A raised limit is not safe merely because the depth counter still works.
             assert_eq!(MAX_DEPTH, 32);
-            let mut ingredient = Ingredient::of(vec!["minecraft:stone".into()]);
             let mut display = RecipeSlotDisplay::Empty;
             for _ in 1..32 {
-                let mut parent = Ingredient::of(vec!["minecraft:stone".into()]);
-                parent.children = Some((Shape::Compound, vec![ingredient]));
-                ingredient = parent;
                 display = RecipeSlotDisplay::Composite(vec![display]);
             }
-            round(&ingredient, 0);
             round(&display, 0);
             let mut place = ItemPlace::ItemEntity { id: 1 };
             let mut entity = LootEntity::default();
@@ -99,11 +62,6 @@ fn structural_families_fit_a_small_stack() {
                 },
                 31,
             );
-            let mut parent = Ingredient::of(vec![]);
-            parent.children = Some((Shape::Compound, vec![ingredient]));
-            let mut out = Writer::new();
-            out.put(&parent);
-            assert_eq!(out.error(), Some(WireError::Depth));
         })
         .unwrap()
         .join()
@@ -148,15 +106,15 @@ fn vanilla_trees_keep_their_depth_on_a_small_stack() {
             let mut out = Writer::new();
             out.put(&text);
             assert_eq!(out.error(), None);
-            let mut form = crate::text::TextForm::try_from(&text).unwrap();
-            let mut extra =
-                crate::text::TextNode::new(crate::text::TextNodeContent::Literal(String::new()));
-            extra.parent = Some(511);
-            form.nodes.push(extra);
-            let mut invalid = Writer::new();
-            invalid.put(&form);
+            // Append a complete row without the encoder's depth check.
+            let mut invalid = out.bytes().to_vec();
+            invalid[..4].copy_from_slice(&513u32.to_le_bytes());
+            invalid.extend([1, 255, 1, 0, 0]); // Parent row 511.
+            invalid.extend([0; 4 + 4 + 4 + 11]); // Child relation, empty literal, unset styles.
+            invalid.extend([10, 0, 0, 0, 0, 0, 0, 0]); // Empty style metadata compound.
+            invalid.extend([10, 0, 0, 0, 0, 0, 0, 0]); // Empty component metadata compound.
             assert!(matches!(
-                Reader::decode::<Text>(invalid.bytes()),
+                Reader::decode::<Text>(&invalid),
                 Err(WireError::Invalid(_))
             ));
             // Drop is outside Wire's ownership; intentionally discard a deep tree iteratively.

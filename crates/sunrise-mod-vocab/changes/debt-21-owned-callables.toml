@@ -1,0 +1,17 @@
+ids = [
+    "method:prelude::ModStateServerHost::schedule_task",
+    "hook:scheduled_task",
+    "hook:scheduled_task.id",
+    "hook:scheduled_task.owner",
+    "hook:scheduled_task.token",
+    "method:Hooks::scheduled_task",
+    "type:ScheduledTaskEvent",
+    "type:ScheduledTaskEvent.id",
+    "type:ScheduledTaskEvent.owner",
+    "type:ScheduledTaskEvent.token",
+    "type:TaskId",
+    "type:ScheduleError",
+    "type:ScheduleError.Unavailable",
+]
+why = "The server now queues the owner's callable instead of broadcasting its token to unrelated mods. The callable receives a fresh server host with journaled writes. Task ids and scheduling errors are local values and no longer implement Wire."
+migrate = "Replace `host.schedule_task(delay, token)` with `host.schedule_task(delay, Box::new(move |host| { /* former handler body */ }))`. Move the data keyed by the token into the closure and use its `host` parameter; remove the `Hooks::scheduled_task` method, its `ScheduledTaskEvent` import, and the owner/token comparisons. Store the returned `TaskId` in memory if you need `host.cancel_task(id)`; to persist work, store your own deadline and data and schedule a new closure after reopening. Handle `ScheduleError::Unavailable` for calls without an available server world, and add a wildcard arm when matching the now non-exhaustive error."

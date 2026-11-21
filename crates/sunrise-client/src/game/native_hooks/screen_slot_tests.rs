@@ -4,20 +4,31 @@
 #[test]
 fn mod_screen_data_is_its_windows_only() {
     let mut s = super::OpenNativeScreen {
+        menu: super::OpenNativeMenu {
+            key: (0, 0, 0),
+            window: 4,
+            generation: 1,
+            name: "gtmod:menu".into(),
+            block: Some("gtmod:machine".into()),
+            pos: None,
+            mod_type: None,
+            data: Vec::new(),
+        },
         slot_moves: Default::default(),
         layout_revision: 0,
-        key: (0, 0, 0),
-        window: 4,
-        menu: "gtmod:menu".into(),
-        block: Some("gtmod:machine".into()),
-        screen: mod_api::Screen::default(),
-        mod_type: None,
-        data: Vec::new(),
-        extra: None,
+        screen: mod_api::__private::OwnedMenuScreen::new(
+            "gtmod",
+            0,
+            mod_api::MenuScreen::new(mod_api::MenuScreenLayout::default()),
+        ),
+        shown: true,
     };
     assert!(s.set_data(4, 1, 7));
     assert!(!s.set_data(3, 1, 99));
-    assert_eq!(s.data, [0, 7]);
+    assert_eq!(s.menu.data, [0, 7]);
+    assert!(s.set_data(4, 300, 11));
+    assert_eq!(s.menu.data.len(), 301);
+    assert_eq!(s.menu.data[300], 11);
 }
 
 /// A slot move changes only a shown slot, to a finite position, takes

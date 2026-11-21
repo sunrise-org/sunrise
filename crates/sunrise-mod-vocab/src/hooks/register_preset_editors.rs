@@ -38,11 +38,13 @@ Dimension ids, stem structure and flat-layer height bounds are checked before ac
 an edit; registry resolution and generator-specific decoding still run when opening the world.
 "#]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "client",
         contract = "collect",
         out = "editors",
         context = "registration",
         neoforge = "RegisterPresetEditorsEvent"
     )]
-    fn register_preset_editors();
+    fn register_preset_editors(editors: &mut Vec<mod_api::PresetEditor>);
 }

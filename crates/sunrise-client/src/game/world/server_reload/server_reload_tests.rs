@@ -1,8 +1,8 @@
 use super::*;
 use crate::game::{native_entity_refs::tests::with_game, world_loading::WorldRequest};
 use mod_api::{
-    self, AddServerReloadListenersEvent, Hooks, Host, ListenerKey, ModEntry, ReloadApply,
-    ReloadResourceError, ServerReloadListener,
+    self, AddServerReloadListenersEvent, Hooks, Host, ListenerKey, ModEntry, ReloadResourceError,
+    ServerReloadListener,
 };
 use std::{
     path::Path,
@@ -20,7 +20,7 @@ impl ServerReloadListener for DataListener {
     fn prepare(
         &self,
         context: &ServerReloadContext,
-    ) -> Result<Box<dyn ReloadApply>, ReloadResourceError> {
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
         let id = Identifier::parse("reload_test:value").unwrap();
         assert!(context.list().any(|entry| entry == &id));
         // Arbitrary IDs only perform map lookups, never filesystem reads.
@@ -35,9 +35,7 @@ impl ServerReloadListener for DataListener {
                 .map_err(|error| ReloadResourceError::new(id.clone(), error))?;
         }
         let live = self.live.clone();
-        Ok(<dyn ReloadApply>::new(move || {
-            *live.lock().unwrap() = value
-        }))
+        Ok(Box::new(move || *live.lock().unwrap() = value))
     }
 }
 struct CheckListener(Arc<AtomicBool>);
@@ -45,14 +43,14 @@ impl ServerReloadListener for CheckListener {
     fn prepare(
         &self,
         _: &ServerReloadContext,
-    ) -> Result<Box<dyn ReloadApply>, ReloadResourceError> {
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
         if self.0.load(Ordering::Relaxed) {
             return Err(ReloadResourceError::new(
                 Identifier::parse("reload_test:value").unwrap(),
                 std::io::Error::other("rejected new machine data"),
             ));
         }
-        Ok(<dyn ReloadApply>::new(|| {}))
+        Ok(Box::new(|| {}))
     }
 }
 #[mod_api::__subscriptions]
@@ -147,9 +145,9 @@ fn reload_command_prepares_world_before_applying_listeners_and_preserves_tables_
         fn prepare(
             &self,
             _: &ServerReloadContext,
-        ) -> Result<Box<dyn ReloadApply>, ReloadResourceError> {
+        ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
             let state = self.0.clone();
-            Ok(<dyn ReloadApply>::new(move || {
+            Ok(Box::new(move || {
                 state.fetch_add(1, Ordering::SeqCst);
             }))
         }
@@ -301,9 +299,7 @@ fn dedicated_world_open_publishes_crafting_item_tags() {
             let view = reader.context();
             assert_eq!(view.is_in_tag(stick, tag), Some(true));
             assert_eq!(view.is_in_tag(dirt, tag), Some(false));
-            assert_eq!(view.item_count(tag), Some(1));
-            assert_eq!(view.item_at(tag, 0), Some(stick));
-            assert_eq!(view.item_at(tag, 1), None);
+            assert_eq!(view.items_in_tag(tag), Some(&[stick][..]));
         });
     });
 }
@@ -578,7 +574,7 @@ fn server_reload_skips_unparsable_files_and_delivers_the_rest() {
         fn prepare(
             &self,
             context: &ServerReloadContext,
-        ) -> Result<Box<dyn ReloadApply>, ReloadResourceError> {
+        ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
             let mut parsed = Vec::new();
             for id in context.list() {
                 match serde_json::from_slice::<String>(context.read(id).unwrap()) {
@@ -587,9 +583,7 @@ fn server_reload_skips_unparsable_files_and_delivers_the_rest() {
                 }
             }
             let live = self.0.clone();
-            Ok(<dyn ReloadApply>::new(move || {
-                *live.lock().unwrap() = parsed
-            }))
+            Ok(Box::new(move || *live.lock().unwrap() = parsed))
         }
     }
     struct SkipHooks(Arc<Mutex<Vec<(String, String)>>>);
@@ -771,7 +765,7 @@ impl ServerReloadListener for RetainedData {
     fn prepare(
         &self,
         context: &ServerReloadContext,
-    ) -> Result<Box<dyn ReloadApply>, ReloadResourceError> {
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
         let mut value = 0;
         for id in context.list() {
             value += serde_json::from_slice::<u64>(context.read(id).unwrap())
@@ -784,9 +778,7 @@ impl ServerReloadListener for RetainedData {
             ));
         }
         let live = self.live.clone();
-        Ok(<dyn ReloadApply>::new(move || {
-            *live.lock().unwrap() = value
-        }))
+        Ok(Box::new(move || *live.lock().unwrap() = value))
     }
 }
 #[mod_api::__subscriptions]

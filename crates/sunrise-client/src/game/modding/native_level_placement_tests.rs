@@ -142,7 +142,7 @@ fn a_code_placement_notifies_only_the_blocks_part_with_its_stack() {
                 placer: event.placer,
                 stack: event
                     .stack
-                    .map(|stack| (stack.item().id(host), stack.count())),
+                    .and_then(|stack| Some((stack.item().id(host)?.to_owned(), stack.count()))),
             });
             let [x, y, z] = event.pos;
             event

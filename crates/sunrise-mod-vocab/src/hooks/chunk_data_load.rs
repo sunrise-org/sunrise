@@ -5,13 +5,15 @@ pub trait Hooks {
     /// Runs on a chunk worker with a restricted Host. Read and edit `data` through
     /// its typed methods; edits become the loaded store only if the entire job
     /// succeeds. Missing records and proto-to-full promotion do not fire this hook.
-    /// A codec error or unwind refuses publication of the whole store.
+    /// Borrow the captured metadata from `host.job()`. A codec error, unwind,
+    /// or invalid or over-budget disk NBT refuses publication of the whole store.
     #[hook(
         side = "server",
         contract = "listen",
         context = "chunk_disk",
         target = "mod_api::chunk_disk::native_chunk_data_load",
-        neoforge = "ChunkDataEvent.Load"
+        neoforge = "ChunkDataEvent.Load",
+        version = 2
     )]
-    fn chunk_data_load();
+    fn chunk_data_load(data: &mut ChunkDiskData);
 }

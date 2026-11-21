@@ -159,7 +159,7 @@ pub(super) fn peer(port: u16, name: &str, sunrise: bool) -> Connection {
             .unwrap();
     if sunrise {
         // A server queries a client only once its brand says Sunrise.
-        let mut brand = sunrise_protocol::buf::Writer::new();
+        let mut brand = ::sunrise_core::vanilla_bytes::Writer::new();
         brand.string("sunrise");
         c.send(
             &cfg::Serverbound::CustomPayload(cfg::CustomPayload {

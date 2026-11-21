@@ -6,7 +6,7 @@
 mod tests;
 
 use crate::{
-    FileToIdConverter, Identifier, ReloadApply, ReloadResourceError,
+    FileToIdConverter, Identifier, ReloadResourceError,
     world::reload::{Boundary, ReloadFiles},
     world::reload_order::ReloadOrderError,
 };
@@ -18,8 +18,9 @@ use std::sync::{Arc, LazyLock};
 /// the model manager, equipment assets, paletted textures, then the entity and
 /// block-entity render dispatchers, particles, the game renderer, the level
 /// extractor, clouds, the GPU warnlist, regional compliance and the GUI.
+/// Use these methods to obtain IDs for client reload dependencies.
+// no wire: namespace for local reload dependency IDs, not a payload.
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct VanillaClientListeners;
 impl VanillaClientListeners {
     /// Boundary before every reload listener.
@@ -45,11 +46,11 @@ impl VanillaClientListeners {
 
 /// Selected client asset files for one converter, with resource-pack overrides
 /// resolved. Keys have their directory and extension removed. This cannot read
-/// data files or filesystem paths. Its fields are private so the view can grow.
+/// data files or filesystem paths. IDs and bytes are borrowed from this view.
 // exhaustive: its fields are private, so mods cannot build or destructure it
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: a local prepare view of the winning client asset files.
 pub struct ClientReloadContext {
-    pub(crate) files: ReloadFiles,
+    files: ReloadFiles,
 }
 impl ClientReloadContext {
     pub(crate) fn new(files: ReloadFiles) -> Self {
@@ -67,31 +68,34 @@ impl ClientReloadContext {
 
 /// A client-side `SimplePreparableReloadListener`, as `ServerReloadListener`
 /// reads data: prepare reads the new pack view without changing live state;
-/// its returned apply publishes the result. All prepares finish before any
-/// apply, including vanilla's, runs. Prepare cannot see another listener's new
-/// published state. Dependencies order both phases deterministically; they do
-/// not remove the barrier. On any error all pending applies are dropped,
-/// keeping every listener's previous assets.
+/// the game consumes its returned action to publish the result. All prepares
+/// finish before any apply, including vanilla's, runs on the game-owning thread.
+/// Prepare cannot see another listener's new published state. Dependencies order
+/// both phases deterministically; they do not remove the barrier. On a prepare
+/// error, pending actions are dropped without running, keeping the previous assets.
 pub trait ClientReloadListener: Send + Sync + 'static {
     /// Parse and validate new assets without changing the listener's live state.
+    /// Return `Ok(Box::new(move || { /* publish prepared assets */ }))` with owned
+    /// data. The action is consumed once and cannot report an error.
     ///
     /// As vanilla's `SimpleJsonResourceReloadListener.scanDirectory`, a
     /// listener that parses its files logs and skips one that won't parse,
     /// carrying the rest through; returning `Err` aborts the whole reload and
-    /// keeps every listener's previous assets. A panic in `prepare` or the
-    /// returned apply is not recovered: it stops the game, and the crash report
-    /// names the listener and the mod that registered it.
+    /// keeps every listener's previous assets. Attach the original error to the
+    /// file's ID with [`ReloadResourceError::new`] to preserve its cause.
+    /// A panic in `prepare` or the returned apply stops the game; the crash
+    /// report names the listener and the mod that registered it.
     fn prepare(
         &self,
         context: &ClientReloadContext,
-    ) -> Result<Box<dyn ReloadApply>, ReloadResourceError>;
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError>;
 }
 impl ClientReloadListener for Boundary {
     fn prepare(
         &self,
         _: &ClientReloadContext,
-    ) -> Result<Box<dyn ReloadApply>, ReloadResourceError> {
-        Ok(<dyn ReloadApply>::new(|| {}))
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
+        Ok(Box::new(|| {}))
     }
 }
 

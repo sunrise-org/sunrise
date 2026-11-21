@@ -37,5 +37,11 @@ pub trait Hooks {
         neoforge = "none (fork addition; see travel-and-move.md, #2308)",
         target = "sunrise_client_lib::move_gate::native_entity_move"
     )]
-    fn entity_move();
+    fn entity_move(
+        entity: u32,
+        kind: &str,
+        cause: MoveCause,
+        delta: &mut [f64; 3],
+        canceled: &mut bool,
+    );
 }

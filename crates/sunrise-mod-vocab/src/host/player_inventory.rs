@@ -12,28 +12,25 @@ pub trait PlayerInventoryBackend {
     #[access(WorldOnly)]
     fn player_selected_slot(&self, player: PlayerRef) -> Option<usize>;
     /// Side: both.
-    /// `Inventory.items`: the non-empty main inventory stacks in slot order, including
-    /// their components. None for a stale or unavailable player; on clients only the
-    /// local player's inventory is available.
+    /// Lend the inventory once if available, including when empty.
+    /// See [`PlayerRef::with_inventory`] for the slot numbering and side rules.
     #[access(WorldOnly)]
-    fn player_inventory(&self, player: PlayerRef) -> Option<Vec<ItemStack>>;
-    /// Side: both.
-    /// The player's non-empty inventory slots by `Inventory`'s numbers, with their
-    /// components: 0 to 35 the main inventory (0 to 8 the hotbar), 36 feet, 37 legs, 38
-    /// chest, 39 head, 40 the off hand, 41 body and 42 saddle
-    /// (`Inventory.EQUIPMENT_SLOT_MAPPING`), lowest first. The numbers
-    /// `player_set_inventory_slot` takes, and for 0 to 35 the `Slot` of a saved player's
-    /// `Inventory` list. None for a stale or unavailable player. On a client, only the local player's
-    /// inventory menu is available: server slot packets plus the client's own changes.
-    /// This read-only view is not authoritative server inventory.
-    #[access(WorldOnly)]
-    fn player_inventory_slots(&self, player: PlayerRef) -> Option<Vec<(u32, ItemStack)>>;
+    #[manual_handle]
+    fn player_inventory_slots(
+        &self,
+        player: PlayerRef,
+        read: &mut dyn for<'a> FnMut(InventoryView<'a>),
+    ) -> Option<()>;
     /// Side: server.
-    /// The player's non-empty ender chest slots (`Player.getEnderChestInventory`, 27 slots
-    /// numbered 0 to 26 as the `Slot` of a saved player's `EnderItems`), lowest first. None for
-    /// a stale or unavailable player and on a client.
+    /// Lend the ender chest once if available, including when empty.
+    /// See [`PlayerRef::with_ender_chest`] for the slot numbering and side rules.
     #[access(WorldOnly)]
-    fn player_ender_chest(&self, player: PlayerRef) -> Option<Vec<(u32, ItemStack)>>;
+    #[manual_handle]
+    fn player_ender_chest(
+        &self,
+        player: PlayerRef,
+        read: &mut dyn for<'a> FnMut(InventoryView<'a>),
+    ) -> Option<()>;
 }
 /// The handles' writes of the `player_inventory` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
@@ -70,7 +67,7 @@ pub trait PlayerInventoryBackendMut {
     /// Numbers: 0..35 main (0..8 hotbar), 36..39 feet to head, 40 offhand,
     /// 41 body, 42 saddle. ItemPlace uses 100..103 for armour and -106 for offhand;
     /// InventoryMenu has no 41 or 42.
-    /// `Inventory.setItem(slot, stack)` by `player_inventory_slots`' numbers: `stack` (None
+    /// `Inventory.setItem(slot, stack)` by [`PlayerRef::with_inventory`]'s numbers: `stack` (None
     /// empties it) goes into that slot as `/item replace entity <player> <slot>` puts it,
     /// without the slot's item check, so a worn slot takes any item; the equip sound and
     /// equipment changes follow for 36 to 42. The client is sent the slot with the tick's

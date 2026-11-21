@@ -56,7 +56,12 @@ impl ItemPart for Probe {
         let level = event.level;
         assert_eq!(level, host.level("minecraft:overworld").unwrap());
         assert_eq!(level.block_state(host, event.pos), Some(event.state));
-        let item = event.stack.item().id(host);
+        let item = event
+            .stack
+            .item()
+            .id(host)
+            .expect("placed item is registered")
+            .to_owned();
         match item.as_str() {
             CRATE => {
                 let entity = host
@@ -116,7 +121,7 @@ impl ItemPart for Probe {
                 assert_eq!(entity.name(host).as_deref(), Some("Shulker"));
             }
             SKULL => {
-                assert_eq!(event.state.block().id(host), "minecraft:air");
+                assert_eq!(event.state.block().id(host), Some("minecraft:air"));
                 crate::game::dispense_fixture::record(|| "item notice".into());
             }
             _ => panic!("unsubscribed item {item}"),

@@ -5,6 +5,7 @@ pub trait Hooks {
     /// on the render thread for an orderly client exit, not for a dedicated server.
     /// NeoForge's `ClientStoppedEvent`.
     #[hook(
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         neoforge = "ClientStoppedEvent",

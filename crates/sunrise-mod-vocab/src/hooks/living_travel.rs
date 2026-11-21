@@ -45,5 +45,12 @@ pub trait Hooks {
         neoforge = "none (fork addition; see travel-and-move.md, #2308)",
         target = "sunrise_client_lib::travel_gate::native_living_travel"
     )]
-    fn living_travel();
+    fn living_travel(
+        entity: u32,
+        kind: &str,
+        mode: TravelMode,
+        input: &mut [f64; 3],
+        velocity: &mut [f64; 3],
+        canceled: &mut bool,
+    );
 }

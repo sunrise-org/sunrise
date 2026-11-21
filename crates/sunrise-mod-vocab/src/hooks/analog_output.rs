@@ -17,6 +17,7 @@ pub trait Hooks {
     /// `container_signal` for vanilla's comparator read, which may unpack unopened loot.
     /// The level's random stream remains in vanilla order. Other world edits stay forbidden.
     #[hook(
+        dispatch = "flat",
         side = "server",
         version = 2,
         contract = "collect",
@@ -26,5 +27,11 @@ pub trait Hooks {
         target = "sunrise_client::game::native_hooks::base::GameLevel<'_>::native_analog_output",
         neoforge = "none (vanilla BlockBehaviour.getAnalogOutputSignal; NeoForge adds no event or extension for it)"
     )]
-    fn analog_output();
+    fn analog_output(
+        dimension: LevelDimension,
+        pos: BlockPos,
+        state: BlockState,
+        face: Direction,
+        output: &mut i32,
+    );
 }

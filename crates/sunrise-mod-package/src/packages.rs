@@ -151,7 +151,7 @@ mod tests {
         fs::write(dir.join("runtime/nav.bin"), b"tables").unwrap();
         let package = read_native(&dir).unwrap();
         let runtime = package.runtime.unwrap();
-        assert_eq!(&*runtime.file("nav.bin").unwrap(), b"tables");
+        assert_eq!(runtime.file("nav.bin").unwrap().0, b"tables");
         // A folder edited by hand is refused at open, naming the file.
         fs::write(dir.join("runtime/nav.bin"), b"edited").unwrap();
         let error = read_native(&dir).unwrap_err().to_string();

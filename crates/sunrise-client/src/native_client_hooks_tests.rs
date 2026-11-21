@@ -133,13 +133,13 @@ pub(crate) fn install() {
             has_mods: || false,
             player_name_format: |context, _, displayname| {
                 if let Some(value) = context.setting("rules_mod", "stack") {
-                    *displayname = crate::text::Text::literal(&value);
+                    *displayname = crate::text::Text::literal(value);
                 }
             },
             player_tab_list_name_format: |context, _, _, display_name| {
                 *display_name = context
                     .setting("rules_mod", "stack")
-                    .map(|value| crate::text::Text::literal(&value));
+                    .map(crate::text::Text::literal);
             },
             living_drown: |context, _, _, drowning, damage, bubbles, _| {
                 if context.setting("rules_mod", "stack").is_some() {

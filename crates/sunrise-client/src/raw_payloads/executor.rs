@@ -243,6 +243,12 @@ impl IPayloadContext for NetworkContext<'_> {
         }
         self.endpoint.transport().local.send_to(players, id, bytes)
     }
+    fn finish_configuration_task(
+        &mut self,
+        _: mod_api::ConfigurationTaskRef,
+    ) -> Result<(), mod_api::ConfigurationTaskError> {
+        Err(mod_api::ConfigurationTaskError::WrongContext)
+    }
     fn disconnect(&mut self, reason: Text) {
         self.disconnect = Some(reason);
     }

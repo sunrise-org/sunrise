@@ -22,11 +22,13 @@ before incoming-damage hooks and armor reductions. It is an effect registrar, no
 Callbacks are indexed directly by resolved slots; hits never scan installed mods. Hits without custom
 nodes retain the vanilla evaluator without constructing API weapon snapshots."#]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "server",
         contract = "collect",
         out = "effects",
         context = "registration",
         neoforge = "RegisterEvent"
     )]
-    fn register_enchantment_damage_effects();
+    fn register_enchantment_damage_effects(effects: &mut dyn EnchantmentDamageEffects);
 }

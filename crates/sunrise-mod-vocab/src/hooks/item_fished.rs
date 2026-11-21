@@ -18,6 +18,7 @@ pub trait Hooks {
     /// Diverges: Sunrise lets a listener change the drop list itself; the reference lets a
     /// listener change the stacks but not the list.
     #[hook(
+        dispatch = "flat",
         side = "server",
         version = 2,
         contract = "collect",
@@ -25,5 +26,12 @@ pub trait Hooks {
         neoforge = "ItemFishedEvent",
         cancellable = true
     )]
-    fn item_fished();
+    fn item_fished(
+        player: u128,
+        player_entity_id: i32,
+        fished: &ItemFished,
+        drops: &mut Vec<ItemStack>,
+        rod_damage: &mut i32,
+        cancel: &mut bool,
+    );
 }

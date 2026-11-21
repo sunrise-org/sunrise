@@ -1154,7 +1154,10 @@ mod fox_consumption_hook_tests {
                             let next = host.entity(201).unwrap();
                             assert_eq!(next.position(host), Some([11.5, 64.0, 8.5]));
                             let next_living = host.living(next).unwrap();
-                            assert_eq!(next_living.hand_item(host, Hand::Main).unwrap().count(), 7);
+                            assert_eq!(
+                                next_living.with_hand_item(host, Hand::Main, |stack| stack.count()),
+                                Some(7)
+                            );
                             assert!(
                                 next_living
                                     .set_hand_item(
@@ -1182,10 +1185,14 @@ mod fox_consumption_hook_tests {
                             // The earlier fox resumed before this one, and the
                             // listener's unrelated actor writes survived it.
                             let first = host.living(host.entity(200).unwrap()).unwrap();
-                            assert_eq!(first.hand_item(host, Hand::Main).unwrap().count(), 6);
+                            assert_eq!(
+                                first.with_hand_item(host, Hand::Main, |stack| stack.count()),
+                                Some(6)
+                            );
                             let next = host.living(host.entity(201).unwrap()).unwrap();
                             assert_eq!(
-                                next.hand_item(host, Hand::Main),
+                                next.with_hand_item(host, Hand::Main, |stack| stack.project())
+                                    .flatten(),
                                 Some(test_snapshot(&ItemStack::new("minecraft:stone", 1)))
                             );
                             assert!(host.entity(202).is_none());

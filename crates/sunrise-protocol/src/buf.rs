@@ -1,9 +1,12 @@
 //! Byte buffers with vanilla's primitive encodings (FriendlyByteBuf, VarInt,
 //! VarLong, ByteBufCodecs) and the `Codec` building blocks packets are
 //! composed from, mirroring `StreamCodec.composite`.
+//!
+//! For the outgoing writer and VarInt helpers, import `Writer`, `write_varint`
+//! and `varint_size` from [`sunrise_core::vanilla_bytes`].
 use crate::{Error, Result};
 use std::marker::PhantomData;
-use sunrise_core::{nbt, nbt::Tag};
+use sunrise_core::{nbt, nbt::Tag, vanilla_bytes::Writer};
 
 /// Vanilla's default NBT quota for network tags (NbtAccounter.defaultQuota).
 pub const NBT_QUOTA: usize = nbt::Limits::network().max_bytes;
@@ -246,103 +249,6 @@ pub fn java_utf8(mut bytes: &[u8]) -> String {
             }
         }
     }
-}
-
-/// An outgoing packet body.
-#[derive(Default)]
-pub struct Writer {
-    pub data: Vec<u8>,
-}
-impl Writer {
-    pub fn new() -> Self {
-        Self::default()
-    }
-    pub fn u8(&mut self, v: u8) {
-        self.data.push(v);
-    }
-    pub fn i8(&mut self, v: i8) {
-        self.data.push(v as u8);
-    }
-    pub fn bool(&mut self, v: bool) {
-        self.data.push(u8::from(v));
-    }
-    pub fn i16(&mut self, v: i16) {
-        self.data.extend_from_slice(&v.to_be_bytes());
-    }
-    pub fn u16(&mut self, v: u16) {
-        self.data.extend_from_slice(&v.to_be_bytes());
-    }
-    pub fn i32(&mut self, v: i32) {
-        self.data.extend_from_slice(&v.to_be_bytes());
-    }
-    pub fn u32(&mut self, v: u32) {
-        self.data.extend_from_slice(&v.to_be_bytes());
-    }
-    pub fn i64(&mut self, v: i64) {
-        self.data.extend_from_slice(&v.to_be_bytes());
-    }
-    pub fn f32(&mut self, v: f32) {
-        self.data.extend_from_slice(&v.to_be_bytes());
-    }
-    pub fn f64(&mut self, v: f64) {
-        self.data.extend_from_slice(&v.to_be_bytes());
-    }
-    pub fn varint(&mut self, v: i32) {
-        write_varint(&mut self.data, v);
-    }
-    pub fn varlong(&mut self, v: i64) {
-        let mut v = v as u64;
-        loop {
-            if v & !0x7F == 0 {
-                self.data.push(v as u8);
-                return;
-            }
-            self.data.push((v as u8 & 0x7F) | 0x80);
-            v >>= 7;
-        }
-    }
-    pub fn string(&mut self, s: &str) {
-        self.varint(s.len() as i32);
-        self.data.extend_from_slice(s.as_bytes());
-    }
-    pub fn byte_array(&mut self, b: &[u8]) {
-        self.varint(b.len() as i32);
-        self.data.extend_from_slice(b);
-    }
-    pub fn bytes(&mut self, b: &[u8]) {
-        self.data.extend_from_slice(b);
-    }
-    pub fn uuid(&mut self, v: u128) {
-        self.data.extend_from_slice(&v.to_be_bytes());
-    }
-    pub fn nbt(&mut self, tag: &Tag) {
-        match nbt::write_network(tag, nbt::Limits::default()) {
-            Ok(bytes) => self.data.extend_from_slice(&bytes),
-            // Unencodable tags (too deep) are sent as "no tag".
-            Err(_) => self.data.push(0),
-        }
-    }
-    pub fn long_array(&mut self, v: &[i64]) {
-        self.varint(v.len() as i32);
-        for &l in v {
-            self.i64(l);
-        }
-    }
-}
-pub fn write_varint(out: &mut Vec<u8>, v: i32) {
-    let mut v = v as u32;
-    loop {
-        if v & !0x7F == 0 {
-            out.push(v as u8);
-            return;
-        }
-        out.push((v as u8 & 0x7F) | 0x80);
-        v >>= 7;
-    }
-}
-pub fn varint_size(v: i32) -> usize {
-    let v = v as u32;
-    (1..5).find(|i| v >> (7 * i) == 0).unwrap_or(5)
 }
 
 /// A wire encoding for values of type `T` (vanilla's StreamCodec).
@@ -711,6 +617,9 @@ pub fn unpack_degrees(b: i8) -> f32 {
 
 /// Define a packet struct and its codec from (field: type => codec) triples,
 /// like vanilla's `StreamCodec.composite`.
+///
+/// Downstream callers need a direct `sunrise-core` dependency: this macro expands
+/// to `::sunrise_core::vanilla_bytes::Writer`.
 #[macro_export]
 macro_rules! packet {
     ($(#[$meta:meta])* $name:ident { $($field:ident : $ty:ty => $codec:ty),* $(,)? }) => {
@@ -728,7 +637,7 @@ macro_rules! packet {
                 Ok($name { $($field: <$codec as $crate::buf::Codec<$ty>>::read(r)?),* })
             }
             #[allow(unused_variables)]
-            fn write(v: &$name, w: &mut $crate::buf::Writer) {
+            fn write(v: &$name, w: &mut ::sunrise_core::vanilla_bytes::Writer) {
                 $(<$codec as $crate::buf::Codec<$ty>>::write(&v.$field, w);)*
             }
         }
@@ -798,7 +707,10 @@ mod tests {
             [0x80, 0x80, 0x80, 0x80, 0x08]
         );
         for v in [0, 1, 127, 128, 16383, 16384, 2097151, 2097152, i32::MAX, -1] {
-            assert_eq!(varint_size(v), round::<i32, VarInt>(v).len());
+            assert_eq!(
+                sunrise_core::vanilla_bytes::varint_size(v),
+                round::<i32, VarInt>(v).len()
+            );
         }
         assert!(Reader::new(&[0xff; 6]).varint().is_err());
     }

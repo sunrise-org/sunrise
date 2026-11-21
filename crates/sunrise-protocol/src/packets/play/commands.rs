@@ -2,8 +2,9 @@
 //! and their parser properties.
 use crate::{
     Result,
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Reader},
 };
+use sunrise_core::vanilla_bytes::Writer;
 
 /// One entry of ClientboundCommandsPacket: a literal or an argument node.
 #[derive(Clone, Debug, PartialEq)]

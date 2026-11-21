@@ -1,4 +1,3 @@
-// game-module-visibility: pub(crate)
 //! Mods in the game (`docs/modding/src/how-to/content-mods.md`): content mods' blocks, items, data and
 //! assets (`content_root`), and the Mods page's rows. Code mods are native (`native_hooks.rs`)
 //! with content-only packages loaded separately.
@@ -228,8 +227,6 @@ pub(super) fn install_registration_data(
 ) -> sunrise_client::Result<()> {
     let packages = mod_api::__private::loaded_mods();
     let directory = Game::game_dir();
-    let directory = mod_api::InstanceDirectory::from_path(&directory)
-        .expect("the host's paths have an encoding the mod API carries");
     (mod_api::__private::platform::platform()?.install_registration_data)(
         mod_api::__private::RegistrationData::new(
             builtin_registry_names(root)?,
@@ -420,8 +417,8 @@ fn native_declared() -> std::borrow::Cow<'static, NativeDeclared> {
 /// The native mods' standalone models (`native_standalone_models`), set once
 /// before the resources first load.
 pub(super) fn register_standalone_models(role: ExecutionRole) {
-    if let Some(names) = collect_standalone_models(role) {
-        sunrise_client::models::register_standalone(names);
+    if let Some(registrations) = collect_standalone_models(role) {
+        sunrise_client::models::register_standalone(registrations);
     }
     register_fluid_models(role);
 }
@@ -461,22 +458,20 @@ pub(super) fn collect_key_mappings<'declared>(
     if role.is_client() { declared } else { &[] }
 }
 
-/// The native mods' entity model layers (`native_register_layer_definitions`), kept
-/// once at start for `bake_layer`, then their skull types (`native_create_skull_models`), baked
-/// once from those layers (or vanilla's under `vanilla_root`), so `minecraft:head` item models may
-/// name their kinds.
+/// Freeze the native mods' entity model layer definitions at startup, then bake their skull
+/// types (`native_create_skull_models`) from those definitions or vanilla's under `vanilla_root`.
 pub(super) fn register_layer_definitions(role: ExecutionRole, vanilla_root: &std::path::Path) {
     if !role.is_client() {
         return;
     }
-    let mut layers = Vec::new();
-    Game::native_register_layer_definitions(&RegistrationContext::new(), &mut layers);
-    sunrise_client::mobs::model_layers::register(layers);
+    let mut suppliers = Vec::new();
+    Game::native_register_layer_definitions(&RegistrationContext::new(), &mut suppliers);
+    sunrise_client::mobs::model_layers::register(suppliers);
     let mut models = Vec::new();
     Game::native_create_skull_models(&RegistrationContext::new(), &mut models);
     sunrise_client::skull_models::register(models, vanilla_root);
 }
-/// The native mods' F3 debug entries (`native_register_debug_entries`), kept once at start.
+/// Freeze the native mods' F3 text callbacks and renderer toggles at client startup.
 pub(super) fn register_debug_entries(role: ExecutionRole) {
     if !role.is_client() {
         return;
@@ -492,19 +487,19 @@ pub(super) fn register_map_decoration_types() {
     Game::native_map_decoration_types(&RegistrationContext::new(), &mut types);
     sunrise_client::map_decoration_types::register(types, Game::is_vanilla_decoration_sprite);
 }
-/// The native mods' HUD layers (`native_register_gui_layers`), placed among vanilla's once at
-/// start.
+/// Install the native mods' HUD draw callbacks among the vanilla anchors once at client startup.
 pub(super) fn register_gui_layers(role: ExecutionRole) {
     if !role.is_client() {
         return;
     }
-    let mut layers = Vec::new();
+    let mut layers = sunrise_client::gui_layers::GuiLayers::default();
     Game::native_register_gui_layers(&RegistrationContext::new(), &mut layers);
-    sunrise_client::gui_layers::register(layers);
+    sunrise_client::gui_layers::freeze(layers);
 }
-/// The native mods' debug renderers now (`native_register_debug_renderers`), asked at each
-/// refresh of the list (`Game::refresh_debug_renderers`).
-pub(super) fn debug_renderers(role: ExecutionRole) -> Vec<mod_api::DebugRenderer> {
+/// Collect the native mods' owned debug renderers and their owners on each list refresh.
+pub(super) fn debug_renderers(
+    role: ExecutionRole,
+) -> Vec<mod_api::Answered<mod_api::DebugRenderer>> {
     let mut renderers = Vec::new();
     if role.is_client() {
         Game::native_register_debug_renderers(&RegistrationContext::new(), &mut renderers);
@@ -546,9 +541,9 @@ pub(super) fn register_select_item_model_properties(role: ExecutionRole) {
 /// animation files may name them.
 /// Block-state
 /// definition types (`native_register_block_state_models`), so blockstate files naming one get
-/// the models the mod picks; and special item model renderers
-/// (`native_register_special_model_renderer`), so special models of their types draw what the
-/// mod answers.
+/// the models the mod picks; and special item model factories
+/// (`native_register_special_model_renderer`), so each special model node of a registered type
+/// bakes its own renderer.
 pub(super) fn register_resource_sources(role: ExecutionRole) {
     if !role.is_client() {
         return;
@@ -588,7 +583,7 @@ fn register_special_model_renderers() {
             );
         }
     }
-    let (mut renderers, replaced) = registry.into_renderers();
+    let (factories, replaced) = registry.into_renderers();
     for replaced in replaced {
         let name = |id: Option<&str>| id.unwrap_or("the game").to_owned();
         log::warn!(
@@ -598,19 +593,7 @@ fn register_special_model_renderers() {
             name(replaced.later)
         );
     }
-    // In slot order: the types' models resolve to these slots as they decode.
-    let kept = sunrise_assets::item_model::register_special_model_types(
-        renderers.keys().cloned().collect(),
-    );
-    super::native_special_renderers::register(
-        kept.into_iter()
-            .filter_map(|kind| {
-                renderers
-                    .remove(&kind)
-                    .map(|(policy, renderer)| (kind, policy, renderer))
-            })
-            .collect(),
-    );
+    sunrise_client::item_render::install_special_model_factories(factories);
 }
 /// The client presentation registrations, kept once at start, before resources load: the
 /// dimension transition screens, the entity spectator shaders, the render pipelines and the entity
@@ -713,8 +696,8 @@ pub(super) fn register_entity_renderers(role: ExecutionRole) {
     super::native_entity_renderers::register(registry.into_renderers());
 }
 /// The native mods' particle providers (`native_register_particle_providers`) and render groups
-/// (`native_register_particle_groups`), kept once at start, before resources load; every particle
-/// sprite-set load resolves each type's provider and group.
+/// (`native_register_particle_groups`) are registered once at startup. Each particle engine
+/// constructs its groups once; sprite-set loads associate types with those groups and providers.
 pub(super) fn register_particles(role: ExecutionRole) {
     if !role.is_client() {
         return;
@@ -722,9 +705,9 @@ pub(super) fn register_particles(role: ExecutionRole) {
     let mut registry = mod_api::ParticleProviderRegistry::default();
     Game::native_register_particle_providers(&RegistrationContext::new(), &mut registry);
     sunrise_client::particles::register_particle_providers(registry.into_providers());
-    let mut groups = Vec::new();
-    Game::native_register_particle_groups(&RegistrationContext::new(), &mut groups);
-    sunrise_client::particles::register_particle_groups(groups);
+    let mut group_factories = Vec::new();
+    Game::native_register_particle_groups(&RegistrationContext::new(), &mut group_factories);
+    sunrise_client::particles::register_particle_groups(group_factories);
 }
 
 /// `root` with the content mods that are on layered over it
@@ -1470,7 +1453,7 @@ fn register_menu_types(
             m.id.clone(),
             owner.to_owned(),
             m.slots.into(),
-            m.data_slots.into(),
+            m.data_slots,
             results,
             inputs,
             crafting,
@@ -3086,7 +3069,7 @@ mod tests {
                 let mut model = FluidModel::default();
                 model.fluid = "reload_fluid:oil".into();
                 model.still = Some(format!("reload_fluid:block/oil_{generation}"));
-                event.models.push(model);
+                event.register(model);
             }
         }
         let generation = Arc::new(AtomicUsize::new(0));
@@ -3149,7 +3132,7 @@ mod tests {
                 model.fluid = "registration_test:oil".into();
                 model.flowing = Some("registration_test:block/oil_flow".into());
                 model.overlay = Some("registration_test:block/oil_overlay".into());
-                event.models.push(model);
+                event.register(model);
             }
         }
         with_mods(

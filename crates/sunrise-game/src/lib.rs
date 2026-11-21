@@ -8,7 +8,6 @@
 //! static GAME_IDENTITY: [u8; sunrise_game::GAME_IDENTITY.len()] = sunrise_game::GAME_IDENTITY;
 //!
 //! fn main() {
-//!     sunrise_game::prepare_main_stack();
 //!     std::hint::black_box(&GAME_IDENTITY);
 //!     my_crate::register();
 //!     sunrise_game::main();
@@ -29,6 +28,3 @@ pub fn main() {
     std::hint::black_box(&sunrise_mod_package::holder::CAPABILITY);
     sunrise_mod_host::main_with(Vec::new(), &[], startup);
 }
-
-/// Establish the executable main thread stack before initialization.
-pub use sunrise_mod_host::prepare_main_stack;

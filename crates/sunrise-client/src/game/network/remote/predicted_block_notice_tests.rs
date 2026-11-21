@@ -74,7 +74,7 @@ fn with_client(name: &str, test: impl FnOnce(&mut Game<'_>, &Observer, BlockStat
             };
             game.enter_remote_dimension(
                 &spawn,
-                false,
+                RemoteDimensionEntry::Login,
                 sunrise_client::level_loading::Reason::Other,
             );
             game.remote.as_mut().unwrap().logged_in = true;

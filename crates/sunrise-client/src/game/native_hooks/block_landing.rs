@@ -38,7 +38,7 @@ mod landing_crossing_tests {
             event.request(mod_api::LandingWrite::SetBlock(state));
             if invalid {
                 event.request(mod_api::LandingWrite::SetBlock(
-                    mod_api::BlockStateRecord::new(state.block(), u16::MAX).into(),
+                    mod_api::__private::block_state_from_ordinal(state.block(), u16::MAX),
                 ));
             }
         }

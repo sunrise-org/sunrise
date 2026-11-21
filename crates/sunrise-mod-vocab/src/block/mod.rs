@@ -4,6 +4,7 @@ pub(crate) mod block_entity_data;
 pub(crate) mod block_entity_items;
 pub(crate) mod block_entity_shapes;
 pub(crate) mod block_entity_type;
+pub(crate) mod block_entity_view;
 /// Read-only block metadata and typed operation errors.
 pub mod block_metadata;
 pub(crate) mod block_screen_effect;

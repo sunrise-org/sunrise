@@ -9,10 +9,11 @@ pub trait Hooks {
     /// Only the heart sprites change: health, regeneration and the other rows stay vanilla's.
     /// Client-side.
     #[hook(
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         neoforge = "PlayerHeartTypeEvent",
         cancellable = false
     )]
-    fn player_heart_type();
+    fn player_heart_type(kind: &mut mod_api::client::hud_layout::HeartKind);
 }

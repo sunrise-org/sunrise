@@ -3,12 +3,13 @@
 use crate::{DimensionKey, EntityRef, Identifier, ItemStack, LevelRef, PermissionLevel, PlayerRef};
 use sunrise_core::nbt::Compound;
 
-/// The origin of a registered mod command, independent of `execute as`'s executor.
+/// The origin passed to a registered server command's executor, independent of
+/// the acting entity selected by `execute as`.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum CommandSource {
-    /// A player's command; their state is swapped in for the listener.
+    /// A player's command; their state is swapped in for the executor.
     Player {
         /// The player who submitted the command.
         player: PlayerRef,
@@ -137,10 +138,10 @@ impl CommandArgument {
     }
 }
 
-/// A native command parsed once by the server's dispatcher, never a raw line.
+/// Validated input borrowed by a registered server command's executor, never a raw line.
 ///
 /// Missing optional arguments are absent. Selectors are permission-checked and resolved
-/// on the server before any listener runs. `entity` and `player` select exactly one;
+/// by the current server dispatcher before the executor runs. `entity` and `player` select exactly one;
 /// `entities` and `players` select one or more, in selector order. Unhandled entities
 /// are omitted, and an empty result is refused. Failed parsing or resolution produces
 /// command feedback instead.

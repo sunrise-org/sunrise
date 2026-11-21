@@ -32,11 +32,13 @@ The extension table is process-wide, like the loaded mod set: re-collecting repl
 classification for every simultaneously live resource set. Villagers cache only vanilla
 classification and consult the current extension table, just as saves and locate do."#]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "server",
         contract = "collect",
         out = "extensions",
         context = "registration",
         neoforge = "ExtendPoiTypesEvent"
     )]
-    fn extend_poi_types();
+    fn extend_poi_types(extensions: &mut dyn PoiTypeExtensions);
 }

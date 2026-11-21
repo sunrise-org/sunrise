@@ -322,7 +322,12 @@ impl Game<'_> {
                     return Err(());
                 }
                 let place = ItemPlace::MenuSlot { menu, slot: *slot };
-                if place.stack(host).as_ref() != before.as_ref() {
+                if place
+                    .with_stack(host, |stack| stack.project())
+                    .flatten()
+                    .as_ref()
+                    != before.as_ref()
+                {
                     return Err(());
                 }
                 if let Some(stack) = before {

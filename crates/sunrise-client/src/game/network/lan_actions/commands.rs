@@ -319,7 +319,7 @@ impl Game<'_> {
         // ServerCommandSuggestionsProvider.limitSuggestionCount.
         suggestions.truncate(1000);
         let utf16 = |byte: usize| command[..byte.min(command.len())].encode_utf16().count() as i32;
-        let mut w = sunrise_protocol::buf::Writer::new();
+        let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
         w.varint(id);
         w.varint(utf16(start) + skip as i32);
         w.varint(utf16(end) - utf16(start));

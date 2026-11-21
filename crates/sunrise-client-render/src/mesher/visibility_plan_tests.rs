@@ -122,40 +122,44 @@ fn a_cell_with_anything_removed_stops_being_solid() {
 
 #[test]
 fn the_raw_input_reads_the_world_and_names_missing_columns() {
-    let mut chunk = Chunk::empty(0, 0);
-    chunk.set(15, MIN_Y + 31, 15, 7);
-    let mut east = Chunk::empty(1, 0);
-    east.set(0, MIN_Y + 16, 0, 9);
-    east.set_biome_cell(0, 4, 0, 5);
-    let mut region: Region = Default::default();
-    region[1][1] = Some(Arc::new(chunk));
-    region[1][2] = Some(Arc::new(east));
-    let input = capture_input(&region, 1);
-    assert_eq!(
-        input.cell([15, 15, 15]),
-        Ok(SectionCell::State(BlockStateId(7)))
-    );
-    assert_eq!(
-        input.cell([16, 0, 0]),
-        Ok(SectionCell::State(BlockStateId(9)))
-    );
-    assert_eq!(
-        input.biome([16, 0, 0]),
-        Ok(Some(mod_api::__private::biome_id(5)))
-    );
-    assert_eq!(
-        input.cell([0, 0, 0]),
-        Ok(SectionCell::State(BlockStateId(0)))
-    );
-    assert_eq!(input.cell([-1, 0, 0]), Ok(SectionCell::Missing));
-    assert_eq!(input.cell([16, 0, 16]), Ok(SectionCell::Missing));
-    assert_eq!(input.light([16, 0, 16]), Ok([0, 0]));
-    assert_eq!(input.biome([16, 0, 16]), Ok(None));
-    assert_eq!(
-        input.cell([17, 0, 0]),
-        Err(SectionVisibilityRefusal::OutsideInput)
-    );
-    assert_ne!(input.model_seed([15, 0, 0]), input.model_seed([16, 0, 0]));
+    mod_platform::testing::with_mods(Vec::new().into(), || {
+        mod_platform::__private::part_tests::install_parts_fixture(&[]).unwrap();
+        mod_api::__private::resolve_block_keys(["minecraft:air"], |_| {
+            sunrise_mod_runtime::block_definitions::BlockDefinition::new(
+                &[&std::collections::BTreeMap::new()],
+                0,
+            )
+            .map_err(|error| format!("{error:?}"))
+        })
+        .unwrap();
+        let block = mod_api::__private::block_key("minecraft:air").unwrap();
+        let state = |raw: u32| mod_api::__private::block_state_from_ordinal(block, raw as u16);
+        let mut chunk = Chunk::empty(0, 0);
+        chunk.set(15, MIN_Y + 31, 15, 7);
+        let mut east = Chunk::empty(1, 0);
+        east.set(0, MIN_Y + 16, 0, 9);
+        east.set_biome_cell(0, 4, 0, 5);
+        let mut region: Region = Default::default();
+        region[1][1] = Some(Arc::new(chunk));
+        region[1][2] = Some(Arc::new(east));
+        let input = capture_input(&region, 1, state);
+        assert_eq!(input.cell([15, 15, 15]), Ok(SectionCell::State(state(7))));
+        assert_eq!(input.cell([16, 0, 0]), Ok(SectionCell::State(state(9))));
+        assert_eq!(
+            input.biome([16, 0, 0]),
+            Ok(Some(mod_api::__private::biome_id(5)))
+        );
+        assert_eq!(input.cell([0, 0, 0]), Ok(SectionCell::State(state(0))));
+        assert_eq!(input.cell([-1, 0, 0]), Ok(SectionCell::Missing));
+        assert_eq!(input.cell([16, 0, 16]), Ok(SectionCell::Missing));
+        assert_eq!(input.light([16, 0, 16]), Ok([0, 0]));
+        assert_eq!(input.biome([16, 0, 16]), Ok(None));
+        assert_eq!(
+            input.cell([17, 0, 0]),
+            Err(SectionVisibilityRefusal::OutsideInput)
+        );
+        assert_ne!(input.model_seed([15, 0, 0]), input.model_seed([16, 0, 0]));
+    });
 }
 
 #[test]

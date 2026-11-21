@@ -205,7 +205,7 @@ fn the_reset_argument_offers_the_sequences_the_world_has() {
     assert!(game.run_command("random value 1..10 minecraft:test"));
     // ServerGamePacketListenerImpl.handleCustomCommandSuggestions: the
     // `ask_server` request the window's chat box sends for `/random reset `.
-    let mut w = sunrise_protocol::buf::Writer::new();
+    let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
     w.varint(1);
     w.string("random reset ");
     game.guest_suggestions(2, &w.data);

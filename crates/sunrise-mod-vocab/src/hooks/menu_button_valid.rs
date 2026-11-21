@@ -9,6 +9,9 @@ pub trait Hooks {
 `menu_button_valid` asks the owner of the active menu whether it accepts a button ID. The owner chooses its IDs;
 there is no shared range. Only an accepted ID reaches `menu_button`."#]
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_menu_button_valid",
+        receiver = "read",
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "accepted",
@@ -17,5 +20,5 @@ there is no shared range. Only an accepted ID reaches `menu_button`."#]
         host = "read",
         neoforge = "none (vanilla menu button ids are handled by their menu implementation)"
     )]
-    fn menu_button_valid();
+    fn menu_button_valid(menu: &str, block: Option<&str>, id: i32, accepted: &mut bool);
 }

@@ -17,7 +17,7 @@ use sunrise_client::{
 use sunrise_client::{
     entities::nameplate::NameplateDistances,
     hud::HudBatch,
-    mobs::{Anim, Brain, Mob, MobType},
+    mobs::{Anim, Brain, Mob, MobType, render::FrameDraw},
     mouse::Rotation,
     pose::Pose,
 };
@@ -842,18 +842,34 @@ impl Game<'_> {
             local: true,
         };
         let listened = self.mob_render_listened();
-        let pre = self.mod_render_pre(m, Some(who), listened, alpha as f32, camera, packed, out);
-        let Some(hidden) = pre else {
+        let mut frame_draw = FrameDraw::default();
+        if !self.mod_render_pre(
+            m,
+            Some(who),
+            listened,
+            alpha as f32,
+            camera,
+            packed,
+            &mut frame_draw,
+            out,
+        ) {
             return;
+        }
+        // AvatarRenderer.shouldRenderLayers: a spectator draws no layers.
+        let show_layers = sunrise_client::mobs::render::layers_shown(m);
+        let layers = if show_layers {
+            self.mod_layers(m)
+        } else {
+            None
         };
-        // The mods' layers' posed parts, kept from the draw below while they want them.
-        let (mut parts, layers) = (None, self.mod_layers(m));
+        frame_draw.capture_model =
+            layers.is_some() || (listened && self.mob_render_post_listened(true));
         // A spectator still draws its own model in third person: the poses'
         // visibility (set by player_model_visibility) hides body parts, and
         // translucent_body marks the body OIT for the ghostly look. Only first
         // person and dead players skip it.
         if body || self.spectator() {
-            sunrise_client::mobs::render::render_with_hidden(
+            sunrise_client::mobs::render::render_with_frame(
                 m,
                 alpha as f32,
                 camera,
@@ -861,8 +877,7 @@ impl Game<'_> {
                 packed,
                 self,
                 &self.player_armor_layers(),
-                hidden,
-                (listened || layers.is_some()).then_some(&mut parts),
+                &mut frame_draw,
                 out,
             );
         } else {
@@ -874,12 +889,12 @@ impl Game<'_> {
                 packed,
                 self,
                 &self.player_armor_layers(),
-                (listened || layers.is_some()).then_some(&mut parts),
+                &mut frame_draw,
                 out,
             );
         }
-        // AvatarRenderer.shouldRenderLayers: a spectator draws no layers.
-        if sunrise_client::mobs::render::layers_shown(m) {
+        let model = frame_draw.model();
+        if show_layers {
             let chest = self.armor[1].as_ref().map(|s| &*s.item);
             // CapeLayer: no cape on an invisible player (`isInvisible`, whoever looks).
             if !self.own_invisible() {
@@ -904,7 +919,7 @@ impl Game<'_> {
             self.mod_layer_geometry(
                 m,
                 Some(who),
-                parts,
+                model,
                 layers,
                 alpha as f32,
                 camera,
@@ -913,7 +928,7 @@ impl Game<'_> {
             );
         }
         // The post hooks, whether or not the layers drew (a spectator draws none).
-        self.mod_render_post(m, Some(who), parts, alpha as f32, camera, packed, out);
+        self.mod_render_post(m, Some(who), model, alpha as f32, camera, packed, out);
         // LivingEntity.isCurrentlyGlowing: the Glowing effect.
         let vanilla = self
             .potions
@@ -1001,7 +1016,15 @@ impl Game<'_> {
                 );
             } else {
                 sunrise_client::mobs::render::render_layers(
-                    &m, 1.0, camera, &lookup, light, data, &armour, None, &mut verts,
+                    &m,
+                    1.0,
+                    camera,
+                    &lookup,
+                    light,
+                    data,
+                    &armour,
+                    &mut FrameDraw::default(),
+                    &mut verts,
                 );
             }
         });
@@ -2025,6 +2048,7 @@ mod preview_tests {
             biome_tags: Default::default(),
             entity_tags: Default::default(),
             villager_hats: Default::default(),
+            frame_models: Default::default(),
             cem: Default::default(),
             random_textures: Default::default(),
             emissive: Default::default(),
@@ -2032,6 +2056,7 @@ mod preview_tests {
             pois: Default::default(),
             species_placements: Default::default(),
             mod_spawns: Default::default(),
+            vanilla_spawn_placements: None,
             resolved: Default::default(),
         };
         let draw = |body: bool| {
@@ -2043,7 +2068,15 @@ mod preview_tests {
                 );
             } else {
                 sunrise_client::mobs::render::render_layers(
-                    &m, 1.0, at, &atlas, 0xF0F0, &data, &armour, None, &mut out,
+                    &m,
+                    1.0,
+                    at,
+                    &atlas,
+                    0xF0F0,
+                    &data,
+                    &armour,
+                    &mut FrameDraw::default(),
+                    &mut out,
                 );
             }
             out
@@ -2068,7 +2101,7 @@ mod preview_tests {
                 0xF0F0,
                 &data,
                 armour,
-                None,
+                &mut FrameDraw::default(),
                 out,
             );
         }

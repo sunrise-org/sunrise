@@ -4,10 +4,11 @@
 //! them are kept.
 use crate::{
     Result,
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Reader},
     item::{Slot, Stack, Template},
+    packets::login::PropertyCodec,
 };
-use sunrise_core::nbt::Tag;
+use sunrise_core::{nbt::Tag, profile::AccountProperty, vanilla_bytes::Writer};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -46,7 +47,7 @@ pub struct Profile {
     pub name: Option<String>,
     pub uuid: Option<u128>,
     /// `PropertyMap`: its `textures` property carries the skin.
-    pub properties: Vec<crate::packets::login::Property>,
+    pub properties: Vec<AccountProperty>,
     /// `PlayerSkin.Patch`: texture asset ids overriding the profile's.
     pub body: Option<String>,
     pub cape: Option<String>,
@@ -55,18 +56,13 @@ pub struct Profile {
     pub slim: Option<bool>,
 }
 /// `ByteBufCodecs.GAME_PROFILE_PROPERTIES`.
-fn read_properties(r: &mut Reader) -> Result<Vec<crate::packets::login::Property>> {
-    use crate::buf::Codec;
+fn read_properties(r: &mut Reader) -> Result<Vec<AccountProperty>> {
     let n = r.count(16)?;
-    (0..n)
-        .map(|_| crate::packets::login::Property::read(r))
-        .collect()
+    (0..n).map(|_| PropertyCodec::read(r)).collect()
 }
-fn write_properties(p: &[crate::packets::login::Property], w: &mut Writer) {
-    use crate::buf::Codec;
+fn write_properties(p: &[AccountProperty], w: &mut Writer) {
     w.varint(p.len() as i32);
-    p.iter()
-        .for_each(|p| crate::packets::login::Property::write(p, w));
+    p.iter().for_each(|p| PropertyCodec::write(p, w));
 }
 fn read_profile(r: &mut Reader) -> Result<Profile> {
     let mut p = Profile::default();
@@ -768,11 +764,10 @@ mod tests {
     /// contents round-trip, and an entry after it still decodes.
     #[test]
     fn resolvable_profile_round_trips() {
-        use crate::packets::login::Property;
         let full = Profile {
             name: Some("Gommunity".into()),
             uuid: Some(0x0123_4567_89AB_CDEF_0123_4567_89AB_CDEF),
-            properties: vec![Property {
+            properties: vec![AccountProperty {
                 name: "textures".into(),
                 value: "e30=".into(),
                 signature: Some("sig".into()),

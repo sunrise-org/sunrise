@@ -2,15 +2,16 @@
 //! would give and records every one-player send.
 use super::*;
 use crate::{
-    Backend, BackendMut, ChunkRef, DimensionKey, EntityRef, Host, IPayloadContext, LevelRef,
-    PayloadAccepted, PayloadBytes, PayloadCodec, PayloadSendError, PayloadToken, PlayerRef,
-    Players, ServerHost, ToClient, VarInt, WorldEpoch,
+    Backend, BackendMut, ChunkRef, DimensionKey, EntityRef, Host, IPayloadContext, LevelReadError,
+    LevelRef, PayloadAccepted, PayloadBytes, PayloadSendError, PayloadToken, PlayerRef, Players,
+    ServerHost, ToClient, Wire, WorldEpoch,
 };
+use core::ops::ControlFlow;
 use std::collections::HashMap;
 
-#[derive(Debug, PartialEq, PayloadCodec)]
+#[derive(Debug, PartialEq, Wire)]
 struct Counter {
-    counter: VarInt,
+    counter: u8,
 }
 
 fn player(id: u32) -> PlayerRef {
@@ -71,8 +72,18 @@ impl crate::prelude::ServicesServerHost for Double {
 crate::impl_server_host_areas!(Double, except(services, payloads));
 impl Backend for Double {}
 impl crate::prelude::LevelEntitiesBackend for Double {
-    fn level_online_players(&self, level: LevelRef) -> Option<Vec<PlayerRef>> {
-        self.levels.get(&level).cloned()
+    fn level_visit_online_players(
+        &self,
+        level: LevelRef,
+        visit: &mut dyn FnMut(PlayerRef) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, LevelReadError> {
+        Ok(self
+            .levels
+            .get(&level)
+            .ok_or(LevelReadError::Stale)?
+            .iter()
+            .copied()
+            .try_for_each(visit))
     }
 }
 impl crate::prelude::LevelChunksBackend for Double {
@@ -193,7 +204,7 @@ fn recipients(host: &Double) -> Vec<u32> {
 #[test]
 fn every_group_reaches_its_list_with_the_same_body() {
     let (mut host, down, _) = setup();
-    let value = Counter { counter: VarInt(7) };
+    let value = Counter { counter: 7 };
     assert_eq!(down.send_to_all(&mut host, &value), Ok(4));
     assert_eq!(recipients(&host), [1, 2, 3, 4]);
     assert!(host.sent.iter().all(|(_, body)| *body == [7]));
@@ -208,18 +219,22 @@ fn every_group_reaches_its_list_with_the_same_body() {
 }
 
 #[test]
-fn a_level_nobody_can_list_has_no_recipients() {
+fn a_stale_level_has_no_recipients() {
     let (mut host, down, _) = setup();
-    host.levels.clear();
-    let value = Counter { counter: VarInt(1) };
-    assert_eq!(down.send_in_level(&mut host, overworld(), &value), Ok(0));
+    let stale = LevelRef::new(WorldEpoch::new(2), DimensionKey::OVERWORLD);
+    let value = Counter { counter: 1 };
+    assert_eq!(down.send_in_level(&mut host, stale, &value), Ok(0));
+    assert_eq!(
+        down.send_near(&mut host, stale, [0.0, 64.0, 0.0], 100.0, None, &value),
+        Ok(0)
+    );
     assert!(host.sent.is_empty());
 }
 
 #[test]
 fn near_is_strictly_inside_the_radius_in_that_level_and_skips_the_excluded() {
     let (mut host, down, _) = setup();
-    let value = Counter { counter: VarInt(1) };
+    let value = Counter { counter: 1 };
     let at = [0.0, 64.0, 0.0];
     // Distances: player 1 is 0, player 2 is 5 (3-4-5), player 3 is 10; player 4 is close
     // but in the nether.
@@ -246,7 +261,7 @@ fn near_is_strictly_inside_the_radius_in_that_level_and_skips_the_excluded() {
 #[test]
 fn a_refused_recipient_is_skipped_and_not_counted() {
     let (mut host, down, _) = setup();
-    let value = Counter { counter: VarInt(1) };
+    let value = Counter { counter: 1 };
     host.refused = vec![player(2), player(9)];
     host.everyone.0.push(player(9));
     assert_eq!(down.send_to_all(&mut host, &value), Ok(3));
@@ -256,7 +271,7 @@ fn a_refused_recipient_is_skipped_and_not_counted() {
 #[test]
 fn a_stale_token_is_refused_before_anything_is_sent() {
     let (mut host, _, stale) = setup();
-    let value = Counter { counter: VarInt(1) };
+    let value = Counter { counter: 1 };
     let chunk = ChunkRef::new(overworld(), [0, 0]);
     let at = [0.0; 3];
     let id = PayloadId("test:stale".into());
@@ -279,7 +294,7 @@ fn a_stale_token_is_refused_before_anything_is_sent() {
 #[test]
 fn tracking_an_entity_reaches_its_trackers_and_itself_once_when_asked() {
     let (mut host, down, _) = setup();
-    let value = Counter { counter: VarInt(1) };
+    let value = Counter { counter: 1 };
     let entity = |id| EntityRef::new(WorldEpoch::new(1), id);
     // A zombie (entity 9) seen by players 1, 2 and 3.
     assert_eq!(

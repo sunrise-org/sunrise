@@ -44,12 +44,14 @@ normalized just like `set_components`; malformed damage leaves the entire stack 
 `copy_component_from(&other, id)` copies only that component's own value or removal,
 including explicit zero damage. If `other` has no override, the target inherits too:
 no effective prototype value is materialized. `get` followed by `set` covers `update`.
-These owned-value operations require no host. To persist them on a whole stack, use
-server-side `ItemPlace::edit` inside a transaction. It preserves item/count, rolls
-back with its parent transaction and applies only changed components to player slots,
-hands and equipment without equipping the stack again. The cursor and virtual transfer
-wrappers do not support whole-stack edits. Use a normal slot write if you need to replace
-the item or change its count.
+These owned-value operations require no host. To edit a whole stack where it lives, use
+server-side [`ItemPlace::edit`](../../concepts/capabilities/item-places-and-components.md#editing-the-whole-stack)
+inside a transaction. Its callback borrows an `ItemComponentEditor`, not an owned `ItemStack`,
+and cannot use the host borrowed by the edit. `get` sees pending overrides without a
+projection. `original().project()` instead gives the pre-edit `ItemStack`, if it can be
+projected. The editor has no `set_components`: clear the overrides you want to inherit with
+`remove`, then merge the new overrides with `apply_components`. To replace the item or change
+its count, use the appropriate transactional slot write or transfer instead.
 
 `ItemResource::with_component` is also fallible for raw component values. Its default-value
 elision and `without_component` preserve the normal prototype-plus-patch semantics. The latter
@@ -74,9 +76,9 @@ not clamped values. A transfer request is different: `ItemResource` plus a separ
 return more than one resident stack's capacity. The resident writes it produces must
 pass validation.
 
-Game inventory, menus, trades and models keep their engine-owned representations. Native
-hooks and host methods exchange owned API snapshots. The game converts only after a listener
-guard, and stages every mutable result before committing any captured output. Invalid hook
+Game inventory, menus, trades and models keep their engine-owned representations. Where a
+native hook or host method takes an owned API snapshot, the game converts only after a listener
+guard and stages every mutable result before committing any captured output. Invalid hook
 edits retain those captured engine values. Consuming mutable events such as `bonemeal` and
 `item_after_vertical_collision` lend `Option<ItemStack>` so a listener can consume the value by
 setting `None`.
@@ -103,6 +105,13 @@ A client without this mod predicts vanilla here; the server corrects it.
 Item-model callbacks receive the owned stack and a separate `bundle_selected` number (`-1`
 means none). Runtime selection is not a persistent component. Drawing receives the API-owned
 `ItemDisplayContext`, not the renderer's enum.
+
+## Intercept main-hand client input
+
+A [`ClientItemUseBehavior`](../../concepts/parts/item-and-tag-parts.md#intercept-main-hand-client-input)
+receives the original typed `ItemStack` and its hotbar slot on every callback, not the stack
+that may have replaced it. These callbacks intercept local input without starting ordinary
+item use; see the linked example for registration and typed component reads.
 
 ## A stack's name
 

@@ -1,5 +1,6 @@
 //! Concrete authoring extracted verbatim from the vocabulary layer.
 use super::*;
+use std::sync::Mutex;
 
 pub(crate) fn insert_part<P: ?Sized>(
     table: &mut HashMap<Box<str>, Vec<Attached<P>>>,
@@ -41,9 +42,11 @@ pub struct PartRegistrar {
     pub(crate) biome_modifiers: Vec<BiomeModifierDeclaration>,
     pub(crate) biome_regions: Vec<BiomeRegionDeclaration>,
     pub(crate) datapack_registries: Vec<crate::DatapackRegistryDeclaration>,
+    pub(crate) menu_screen_factories: HashMap<String, HashMap<usize, MenuScreenRegistration>>,
     pub(crate) menu_recipe_books: HashMap<String, MenuBookDeclaration>,
-    /// Loading warnings, by owning mod id, in registration order.
-    pub(crate) warnings: Vec<(String, crate::LoadingMessage)>,
+    pub(crate) menu_slot_exclusions: HashMap<String, HashMap<String, Box<[u16]>>>,
+    /// Loading warnings for each owning mod, in registration order.
+    pub(crate) warnings: Vec<(&'static str, Vec<crate::LoadingMessage>)>,
     pub(crate) recipe_book_types: HashMap<String, String>,
     pub(crate) recipe_book_fields: HashMap<String, (String, String)>,
     pub(crate) recipe_book_filters: HashMap<String, crate::RecipeBookFilterLook>,
@@ -96,7 +99,9 @@ impl PartRegistrar {
     pub(crate) fn new(mod_id: &'static str) -> Self {
         let _ = crate::__private::initialize();
         Self {
+            menu_screen_factories: HashMap::new(),
             menu_recipe_books: HashMap::new(),
+            menu_slot_exclusions: HashMap::new(),
             warnings: Vec::new(),
             biome_modifiers: Vec::new(),
             biome_regions: Vec::new(),
@@ -240,19 +245,27 @@ pub(crate) fn register_all(
     for (index, hooks) in mod_vocab::__private::entered_registration(mods, "register").enumerate() {
         registrar.mod_id = mod_vocab::__private::parts_installation::mod_entry_id(&mods[index]);
         registrar.mod_index = index;
-        let context = crate::RegistrationContext::new();
+        let diagnostics = Arc::new(Mutex::new(RegistrationDiagnostics::default()));
         let rollback = registrar.registration_checkpoint();
-        hooks.register(&mut registrar, &context);
-        registrar.warnings.extend(
-            mod_vocab::__private::take_registration_warnings(&context)
-                .into_iter()
-                .map(|warning| (registrar.mod_id.to_owned(), warning)),
+        hooks.register(
+            &mut registrar,
+            &registration_context_with_diagnostics(Arc::clone(&diagnostics)),
         );
-        if let Some(reason) = mod_vocab::__private::take_registration_refusal(&context) {
+        // The borrowed context has ended; the registrar can move its record into the report.
+        let diagnostics = Arc::into_inner(diagnostics)
+            .expect("only the registrar and its registration context own the diagnostic sink")
+            .into_inner()
+            .unwrap_or_else(|p| p.into_inner());
+        if !diagnostics.warnings.is_empty() {
+            registrar
+                .warnings
+                .push((registrar.mod_id, diagnostics.warnings));
+        }
+        if let Some(reason) = diagnostics.refusal {
             rollback(&mut registrar);
             registrar.refused.push(format!(
                 "mod {} refused registration: {reason}",
-                mod_vocab::__private::parts_installation::mod_entry_id(&mods[index])
+                registrar.mod_id
             ));
         }
     }
@@ -279,12 +292,14 @@ pub(crate) fn install_registrar(
     if let Err(errors) = &slots {
         registrar.refused.extend(errors.iter().cloned());
     }
-    for (id, warning) in &registrar.warnings {
-        log::warn!(
-            "mod {id} loading warning: {} {:?}",
-            warning.key(),
-            warning.args()
-        );
+    for (id, warnings) in &registrar.warnings {
+        for warning in warnings {
+            log::warn!(
+                "mod {id} loading warning: {} {:?}",
+                warning.key(),
+                warning.args()
+            );
+        }
     }
     registrar.validate_recipe_types();
     registrar.skip_absent_effect_parts();
@@ -303,7 +318,9 @@ pub(crate) fn install_registrar(
             regions
         },
         datapack_registries: registrar.datapack_registries,
+        menu_screen_factories: registrar.menu_screen_factories,
         menu_recipe_books: registrar.menu_recipe_books,
+        menu_slot_exclusions: registrar.menu_slot_exclusions,
         recipe_book_types: registrar.recipe_book_types,
         recipe_book_fields: registrar.recipe_book_fields,
         recipe_book_filters: registrar.recipe_book_filters,

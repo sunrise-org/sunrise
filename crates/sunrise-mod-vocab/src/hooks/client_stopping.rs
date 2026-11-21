@@ -12,6 +12,7 @@ pub trait Hooks {
     /// NeoForge has no event for this moment. A listener is a pure function of its
     /// `ClientHost` reads and its own state.
     #[hook(
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         cancellable = false,

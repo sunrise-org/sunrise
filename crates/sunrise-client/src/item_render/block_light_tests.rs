@@ -7,6 +7,7 @@ use sunrise_assets::{item_model::LevelState, resource_source::ResourceRoot};
 
 struct Plain;
 impl ItemEnv for Plain {}
+impl ItemDrawEnv for Plain {}
 
 #[test]
 fn a_dimension_select_takes_its_fallback_without_a_level() {

@@ -9,9 +9,17 @@ pub trait Hooks {
     /// white. The owned stack snapshot is the one being resolved, including nested bundle items.
     /// `bundle_selected` is the runtime bundle selection index; -1 means none.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         neoforge = "RegisterColorHandlersEvent.ItemTintSources (registration only)"
     )]
-    fn item_tint_source();
+    fn item_tint_source(
+        source: &str,
+        config: &sunrise_core::nbt::Tag,
+        stack: &mod_api::ItemStack,
+        bundle_selected: i32,
+        color: &mut u32,
+    );
 }

@@ -1,6 +1,7 @@
 //! Bursts of key presses and clicks on a server's client: a player's act on the next tick in the
-//! order they came, and a mod's loop of `click_mapping` acts 64 entries of each queue a tick, oldest
-//! first, and one click of each number key, with nothing dropped below the queue's maximum.
+//! order they came. A mod's loop of `VanillaKeyMappingRef::click` acts on 64 entries of each
+//! queue a tick, oldest first, and one click of each number key, with nothing dropped below
+//! the queue's maximum.
 use super::*;
 use winit::event::MouseButton;
 use winit::keyboard::KeyCode;
@@ -76,12 +77,16 @@ fn a_mods_burst_acts_64_entries_of_each_queue_a_tick() {
         game.set_mode_id(1);
         game.forced_hit = None;
         game.inventory[game.selected] = Some(ItemStack::new("minecraft:stone", 64));
+        let attack = game.vanilla_key_mapping("key.attack").unwrap();
+        let drop = game.vanilla_key_mapping("key.drop").unwrap();
+        let hotbar_7 = game.vanilla_key_mapping("key.hotbar.7").unwrap();
+        let hotbar_4 = game.vanilla_key_mapping("key.hotbar.4").unwrap();
         for _ in 0..150 {
-            assert_eq!(game.click_mapping("key.attack"), Ok(()));
-            assert_eq!(game.click_mapping("key.drop"), Ok(()));
+            assert_eq!(attack.click(game), Ok(()));
+            assert_eq!(drop.click(game), Ok(()));
         }
-        for key in ["7", "7", "4", "4", "4"] {
-            assert_eq!(game.click_mapping(&format!("key.hotbar.{key}")), Ok(()));
+        for mapping in [hotbar_7, hotbar_7, hotbar_4, hotbar_4, hotbar_4] {
+            assert_eq!(mapping.click(game), Ok(()));
         }
         let mut ticks = Vec::new();
         let mut selected = Vec::new();
@@ -106,10 +111,13 @@ fn a_full_queue_refuses_the_entry_and_the_call_returns() {
         game.set_mode_id(1);
         game.forced_hit = None;
         game.inventory[game.selected] = Some(ItemStack::new("minecraft:stone", 64));
+        let attack = game.vanilla_key_mapping("key.attack").unwrap();
+        let drop = game.vanilla_key_mapping("key.drop").unwrap();
+        let hotbar = game.vanilla_key_mapping("key.hotbar.2").unwrap();
         for _ in 0..1100 {
-            assert_eq!(game.click_mapping("key.drop"), Ok(()));
-            assert_eq!(game.click_mapping("key.attack"), Ok(()));
-            assert_eq!(game.click_mapping("key.hotbar.2"), Ok(()));
+            assert_eq!(drop.click(game), Ok(()));
+            assert_eq!(attack.click(game), Ok(()));
+            assert_eq!(hotbar.click(game), Ok(()));
         }
         assert_eq!(
             game.remote.as_ref().unwrap().pending_keys.entries().len(),

@@ -232,7 +232,7 @@ pub trait MobsBackend {
         attribute: &Identifier,
     ) -> Result<f64, UnspawnedMobError>;
     /// Side: server.
-    /// The tags a mod gave the unspawned mob so far (`Entity.getTags`). `Expired` once the hook that lent it has returned.
+    /// The tags a mod gave the unspawned mob so far (`Entity.entityTags()`). `Expired` once the hook that lent it has returned.
     #[access(WorldOnly)]
     fn unspawned_mob_tags(&self, mob: UnspawnedMobRef) -> Result<Vec<String>, UnspawnedMobError>;
     /// Side: server.

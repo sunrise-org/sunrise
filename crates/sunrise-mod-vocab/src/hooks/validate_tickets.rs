@@ -11,11 +11,16 @@ pub trait Hooks {
     /// longer hold (a machine that is gone), and they stop forcing their
     /// chunks. Server-side.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "LoadingValidationCallback",
         cancellable = false,
         version = 2
     )]
-    fn validate_tickets();
+    fn validate_tickets(
+        dimension: &str,
+        controller: TicketController,
+        validation: &mut dyn mod_api::TicketValidation,
+    );
 }

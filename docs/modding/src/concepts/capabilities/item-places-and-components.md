@@ -5,6 +5,28 @@ slot, hand or cursor, a block entity's slot, an item entity, an entity's invento
 a menu slot, or a stack inside another item (`ItemPlace::Nested`). For storage you manage,
 register a `PlaceProvider` with `r.place_provider` and use `ItemPlace::Mod`.
 
+`place.with_stack(host, |stack| stack.item())` reads the item at a nonempty place. The
+callback receives an `ItemStackView` for that call only. Read `item()`, `count()` and
+`damage()` there without copying a resident stack. If you only need to know whether
+the place is occupied, use `place.amount(host) != 0`. For components or an owned
+`ItemStack` beyond the callback, project it explicitly:
+
+```rust,ignore
+match place.with_stack(host, |stack| stack.project()) {
+    None => { /* empty or unavailable place */ }
+    Some(None) => { /* occupied, but the stack could not be projected */ }
+    Some(Some(stack)) => { /* inspect components or retain the owned stack */ }
+}
+```
+
+Native reads use storage already present: they do not load chunks, initialize a player or
+unpack pending loot. An item entity's place sees live state, including earlier writes in
+the same transaction.
+For a provider-backed or decoded place, the view lends the value produced for that read. A
+provider-backed menu slot reads its live backing, not the menu's display copy. A dropped
+item narrowed to an `ItemEntityRef` has its own
+[`with_stack`](../../how-to/world/block-entity-item-drops.md).
+
 ## Item capabilities
 
 Register an item's capability with
@@ -28,7 +50,7 @@ Keep the contents in the stack and use these methods to access it:
 
 | Method | Result |
 |---|---|
-| `place.stack(host)` | The stack, or `None` |
+| `place.with_stack(host, read)` | The callback's result, or `None` without calling it if the place is empty or unavailable |
 | `place.resource(host)` | Its resource without a count, or `None` |
 | `place.amount(host)` | Its count, or 0 |
 | `place.insert(host, tx, &resource, amount)` | How much was inserted |
@@ -75,8 +97,8 @@ These correspond to NeoForge's other `ItemAccess` factories:
   It lives and aborts as a scratch stack does.
 - `ItemPlace::Strict(place)` (`forHandlerIndexStrict`) refuses what a block entity's, entity's
   or nested item's slot doesn't take, where the plain place would spread it to the other slots.
-- `ItemPlace::OneByOne(place)` (`oneByOne`) reads at most one item and extracts at most one, so a
-  handler that acts on the whole stack acts on one.
+- `ItemPlace::OneByOne(place)` (`oneByOne`) lends and projects a count of one for a nonempty
+  stack without changing its stored count. An extract takes at most one item.
 - `ItemPlace::InfiniteMaterials { player, inner }` (`forInfiniteMaterials`) reaches `inner` as a
   creative player does while `player` has infinite materials. Extracts give without taking.
   Inserts are taken whole, and one item goes to the player only if they have none: into their
@@ -84,20 +106,38 @@ These correspond to NeoForge's other `ItemAccess` factories:
 
 ## Editing the whole stack
 
-To change components on the **whole stack**, use `place.edit(host, tx, |stack| { ... })`
-with a server host. A player's slot (including the armour and off-hand slots supplied
-by `inventory_tick`), hand, and a mob's or armour stand's `ItemPlace::Equipment` update
-only the changed components in place: no equip sound, equip event or immediate attribute
-reapplication. The usual slot sync sends the changed stack. `Strict` keeps this behavior.
-Cursors, `OneByOne` and `InfiniteMaterials` return `ItemPlaceEditError::UnsupportedPlace`
-instead of editing a partial, virtual or unsynced stack. Other places use their exchange rules.
-`ItemPlaceEditError::NotHeld`, `ItemChanged` and `CountChanged` name refusals that leave
-the place unchanged. Successful edits are part of the current transaction and roll back
-with it. `stack.set` and `stack.remove` edit typed overrides; `get` then
-`set` covers `update`. `stack.apply_components(&patch)` merges values and `!id`
-removals without losing unrelated components, refusing malformed damage atomically.
-`stack.copy_component_from(&other, id)` copies an own value or removal; when `other`
-inherits that component, it clears the target's override rather than recording removal.
+To edit components on the **whole stack**, call `place.edit` with a server host and a
+transaction. For example, to set the stack's stored damage to an explicit zero:
+
+```rust,ignore
+place.edit(host, tx, |editor| editor.set_damage(0))?;
+```
+
+The callback borrows an `ItemComponentEditor`, not the host or an owned stack. Read the
+item and count but do not change them. Use `editor.get(&descriptor)` to read a typed override,
+including changes already staged by this callback; it does not read the item's default.
+Use `editor.original().project()` only when you need the original stack's patch or an owned
+copy. It never includes pending edits and returns `None` if projection is refused.
+
+`editor.set` stages a value; `editor.remove(&descriptor)` clears an override so the item
+inherits its default. To remove the component even if the item has a default, use a
+`!id` entry with `editor.apply_components(&patch)`, or `editor.clear_damage()` for damage.
+`apply_components` merges without dropping unrelated overrides and refuses a malformed or
+conflicting damage patch before staging any of it. `editor.copy_component_from(&other, id)`
+copies the source stack's own value or removal; if the source inherits, the target inherits too.
+
+For a player's slot (including armour and off hand), hand, or a mob's or armour stand's
+`ItemPlace::Equipment`, the game resolves the slot before calling the editor. An empty or
+unreadable slot (`ItemPlaceEditError::NotHeld`), an unavailable backend, or a closed transaction
+(`Unavailable`) refuses before calling the editor. After the callback, the game validates the
+changed overrides together, including the resulting stack limits. If it returns `Stack(error)`,
+none of the edits were applied. Unchanged overrides are not rewritten. The usual inventory,
+menu and equipment sync sends the change without replaying equip sounds, events or attribute
+effects. Aborting this transaction or an enclosing one restores the previous stack.
+
+`Strict` keeps the same edit behavior. Cursors, `OneByOne` and `InfiniteMaterials` refuse with
+`UnsupportedPlace` before the callback; other places use their ordinary exchange rules.
+To change an item or count, use the appropriate transactional slot write or transfer instead.
 
 ## Component patches
 

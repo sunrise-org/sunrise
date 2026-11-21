@@ -1,7 +1,8 @@
 //! Registered engine payloads must retain their own structural or byte bounds.
+use sunrise_core::vanilla_bytes::Writer;
 use sunrise_protocol::{
     self as protocol,
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Reader},
 };
 
 #[test]

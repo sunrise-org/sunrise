@@ -66,42 +66,17 @@ impl mod_api::ItemPart for Part {
     }
 }
 
-pub struct Control;
-#[mod_api::sunrise_part]
-impl mod_api::BlockPart for Control {}
+pub(super) fn begin(path: i32, answer: i32, server_only: bool) {
+    *STATE.lock().unwrap() = ([path, answer, i32::from(server_only)], [0; 3]);
+}
 
-#[mod_api::sunrise_part]
-impl mod_api::BlockEntityPart for Control {
-    fn block_entity_tick(
-        &self,
-        _: &mut dyn mod_api::ServerHost,
-        event: &mut mod_api::BlockEntityTickEvent<'_>,
-    ) {
-        let mut state = STATE.lock().unwrap();
-        if event.entity.data.len() == 3 {
-            let data = &event.entity.data;
-            if !(1..=4).contains(&data[0])
-                || !(1..=6).contains(&data[1])
-                || !(0..=1).contains(&data[2])
-            {
-                return;
-            }
-            state.0 = [data[0], data[1], data[2]];
-            state.1 = [0; 3];
-            event.entity.data.clear();
-        } else {
-            event.entity.data = state.1.to_vec();
-            state.0 = [0; 3];
-        }
-    }
+pub(super) fn finish() -> [i32; 3] {
+    let mut state = STATE.lock().unwrap();
+    state.0 = [0; 3];
+    state.1
 }
 
 pub fn register(registrar: &mut dyn mod_api::Registrar) {
     let item = registrar.item_key("minecraft:paper");
     registrar.item_part(item, Part);
-    let kind = registrar
-        .block_entity_type("prediction_control")
-        .blocks(&[])
-        .build();
-    registrar.block_entity_part(&kind, Control).unwrap();
 }

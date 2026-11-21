@@ -1,7 +1,12 @@
 //! A server player's ender chest (`Player.getEnderChestInventory`) by slot, for mods that copy
 //! or edit it whole (player data sync, `/endersee`), and its menu opened with no block.
-use super::{Game, commands::items::Slot, native_server::PlayerRead};
-use mod_api::{MenuReplace, OpenMenuError, PlayerDataRefusal, PlayerRef};
+use super::{
+    Game,
+    api_values::{project_stack, stack_read_metadata},
+    commands::items::Slot,
+    native_server::PlayerRead,
+};
+use mod_api::{InventoryView, MenuReplace, OpenMenuError, PlayerDataRefusal, PlayerRef};
 use sunrise_client::{
     items::ItemStack,
     lan::{data::component_nbt, menu::Slots},
@@ -12,32 +17,34 @@ use sunrise_core::nbt::Tag;
 /// `PlayerEnderChestContainer`'s size.
 const SLOTS: usize = 27;
 
-fn numbered(items: &[Option<ItemStack>]) -> Vec<(u32, ItemStack)> {
-    items
-        .iter()
-        .take(SLOTS)
-        .enumerate()
-        .filter_map(|(i, s)| Some((i as u32, s.clone().filter(|s| s.count > 0)?)))
-        .collect()
-}
-
 impl Game<'_> {
-    /// `PlayerEnderChestContainer.getItem` for every slot that holds something.
-    pub(super) fn player_ender_chest(&self, player: PlayerRef) -> Option<Vec<(u32, ItemStack)>> {
-        if self.remote.is_some() {
+    /// Lend `PlayerEnderChestContainer.getItem` over the live or saved slots.
+    pub(super) fn player_ender_chest(
+        &self,
+        player: PlayerRef,
+        read: &mut dyn for<'a> FnMut(InventoryView<'a>),
+    ) -> Option<()> {
+        if !self.is_logical_server() {
             return None;
         }
-        Some(match self.player_handle_read(player)? {
+        let items = match self.player_handle_read(player)? {
             // An open ender chest menu holds the live copy until it closes.
             PlayerRead::Acting { .. } => match self
                 .ender_open
                 .and_then(|key| self.world.block_entities.get(&key))
             {
-                Some(sunrise_client::containers::BlockEntity::Chest(items)) => numbered(items),
-                _ => numbered(&self.ender_items),
+                Some(sunrise_client::containers::BlockEntity::Chest(items)) => items,
+                _ => &self.ender_items,
             },
-            PlayerRead::Guest(g) => numbered(&g.ender_items),
-        })
+            PlayerRead::Guest(g) => &g.ender_items,
+        };
+        let stack_at = |slot| items.get(slot as usize)?.as_ref();
+        read(InventoryView::new(
+            0..SLOTS as u32,
+            &|slot| stack_read_metadata(stack_at(slot)?).ok(),
+            &|slot, metadata| project_stack(stack_at(slot)?, metadata).ok(),
+        ));
+        Some(())
     }
 
     /// `PlayerEnderChestContainer.setItem`, in the player's turn.

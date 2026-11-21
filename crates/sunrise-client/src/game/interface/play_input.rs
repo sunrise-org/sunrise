@@ -329,6 +329,7 @@ impl Game<'_> {
         self.sync_toggle(SPRINT);
         self.left = false;
         self.right = false;
+        self.reset_client_item_use();
     }
     /// `MouseHandler.onScroll`: the hotbar (or the spectator menu) takes the wheel only when no
     /// screen is open; a book, lectern, sign or prompt drawn over gameplay is one.

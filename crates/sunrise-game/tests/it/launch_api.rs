@@ -16,8 +16,15 @@ fn scratch(name: &str) -> PathBuf {
 
 /// The game started in `cwd` with `args`, its homes kept inside `cwd`.
 fn run(cwd: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_sunrise-client"))
-        .args(args)
+    run_command(
+        cwd,
+        Command::new(env!("CARGO_BIN_EXE_sunrise-client")).args(args),
+    )
+}
+
+/// Run a prepared command with the same isolated homes as a direct game launch.
+fn run_command(cwd: &Path, command: &mut Command) -> Output {
+    command
         .current_dir(cwd)
         .env("SUNRISE_HOME", cwd.join("env home"))
         .env("SUNRISE_LAUNCHER_HOME", cwd.join("launcher"))
@@ -37,6 +44,32 @@ fn last_stderr_line(output: &Output) -> String {
         .last()
         .unwrap_or_default()
         .to_string()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "daily"]
+fn launch_help_works_with_an_eight_mib_hard_stack_limit() {
+    let dir = scratch("low-stack-help");
+    let output = run_command(
+        &dir,
+        Command::new("sh").args([
+            "-c",
+            r#"ulimit -S -s 8192 && ulimit -H -s 8192 && exec "$@""#,
+            "sh",
+            env!("CARGO_BIN_EXE_sunrise-client"),
+            "--help",
+        ]),
+    );
+    assert!(
+        output.status.success(),
+        "{}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("--resources"), "{help}");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

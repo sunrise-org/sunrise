@@ -51,7 +51,7 @@ pub(in crate::game) fn scene_blocks(
 mod tests {
     use super::*;
     use crate::game::native_structures::TemplateBlock;
-    use mod_api::{BlockState, BlockStateRecord, Compound, Identifier, SceneBlockEntity, Tag};
+    use mod_api::{Compound, Identifier, SceneBlockEntity, Tag};
     use sunrise_world::registry::{BlockRegistry, BlockStateId};
 
     #[test]
@@ -126,7 +126,7 @@ mod tests {
             scene[1].entity.as_ref().unwrap()
         ));
         assert_eq!(scene, original);
-        scene[1].state = BlockState::from(BlockStateRecord::new(east.block(), u16::MAX));
+        scene[1].state = mod_api::__private::block_state_from_ordinal(east.block(), u16::MAX);
         assert!(matches!(
             scene_blocks(&scene),
             Err(mod_api::SceneError::BadBlock { index: 1 })

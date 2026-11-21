@@ -9,11 +9,17 @@ pub trait Hooks {
     /// A block-phase `TryWithEmptyHand` can still try the empty-hand behaviour.
     /// A client without this mod predicts vanilla here; the server corrects it.
     #[hook(
+        dispatch = "flat",
         side = "both",
         contract = "cancel",
         out = "canceled",
         neoforge = "UseItemOnBlockEvent",
         cancellable = true
     )]
-    fn use_item_on_block();
+    fn use_item_on_block(
+        click: &BlockClick<'_>,
+        phase: UsePhase,
+        cancellation_result: &mut mod_api::InteractionResult,
+        canceled: &mut bool,
+    );
 }

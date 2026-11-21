@@ -4,8 +4,9 @@
 use super::native_entity_refs::tests::with_client_game;
 use super::packs::ReloadKind;
 use mod_api::{
-    ClientHost, ClientResourcesReloadedEvent, ClientSetupEvent, Hooks, Identifier, ModEntry,
-    ModelBakingCompletedEvent, ModelError, ModelRef, TextureAtlasStitchedEvent,
+    __private::game::RegistrationContextNew, ClientHost, ClientResourcesReloadedEvent,
+    ClientSetupEvent, Hooks, Identifier, ModEntry, ModelBakingCompletedEvent, ModelError, ModelRef,
+    RegistrationContext, StandaloneModelsEvent, TextureAtlasStitchedEvent,
 };
 use mod_platform::testing::with_mods;
 use std::sync::{Arc, Mutex};
@@ -23,11 +24,29 @@ struct Kept {
     heard: Vec<String>,
     part: Vec<Result<ModelRef, ModelError>>,
     nobody: Vec<Result<ModelRef, ModelError>>,
-    forms: Vec<[Result<ModelRef, ModelError>; 3]>,
+    baked: Vec<[Result<ModelRef, ModelError>; 3]>,
 }
 struct Keeper(Arc<Mutex<Kept>>);
 #[mod_api::__subscriptions]
 impl Hooks for Keeper {
+    fn standalone_models(&self, _: &RegistrationContext, event: &mut StandaloneModelsEvent<'_>) {
+        const CUBE: &str = "minecraft:block/stone";
+        const SLAB: &str = "minecraft:block/stone_slab";
+        const MISSING: &str = "keeper:absent_dependency";
+        event.register_model(PART);
+        event.register("keeper:turned", [CUBE], |bake| {
+            bake.append_dependency(CUBE, [0, 1, 0], true)
+        });
+        event.register("keeper:assembly", [CUBE, SLAB], |bake| {
+            bake.append_dependency(CUBE, [0; 3], false)?;
+            bake.append_dependency(SLAB, [0; 3], false)
+        });
+        event.register("keeper:missing", [CUBE, MISSING], |bake| {
+            bake.append_dependency(CUBE, [0; 3], false)?;
+            bake.append_dependency(MISSING, [0; 3], false)
+        });
+    }
+
     fn texture_atlas_stitched(
         &self,
         _: &mut dyn ClientHost,
@@ -45,7 +64,7 @@ impl Hooks for Keeper {
         let assets = host.render_assets();
         kept.part.push(assets.model(&id(PART)));
         kept.nobody.push(assets.model(&id(NOBODY)));
-        kept.forms.push([
+        kept.baked.push([
             assets.model(&id("keeper:turned")),
             assets.model(&id("keeper:assembly")),
             assets.model(&id("keeper:missing")),
@@ -148,38 +167,18 @@ fn a_client_mod_hears_model_baking_completed_once_per_load_and_keeps_its_handles
 /// Real Game/resource-load/model-registry proof, not a GPU render proof.
 #[test]
 #[ignore = "daily"]
-fn standalone_forms_resolve_as_one_model_and_republish_after_resource_reload() {
-    use mod_api::StandaloneModelForm;
-    use sunrise_client::models::StandaloneFormRegistration;
-    let cube = "minecraft:block/stone";
-    let entry = |form| StandaloneFormRegistration {
-        owner: "keeper",
-        form,
-    };
-    let _fixture = sunrise_client::models::standalone_fixture(vec![PART.into()]).with_forms(vec![
-        entry(StandaloneModelForm::Rotated {
-            id: "keeper:turned".into(),
-            model: cube.into(),
-            turns: [0, 1, 0],
-            uvlock: true,
-        }),
-        entry(StandaloneModelForm::Combined {
-            id: "keeper:assembly".into(),
-            parts: vec![cube.into(), "minecraft:block/stone_slab".into()],
-        }),
-        entry(StandaloneModelForm::Combined {
-            id: "keeper:missing".into(),
-            parts: vec![cube.into(), "keeper:absent_dependency".into()],
-        }),
-    ]);
+fn standalone_bakers_resolve_as_one_model_and_republish_after_resource_reload() {
     let (kept, mods) = keeper();
     with_mods(mods, || {
+        let mut staged = Vec::new();
+        super::Game::native_standalone_models(&RegistrationContext::new(), &mut staged);
+        let _fixture = sunrise_client::models::StandaloneFixture::from_registrations(staged);
         with_client_game(|game| {
             game.publish_initial_client_models().unwrap();
             let [Ok(turned), Ok(assembly), Err(ModelError::UnknownModel)] =
-                kept.lock().unwrap().forms[0]
+                kept.lock().unwrap().baked[0]
             else {
-                panic!("forms not published atomically");
+                panic!("baker results not published atomically");
             };
             assert_eq!(
                 game.pack.render.resolve_model(turned).unwrap().faces.len(),
@@ -198,14 +197,14 @@ fn standalone_forms_resolve_as_one_model_and_republish_after_resource_reload() {
             }
             reload(game);
             let kept = kept.lock().unwrap();
-            assert_eq!(kept.forms.len(), 2);
+            assert_eq!(kept.baked.len(), 2);
             let [
                 Ok(second_turned),
                 Ok(second_assembly),
                 Err(ModelError::UnknownModel),
-            ] = kept.forms[1]
+            ] = kept.baked[1]
             else {
-                panic!("forms not republished");
+                panic!("baker results not republished");
             };
             assert_eq!(
                 game.pack.render.resolve_model(turned).err(),

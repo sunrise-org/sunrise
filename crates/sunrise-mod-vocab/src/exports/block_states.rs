@@ -1,4 +1,4 @@
 pub use block::block_states::{
-    BlockClass, BlockStates, HostBlockStates, StateConstraint, StateMatchError, StateProperty,
-    WeatheringAge,
+    BlockClass, BlockStates, HostBlockStates, StateConstraint, StateMatchError, StateProperties,
+    StateProperty, WeatheringAge,
 };

@@ -15,6 +15,8 @@ pub trait Hooks {
     /// the block. Otherwise the random tick keeps its state: water-tag fallback, rain and dry-out
     /// are held. This does not prevent trampling. Diverges from upstream: new hook.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "server",
         contract = "replace",
         out = "hydrates",
@@ -24,5 +26,12 @@ pub trait Hooks {
         target = "sunrise_client::game::native_hooks::can_be_hydrated::GameLevel<'_>::native_can_be_hydrated",
         neoforge = "IBlockExtension.canBeHydrated"
     )]
-    fn can_be_hydrated();
+    fn can_be_hydrated(
+        dimension: LevelDimension,
+        state: BlockState,
+        pos: BlockPos,
+        fluid: mod_api::FluidState,
+        fluid_pos: BlockPos,
+        hydrates: &mut Option<bool>,
+    );
 }

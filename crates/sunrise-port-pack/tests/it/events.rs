@@ -584,7 +584,7 @@ fn all_api_mapping_targets_compile() {
         <dyn mod_api::Registrar as mod_api::EntityAttributesRegistrar>::declare_entity_attributes;
     let _ =
         <dyn mod_api::Registrar as mod_api::EntityAttributesRegistrar>::modify_entity_attributes;
-    let _ = <dyn mod_api::Registrar as mod_api::SpawnPlacementsRegistrar>::declare_spawn_placement;
+    let _ = <dyn mod_api::Registrar as mod_api::SpawnPlacementsRegistrar>::register_spawn_placement;
     let _ = <dyn mod_api::Registrar as mod_api::TicketsRegistrar>::register_ticket_controller;
     let _ = (
         mod_api::ITEMS,
@@ -618,7 +618,7 @@ fn every_api_mapping_has_the_expected_target() {
         ),
         (
             "RegisterSpawnPlacementsEvent",
-            "Registrar::declare_spawn_placement",
+            "Registrar::register_spawn_placement",
         ),
         (
             "RegisterTicketControllersEvent",

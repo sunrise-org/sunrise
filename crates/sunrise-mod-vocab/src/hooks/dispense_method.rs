@@ -16,6 +16,7 @@ pub trait Hooks {
     /// A disabled owner's subscribed method retains the stack and emits no dispense event unless
     /// an earlier enabled Part supplies a reply the engine accepts.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "replace",
         out = "answer",
@@ -24,5 +25,13 @@ pub trait Hooks {
         key = "state",
         neoforge = "none (vanilla DispenserBlock.getDispenseMethod; NeoForge adds no event or extension for it)"
     )]
-    fn dispense_method();
+    fn dispense_method(
+        dimension: &str,
+        pos: [i32; 3],
+        facing: Direction,
+        state: BlockState,
+        stack: &ItemStack,
+        answer: &mut Option<mod_api::Dispensed>,
+        #[engine] inert: &mut bool,
+    );
 }

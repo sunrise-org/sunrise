@@ -52,11 +52,13 @@ item (a pan holding its food), so the transform is not applied twice. `item_mode
 replaced the pushed names (`models: Vec<String>`) with these layers. A node type no mod registered is an error naming it: the item definition holding it isn't loaded,
 and the item draws the missing model."#]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "client",
         contract = "collect",
         out = "models",
         context = "registration",
         neoforge = "RegisterItemModelsEvent"
     )]
-    fn register_item_models();
+    fn register_item_models(models: &mut Vec<String>);
 }

@@ -59,26 +59,18 @@ mod tests {
     }
 
     #[test]
-    fn custom_pose_and_angles_cross_as_derived_wire_values() {
+    fn custom_pose_wire_preserves_flags_without_the_registration_table() {
         use crate::wire::{Reader, Writer};
         let pose = crate::ArmPose::Custom(mod_vocab::__private::parts_installation::arm_pose(
             37, true, false,
         ));
-        let angles = crate::ArmAngles {
-            right: [-0.71, 0.42, 0.63],
-            left: [1.2, -0.3, 2.1],
-        };
         let mut output = Writer::new();
         output.put(&pose);
-        output.put(&angles);
-        let _absent_guest_table = mod_vocab::__private::parts_installation::empty_pose_table();
-        let mut input = Reader::new(output.bytes());
-        let transported = input.take::<crate::ArmPose>().unwrap();
-        assert_eq!(transported, pose);
-        assert!(transported.two_handed());
-        assert!(!transported.affects_offhand());
-        assert_eq!(input.take::<crate::ArmAngles>().unwrap(), angles);
-        assert!(input.rest().is_empty());
+        let _empty_table = mod_vocab::__private::parts_installation::empty_pose_table();
+        let decoded = Reader::decode::<crate::ArmPose>(output.bytes()).unwrap();
+        assert_eq!(decoded, pose);
+        assert!(decoded.two_handed());
+        assert!(!decoded.affects_offhand());
         // Decoding preserves data; admission into the engine, not the codec,
         // checks membership in the load-owned registration table.
         assert!(

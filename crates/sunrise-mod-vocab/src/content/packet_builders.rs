@@ -1,8 +1,10 @@
 //! Portable vanilla play packet builders. Protocol is deliberately a test-only dependency.
-use crate::{Identifier, PayloadWriter, ServerboundPlayPacket};
+use crate::{Identifier, ServerboundPlayPacket};
+use sunrise_core::vanilla_bytes::Writer;
 
 /// A value cannot be represented by the named packet field.
-#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+// no wire: reported locally while building a vanilla packet.
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PacketBuildError {
     /// A number exceeds the field's wire representation.
@@ -86,7 +88,7 @@ fn finite(
         })
     }
 }
-fn position(packet: &str, pos: [i32; 3], w: &mut PayloadWriter) -> Result<(), PacketBuildError> {
+fn position(packet: &str, pos: [i32; 3], w: &mut Writer) -> Result<(), PacketBuildError> {
     let [x, y, z] = pos;
     if !(-33_554_432..=33_554_431).contains(&x)
         || !(-33_554_432..=33_554_431).contains(&z)
@@ -99,13 +101,16 @@ fn position(packet: &str, pos: [i32; 3], w: &mut PayloadWriter) -> Result<(), Pa
 }
 fn build(
     packet: &str,
-    write: impl FnOnce(&mut PayloadWriter) -> Result<(), PacketBuildError>,
+    write: impl FnOnce(&mut Writer) -> Result<(), PacketBuildError>,
 ) -> Result<ServerboundPlayPacket, PacketBuildError> {
-    let mut w = PayloadWriter::new(8192);
+    let mut w = Writer::new();
     write(&mut w)?;
-    let body = w.finish().map_err(|_| range(packet, "body"))?;
+    // Every field is fixed-size or bounded before writing (including sign lines).
+    if w.data.len() > 8192 {
+        return Err(range(packet, "body"));
+    }
     let id = Identifier::from_parts("minecraft", packet).map_err(|_| range(packet, "id"))?;
-    Ok(ServerboundPlayPacket::new(id, body))
+    Ok(ServerboundPlayPacket::new(id, w.data))
 }
 fn flags(ground: bool, collision: bool) -> u8 {
     u8::from(ground) | (u8::from(collision) << 1)
@@ -113,7 +118,7 @@ fn flags(ground: bool, collision: bool) -> u8 {
 
 // Vec3.LP_STREAM_CODEC, also implemented by sunrise-protocol::buf::LpVec3.
 // Inputs have already been checked for finiteness. The vanilla codec clamps large values.
-fn lp_vec3(pos: [f64; 3], w: &mut PayloadWriter) {
+fn lp_vec3(pos: [f64; 3], w: &mut Writer) {
     let [x, y, z] = pos.map(|v| v.clamp(-1.717_986_918_3e10, 1.717_986_918_3e10));
     let length = x.abs().max(y.abs()).max(z.abs());
     if length < 3.051_944_088_384_301e-5 {
@@ -129,7 +134,7 @@ fn lp_vec3(pos: [f64; 3], w: &mut PayloadWriter) {
     w.u8((buffer >> 8) as u8);
     w.i32((buffer >> 16) as i32);
     if partial {
-        w.var_int((scale >> 2) as i32);
+        w.varint((scale >> 2) as i32);
     }
 }
 
@@ -168,8 +173,8 @@ impl ServerboundPlayPacket {
         finite(p, "yaw", [f64::from(yaw)])?;
         finite(p, "pitch", [f64::from(pitch)])?;
         build(p, |w| {
-            w.var_int(hand);
-            w.var_int(sequence);
+            w.varint(hand);
+            w.varint(sequence);
             w.f32(yaw);
             w.f32(pitch);
             Ok(())
@@ -191,15 +196,15 @@ impl ServerboundPlayPacket {
         ordinal(p, "face", face, 5)?;
         finite(p, "cursor", cursor.map(f64::from))?;
         build(p, |w| {
-            w.var_int(hand);
+            w.varint(hand);
             position(p, pos, w)?;
-            w.var_int(face);
+            w.varint(face);
             for v in cursor {
                 w.f32(v);
             }
             w.bool(inside);
             w.bool(world_border);
-            w.var_int(sequence);
+            w.varint(sequence);
             Ok(())
         })
     }
@@ -215,10 +220,10 @@ impl ServerboundPlayPacket {
         ordinal(p, "action", action, 8)?;
         ordinal(p, "direction", direction, 5)?;
         build(p, |w| {
-            w.var_int(action);
+            w.varint(action);
             position(p, pos, w)?;
             w.u8(direction as u8);
-            w.var_int(sequence);
+            w.varint(sequence);
             Ok(())
         })
     }
@@ -234,8 +239,8 @@ impl ServerboundPlayPacket {
         ordinal(p, "hand", hand, 1)?;
         finite(p, "location", location)?;
         build(p, |w| {
-            w.var_int(entity);
-            w.var_int(hand);
+            w.varint(entity);
+            w.varint(hand);
             lp_vec3(location, w);
             w.bool(sneaking);
             Ok(())
@@ -244,7 +249,7 @@ impl ServerboundPlayPacket {
     /// The attack form of entity interaction. In 26.3 this carries only the entity ID.
     pub fn attack(entity: i32) -> Result<ServerboundPlayPacket, PacketBuildError> {
         build("attack", |w| {
-            w.var_int(entity);
+            w.varint(entity);
             Ok(())
         })
     }
@@ -265,7 +270,7 @@ impl ServerboundPlayPacket {
         include_data: bool,
     ) -> Result<ServerboundPlayPacket, PacketBuildError> {
         build("pick_item_from_entity", |w| {
-            w.var_int(entity);
+            w.varint(entity);
             w.bool(include_data);
             Ok(())
         })
@@ -289,9 +294,10 @@ impl ServerboundPlayPacket {
         build(p, |w| {
             position(p, pos, w)?;
             for line in &lines {
-                w.str_within(line, 384 * 3);
+                // The validated 384 UTF-16 units imply at most 384 * 3 UTF-8 bytes.
+                w.string(line);
             }
-            w.var_int(i32::from(front));
+            w.varint(i32::from(front));
             Ok(())
         })
     }

@@ -1,8 +1,14 @@
 //! Restricted views for registration and data loading.
-/// The owning boundary that starts a data load.
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+/// The owning boundary that starts a data load, as reported by [`DataLoadContext::origin`].
+// no wire: identifies the owner of a local data load.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum DataLoadOrigin {
     /// Server data loading, including a reload.
     ServerDataLoad,
@@ -10,22 +16,21 @@ pub enum DataLoadOrigin {
     ClientPreload,
 }
 
-/// The side that owns a resource-generation loop.
+/// The side of the local resource-generation loop, as reported by [`LoopContext::side`].
+// no wire: identifies the owner of a local loop, not an installation or join contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum LoopSide {
     /// A server loop.
     Server,
     /// A client loop.
     Client,
 }
-use std::{collections::BTreeMap, sync::Arc};
 
 /// The permission boundary of the current owning thread. Only the game advances it.
+// no wire: tracks the owning thread's phase in this process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum ModPhase {
     /// Package discovery, before declarations.
     Packages,
@@ -43,9 +48,9 @@ pub enum ModPhase {
 }
 
 /// A refused engine transition never changes the phase or dispatches a hook.
+// no wire: reports a failed transition to the local phase owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum PhaseError {
     /// The token belongs to another thread.
     WrongThread,
@@ -237,9 +242,9 @@ pub fn registration_open() -> bool {
 }
 
 /// The catalog-owned access class of a generated game operation.
+// no wire: the generated phase gate reads this access class in the same process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum LoadAccess {
     /// No extra load access beyond the phase's metadata/settings exceptions.
     WorldOnly,
@@ -311,8 +316,9 @@ fn phase_allows(phase: ModPhase, operation: &str, access: LoadAccess) -> bool {
     }
 }
 
-/// Whether a package contains compiled code or content alone.
-#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq)]
+/// Whether a loaded package contains compiled code or content alone.
+// no wire: describes an entry in the local package inventory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PackageKind {
     /// The package carries compiled code.
@@ -321,8 +327,17 @@ pub enum PackageKind {
     Content,
 }
 
-/// Read-only package metadata available during registration.
-#[derive(sunrise_mod_api_macros::Wire, Clone)]
+/// Read-only metadata from the local package inventory, in dispatch order through [`LoadedMods`].
+/// Read it directly; to send or store package facts, copy the fields you need into your own record.
+///
+/// ```compile_fail,E0277
+/// use mod_api::{PackageInfo, wire::Writer};
+/// fn write_package(writer: &mut Writer, package: &PackageInfo) {
+///     writer.put(package);
+/// }
+/// ```
+// no wire: this snapshot is for inspecting packages in the current process.
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct PackageInfo {
     pub(crate) id: String,
@@ -424,13 +439,13 @@ impl PackageInfo {
 }
 
 // no wire: shared immutable loader inventory; contexts query it through LoadReader rather than transferring its Arc storage.
-/// The registries and settings registration reads: captured by the engine once, before the
-/// first registration hook runs, and the same for every registration step. Lookups are binary
-/// searches over sorted lists, so a clone of the context copies nothing.
+/// The instance directory, registries and settings that registration reads: captured by the
+/// engine once, before the first registration hook, and the same for every registration step.
+/// Registry and settings lookups are binary searches over sorted lists.
 #[derive(Clone)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct RegistrationData {
-    instance_dir: crate::InstanceDirectory,
+    instance_dir: Arc<Path>,
     runtime: crate::RuntimeEnvironment,
     /// Built-in registry names in ID order, by registry name.
     pub(crate) registries: Arc<[(String, Arc<[String]>)]>,
@@ -445,15 +460,15 @@ pub struct RegistrationData {
 
 impl RegistrationData {
     /// The engine's snapshot: `registries` maps a registry name to its names in ID order,
-    /// `settings` a mod ID to its settings.
+    /// `settings` a mod ID to its settings, and `instance_dir` is the startup game directory.
     pub fn new(
         registries: BTreeMap<String, Vec<String>>,
         settings: BTreeMap<String, BTreeMap<String, String>>,
-        instance_dir: crate::InstanceDirectory,
+        instance_dir: PathBuf,
         runtime: crate::RuntimeEnvironment,
     ) -> Self {
         Self {
-            instance_dir,
+            instance_dir: instance_dir.into(),
             runtime,
             capability_coverage: None,
             block_entity_coverage: None,
@@ -536,7 +551,7 @@ pub(crate) fn block_entity_covers(kind: &str, block: &str) -> bool {
         .is_some_and(|coverage| coverage(kind, block))
 }
 /// Read-only view of the startup package inventory, shared: cloning it copies no package.
-// no wire: zero-byte phase token: decoding rebinds the installed package inventory rather than transferring entries.
+// no wire: the loader publishes the inventory locally; callers borrow or clone the view.
 #[derive(Clone)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct LoadedMods {
@@ -571,12 +586,12 @@ impl LoadedMods {
     }
 }
 
-/// Why a registration read was refused.
+/// Why a read through [`RegistrationContext`] was refused. Handle this error at the call site.
+// no wire: reports failure of a local registration read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum RegistrationReadError {
-    /// The engine supplied no registry or settings data to this context.
+    /// The engine supplied no startup snapshot to this context.
     Unavailable,
     /// The registry name is not a namespaced identifier (`minecraft:item`).
     InvalidRegistryName(String),
@@ -609,6 +624,9 @@ impl std::error::Error for RegistrationReadError {}
 /// - [`setting`](Self::setting): the settings on disk for the loaded packages when registration
 ///   began. Later writes are not seen.
 ///
+/// In [`Hooks::register`](crate::Hooks::register), this context also records [`warn`](Self::warn)
+/// and [`refuse`](Self::refuse) diagnostics for the mod being registered.
+///
 /// ```compile_fail
 /// use mod_api::{Host, RegistrationContext};
 /// fn game(_: &dyn Host) {}
@@ -632,9 +650,8 @@ pub struct RegistrationContext {
     pub(crate) mods: LoadedMods,
     pub(crate) data: Option<RegistrationData>,
     pub(crate) declaration_refusals: std::sync::Mutex<Vec<crate::__private::DeclarationRefusal>>,
-    pub(crate) self_refusal: std::sync::Mutex<Option<String>>,
-    pub(crate) warnings: std::sync::Mutex<Vec<crate::LoadingMessage>>,
-    pub(crate) instance_dir: Option<crate::InstanceDirectory>,
+    pub(crate) diagnostics:
+        Option<Arc<std::sync::Mutex<crate::__private::RegistrationDiagnostics>>>,
     /// The game's startup screen, for [`progress`](Self::progress) and
     /// [`message`](Self::message); none without a game.
     pub(crate) startup: Option<Arc<dyn crate::StartupScreen>>,
@@ -644,15 +661,12 @@ pub struct RegistrationContext {
 impl RegistrationContext {
     pub(crate) fn new() -> Self {
         let data = registration_data();
-        let instance_dir = data.as_ref().map(|data| data.instance_dir.clone());
         let runtime = data.as_ref().map(|data| data.runtime.clone());
         Self {
             mods: LoadedMods::new(),
             data,
             declaration_refusals: Default::default(),
-            self_refusal: Default::default(),
-            warnings: Default::default(),
-            instance_dir,
+            diagnostics: None,
             startup: crate::world::startup_progress::installed(),
             runtime,
         }
@@ -680,13 +694,11 @@ impl RegistrationContext {
             .expect("registration runtime environment is installed")
     }
 
-    /// The instance directory captured before registration. This is data only, not permission
-    /// to access a filesystem.
-    /// The value preserves the host OS's raw path encoding, including non-UTF-8 names.
-    pub fn instance_dir(&self) -> Result<&crate::InstanceDirectory, RegistrationReadError> {
-        self.instance_dir
-            .as_ref()
-            .ok_or(RegistrationReadError::Unavailable)
+    /// Borrow the instance directory captured before registration, preserving non-Unicode names.
+    /// Use [`Path::to_path_buf`] to keep it beyond this context. The path gives no filesystem
+    /// authority. Returns [`RegistrationReadError::Unavailable`] if there is no startup snapshot.
+    pub fn instance_dir(&self) -> Result<&Path, RegistrationReadError> {
+        Ok(self.data()?.instance_dir.as_ref())
     }
 
     /// The loaded-mod view, independent of this phase's event or registrar.
@@ -726,8 +738,10 @@ impl RegistrationContext {
     }
 }
 
-/// A data load's read-only view. The owning loader supplies its origin and
-/// metadata; reading already-loaded data never creates this context.
+/// A data load's read-only view. The loader freezes the metadata for this
+/// resource generation before dispatch. The metadata getters lend that data
+/// without file I/O. Copy data only if it must outlive the context borrow.
+/// Reading already-loaded data never creates this context.
 ///
 /// ```compile_fail
 /// use mod_api::{DataLoadContext, Host};
@@ -750,35 +764,37 @@ pub trait DataLoadContext {
     /// The phase selected at the owning load boundary.
     fn origin(&self) -> DataLoadOrigin;
 
-    /// Registry names in ID order, from this resource generation's snapshot.
-    fn registry(&self, name: &str) -> Option<Arc<[String]>>;
+    /// Borrows registry names in ID order, or returns `None` if the registry
+    /// is unavailable.
+    fn registry(&self, name: &str) -> Option<&[String]>;
 
     /// Resolve a fluid name against this load's registered fluid identities.
     fn fluid_key(&self, id: &str) -> Option<crate::FluidKey>;
 
-    /// The fluid tags this load's resources hold (`data/<ns>/tags/fluid`):
-    /// each tag id to the fluids it names, in the sources' order — what a
-    /// recipe's fluid ingredient resolves its `#tag`s with. `None` where the
-    /// load reads no recipe resources.
-    fn fluid_tags(&self) -> Option<Arc<[(String, Arc<[String]>)]>> {
+    /// Borrows the recipe pass's fluid tags (`data/<ns>/tags/fluid`), with each
+    /// tag's members in source order. `None` means the load has no recipe
+    /// overlay; `Some(&[])` means the overlay has no fluid tags.
+    fn fluid_tags(&self) -> Option<&[(String, Arc<[String]>)]> {
         None
     }
 
-    /// A loaded mod's setting captured at the owning load boundary, without file I/O.
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String>;
+    /// Borrows a captured setting, or returns `None` if it was not captured.
+    fn setting(&self, mod_id: &str, key: &str) -> Option<&str>;
 
-    /// The same loaded-mod view available during registration.
-    fn mods(&self) -> LoadedMods;
+    /// Borrows the loaded-mod inventory in dispatch order.
+    fn mods(&self) -> &LoadedMods;
 }
 
-/// Immutable resource-generation reads supplied by an owning loader.
+/// Immutable resource-generation reads supplied by an owning loader. Return
+/// borrows into the captured data; the getters must not read files.
 pub trait LoadReader: Sync {
-    /// Registry names in ID order.
-    fn registry(&self, name: &str) -> Option<Arc<[String]>>;
-    /// Fluid tags and their members in source order.
-    fn fluid_tags(&self) -> Arc<[(String, Arc<[String]>)]>;
-    /// A captured setting, without file I/O.
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String>;
+    /// Borrows registry names in ID order, or returns `None` if unavailable.
+    fn registry(&self, name: &str) -> Option<&[String]>;
+    /// Borrows recipe fluid tags with members in source order. Return `None`
+    /// without a recipe overlay and `Some(&[])` when it has no fluid tags.
+    fn fluid_tags(&self) -> Option<&[(String, Arc<[String]>)]>;
+    /// Borrows a captured setting, or returns `None` if it was not captured.
+    fn setting(&self, mod_id: &str, key: &str) -> Option<&str>;
 }
 
 // no wire: borrowed phase-scoped host readers; authority stays with their owning thread.
@@ -807,20 +823,20 @@ impl DataLoadContext for OwningLoad<'_> {
     fn origin(&self) -> DataLoadOrigin {
         self.origin
     }
-    fn registry(&self, name: &str) -> Option<Arc<[String]>> {
+    fn registry(&self, name: &str) -> Option<&[String]> {
         self.source.registry(name)
     }
     fn fluid_key(&self, id: &str) -> Option<crate::FluidKey> {
         crate::content::registry_keys::fluid_key(id)
     }
-    fn fluid_tags(&self) -> Option<Arc<[(String, Arc<[String]>)]>> {
-        Some(self.source.fluid_tags())
+    fn fluid_tags(&self) -> Option<&[(String, Arc<[String]>)]> {
+        self.source.fluid_tags()
     }
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
+    fn setting(&self, mod_id: &str, key: &str) -> Option<&str> {
         self.source.setting(mod_id, key)
     }
-    fn mods(&self) -> LoadedMods {
-        self.mods.clone()
+    fn mods(&self) -> &LoadedMods {
+        &self.mods
     }
 }
 
@@ -828,7 +844,8 @@ impl DataLoadContext for OwningLoad<'_> {
 /// player-list loop: the side, registries, settings, mod list and authoritative item
 /// tags. A loop without a tag-bearing snapshot (for example, the sound engine) returns
 /// `None` from tag reads even after world tags sync. The side that owns the loop builds
-/// this view; its answers never change while held.
+/// this view; its answers never change while held. Metadata getters return borrows
+/// tied to this context and do no file I/O.
 ///
 /// ```compile_fail
 /// use mod_api::{Host, LoopContext};
@@ -844,18 +861,17 @@ impl DataLoadContext for OwningLoad<'_> {
 /// ```
 pub trait LoopContext {
     /// Membership in this generation's authoritative item tags. `None` means the
-    /// snapshot or item keys are unavailable. Unknown tags in a loaded snapshot
-    /// answer `Some(false)`. Reads allocate nothing and perform no file I/O.
+    /// snapshot is unavailable or a member of this tag could not be bound. Absent
+    /// or empty tags in a loaded snapshot answer `Some(false)`. Reads allocate
+    /// nothing and perform no file I/O.
     fn is_in_tag(&self, item: crate::ItemKey, tag: crate::TagKey) -> Option<bool>;
 
-    /// Number of authoritative item members, or `None` if the snapshot or item
-    /// keys are unavailable. Unknown tags in a loaded snapshot have zero members.
-    /// Reads allocate nothing and do no I/O.
-    fn item_count(&self, tag: crate::TagKey) -> Option<usize>;
-
-    /// Item member in authoritative order from this same frozen generation.
-    /// None means unavailable data or an out-of-range index. Reads allocate nothing.
-    fn item_at(&self, tag: crate::TagKey, index: usize) -> Option<crate::ItemKey>;
+    /// Borrow the bound item members in authoritative order for this generation.
+    /// `None` means the snapshot was unavailable or a member of this tag could not
+    /// be bound at publication; no partial list is returned. A missing or empty tag
+    /// in a loaded snapshot returns `Some(&[])`. On clients these are the server's
+    /// synced tags, never the local pack's. Reads allocate nothing.
+    fn items_in_tag(&self, tag: crate::TagKey) -> Option<&[crate::ItemKey]>;
 
     /// Whether a mod-created recipe property set accepts an item ID. Unknown
     /// sets/items and vanilla set keys return false. Use this in
@@ -867,42 +883,34 @@ pub trait LoopContext {
     /// The side whose loop fires the hook.
     fn side(&self) -> LoopSide;
 
-    /// Registry names in ID order, from the resource generation's snapshot.
-    fn registry(&self, name: &str) -> Option<Arc<[String]>>;
+    /// Borrows registry names in ID order, or returns `None` if the registry
+    /// is unavailable.
+    fn registry(&self, name: &str) -> Option<&[String]>;
 
-    /// A loaded mod's setting captured when this context was built, without file I/O.
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String>;
+    /// Borrows a captured setting, or returns `None` if it was not captured.
+    fn setting(&self, mod_id: &str, key: &str) -> Option<&str>;
 
-    /// The same loaded-mod view available during registration.
-    fn mods(&self) -> LoadedMods;
+    /// Borrows the loaded-mod inventory in dispatch order.
+    fn mods(&self) -> &LoadedMods;
 }
 
-/// Immutable resource-generation reads supplied by an owning loop.
+#[path = "loop_item_tags.rs"]
+mod loop_item_tags;
+pub use loop_item_tags::BoundItemTags;
+
+/// Immutable resource-generation reads supplied by an owning loop. The getters
+/// borrow the captured metadata and must not read files. Item tags are bound
+/// separately when the generation is published.
 pub trait LoopReader: Sync {
-    /// Authoritative membership, unavailable until this reader has tag inputs.
-    fn item_is_in_tag(&self, item: crate::ItemKey, tag: crate::TagKey) -> Option<bool> {
-        let _ = (item, tag);
-        None
-    }
-    /// Authoritative member count, unavailable until tags and keys are loaded.
-    fn item_count(&self, tag: crate::TagKey) -> Option<usize> {
-        let _ = tag;
-        None
-    }
-    /// An authoritative member in source order, without allocation.
-    fn item_at(&self, tag: crate::TagKey, index: usize) -> Option<crate::ItemKey> {
-        let _ = (tag, index);
-        None
-    }
     /// Mod-created recipe property membership from the owning generation.
     fn mod_recipe_property_contains(&self, set: &str, item: crate::ItemKey) -> bool {
         let _ = (set, item);
         false
     }
-    /// Registry names in ID order.
-    fn registry(&self, name: &str) -> Option<Arc<[String]>>;
-    /// A captured setting, without file I/O.
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String>;
+    /// Borrows registry names in ID order, or returns `None` if unavailable.
+    fn registry(&self, name: &str) -> Option<&[String]>;
+    /// Borrows a captured setting, or returns `None` if it was not captured.
+    fn setting(&self, mod_id: &str, key: &str) -> Option<&str>;
 }
 
 // no wire: borrowed phase-scoped host readers; authority stays with their owning thread.
@@ -912,15 +920,21 @@ pub trait LoopReader: Sync {
 // exhaustive: its fields are private; only the game builds it
 pub struct OwningLoop<'a> {
     source: &'a dyn LoopReader,
+    item_tags: Option<&'a BoundItemTags>,
     side: LoopSide,
     mods: LoadedMods,
 }
 
 impl<'a> OwningLoop<'a> {
-    /// Borrow a loop's immutable reader at its owning boundary.
-    pub fn new(side: LoopSide, source: &'a dyn LoopReader) -> Self {
+    /// Borrow a loop's immutable reader and its already-bound tags at the owning boundary.
+    pub fn new(
+        side: LoopSide,
+        source: &'a dyn LoopReader,
+        item_tags: Option<&'a BoundItemTags>,
+    ) -> Self {
         Self {
             source,
+            item_tags,
             side,
             mods: LoadedMods::new(),
         }
@@ -929,13 +943,10 @@ impl<'a> OwningLoop<'a> {
 
 impl LoopContext for OwningLoop<'_> {
     fn is_in_tag(&self, item: crate::ItemKey, tag: crate::TagKey) -> Option<bool> {
-        self.source.item_is_in_tag(item, tag)
+        self.item_tags?.contains(tag, item)
     }
-    fn item_count(&self, tag: crate::TagKey) -> Option<usize> {
-        self.source.item_count(tag)
-    }
-    fn item_at(&self, tag: crate::TagKey, index: usize) -> Option<crate::ItemKey> {
-        self.source.item_at(tag, index)
+    fn items_in_tag(&self, tag: crate::TagKey) -> Option<&[crate::ItemKey]> {
+        self.item_tags?.items(tag)
     }
     fn mod_recipe_property_contains(&self, set: &str, item: crate::ItemKey) -> bool {
         self.source.mod_recipe_property_contains(set, item)
@@ -943,24 +954,24 @@ impl LoopContext for OwningLoop<'_> {
     fn side(&self) -> LoopSide {
         self.side
     }
-    fn registry(&self, name: &str) -> Option<Arc<[String]>> {
+    fn registry(&self, name: &str) -> Option<&[String]> {
         self.source.registry(name)
     }
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
+    fn setting(&self, mod_id: &str, key: &str) -> Option<&str> {
         self.source.setting(mod_id, key)
     }
-    fn mods(&self) -> LoadedMods {
-        self.mods.clone()
+    fn mods(&self) -> &LoadedMods {
+        &self.mods
     }
 }
 
 /// The view of a hook fired while a feature generates, where no game is at
 /// hand: on a worldgen worker thread, or on the server thread when a sapling
-/// grows. It carries the server's registries, its settings and the mod list;
-/// the server builds it once per resource generation, a hook never builds one,
-/// and its answers never change while it is held. There are no writes, no
-/// level or entity handles and no transaction: what the generating region
-/// holds is the hook's own arguments.
+/// grows. It lends the server's registries, settings and mod list from the
+/// frozen resource generation. The metadata borrows are tied to this host
+/// and the getters do no file I/O. There are no writes, no level or entity
+/// handles and no transactions: the hook's arguments provide access to the
+/// generating region.
 ///
 /// ```compile_fail
 /// use mod_api::{Host, WorldgenHost};
@@ -975,14 +986,15 @@ impl LoopContext for OwningLoop<'_> {
 /// }
 /// ```
 pub trait WorldgenHost {
-    /// Registry names in ID order, from the server's resource generation.
-    fn registry(&self, name: &str) -> Option<Arc<[String]>>;
+    /// Borrows registry names in ID order, or returns `None` if the registry
+    /// is unavailable.
+    fn registry(&self, name: &str) -> Option<&[String]>;
 
-    /// A loaded mod's setting captured when the server built this view, without file I/O.
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String>;
+    /// Borrows a captured setting, or returns `None` if it was not captured.
+    fn setting(&self, mod_id: &str, key: &str) -> Option<&str>;
 
-    /// The same loaded-mod view available during registration.
-    fn mods(&self) -> LoadedMods;
+    /// Borrows the loaded-mod inventory in dispatch order.
+    fn mods(&self) -> &LoadedMods;
 
     /// `BlockState.setValue`: `state` with its property `key` set to `value`; `state` itself
     /// when it already has that value, None when its block has no such property or value.
@@ -994,14 +1006,24 @@ pub trait WorldgenHost {
     ) -> Option<crate::BlockState>;
 }
 
+// no wire: a process-local borrow of frozen worldgen metadata.
+/// Immutable world-generation reads supplied by the owning engine boundary.
+// hidden: engine plumbing, re-exported through __private for the game.
+#[doc(hidden)]
+pub trait WorldgenReader: Sync {
+    /// Borrows registry names in ID order.
+    fn registry(&self, name: &str) -> Option<&[String]>;
+    /// Borrows a captured setting, without file I/O.
+    fn setting(&self, mod_id: &str, key: &str) -> Option<&str>;
+}
+
 // no wire: borrowed phase-scoped host readers; authority stays with their owning thread.
 /// The server's world generation, as a [`WorldgenHost`].
 // hidden: the game's side of the context, not part of the mod surface
 #[doc(hidden)]
 // exhaustive: its fields are private; only the game builds it
 pub struct OwningWorldgen<'a> {
-    registry: &'a dyn Fn(&str) -> Option<Arc<[String]>>,
-    setting: &'a dyn Fn(&str, &str) -> Option<String>,
+    source: &'a dyn WorldgenReader,
     state_with_property: &'a StateWithProperty<'a>,
     mods: LoadedMods,
 }
@@ -1011,16 +1033,13 @@ type StateWithProperty<'a> =
     dyn Fn(crate::BlockState, &str, &str) -> Option<crate::BlockState> + 'a;
 
 impl<'a> OwningWorldgen<'a> {
-    /// The server's registries, mod settings and block states, read through the game's
-    /// worldgen context.
+    /// Borrow the owning engine's frozen metadata reader and block-state query.
     pub fn new(
-        registry: &'a dyn Fn(&str) -> Option<Arc<[String]>>,
-        setting: &'a dyn Fn(&str, &str) -> Option<String>,
+        source: &'a dyn WorldgenReader,
         state_with_property: &'a StateWithProperty<'a>,
     ) -> Self {
         Self {
-            registry,
-            setting,
+            source,
             state_with_property,
             mods: LoadedMods::new(),
         }
@@ -1028,14 +1047,14 @@ impl<'a> OwningWorldgen<'a> {
 }
 
 impl WorldgenHost for OwningWorldgen<'_> {
-    fn registry(&self, name: &str) -> Option<Arc<[String]>> {
-        (self.registry)(name)
+    fn registry(&self, name: &str) -> Option<&[String]> {
+        self.source.registry(name)
     }
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
-        (self.setting)(mod_id, key)
+    fn setting(&self, mod_id: &str, key: &str) -> Option<&str> {
+        self.source.setting(mod_id, key)
     }
-    fn mods(&self) -> LoadedMods {
-        self.mods.clone()
+    fn mods(&self) -> &LoadedMods {
+        &self.mods
     }
     fn state_with_property(
         &self,
@@ -1099,6 +1118,7 @@ fn phase_authority_advances_without_a_platform_backend() {
 fn the_registration_context_lists_installed_packages_with_their_details() {
     let details = crate::PackageDetails {
         name: "Machines".to_owned(),
+        properties: BTreeMap::from([("ratio".to_owned(), crate::PropertyValue::Float(0.5))]),
         ..Default::default()
     };
     let packages = vec![
@@ -1112,7 +1132,7 @@ fn the_registration_context_lists_installed_packages_with_their_details() {
                 "base".to_owned(),
                 "^1".to_owned(),
                 crate::DependencyKind::Required,
-                crate::DependencyOrder::After,
+                crate::DependencyOrder::Before,
                 crate::Side::Both,
                 None,
                 None,
@@ -1137,7 +1157,15 @@ fn the_registration_context_lists_installed_packages_with_their_details() {
         let machines = context.mods().get("machines").unwrap();
         assert_eq!(machines.name(), "Machines");
         assert_eq!(machines.kind(), PackageKind::Code);
+        assert_eq!(
+            machines.property("ratio"),
+            Some(&crate::PropertyValue::Float(0.5))
+        );
         assert!(machines.depends_on("base"));
+        assert_eq!(
+            machines.dependencies()[0].order(),
+            crate::DependencyOrder::Before
+        );
         let base = context.mods().get("base").unwrap();
         assert_eq!(base.kind(), PackageKind::Content);
         assert!(context.mods().get("missing").is_none());

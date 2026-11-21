@@ -18,6 +18,7 @@ pub trait Hooks {
     /// attachments, level sounds, and the own random of the entities the hit lends.
     /// The container is an API-owned scalar snapshot; the engine retains sequencing and normalization.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         host = "hit",
@@ -25,5 +26,10 @@ pub trait Hooks {
         version = 2,
         target = "sunrise_client::game::native_hooks::living_damage_post::HitLevel<'_>::native_living_damage_post"
     )]
-    fn living_damage_post();
+    fn living_damage_post(
+        entity: i32,
+        kind: &str,
+        source: &HurtSource<'_>,
+        container: &mod_api::DamageContainer,
+    );
 }

@@ -8,7 +8,7 @@
 use super::{ALL_VISIBLE, B, Mesher, P, Region, SectionMesh, pi};
 use crate::chunk::Chunk;
 use mod_api::{
-    BlockStateId, SectionCell, SectionVisibility, SectionVisibilityInput, SectionVisibilityRefusal,
+    BlockState, SectionCell, SectionVisibility, SectionVisibilityInput, SectionVisibilityRefusal,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -352,7 +352,11 @@ pub(super) fn hidden_terrain(
 
 /// Lend native listeners a raw view captured from the same region the worker uses, before any
 /// masks are applied. Above and below the world is air with the light the column gives it there.
-pub fn capture_input(region: &Region, sy: i32) -> SectionVisibilityInput {
+pub fn capture_input(
+    region: &Region,
+    sy: i32,
+    mut state_of: impl FnMut(u32) -> BlockState,
+) -> SectionVisibilityInput {
     let centre = region[1][1].as_ref().expect("centre chunk");
     let base_y = centre.min_y() + sy * 16;
     SectionVisibilityInput::capture([centre.x * 16, base_y, centre.z * 16], |[x, y, z]| {
@@ -360,7 +364,7 @@ pub fn capture_input(region: &Region, sy: i32) -> SectionVisibilityInput {
         let (lx, wy, lz) = (x.rem_euclid(16), base_y + y, z.rem_euclid(16));
         match column {
             Some(chunk) => (
-                SectionCell::State(BlockStateId(chunk.get(lx, wy, lz))),
+                SectionCell::State(state_of(chunk.get(lx, wy, lz))),
                 chunk.light(lx, wy, lz),
                 Some(mod_api::__private::biome_id(chunk.biome(lx, wy, lz).into())),
             ),

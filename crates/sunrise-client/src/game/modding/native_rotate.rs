@@ -1,4 +1,3 @@
-// game-module-visibility: pub(crate)
 //! The engine side of `rotate`: the callback every template placement turns its states through,
 //! asking the parts of each state's block on the worldgen workers and on the server thread. It
 //! reads what the server published (`native_worldgen_parts`), never a game thread's tables.

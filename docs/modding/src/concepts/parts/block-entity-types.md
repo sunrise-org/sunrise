@@ -19,16 +19,17 @@ refused at load. Refused native block, item or block entity declarations stop st
 known-components input; the game does not fall back to vanilla content. An explicitly declared mod
 template block uses its declared type; undeclared template blocks retain their vanilla behavior. Adding mod blocks to vanilla types is not supported by this builder.
 The hooks about the entity (`block_entity_tick`, `block_entity_update_tag`, `pre_remove_side_effects`,
-`on_chunk_unloaded`, `menu_quick_move`) find it by that declared type; the others (`block_entity`, `screen`, the
-block hooks) by block. The factory is a `BlockEntityPart` method, not a global `Hooks` method.
+`on_chunk_unloaded`, `menu_quick_move`) find it by that declared type; the others (`block_entity` and the block hooks) by block. The factory is a `BlockEntityPart` method, not a global `Hooks` method.
 
 `r.block_entity_type_key("other:press")` looks up another mod's type, and
 `r.block_entity_type_key("minecraft:chest")` looks up a vanilla type. Both return the same opaque
 `BlockEntityTypeKey` as the declaration builder: equality and hashing use the shared load-owned
 registration slot, not the type's blocks. Bare names use the `minecraft:` namespace. The final
 registry resolves requests after all declarations and refuses unknown IDs, naming the requesting mod
-and type. `key.id(host)` reads the canonical name for diagnostics; a key retains its identity until
-restart. Use a type ID, not a block ID (`minecraft:shulker_box`, not `minecraft:red_shulker_box`). `BlockEntityRef::kind(host)` returns `Option<BlockEntityTypeKey>`.
+and type. A key retains its identity until restart. `BlockEntityRef::kind(host)` returns
+`Option<BlockEntityTypeKey>`: compare it with `Some(chest_type)` if you already have the key.
+To read the canonical name, use `kind.id(host)`, which borrows it as `Option<&str>`.
+Use a type ID, not a block ID (`minecraft:shulker_box`, not `minecraft:red_shulker_box`).
 
 Lookup keys may answer capabilities for vanilla and native types. `block_entity_part` accepts only
 native types and returns `BlockEntityPartError::VanillaType { kind }` immediately for a vanilla key. Native
@@ -102,13 +103,14 @@ impl BlockEntityPartState for Press {
 }
 r.block_entity_part_with_state(&press, Press)?;
 
-// In its tick, where the block entity is out of the world and `block_entity` finds nothing:
-let level = host.level(host.dimension()).unwrap();
-let entity = host.block_entity_identity(level, event.pos).unwrap();
-let done = Press::edit_state(host, entity, |_, progress| {
+// In block_entity_tick, return the view before borrowing the Host:
+let Some(entity) = event.subject.with_view(|view| view.handle()) else {
+    return;
+};
+let done = Press::edit_state(event.subject.host(), entity, |_, progress| {
     *progress += 1;
     *progress >= 200
-})?;
+});
 ```
 
 - `Press::state(host, entity)` and `state_existing` read a snapshot through `&dyn Host` and never
@@ -137,20 +139,22 @@ let done = Press::edit_state(host, entity, |_, progress| {
   depth 512. The 2 MiB quota of a chunk packet's block entity data is a network limit and does not
   cap saved state.
 - Registration refuses a declaration that syncs, copies on death, lies outside the mod's namespaces
-  or reuses a key with a type of another Rust type name. It refuses a type whose Wire form holds a resource
-  handle (an erased handler such as `Arc<dyn BlockPart>`): such a value cannot be saved. The refusal names the Part,
-  the key, the type and the reason.
+  or reuses a key with a type of another Rust type name. The refusal names the Part, the key,
+  the type and the reason.
 - Values without a codec last for the session. Part state is server-side for now. A client reads the
   default, because nothing is sent to it yet.
+- Part registration and state errors are local values, not `Wire` records.
+  The attachment codec persists the state value, not its declaration or errors.
 
 ## Saved data
 
 Implement `BlockEntityPart::block_entity_save_additional` to serialize live mod state when the server
 captures this type's data. `event.tag` starts with the stored payload. Change that copy to write the
 value that goes into a chunk, a command read, or a copy into an item, loot or a structure. For a
-holder without declared slots, this copy includes any saved `Items`, and the listener can replace
-or remove that field. For a declared container, the game writes its inventory instead. Neither path
-changes the live entity or the separate client update tag.
+holder without declared inventory slots, this copy includes any saved `Items` as mod-owned NBT.
+Even canonical-looking item rows keep their saved list order instead of being reconstructed in
+slot order. The listener can replace or remove that field. For a declared container, the game
+writes its inventory instead. Neither path changes the live entity or the separate client update tag.
 Malformed payloads, including names or strings too long for NBT, are refused before any copy uses
 that output. If the region writer cannot encode or admit the complete chunk
 record, it retries with the stored block-entity payloads from the same snapshot. Other changes in
@@ -175,9 +179,12 @@ load or an unchanged result.
 
 Implement `BlockEntityPart::block_entity_load_additional` to refresh mod-owned state after the server
 applies a saved payload, including `/data merge` and `/data modify`, cloning, structure and item
-placement, falling-block landing, and chunk load. `event.tag` is the applied mod payload, `event.pos` and `event.level` name the instance, and the
-read-only level host already sees the updated instance. `block_entity_on_load` follows when that
-instance is new; it also fires for a fresh placement that had no saved data.
+placement, falling-block landing, and chunk load. `event.tag` is the applied mod payload,
+`event.pos` and `event.level` name the instance, and the read-only level host already sees the
+updated instance. On a slotless holder, `event.tag` and `BlockEntityRef::data` include any saved
+`Items` field in its original list order, even if its entries look like inventory rows.
+`block_entity_on_load` follows when that instance is new; it also fires for a fresh placement
+that had no saved data.
 
 Direct Mod API `merge_data` and `replace_data` writes and transaction restores do not fire the
 notice. Client sync instead uses `block_entity_data_received`.

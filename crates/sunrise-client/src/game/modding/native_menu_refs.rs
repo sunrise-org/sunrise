@@ -77,6 +77,7 @@ impl Game<'_> {
     }
 
     /// `DataSlot.set` of an owning mod's blockless menu, journaled by window generation.
+    /// The client reads the committed updates as live frame data, not opening bytes.
     pub(super) fn menu_set_data_slot(
         &mut self,
         menu: MenuRef,
@@ -98,7 +99,7 @@ impl Game<'_> {
             return Err(WrongOwner);
         }
         let &committed = open.blockless_data.get(index).ok_or(InvalidIndex)?;
-        let (conn, index) = (guest.conn, index as u16);
+        let conn = guest.conn;
         let key = (conn, guest.menu_generation, index);
         if self.pending_menu_data(key).unwrap_or(committed) == value {
             return Ok(false);
@@ -115,8 +116,8 @@ impl Game<'_> {
     /// one of its buttons does (`MultiPlayerGameMode.handleInventoryButtonClick`,
     /// `ContainerButtonClick`): the server's menu decides what it does
     /// (`clickMenuButton`, and `menu_button` for a mod's menu). For a client
-    /// mod's own input on a menu's screen where `screen_click` doesn't come,
-    /// such as a key or the wheel; no sound, that is the screen's. Refuses
+    /// mod's own input on a menu's screen other than a press, such as a key
+    /// or the wheel; no sound, that is the screen's. Refuses
     /// stale menus, non-client hosts and the inventory menu, which no server
     /// opened. True means sent, not that the menu took it.
     pub(super) fn menu_click_button(&mut self, menu: MenuRef, button: i32) -> bool {
@@ -222,15 +223,14 @@ impl Game<'_> {
         }
     }
 
-    fn native_menu_guest(&self, menu: MenuRef) -> Option<&Guest> {
+    pub(super) fn native_menu_guest(&self, menu: MenuRef) -> Option<&Guest> {
         let guest = self.native_menu_player(menu.fields().player)?;
         let host = self.lan.as_ref()?;
         (host.hub.holder_guest(guest.uuid, self.dim.id())?.conn == guest.conn).then_some(())?;
         (guest.menu_generation == menu.fields().generation).then_some(())?;
         if let Some(open) = &guest.menu {
-            // A native menu's slots are the mods' own: its hidden ones only
-            // keep the game's clicks out. The handle remains live so visible
-            // slots can still be backed and used.
+            // Excluded slots keep their backing indices. The handle stays live
+            // for the other slots; the slot methods check the authoritative mask.
             (open.window == menu.fields().window).then_some(guest)
         } else {
             let play = host.play.get(&guest.conn);
@@ -248,8 +248,9 @@ impl Game<'_> {
     }
 
     /// A player's current supported menu. Refuses crafting tables, merchants,
-    /// workstations, lecterns and mounts. Hidden slots remain unavailable through
-    /// the slot methods without invalidating the menu handle. Also refuses stale
+    /// workstations, lecterns and mounts. Permanently excluded slots remain
+    /// indexed but unavailable through slot methods without invalidating the handle.
+    /// Local screen hides do not change server access. Also refuses stale
     /// players and players whose state is swapped out by another active turn.
     /// The acting player's inventory, equipment, cursor and ender reads use Game's state.
     /// On a client, only the local player's supported menu is available.
@@ -739,28 +740,36 @@ mod tests {
 
     const PANEL: &str = "test:panel";
 
-    #[derive(Clone)]
     struct Panel {
-        slots: usize,
         opening: Arc<Mutex<Option<(MenuRef, usize)>>>,
-    }
-    #[mod_api::sunrise_part]
-    impl mod_api::MenuPart for Panel {
-        fn screen(
-            &self,
-            _: &dyn mod_api::Host,
-            _: &mut mod_api::ScreenEvent<'_>,
-        ) -> Option<mod_api::Screen> {
-            Some(mod_api::Screen {
-                slots: vec![Some(mod_api::ScreenSlot::default()); self.slots],
-                ..Default::default()
-            })
-        }
     }
     #[mod_api::__subscriptions]
     impl mod_api::Hooks for Panel {
         fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
-            r.menu_part(PANEL, self.clone());
+            r.register_menu_screen(
+                PANEL,
+                Arc::new(
+                    |_: &dyn mod_api::ClientHost, open: mod_api::MenuScreenOpen<'_>| {
+                        Some(mod_api::MenuScreen::new(mod_api::MenuScreenLayout {
+                            width: 176.0,
+                            height: 166.0,
+                            slots: (0..open.backing_slots)
+                                .map(|index| {
+                                    Some(mod_api::ScreenSlot {
+                                        position: [
+                                            8.0 + (index % 9) as f32 * 18.0,
+                                            18.0 + (index / 9) as f32 * 18.0,
+                                        ],
+                                        no_item_icon: None,
+                                    })
+                                })
+                                .collect(),
+                            ..Default::default()
+                        }))
+                    },
+                ),
+            )
+            .unwrap();
         }
 
         fn screen_opening(
@@ -783,7 +792,6 @@ mod tests {
     ) {
         let opening = Arc::new(Mutex::new(None));
         let panel = Panel {
-            slots,
             opening: opening.clone(),
         };
         let mods: mod_api::Mods = vec![mod_api::ModEntry::new("test", Box::new(panel))].into();

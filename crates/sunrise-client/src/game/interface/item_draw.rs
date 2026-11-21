@@ -51,11 +51,28 @@ pub(super) struct Env<'a, 'g> {
     game: &'a Game<'g>,
 }
 impl Game<'_> {
-    /// Before a frame is drawn: the model draws prepared for the last one are dropped, and so are
-    /// the special model renderers' answers it didn't draw.
+    /// Before a frame is drawn: drop the model draws prepared for the last one.
     pub(super) fn begin_frame_draws(&self) {
         self.prepared_model_draws.borrow_mut().clear();
-        super::native_special_renderers::begin_frame(std::ptr::from_ref(self) as usize);
+    }
+}
+
+impl item_render::ItemDrawEnv for Env<'_, '_> {
+    fn special_model_input(
+        &self,
+        model: &item_render::BakedSpecialModel,
+        stack: &StackView,
+        context: &sunrise_assets::item_model::Context<'_>,
+    ) -> Option<item_render::SpecialModelInput<'_>> {
+        super::native_special_renderers::draw_input(self.game, model, stack, context)
+    }
+
+    fn special_model_stack(
+        &self,
+        stack: &mod_api::ItemStack,
+        display: mod_api::ItemDisplayContext,
+    ) -> Option<(StackView, DisplayContext)> {
+        super::native_special_renderers::nested_stack(stack, display)
     }
 }
 
@@ -167,24 +184,6 @@ impl ItemEnv for Env<'_, '_> {
                 _ => LayerTransform::Model,
             },
         }));
-    }
-    fn special_model_parts(
-        &self,
-        slot: sunrise_assets::item_model::SpecialModelSlot,
-        base: &str,
-        config: &std::sync::Arc<sunrise_core::nbt::Tag>,
-        stack: &StackView,
-        ctx: &sunrise_assets::item_model::Context,
-    ) -> Option<sunrise_assets::item_model::PreparedParts> {
-        let Ok(display) = ctx.display.try_into_api();
-        let context = mod_api::SpecialModelContext::new(
-            display,
-            ctx.level.map(|level| level.game_time),
-            self.game.frame_world_partial_tick() as f32,
-        );
-        super::native_special_renderers::parts(self.game, slot, config, stack, &context, |parts| {
-            self.game.pack.item_renderer.prepare_parts(base, parts)
-        })
     }
     fn stack_fluid(&self, stack: &StackView) -> Option<&str> {
         // Vanilla's items keep vanilla's closed set; only a mod's own item asks its parts.

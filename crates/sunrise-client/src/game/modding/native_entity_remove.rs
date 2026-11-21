@@ -2,12 +2,10 @@
 //! (docs/modding/src/how-to/native-mods.md, "Entity and level handles", #7387): `Entity.discard`
 //! and `Entity.remove` with a reason. Nothing dies and nothing drops loot.
 //! `Entity.spawnAtLocation` drops an item at one.
-//! Outside a mod block-entity tick, `Entity.setRemoved` tells the world at the call:
-//! the handle and selectors stop finding it, passengers get off and mods hear it leave.
-//! Inside a transaction the handle stops finding it at the call, and the rest waits for the root
-//! commit (`transactions/entities.rs`); an abort leaves it as it was.
-//! Dropped-item removal inside that tick is instead staged with its final snapshot;
-//! scoped reads hide it immediately, while the leave notification waits for publication. A mob's list entry is marked at once too; the other
+//! `Entity.setRemoved` tells the world at the call: the handle and selectors stop finding it,
+//! passengers get off and mods hear it leave. Inside a transaction the handle stops finding it at
+//! the call and the rest waits for the root commit (`transactions/entities.rs`); an abort leaves
+//! it as it was. A mob's list entry is marked at once too; the other
 //! kinds stay in their lists until the level's next sweep of departed
 //! entities, a few times per tick, so a hook that removes one never shifts the
 //! lists the game is walking. A container vehicle spills before its logical removal;
@@ -36,9 +34,6 @@ impl Game<'_> {
             // A part leaves the level with its dragon, never alone.
             None | Some(Target::Player | Target::Guest(_) | Target::DragonPart(_)) => false,
             Some(t) if self.persist.preparing_vehicle_removals.contains(&t) => false,
-            Some(Target::Item(id)) if self.block_entity_tick_key.is_some() => {
-                self.stage_tick_item(id, None).unwrap_or(false)
-            }
             Some(t) if self.journal_removal(entity, t, killed) => true,
             Some(Target::Mob(id)) => {
                 self.remove_mob_now(id, killed);

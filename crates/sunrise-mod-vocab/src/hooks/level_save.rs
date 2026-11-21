@@ -6,10 +6,11 @@ pub trait Hooks {
     /// autosave, `/save-all`, a pause, a closing level or the server
     /// stopping; each level of a world save in turn. Server-side.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "LevelEvent.Save",
         paper = "WorldSaveEvent"
     )]
-    fn level_save();
+    fn level_save(dimension: &str);
 }

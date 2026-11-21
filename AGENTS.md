@@ -284,7 +284,7 @@ state stays separate from the library tests. This compiles gameplay twice for ex
   between the two side crates.
 - `struct Game` (game.rs) keeps the core loop and fields. Each `game/<area>/<feature>.rs` (or
   `<feature>/mod.rs`) adds an `impl Game<'_>` block and state types. Logical modules remain direct
-  children of `game`; an area's `.game-area` marker enables build-derived declarations.
+  children of `game`: `game.rs` declares each with a `#[path]`, so an area folder is not a module.
 - Find a feature's code: `grep -rn "fn tick_<thing>\|fn <verb>_<thing>" crates/sunrise-client/src/game*`;
   the file is under `game/<area>/`. Find its callers in game.rs's `fn tick` and `world/level_tick.rs`'s `fn tick_world`.
 - Fields that say which mode runs: `remote` (this window is a client of a server: multiplayer, LAN guest, or

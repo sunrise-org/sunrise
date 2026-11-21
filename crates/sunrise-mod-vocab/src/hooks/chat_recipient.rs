@@ -18,11 +18,18 @@ pub trait Hooks {
     /// reentering the hook or sending an unchecked line. No player's state is swapped in.
     /// Server-side.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "hidden",
         neoforge = "none (NeoForge has no per-receiver server chat event)",
         cancellable = true
     )]
-    fn chat_recipient();
+    fn chat_recipient(
+        sender: u128,
+        sender_name: &str,
+        message: &str,
+        recipient: u128,
+        hidden: &mut bool,
+    );
 }

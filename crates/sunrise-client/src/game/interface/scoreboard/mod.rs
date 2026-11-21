@@ -3,6 +3,7 @@
 //! entities, the selector options `scores=`, `team=` and `tag=`, the
 //! commands' [`Env`] and the sidebar.
 use super::{Game, chat::PLAYER_NAME, commands::Target};
+use mod_api::EntityTags;
 use std::collections::{HashMap, HashSet};
 use sunrise_client::actions::Action;
 use sunrise_client::{
@@ -285,8 +286,8 @@ impl Game<'_> {
         let uuid = uuid_from_text(name).filter(|_| name.len() == 36)?;
         self.target_with_uuid(uuid)
     }
-    /// `Entity.getTags` (the `Tags` list of the saved entity).
-    pub(super) fn tags_of(&self, t: Target) -> Vec<String> {
+    /// The saved `Tags` list read by commands and native entity handles.
+    pub(super) fn saved_entity_tags(&self, t: Target) -> EntityTags<'_> {
         let raw = match t {
             Target::Mob(id)
             | Target::Item(id)
@@ -325,16 +326,19 @@ impl Game<'_> {
             // A natural knot keeps no saved compound: it has no tags.
             Target::Knot(_) => None,
         };
-        match raw.and_then(|r| r.get("Tags")) {
-            Some(Tag::List(l)) => l
-                .iter()
-                .filter_map(|t| match t {
-                    Tag::String(s) => Some(s.to_string_lossy()),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        }
+        let tags = match raw.and_then(|r| r.get("Tags")) {
+            Some(Tag::List(tags)) => tags.as_slice(),
+            _ => &[],
+        };
+        mod_api::__private::game::borrow_entity_tags(tags)
+    }
+
+    /// The lossy UTF-8 presentation used by `/tag` and its existing write paths.
+    pub(super) fn tags_of(&self, t: Target) -> Vec<String> {
+        self.saved_entity_tags(t)
+            .iter_utf16()
+            .map(String::from_utf16_lossy)
+            .collect()
     }
     /// The selector options that need the scoreboard or entity data: which
     /// of `candidates` pass `scores=`, `team=` and `tag=`.

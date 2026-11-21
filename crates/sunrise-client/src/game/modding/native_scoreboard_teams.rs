@@ -4,10 +4,11 @@
 //! `/team` writes, with its methods, so the sync, the save and the selectors need to know
 //! nothing of a mod; a handle holds the world's epoch and the identity the board gave its team.
 use super::{Game, native_scoreboard::api_text};
+use core::ops::ControlFlow;
 use mod_api::__private::game::*;
 use mod_api::{
-    ClientTeam, CollisionRule, ScoreHolder, TeamColor, TeamError, TeamRef, TeamVisibility,
-    TextFormError,
+    ClientTeam, CollisionRule, ScoreHolder, TeamColor, TeamError, TeamMembersReadError, TeamRef,
+    TeamVisibility, TextFormError,
 };
 use sunrise_client::{
     scoreboard::{self as sb, Comp, comp_text},
@@ -195,14 +196,16 @@ impl Game<'_> {
     }
 
     /// `PlayerTeam.getPlayers`.
-    pub(super) fn team_members(&self, team: TeamRef) -> Option<Vec<ScoreHolder>> {
-        Some(
-            self.team_state(team)?
-                .players
-                .iter()
-                .map(|p| ScoreHolder::Name(p.clone()))
-                .collect(),
-        )
+    pub(super) fn team_visit_members(
+        &self,
+        team: TeamRef,
+        visit: &mut dyn FnMut(&str) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, TeamMembersReadError> {
+        if !self.is_logical_server() {
+            return Err(TeamMembersReadError::Unavailable);
+        }
+        let team = self.team_state(team).ok_or(TeamMembersReadError::Stale)?;
+        Ok(team.players.iter().map(String::as_str).try_for_each(visit))
     }
 
     /// `PlayerTeam.setDisplayName`.
@@ -409,6 +412,15 @@ mod tests {
             }
             assert_eq!(game.team("red"), Some(red));
             assert_eq!(red.name(game).as_deref(), Some("red"));
+            let mut unexpected_visits = 0;
+            let mut count = |_: &str| {
+                unexpected_visits += 1;
+                ControlFlow::Continue(())
+            };
+            assert_eq!(
+                red.visit_members(game, &mut count),
+                Ok(ControlFlow::Continue(()))
+            );
 
             // Vanilla's defaults, then every option, through to the board.
             assert_eq!(red.display_name(game), Ok(text("red")));
@@ -451,10 +463,18 @@ mod tests {
             let as_entity = ScoreHolder::Entity(a.entity());
             assert_eq!(red.join(game, as_player.clone()), Ok(true));
             assert_eq!(red.join(game, as_entity.clone()), Ok(true));
-            assert_eq!(
-                red.members(game),
-                Some(vec![ScoreHolder::Name("guest1".into())])
-            );
+            let members = |game: &Game<'_>| {
+                let mut names = Vec::new();
+                assert_eq!(
+                    red.visit_members(game, &mut |name| {
+                        names.push(name.to_owned());
+                        ControlFlow::Continue(())
+                    }),
+                    Ok(ControlFlow::Continue(()))
+                );
+                names
+            };
+            assert_eq!(members(game), ["guest1"]);
             for who in [
                 as_player.clone(),
                 as_entity.clone(),
@@ -468,6 +488,17 @@ mod tests {
                 red.join(game, ScoreHolder::Name("offline".into())),
                 Ok(true)
             );
+            // The Java hash set walks bucket 1 (offline) before bucket 10 (guest1).
+            assert_eq!(members(game), ["offline", "guest1"]);
+            let mut first = Vec::new();
+            assert_eq!(
+                red.visit_members(game, &mut |name| {
+                    first.push(name.to_owned());
+                    ControlFlow::Break(())
+                }),
+                Ok(ControlFlow::Break(()))
+            );
+            assert_eq!(first, ["offline"]);
             let nobody = ScoreHolder::Entity(mod_api::EntityRef::new(
                 game.native_lifecycle.epoch().unwrap(),
                 9_999_999,
@@ -482,10 +513,7 @@ mod tests {
             let blue = ScoreboardServerHost::add_team(game, "blue").unwrap();
             assert_eq!(blue.join(game, as_player.clone()), Ok(true));
             assert_eq!(game.holder_team(as_player.clone()), Some(blue));
-            assert_eq!(
-                red.members(game),
-                Some(vec![ScoreHolder::Name("offline".into())])
-            );
+            assert_eq!(members(game), ["offline"]);
             // Leaving a team the holder is not on changes nothing.
             assert!(!red.leave(game, as_player.clone()));
             assert!(blue.leave(game, as_player.clone()));
@@ -539,6 +567,11 @@ mod tests {
             assert_ne!(renamed, red_again);
             assert_eq!(red_again.name(game), None);
             assert_eq!(red_again.display_name(game), Err(TeamError::Stale));
+            assert_eq!(
+                red_again.visit_members(game, &mut count),
+                Err(TeamMembersReadError::Stale)
+            );
+            assert_eq!(unexpected_visits, 0);
             assert_eq!(
                 red_again.join(game, ScoreHolder::Name("x".into())),
                 Err(TeamError::Stale)

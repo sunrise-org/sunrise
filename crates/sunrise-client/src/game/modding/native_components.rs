@@ -329,17 +329,15 @@ impl Game<'_> {
             return None;
         }
         self.native_entity_read_target(target)?;
-        let target = self.entity_kind(target).map(|kind| kind.id(self))?;
-        let actor = self
-            .entity_kind(attacker.entity())
-            .map(|kind| kind.id(self))?;
+        let target = self.entity_kind(target)?.id(self)?;
+        let actor = self.entity_kind(attacker.entity())?.id(self)?;
         let source = self.item_resource_damage_source(stack, attacker)?;
         let source = source.damage_type.to_string();
         let effective = self.item_combat_stack(stack);
         let ctx = sunrise_items::enchant::EffectContext {
-            this: Some(&target),
-            attacker: Some(&actor),
-            direct_attacker: Some(&actor),
+            this: Some(target.as_str()),
+            attacker: Some(actor.as_str()),
+            direct_attacker: Some(actor.as_str()),
             is_direct: true,
             damage_type: Some(&source),
             items: Some(world_items!(self)),

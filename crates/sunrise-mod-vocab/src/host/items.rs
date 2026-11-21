@@ -320,17 +320,16 @@ pub trait ItemsBackend {
     #[access(WorldOnly)]
     fn container_kind_space(&self, at: BlockSide, resource: &ItemResource) -> Option<u64>;
     /// Side: server.
-    /// What the slots `at`'s side reaches hold, from its `from`th to before its
-    /// `from + limit`th (fewer at the end), empty ones included, never more than
-    /// [`MAX_STORAGE_PAGE`](crate::MAX_STORAGE_PAGE) slots whatever `limit` asks. None where no
-    /// supported container or composter port exists.
+    /// Visits the occupied slots `at`'s side reaches, in sided order, including duplicate
+    /// kinds. Stops before reading another slot when the visitor breaks. If no supported
+    /// container or composter port exists, there are no entries to visit. Refuses the read
+    /// if a visited stack cannot be represented as an API value.
     #[access(WorldOnly)]
-    fn container_listing(
+    fn container_visit_entries(
         &self,
         at: BlockSide,
-        from: usize,
-        limit: usize,
-    ) -> Option<Vec<Option<ItemStack>>>;
+        visitor: &mut dyn FnMut(&ItemResource, u64) -> std::ops::ControlFlow<()>,
+    ) -> Result<(), LevelReadError>;
     /// Side: both.
     /// Whether an enchantment on `stack` has effect component `effect`, by the world's
     /// enchantment definitions (`EnchantmentHelper.has`), behind
@@ -514,21 +513,25 @@ pub trait ItemsBackendMut {
         tx: &Transaction,
     ) -> u64;
     /// Side: server.
-    /// The stack at a player's or an item entity's place; none for an empty one, a player who
-    /// isn't here or is dead, an item entity not in the level in place, any other place
-    /// (`ItemPlace::stack` reads those), and on a client.
+    /// Lend a stack in a native item place, once, as in [`ItemPlace::with_stack`].
     #[access(WorldOnly)]
-    fn game_stack(&mut self, place: &ItemPlace) -> Option<ItemStack>;
-    /// Side: server. Writes the changed components on a stack in a player slot, hand or mob or
-    /// armor stand equipment, without running any equipment effects. The stack must already be
-    /// there. Journaled in `tx`.
+    fn game_stack(
+        &mut self,
+        place: &ItemPlace,
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) -> Option<()>;
+    /// Side: server. Resolve an occupied player slot, hand, or mob or armour stand equipment
+    /// slot before lending its component editor once, without lending the host. Refuse an
+    /// unavailable or unreadable slot or a closed `tx` before calling `edit`. Validate all
+    /// changed overrides before applying any of them to that slot. Journal the write in `tx`
+    /// and let normal menu, inventory and equipment sync publish it without replaying equip
+    /// effects. A refusal or a transaction abort leaves the original slot intact.
     #[access(WorldOnly)]
     fn game_edit_stack(
         &mut self,
         place: &ItemPlace,
-        stack: ItemStack,
-        changed: &[String],
         tx: &Transaction,
+        edit: &mut dyn for<'a> FnMut(&mut ItemComponentEditor<'a>),
     ) -> Result<(), ItemPlaceEditError>;
     /// Side: server. Runs `ItemStack.onCraftedBy` for a stack held by a menu slot or its cursor,
     /// including the item's post-processing and the player's crafted statistic, in transaction
@@ -548,7 +551,7 @@ pub trait ItemsBackendMut {
     /// the root commit (a creative player's hand takes anything, and gives them one if they have
     /// none, as `ItemUtils.createFilledResult`); an item entity's dropped beside it at the root
     /// commit; an entity slot's into the entity's other slots (`forHandlerIndex`). How much
-    /// went: 0 where `native_game_stack` reads nothing for want of the place. In transaction
+    /// went: 0 where the place is unavailable. In transaction
     /// `tx`, which keeps each place as it was. The player's screen follows with the tick's sync.
     #[access(WorldOnly)]
     fn game_insert(

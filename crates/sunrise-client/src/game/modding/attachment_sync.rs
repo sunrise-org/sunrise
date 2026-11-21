@@ -81,7 +81,7 @@ impl Game<'_> {
                     .map(|((x, y, z), map)| (Holder::BlockEntity([x, y, z]), map.synced())),
             );
         }
-        // A general row is shown on a client once its first snapshot arrives with it
+        // A general row needs an initial snapshot before it can publish render attachments
         // (`remote/general.rs`), so it gets one even with nothing synced, as a player does.
         let general = |holder: &Holder| match holder {
             Holder::Entity(id) => self

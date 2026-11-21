@@ -16,9 +16,11 @@ pub trait Hooks {
     /// with no listener the read costs nothing more. Beyond NeoForge: there is no counterpart.
     /// Diverges from upstream: new hook.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         neoforge = "none (vanilla Camera.getFluidInCamera; NeoForge adds no event for it)"
     )]
-    fn camera_submersion();
+    fn camera_submersion(camera: [f64; 3], fog_type: &mut mod_api::client::fog::FogType);
 }

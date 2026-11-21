@@ -12,8 +12,10 @@ struct Listener {
 }
 #[mod_api::sunrise_mod]
 impl Hooks for Listener {
-    fn chunk_data_save(&self, _: &dyn ChunkDiskHost, event: &mut ChunkDataSaveEvent<'_>) {
+    fn chunk_data_save(&self, host: &dyn ChunkDiskHost, event: &mut ChunkDataSaveEvent<'_>) {
         self.saves.fetch_add(1, Ordering::Relaxed);
+        let names: &[String] = host.registry("minecraft:block").unwrap();
+        assert_eq!(names, ["minecraft:stone", "minecraft:dirt"]);
         fixture::save(event.data);
     }
     fn chunk_data_load(&self, host: &dyn ChunkDiskHost, event: &mut ChunkDataLoadEvent<'_>) {
@@ -25,7 +27,13 @@ fn context(save: &SaveDir) {
     use sunrise_world::native_load_context::{DataLoadOrigin, LoadContext, LoadInputs};
     let load = LoadContext::new(
         DataLoadOrigin::ServerDataLoad,
-        Arc::new(LoadInputs::new(BTreeMap::new(), save.root.join("settings"))),
+        Arc::new(LoadInputs::new(
+            BTreeMap::from([(
+                "minecraft:block".into(),
+                vec!["minecraft:stone".into(), "minecraft:dirt".into()],
+            )]),
+            save.root.join("settings"),
+        )),
         [],
     );
     save.set_chunk_disk_context(

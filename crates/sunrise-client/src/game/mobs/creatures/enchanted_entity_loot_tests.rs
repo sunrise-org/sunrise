@@ -30,12 +30,13 @@ impl mod_api::Hooks for Answer {
             entity: event
                 .entity
                 .entity()
-                .kind(&*host)
-                .map(|kind| kind.id(&*host)),
+                .kind(host)
+                .and_then(|kind| kind.id(host))
+                .map(|name| name.as_str().to_owned()),
             attacker: event
                 .attacker
-                .and_then(|a| a.kind(&*host))
-                .map(|kind| kind.id(&*host)),
+                .and_then(|a| a.kind(host)?.id(host))
+                .map(|name| name.as_str().to_owned()),
             damage_type: event.source.damage_type.to_owned(),
             enchantment: event.enchantment.to_string(),
             level: event.level,

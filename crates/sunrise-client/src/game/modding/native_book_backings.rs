@@ -306,7 +306,10 @@ impl Backings {
                     before.place.resolves(host, player)
                         && menu.slot_backing(host, slot)
                             == Some(MenuSlotBacking::Place(before.place))
-                        && ItemPlace::MenuSlot { menu, slot }.stack(host).as_ref()
+                        && ItemPlace::MenuSlot { menu, slot }
+                            .with_stack(host, |stack| stack.project())
+                            .flatten()
+                            .as_ref()
                             == before.stack.as_ref()
                 }
                 None => matches!(

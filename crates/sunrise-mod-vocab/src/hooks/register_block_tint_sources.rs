@@ -55,10 +55,12 @@ neighbours: block and fluid states, light, face shading and `block_tint(pos, res
 Block entities are not part of it. A block with no mod layers meshes as before, and the registrations hold after
 a pack change or F3+T. Fluids take their colour from their fluid model, not from these registrations."#]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         context = "registration",
         neoforge = "RegisterColorHandlersEvent.BlockTintSources"
     )]
-    fn register_block_tint_sources();
+    fn register_block_tint_sources(sources: &mut dyn BlockTintSources);
 }

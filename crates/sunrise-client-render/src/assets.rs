@@ -90,6 +90,8 @@ pub struct RenderAssets {
     pub model_gallery: Vec<Value>,
     pub animations: Vec<crate::sprites::SpriteAnimation>,
     pub sprite_layers: std::collections::BTreeMap<String, u32>,
+    /// The first block sprite name at each layer, in `sprite_layers`' name order.
+    pub(crate) sprite_names: Vec<Option<String>>,
     /// The layers of the texture files read on their own (emissive overlays), by raw name.
     pub file_layers: std::collections::BTreeMap<String, u32>,
     /// OptiFine's emissive block overlays: base sprite and overlay sprite names.
@@ -510,6 +512,12 @@ impl RenderAssets {
         }
         // `finish` grows the buffer by doubling: keep only the bytes in use.
         sprites.pixels.shrink_to_fit();
+        // Multiple block sprites can share one layer. Keep the same first name that looking up
+        // the layer in the name-sorted map would give.
+        let mut sprite_names = vec![None; sprites.count()];
+        for (name, &layer) in &sprites.layers {
+            sprite_names[layer as usize].get_or_insert_with(|| name.clone());
+        }
         let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         Ok(Self {
             sprite_size: sprites.size,
@@ -522,6 +530,7 @@ impl RenderAssets {
             model_gallery: models.states,
             animations: sprites.animations,
             sprite_layers: sprites.layers,
+            sprite_names,
             file_layers: sprites.files,
             emissive,
             translucent_layers: sprites.translucent,

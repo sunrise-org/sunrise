@@ -271,7 +271,8 @@ impl Game<'_> {
                 break;
             }
             let stack = ItemPlace::MenuSlot { menu, slot: n }
-                .stack(host)
+                .with_stack(host, |stack| stack.project())
+                .flatten()
                 .and_then(|stack| stack.try_into_engine(self.items()).ok());
             let Some(lan) = self.lan.as_mut() else {
                 return false;
@@ -658,13 +659,16 @@ mod tests {
             assert_eq!(game.place_menu_click(123, window, 27, 0, 1), Some(true));
             let host: &mut dyn ServerHost = game;
             assert_eq!(held_slot(0).amount(host), 64);
-            assert_eq!(ItemPlace::MenuSlot { menu, slot: 27 }.stack(host), None);
+            assert_eq!(
+                ItemPlace::MenuSlot { menu, slot: 27 }.with_stack(host, |_| ()),
+                None
+            );
             assert_eq!(ItemPlace::MenuSlot { menu, slot: 0 }.amount(host), 64);
 
             // The box's own hotbar slot (menu slot 54) takes no click.
             assert_eq!(game.place_menu_click(123, window, 54, 0, 0), Some(true));
             let host: &mut dyn ServerHost = game;
-            assert_eq!(menu.cursor().stack(host), None);
+            assert_eq!(menu.cursor().with_stack(host, |_| ()), None);
             let held = ItemPlace::PlayerHand {
                 player: 123,
                 hand: Hand::Main,
@@ -746,7 +750,10 @@ mod tests {
             );
             let host: &mut dyn ServerHost = game;
             assert_eq!(menu.slot_backing(host, 0), Some(MenuSlotBacking::Native(0)));
-            assert_eq!(ItemPlace::MenuSlot { menu, slot: 0 }.stack(host), None);
+            assert_eq!(
+                ItemPlace::MenuSlot { menu, slot: 0 }.with_stack(host, |_| ()),
+                None
+            );
             assert_eq!(stone(game, menu), 64);
         });
     }
@@ -829,11 +836,19 @@ mod tests {
                 Ok(())
             );
             let host: &mut dyn ServerHost = game;
+            let custom_data = mod_api::ComponentId::new("minecraft:custom_data").unwrap();
+            let data = mod_api::Tag::Compound(
+                [("value".into(), mod_api::Tag::Int(42))]
+                    .into_iter()
+                    .collect(),
+            );
             let stone = ItemPlace::PlayerSlot {
                 player: 123,
                 slot: 9,
             }
             .resource(host)
+            .unwrap()
+            .with_component(host, &custom_data, data.clone())
             .unwrap();
             let put =
                 host.transaction(|host, tx| Ok::<_, ()>(held_slot(4).insert(host, tx, &stone, 5)));
@@ -843,8 +858,29 @@ mod tests {
                 guest.native_menu[4].as_ref().map(|s| s.count)
             };
             assert_eq!(shown(game), None, "mirrored after the write, not inside it");
+            let place = ItemPlace::MenuSlot { menu, slot: 4 };
+            let found = place.with_stack(game, |stack| (stack.count(), stack.project()));
+            let (count, projected) = found.unwrap();
+            assert_eq!(count, 5);
+            let projected = projected.unwrap();
+            assert_eq!(projected.count(), 5);
+            assert_eq!(
+                mod_api::ItemResource::of(&projected).component(&custom_data),
+                Some(data)
+            );
             game.run_native_menu_events();
             assert_eq!(shown(game), Some(5));
+
+            let host: &mut dyn ServerHost = game;
+            let taken =
+                host.transaction(|host, tx| Ok::<_, ()>(held_slot(4).extract(host, tx, &stone, 5)));
+            assert_eq!(taken, Ok(5));
+            assert_eq!(shown(game), Some(5), "the mirror has not caught up yet");
+            assert_eq!(
+                place.with_stack(game, |_| ()),
+                None,
+                "no fallback to the display mirror"
+            );
         });
     }
 
@@ -1008,24 +1044,8 @@ mod tests {
         });
     }
 
-    /// A held box's menu, opened from code at the mod block whose container opens its type:
-    /// the type's screen hides slot 0 there.
-    struct SatchelScreen;
-    #[mod_api::sunrise_part]
-    impl mod_api::MenuPart for SatchelScreen {
-        fn screen(
-            &self,
-            _: &dyn mod_api::Host,
-            _: &mut mod_api::ScreenEvent<'_>,
-        ) -> Option<mod_api::Screen> {
-            Some(mod_api::Screen {
-                slots: (0..9)
-                    .map(|i| (i != 0).then(mod_api::ScreenSlot::default))
-                    .collect(),
-                ..Default::default()
-            })
-        }
-    }
+    /// A held box's menu, opened from code at the mod block whose container
+    /// opens its type, with backing slot 0 excluded for that opener.
     struct Satchel;
     #[mod_api::__subscriptions]
     impl mod_api::Hooks for Satchel {
@@ -1041,7 +1061,8 @@ mod tests {
                     ..Default::default()
                 },
             );
-            r.menu_part(SATCHEL_MENU, SatchelScreen);
+            r.menu_slot_exclusions(SATCHEL_MENU, Some("satchel:stand"), &[0])
+                .unwrap();
         }
         fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
             event
@@ -1054,7 +1075,7 @@ mod tests {
     const SATCHEL_MENU: &str = "minecraft:generic_9x1";
 
     /// #1172: a menu `player_open_mod_menu` opens keeps its handle and backing, and a
-    /// shift-click on the server passes over the slot its screen hid at open.
+    /// shift-click on the server passes over the slot its opener excludes.
     /// Neither pickup nor shift-click can move an item out of the hidden slot.
     #[test]
     #[ignore = "daily"]
@@ -1158,14 +1179,18 @@ mod tests {
         assert_eq!(held_slot(0).amount(host), 5);
         let contents = |game: &mut Game<'_>| {
             (0..45)
-                .map(|slot| ItemPlace::MenuSlot { menu, slot }.stack(game))
+                .map(|slot| {
+                    ItemPlace::MenuSlot { menu, slot }
+                        .with_stack(game, |stack| stack.project())
+                        .flatten()
+                })
                 .collect::<Vec<_>>()
         };
         let before = contents(game);
         for mode in [0, 1] {
             assert_eq!(game.place_menu_click(123, window, 0, 0, mode), Some(true));
             assert_eq!(contents(game), before);
-            assert_eq!(menu.cursor().stack(game), None);
+            assert_eq!(menu.cursor().with_stack(game, |_| ()), None);
             assert_eq!(held_slot(0).amount(game), 5);
         }
     }

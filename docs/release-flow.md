@@ -262,6 +262,9 @@ exist, verifies Windows PE architectures, checks the `--help` and `--version` en
 legs are fresh machines. The game's run of a new world (1500 offscreen frames, `smoke-test.json`, which the Nightly
 publishes) is `linux-smoke`'s, on Dyna's runner with the prepared files, from the hosted Linux archive.
 
+Game and server executables use the platform default for the process main thread's stack. Worker threads request
+stack sizes independently; the integrated server still honors `RUST_MIN_STACK` when it exceeds its own minimum.
+
 The musl archive is an optional manual download for musl-based Linux desktops; see
 [installation and updates](native-client.md#musl-linux-manual-installation). The launcher still selects the
 standard glibc archive. Nightlies and snapshots publish without waiting for the musl build. The release notes
@@ -944,7 +947,3 @@ Releases ship often, so nothing they leave behind may grow without bound.
   fetches, collects a `.git` over 5 GB (`MAX_GIT_MB`) with `git gc --prune=now` and folds more than 40 packs
   (`MAX_PACKS`) into few. Update the copies after changing the scripts (git-slim.sh goes beside runner-gc.sh):
   `ssh macmini 'cd ~/.actions-runners && for f in runner-gc.sh git-slim.sh; do curl -fsSL https://raw.githubusercontent.com/horizon-rust/horizon/main/tools/ci/$f -o $f; done'`.
-
-Guest-stack release note (#3232): game and server executables reserve 136 MiB
-for their main stack through MSVC `/STACK` or Apple `-stack_size` linker arguments;
-Linux raises RLIMIT_STACK and re-execs before initialization.

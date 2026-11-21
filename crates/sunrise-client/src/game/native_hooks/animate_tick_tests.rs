@@ -40,7 +40,7 @@ impl BlockPart for Hearts {
         ];
         let added = host.add_particle(&ParticleOptions::simple(self.heart), at, [0.0; 3]);
         let second = event.random.next_float();
-        let block = event.state.block().id(&*host).to_string();
+        let block = event.state.block().id(&*host).unwrap().to_owned();
         self.calls
             .lock()
             .unwrap()

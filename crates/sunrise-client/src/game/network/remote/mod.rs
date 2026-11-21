@@ -30,6 +30,8 @@ mod use_item;
 mod block_entity_data;
 #[cfg(test)]
 mod block_entity_data_tests;
+#[cfg(test)]
+mod claimed_item_use_tests;
 use super::raw_backlog::Received;
 use super::remote_chunks::{ChunkDecoder, ChunkFormat, Next};
 use super::remote_vehicles::PassengerSeat;
@@ -285,9 +287,18 @@ enum OwnProfile {
     Done(Option<sunrise_client::skins::Textures>),
 }
 
+/// The packet route that starts a remote level entry.
+pub(in crate::game) enum RemoteDimensionEntry {
+    Login,
+    Respawn,
+    DeathRespawn,
+}
+
 pub(super) struct Remote {
     pub(super) professions: Arc<sunrise_client::mobs::villager::ResolvedProfessions>,
     pub session: Session,
+    /// Display-only address computed at connection setup. Never holds the raw friend invite.
+    pub(super) display_address: Option<String>,
     pub brand: String,
     pub(super) recipe_viewer: crate::game::recipe_book::ViewerChannels,
     /// This connection's configured feature flags, carried through reconfiguration.
@@ -885,7 +896,7 @@ impl Game<'_> {
         else {
             return;
         };
-        let mut w = sunrise_protocol::buf::Writer::new();
+        let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
         w.varint(id);
         w.string(&command);
         self.send(S::Unknown(
@@ -1973,15 +1984,12 @@ impl sunrise_client::interaction_input::InteractionWorld for RemoteInputWorld<'_
         self.0.release_tick_targets();
     }
     fn using_item(&self) -> bool {
-        self.0.using.is_some()
+        self.0.client_item_use.is_some() || self.0.using.is_some()
     }
     fn release_using(&mut self) {
-        if let Some((slot, ticks)) = self.0.using
-            && self.0.mod_use_tick(slot, ticks, true)
-        {
-            return;
+        if !self.0.end_client_item_use(true) && self.0.using.is_some() {
+            self.0.release_remote_use();
         }
-        self.0.release_remote_use();
     }
     fn start_attack(&mut self) -> bool {
         self.0.remote_start_attack()
@@ -2201,6 +2209,13 @@ mod attachment_query_tests;
 mod passage_cross_tests;
 #[cfg(test)]
 mod respawn_motion_tests;
+impl Remote {
+    /// Project the session address for display once, dropping the memory transport's marker.
+    pub(super) fn display_address_for(address: &str) -> Option<String> {
+        (address != "local").then(|| sunrise_client::net::shown_address(address))
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::super::api_values::TryIntoApi;
@@ -2469,6 +2484,7 @@ pub(crate) mod tests {
 
     /// Spawns the connected client in the overworld as entity 7, profile 42.
     fn spawn_menu_test(game: &mut super::Game<'_>) -> sunrise_protocol::packets::play::SpawnInfo {
+        use crate::game::remote::RemoteDimensionEntry;
         use sunrise_client::level_loading::Reason;
         use sunrise_protocol::packets::play::SpawnInfo;
         let spawn = SpawnInfo {
@@ -2483,7 +2499,7 @@ pub(crate) mod tests {
             portal_cooldown: 0,
             sea_level: 63,
         };
-        game.enter_remote_dimension(&spawn, false, Reason::Other);
+        game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
         let remote = game.remote.as_mut().unwrap();
         remote.logged_in = true;
         remote.entity_id = 7;

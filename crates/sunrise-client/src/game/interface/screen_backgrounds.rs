@@ -1,6 +1,8 @@
 //! What a frame draws behind the screens: the title panorama, the level loading background, the
 //! menu blur and transparent background, the world border wall, and the screens' render events.
 use super::*;
+use crate::game::host::draw::GameDrawContext;
+use mod_api::content::crash::{ModCall, enter_native_mod};
 
 impl Game<'_> {
     /// The frame shows the title's panorama, not a level: the title screen, or a
@@ -38,19 +40,20 @@ impl Game<'_> {
         tracker: &sunrise_client::level_loading::LevelLoadTracker,
         progress: Option<f32>,
     ) -> bool {
-        let Some(screen) = tracker
-            .transition_screen()
-            .and_then(sunrise_client_render::dimension_transition::screen)
-        else {
+        let Some(screen) = tracker.transition_screen() else {
             return false;
         };
-        use sunrise_client::level_loading::Reason;
-        let reason = match tracker.reason {
-            Reason::NetherPortal => mod_api::DimensionTransitionReason::NetherPortal,
-            Reason::EndPortal => mod_api::DimensionTransitionReason::EndPortal,
-            Reason::Other => mod_api::DimensionTransitionReason::Other,
-        };
-        self.native_dimension_transition_screen_draw(screen, reason, progress, batch);
+        let _owner = enter_native_mod(ModCall {
+            id: screen.owner,
+            hook: "dimension_transition_presentation",
+            part: None,
+        });
+        screen.presentation.draw(
+            self,
+            tracker.reason.into(),
+            progress,
+            &mut GameDrawContext::new(self, batch),
+        );
         true
     }
     /// `LevelLoadingScreen.extractBackground`.

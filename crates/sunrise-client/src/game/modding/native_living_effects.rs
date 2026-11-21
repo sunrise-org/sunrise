@@ -397,7 +397,7 @@ mod tests {
                 listed[0].id,
                 mod_platform::__private::part_tests::effect_key("speed")
             );
-            assert_eq!(listed[0].id.id(game), "minecraft:speed");
+            assert_eq!(listed[0].id.id(game), Some("minecraft:speed"));
         });
     }
 

@@ -1373,13 +1373,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sunrise-guest-stack"
-version = "0.1.0"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "sunrise-hooks"
 version = "0.1.0"
 
@@ -1399,7 +1392,6 @@ version = "0.1.0"
 dependencies = [
  "sunrise-bench",
  "sunrise-core",
- "sunrise-guest-stack",
  "sunrise-hooks",
  "sunrise-perf-format",
  "sunrise-system",

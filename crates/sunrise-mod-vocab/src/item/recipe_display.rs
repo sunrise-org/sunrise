@@ -82,9 +82,12 @@ pub enum RecipeBookDisplay {
     },
 }
 
+// no wire: an entry's placement can retain native ingredient predicates; only display data is portable.
 /// Displays supplied by a recipe type for one recipe. A recipe may have several
 /// displays. Declarations are evaluated once per recipe-table load, not per frame.
-#[derive(Clone, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
+/// `displays` describes pictures; `placement` is a separate local requirement that
+/// can retain native predicates. Send only the display data needed by a remote viewer.
+#[derive(Clone, Debug, PartialEq)]
 // exhaustive: mods construct complete recipe display declarations with a literal
 pub struct RecipeBookDisplayEntry {
     /// Recipe id in the owning category's recipe type.

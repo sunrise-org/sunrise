@@ -1041,16 +1041,19 @@ impl Game<'_> {
                 return amount;
             }
             stack.damage -= repaired;
-            let item = stack.item.to_string();
+            let notice = player
+                .filter(|_| mod_api::__private::listened(mod_api::HookId::PlayerItemMend))
+                .and_then(|uuid| {
+                    let player = self
+                        .native_server_players()
+                        .into_iter()
+                        .find(|p| p.uuid() == uuid)?;
+                    let name = self.player_name(player)?.to_owned();
+                    Some((uuid, name, stack.item.to_string()))
+                });
             *self.player_slot_mut(slot) = Some(stack);
 
-            if let Some(player) = player
-                && let Some(name) = self
-                    .native_server_players()
-                    .into_iter()
-                    .find(|p| p.uuid() == player)
-                    .and_then(|p| self.player_name(p))
-            {
+            if let Some((player, name, item)) = notice {
                 self.native_player_item_mend(player, &name, &item, repaired, amount);
             }
             if remaining == 0 {

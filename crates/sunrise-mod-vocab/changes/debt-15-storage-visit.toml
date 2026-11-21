@@ -1,0 +1,21 @@
+ids = [
+    "trait:ItemStorage",
+    "method:ItemStorage::page",
+    "method:ItemStorage::visit_entries",
+    "type:StoragePage",
+    "handle:StoragePage::new",
+    "handle:StoragePage::limit",
+    "handle:StoragePage::room",
+    "handle:StoragePage::push",
+    "handle:StoragePage::entries",
+    "handle:StoragePage::clear",
+    "type:StorageError",
+    "type:StorageError.ZeroPage",
+]
+why = "Storage visits occupied entries directly so callers can stop at a match without filling a page. Matching transfers end the read before writing and rescan after a move so compacted storage does not skip entries."
+migrate = """
+Callers: remove StoragePage, StoragePage::new, MAX_STORAGE_PAGE, and the page(host, cursor, &mut page) loop. Move the body of your loop over page.entries() into storage.visit_entries(host, &mut |kind, amount| { ... })?, where kind is &ItemResource and amount is u64. Return std::ops::ControlFlow::Continue(()) to keep reading or ControlFlow::Break(()) to finish at the first match. Clone a kind to retain it, and wait for the visit to return Ok(()) before writing.
+Providers: replace ItemStorage::page with visit_entries(&self, host: &mut dyn ServerHost, visitor: &mut dyn FnMut(&ItemResource, u64) -> std::ops::ControlFlow<()>) -> Result<(), StorageError>. Drop cursor handling and the page's limit, room, and clear calls. Replace each page.push(kind, amount) with a call to visitor(&kind, amount); on Break, stop reading immediately and return Ok(()). Skip empty entries and keep sided provider order and repeated kinds. Return Ok(()) on exhaustion instead of a next cursor.
+Remove the StorageError::ZeroPage branch. Remove Wire encoding and decoding of StoragePage and StorageError; keep results local or define and map to your own payload types for serialized data.
+Calls to transfer_matching stay the same. Each attempt ends its visit before the journaled transfer. A zero move resumes after that occurrence; a positive move restarts the scan at the first entry because later entries may have shifted. The filter can be called again for a kind it has already seen.
+"""

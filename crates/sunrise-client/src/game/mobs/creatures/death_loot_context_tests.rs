@@ -31,10 +31,14 @@ impl mod_api::Hooks for Probe {
         let hand = host
             .entity(source.causing as u32)
             .and_then(|entity| host.living(entity))
-            .and_then(|living| living.hand_item(host, mod_api::Hand::Main));
+            .and_then(|living| {
+                living.with_hand_item(host, mod_api::Hand::Main, |stack| {
+                    (stack.damage(), stack.count())
+                })
+            });
         if source.causing == 12 {
             assert_eq!(
-                hand.as_ref().map(|s| s.damage()),
+                hand.map(|(damage, _)| damage),
                 Some(31),
                 "later listeners read the earlier loot listener's hand edit"
             );
@@ -43,7 +47,7 @@ impl mod_api::Hooks for Probe {
             source.damage_type.into(),
             source.causing,
             source.direct,
-            hand.as_ref().map(|s| s.count()),
+            hand.map(|(_, count)| count),
         ));
     }
 }
@@ -204,7 +208,9 @@ impl mod_api::Hooks for ChangeKillerHand {
             .unwrap();
         let living = host.living(entity).unwrap();
         assert_eq!(
-            living.hand_item(host, mod_api::Hand::Main),
+            living
+                .with_hand_item(host, mod_api::Hand::Main, |stack| stack.project())
+                .flatten(),
             Some(self.0.clone()),
             "loot sees the complete stack installed during living_death"
         );

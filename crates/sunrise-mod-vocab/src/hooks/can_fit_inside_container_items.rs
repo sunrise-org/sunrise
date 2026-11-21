@@ -31,5 +31,5 @@ pub trait Hooks {
         target = "sunrise_client_lib::menu::container_items::native_can_fit_inside_container_items",
         neoforge = "IItemExtension.canFitInsideContainerItems"
     )]
-    fn can_fit_inside_container_items();
+    fn can_fit_inside_container_items(stack: &mod_api::ItemStack, fits: &mut bool);
 }

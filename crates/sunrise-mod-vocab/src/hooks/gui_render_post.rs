@@ -27,10 +27,12 @@ receive `&dyn ClientHost`. They do not grant server writes.
 not for a dimension change. Initialization and final shutdown still use the
 existing `client_setup` and `client_stopping` hooks, with no parallel aliases."#]
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         cancellable = false,
         neoforge = "RenderGuiEvent.Post"
     )]
-    fn gui_render_post();
+    fn gui_render_post(batch: &mut dyn DrawContext, gui_hidden: bool, focused: bool);
 }

@@ -48,12 +48,29 @@ bucket sounds `fluid_pickup_sound` and `fluid_empty_sound` answer.
 A fake's constructors do not install or resolve entity types. Declare its entities with
 `host.level.entity(id, kind)`, then call `host.resolve_entity_types().unwrap()` explicitly.
 This freezes the current load's table with requested mod keys, the player type and every kind in
-that fake level. After `host.join(1, 10)` and this explicit setup,
-`host.player(1).unwrap().entity().kind(&host).unwrap().id(&host)` is
-`"minecraft:player"` (with `PlayersHost` in scope). Existing kinds may be instantiated after
-resolution; inserting a new undeclared kind panics at the fake setup boundary. Repeated resolution
-checks the frozen table rather than extending it. A new load requires a new part installation.
+that fake level. After `host.join(1, 10)` and this explicit setup, read the entity type with
+`host.player(1).unwrap().entity().kind(&host).unwrap()` (with `PlayersHost` in scope).
+Assert that `kind.id(&host).as_deref() == Some("minecraft:player")` without copying the name.
+Existing kinds may be instantiated after resolution; inserting a new undeclared kind panics at the
+fake setup boundary. Repeated resolution checks the frozen table rather than extending it. A new
+load requires a new part installation.
 
 An unsupported host method panics with its name, so an unexpected call fails
 loudly. You can write your own double for behavior the fakes do not model,
 implementing the services your hook calls; `testing::FakeJournal` gives such a host the same transaction journal over its own state.
+
+To supply `player.profile(host)` from a custom host, store a `testing::GameProfileFixture` in
+that host. Set it up with the player's UUID, name, and `(String, String, Option<String>)`
+property tuples in login order, or pass `[]` for no properties:
+
+```rust,ignore
+use mod_api::testing::GameProfileFixture;
+
+let profile = GameProfileFixture::new(42, "Alex", [
+    ("textures".into(), "fixture-skin".into(), Some("fixture-signature".into())),
+]);
+```
+
+If the host stores the fixture as `self.profile`, its `PlayerSessionBackend::player_profile`
+returns `Some(self.profile.profile())` for the matching player, borrowing the fixture instead of
+rebuilding `GameProfile<'_>` on each call.

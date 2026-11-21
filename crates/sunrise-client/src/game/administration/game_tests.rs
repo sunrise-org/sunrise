@@ -1,4 +1,3 @@
-// game-module-cfg: always
 //! The game-test runner: `GameTestInfo`, `GameTestRunner`, `GameTestTicker`,
 //! `MultipleTestTracker`, `ReportGameListener`, `TestCommand.trackAndStartRunner`
 //! and the two test instance types (`BlockBasedTestInstance` and

@@ -15,6 +15,8 @@ pub trait Hooks {
     /// Cached layout can reuse answers while the text, resources, sprite geometry and enabled mods
     /// are unchanged. To animate a glyph, update the pixels of the same dynamic texture id.
     #[hook(
+        receiver = "read",
+        dispatch = "api_carrier",
         side = "client",
         contract = "collect",
         out = "images",

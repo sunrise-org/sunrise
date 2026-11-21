@@ -1,8 +1,12 @@
 //! The skull types native mods register (`create_skull_models`): what is kept, what is left
-//! out, and that only a kept kind is a `minecraft:head` kind. Its own test binary, as both the
-//! model layers and the skull types are registered once per process.
+//! out, and that only a kept kind is a `minecraft:head` kind. Only this test in the
+//! integration binary freezes the model layer and skull tables.
 
-use mod_api::{CubeListBuilder, LayerDefinition, MeshDefinition, PartPose, SkullModel};
+use mod_api::{
+    __private::game::RegistrationContextNew, CubeListBuilder, Hooks, LayerDefinition,
+    MeshDefinition, ModEntry, PartPose, RegisterLayerDefinitionsEvent, RegistrationContext,
+    SkullModel,
+};
 use sunrise_assets::item_model::{SpecialKind, SpecialModel, is_skull_kind};
 use sunrise_client::{mobs::model_layers, skull_models};
 
@@ -16,16 +20,37 @@ fn skull(kind: &str, layer: &str, texture: &str) -> SkullModel {
 
 #[test]
 fn skull_types_keep_a_known_layer_and_leave_out_the_rest() {
-    let mut mesh = MeshDefinition::new();
-    let root = mesh.root();
-    let head = CubeListBuilder::create()
-        .tex_offs(0, 0)
-        .add_box([-4.0, -8.0, -4.0], [8.0, 8.0, 8.0]);
-    mesh.add_or_replace_child(root, "head", head, PartPose::offset(0.0, 1.0, 0.0));
-    model_layers::register(vec![(
-        "skulltest:goblin_head#main".into(),
-        LayerDefinition::create(mesh, 64, 32),
-    )]);
+    struct Goblin;
+    #[mod_api::__subscriptions]
+    impl Hooks for Goblin {
+        fn register_layer_definitions(
+            &self,
+            _: &RegistrationContext,
+            event: &mut RegisterLayerDefinitionsEvent<'_>,
+        ) {
+            event.register("skulltest:goblin_head#main", || {
+                let mut mesh = MeshDefinition::new();
+                let head = CubeListBuilder::create()
+                    .tex_offs(0, 0)
+                    .add_box([-4.0, -8.0, -4.0], [8.0, 8.0, 8.0]);
+                mesh.add_or_replace_child(
+                    mesh.root(),
+                    "head",
+                    head,
+                    PartPose::offset(0.0, 1.0, 0.0),
+                );
+                LayerDefinition::create(mesh, 64, 32)
+            });
+        }
+    }
+    mod_platform::testing::with_mods(
+        vec![ModEntry::new("skulltest", Box::new(Goblin))].into(),
+        || {
+            let mut layers = Vec::new();
+            mod_api::dispatch_register_layer_definitions(&RegistrationContext::new(), &mut layers);
+            model_layers::register(layers);
+        },
+    );
     // A vanilla layer, read from `entity-models.json` under the vanilla root.
     let vanilla_root = std::env::temp_dir().join(format!("skull-models-{}", std::process::id()));
     std::fs::create_dir_all(&vanilla_root).unwrap();

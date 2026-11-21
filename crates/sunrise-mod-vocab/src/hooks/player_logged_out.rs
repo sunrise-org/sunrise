@@ -11,10 +11,12 @@ pub trait Hooks {
     /// before it saves, with them still listed and able to get a last message.
     /// Server-side.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_player_logged_out",
+        dispatch = "flat",
         side = "server",
         version = 2,
         contract = "listen",
         neoforge = "PlayerEvent.PlayerLoggedOutEvent"
     )]
-    fn player_logged_out();
+    fn player_logged_out(player: u128, name: &str);
 }

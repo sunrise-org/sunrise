@@ -40,11 +40,19 @@ pub trait Hooks {
     /// recipe does it here through the host. Nothing is asked when no mod
     /// listens.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         scope = "block_entity",
         key = "entity",
         neoforge = "none (a Java menu's slot overrides Slot.onTake; NeoForge adds no event)"
     )]
-    fn menu_slot_take();
+    fn menu_slot_take(
+        entity: &mut ModBlockEntity,
+        player: u128,
+        menu: &str,
+        slot: usize,
+        taken: &mod_api::ItemStack,
+        left: Option<&mod_api::ItemStack>,
+    );
 }

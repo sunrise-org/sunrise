@@ -75,6 +75,70 @@ fn custom_condition_is_evaluated_per_stack_at_branch_selection() {
 }
 
 #[test]
+fn a_layer_refusal_stops_inside_a_bundle_and_skips_its_later_siblings() {
+    struct Env(std::cell::Cell<usize>);
+    impl ItemEnv for Env {
+        fn item_model_property(&self, _: &str, _: &StackView) -> bool {
+            self.0.set(self.0.get() + 1);
+            false
+        }
+    }
+    let tail = r#"{"type":"condition","property":"test:late",
+        "on_true":{"type":"empty"},"on_false":{"type":"empty"}}"#;
+    let mut models = ItemModels::default();
+    for (item, first) in [
+        ("test:bundle", r#"{"type":"bundle/selected_item"}"#),
+        (
+            "test:selected",
+            r#"{"type":"model","model":"test:item/first"}"#,
+        ),
+    ] {
+        let definition = format!(r#"{{"model":{{"type":"composite","models":[{first},{tail}]}}}}"#);
+        models
+            .definitions
+            .insert(item.into(), ClientItem::from_json(&definition).unwrap());
+    }
+    let mut stack = StackView::new("test:bundle", 1);
+    stack.bundle_selected = 0;
+    stack
+        .patch
+        .insert("minecraft:item_model".into(), Some(json!("test:bundle")));
+    stack.patch.insert(
+        "minecraft:bundle_contents".into(),
+        Some(json!([{
+            "id": "test:selected", "components": { "minecraft:item_model": "test:selected" }
+        }])),
+    );
+    let context = Context {
+        display: DisplayContext::Gui,
+        owner: None,
+        level: None,
+        seed: 0,
+    };
+    let env = Env(std::cell::Cell::new(0));
+    let mut visited = Vec::new();
+    let outcome = models.visit_layers(
+        &stack,
+        &context,
+        &env,
+        LayerTransform::Model,
+        &mut |layer, source| {
+            assert_eq!(source.item, "test:selected");
+            visited.push(layer.content);
+            ControlFlow::Break(())
+        },
+    );
+    assert_eq!(outcome, ControlFlow::Break(()));
+    assert_eq!(
+        visited,
+        [LayerContent::Model {
+            model: "test:item/first".into()
+        }]
+    );
+    assert_eq!(env.0.get(), 0);
+}
+
+#[test]
 fn custom_condition_validates_its_name_and_both_branches() {
     let node = |property: &str, on_true: Value| {
         ItemModelNode::decode(&serde_json::json!({

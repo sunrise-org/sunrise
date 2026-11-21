@@ -113,15 +113,15 @@ mod model_layers {
             _context: &RegistrationContext,
             event: &mut RegisterLayerDefinitionsEvent<'_>,
         ) {
-            let mut mesh = MeshDefinition::new();
-            let root = mesh.root();
-            let head = CubeListBuilder::create()
-                .tex_offs(0, 0)
-                .add_box([-4.0, -8.0, -4.0], [8.0, 8.0, 8.0]);
-            mesh.add_or_replace_child(root, "head", head, PartPose::offset(0.0, 6.0, 0.0));
-            event
-                .layers
-                .push((self.0.into(), LayerDefinition::create(mesh, 64, 32)));
+            event.register(self.0, || {
+                let mut mesh = MeshDefinition::new();
+                let root = mesh.root();
+                let head = CubeListBuilder::create()
+                    .tex_offs(0, 0)
+                    .add_box([-4.0, -8.0, -4.0], [8.0, 8.0, 8.0]);
+                mesh.add_or_replace_child(root, "head", head, PartPose::offset(0.0, 6.0, 0.0));
+                LayerDefinition::create(mesh, 64, 32)
+            });
         }
         // ANCHOR_END: register_layer_definitions
     }
@@ -142,9 +142,18 @@ mod model_layers {
                     &RegistrationContext::new(),
                     &mut layers,
                 );
-                let ids: Vec<_> = layers.iter().map(|(id, _)| id.as_str()).collect();
-                assert_eq!(ids, ["first:golem#main", "second:golem#main"]);
-                let model = layers[0].1.bake_root();
+                let owners_and_ids: Vec<_> = layers
+                    .iter()
+                    .map(|layer| (layer.mod_id, layer.answer.id.as_str()))
+                    .collect();
+                assert_eq!(
+                    owners_and_ids,
+                    [
+                        ("first", "first:golem#main"),
+                        ("second", "second:golem#main")
+                    ]
+                );
+                let model = (layers[0].answer.supplier)().bake_root();
                 let head = model.get_child("head").expect("the head part");
                 assert_eq!((head.y, head.polygons.len()), (6.0, 6));
             },
@@ -164,7 +173,7 @@ mod skull_models {
             _context: &RegistrationContext,
             event: &mut CreateSkullModelsEvent<'_>,
         ) {
-            event.models.push(SkullModel {
+            event.register(SkullModel {
                 kind: format!("{}:goblin", self.0),
                 layer: format!("{}:goblin_head#main", self.0),
                 texture: format!("{}:entity/goblin", self.0),
@@ -194,13 +203,89 @@ mod skull_models {
     }
 }
 
-/// Each mod changes the prior answer, vanilla's stays readable, and cancel
-/// stops later mods. The fork's existing typed event owns this moment.
+#[test]
+fn block_entity_additions_collect_in_order_and_quiet_dispatch_preserves_input() {
+    use mod_api::__private::game::RegistrationContextNew;
+    use mod_api::__private::parts_installation::{block_entity_type_key, block_key};
+    use mod_api::{
+        BlockEntityTypeAddBlocksEvent, BlockEntityTypeKey, BlockKey, RegistrationContext,
+        dispatch_block_entity_type_add_blocks,
+    };
+
+    struct Listener {
+        block: BlockKey,
+        direct: BlockEntityTypeKey,
+    }
+
+    #[mod_api::__subscriptions]
+    impl Hooks for Listener {
+        fn block_entity_type_add_blocks(
+            &self,
+            _: &RegistrationContext,
+            event: &mut BlockEntityTypeAddBlocksEvent<'_>,
+        ) {
+            event.modify_matching(|kind| kind != self.direct, &[self.block]);
+            event.modify(self.direct, &[self.block]);
+        }
+    }
+
+    let [a, b, c] = [0, 1, 2].map(block_entity_type_key);
+    let [first_block, second_block] = [0, 1].map(block_key);
+    let types = [b, a, c];
+    let seed = (c, second_block);
+    let mut additions = vec![seed];
+
+    mod_platform::testing::with_mods(Vec::<ModEntry>::new().into(), || {
+        dispatch_block_entity_type_add_blocks(&RegistrationContext::new(), &types, &mut additions);
+    });
+    assert_eq!(additions, [seed]);
+
+    mod_platform::testing::with_mods(
+        vec![
+            ModEntry::new(
+                "first",
+                Box::new(Listener {
+                    block: first_block,
+                    direct: c,
+                }),
+            ),
+            ModEntry::new(
+                "second",
+                Box::new(Listener {
+                    block: second_block,
+                    direct: b,
+                }),
+            ),
+        ]
+        .into(),
+        || {
+            dispatch_block_entity_type_add_blocks(
+                &RegistrationContext::new(),
+                &types,
+                &mut additions,
+            );
+        },
+    );
+    assert_eq!(
+        additions,
+        [
+            seed,
+            (b, first_block),
+            (a, first_block),
+            (c, first_block),
+            (a, second_block),
+            (c, second_block),
+            (b, second_block),
+        ]
+    );
+}
+
+/// Each mod changes the prior edits, vanilla's answer stays readable, and
+/// cancel stops later mods.
 #[test]
 fn an_anvil_update_is_changed_in_turn_and_cancel_stops_later_mods() {
-    use mod_api::item::menu::AnvilUpdate;
-    use mod_api::item::stations::AnvilResult;
-    use mod_api::{AnvilUpdateEvent, Flow, Host, HostSide, ItemStack, ServerHost};
+    use mod_api::item::menu::{AnvilUpdateEdits, AnvilUpdateInputs};
+    use mod_api::{AnvilUpdateEvent, Flow, Host, HostSide, ItemStack, ServerHost, StackResult};
     fn key(id: &str) -> mod_api::ItemKey {
         mod_api::__private::item_key(id).unwrap()
     }
@@ -214,19 +299,19 @@ fn an_anvil_update_is_changed_in_turn_and_cancel_stops_later_mods() {
     #[mod_api::__subscriptions]
     impl Hooks for Recipe {
         fn anvil_update(&self, _: HostSide<'_>, event: &mut AnvilUpdateEvent<'_>) -> Flow {
-            let update = &mut *event.update;
-            if update.name.as_deref() == Some("void") {
+            let inputs = event.inputs;
+            if inputs.name == Some("void") {
                 return Flow::Cancel;
             }
-            if update.left.item() == key("minecraft:iron_ingot")
-                && update
+            if inputs.left.item() == key("minecraft:iron_ingot")
+                && inputs
                     .right
-                    .as_ref()
                     .is_some_and(|r| r.item() == key("minecraft:emerald"))
             {
-                update.output = Some(ItemStack::of(key("minecraft:diamond")));
-                update.xp_cost = 5;
-                update.material_cost = 1;
+                event.edits.output =
+                    StackResult::Set(Some(ItemStack::of(key("minecraft:diamond"))));
+                event.edits.xp_cost = 5;
+                event.edits.material_cost = 1;
             }
             Flow::Continue
         }
@@ -236,11 +321,13 @@ fn an_anvil_update_is_changed_in_turn_and_cancel_stops_later_mods() {
     #[mod_api::__subscriptions]
     impl Hooks for Discount {
         fn anvil_update(&self, _: HostSide<'_>, event: &mut AnvilUpdateEvent<'_>) -> Flow {
+            assert_eq!(event.inputs.vanilla_xp_cost, 3);
+            assert_eq!(event.inputs.vanilla_material_cost, 0);
             assert_eq!(
-                event.update.vanilla.xp_cost, 3,
-                "vanilla's cost stays readable"
+                event.inputs.vanilla_output.unwrap().item(),
+                key("minecraft:iron_sword")
             );
-            event.update.xp_cost -= 1;
+            event.edits.xp_cost -= 1;
             Flow::Continue
         }
     }
@@ -263,51 +350,51 @@ fn an_anvil_update_is_changed_in_turn_and_cancel_stops_later_mods() {
             "minecraft:diamond",
         ])
         .unwrap();
+        let vanilla_output = ItemStack::of(key("minecraft:iron_sword"));
         let update = |left: &str, right: Option<&str>, name: Option<&str>| {
-            let vanilla = AnvilResult {
-                result: Some(ItemStack::of(key("minecraft:iron_sword"))),
-                cost: 3,
-                repair_item_count_cost: 0,
-                only_renaming: false,
+            let left = ItemStack::of(key(left));
+            let right = right.map(|r| ItemStack::new(key(r), 4).unwrap());
+            let inputs = AnvilUpdateInputs {
+                left: &left,
+                right: right.as_ref(),
+                name,
+                vanilla_output: Some(&vanilla_output),
+                vanilla_xp_cost: 3,
+                vanilla_material_cost: 0,
             };
-            let mut update = AnvilUpdate::new(
-                ItemStack::of(key(left)),
-                right.map(|r| ItemStack::new(key(r), 4).unwrap()),
-                name.map(str::to_owned),
-                &vanilla,
-            );
+            let mut edits = AnvilUpdateEdits {
+                output: StackResult::Keep,
+                xp_cost: inputs.vanilla_xp_cost,
+                material_cost: inputs.vanilla_material_cost,
+            };
             let mut cancel = false;
             mod_api::dispatch_anvil_update(
                 HostSide::Server(&mut TestHost),
                 7,
                 1,
                 [0, 64, 0],
-                &mut update,
+                &inputs,
+                &mut edits,
                 &mut cancel,
             );
-            (
-                update.output.map(|o| {
-                    mod_api::__private::item_key_id(o.item())
-                        .unwrap()
-                        .to_owned()
-                }),
-                update.xp_cost,
-                update.material_cost,
-                cancel,
-            )
+            (edits.output, edits.xp_cost, edits.material_cost, cancel)
         };
-        let sword = Some("minecraft:iron_sword".to_owned());
         assert_eq!(
             update("minecraft:iron_ingot", Some("minecraft:emerald"), None),
-            (Some("minecraft:diamond".to_owned()), 4, 1, false)
+            (
+                StackResult::Set(Some(ItemStack::of(key("minecraft:diamond")))),
+                4,
+                1,
+                false
+            )
         );
         assert_eq!(
             update("minecraft:iron_sword", None, Some("")),
-            (sword.clone(), 2, 0, false)
+            (StackResult::Keep, 2, 0, false)
         );
         assert_eq!(
             update("minecraft:iron_sword", None, Some("void")),
-            (sword, 3, 0, true)
+            (StackResult::Keep, 3, 0, true)
         );
     });
 }

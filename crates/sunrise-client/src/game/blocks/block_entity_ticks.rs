@@ -210,14 +210,15 @@ pub(crate) trait BlockEntityTickSlot {
     /// Just before the visited block entity ticks. [`LoopFlow::Skip`] leaves it out this tick;
     /// [`LoopFlow::Stop`] ends the pass (what follows the loop, such as shulker box lids, still runs).
     /// After [`LoopFlow::Continue`] from every slot the loop looks again: when the visited block
-    /// entity was removed, or replaced by one of another [`TickedKind`] or a mod's of another type,
-    /// it does not tick and no slot's [`Self::after`] is called for it.
+    /// entity was removed, replaced by one of another [`TickedKind`] or a mod's of another type,
+    /// or a mod block entity is now on an incompatible block, it does not tick and no slot's
+    /// [`Self::after`] is called for it.
     #[inline(always)]
     fn before(&mut self, tick: &mut BlockEntityTick<'_, '_>) -> LoopFlow {
         let _ = tick;
         LoopFlow::Continue
     }
-    /// Just after the visited block entity ticked; not called for one a slot skipped.
+    /// Just after the visited block entity ticked; not called if its tick was skipped.
     #[inline(always)]
     fn after(&mut self, tick: &mut BlockEntityTick<'_, '_>) {
         let _ = tick;
@@ -428,7 +429,11 @@ impl Game<'_> {
                 TickedKind::DaylightDetector => this.tick_daylight_detector(pos),
                 TickedKind::EndGateway => this.tick_end_gateway(pos),
                 TickedKind::Campfire => this.tick_campfire(pos)?,
-                TickedKind::Mod => this.tick_mod_block_entity(pos),
+                TickedKind::Mod => {
+                    if !this.tick_mod_block_entity(pos) {
+                        continue;
+                    }
+                }
                 TickedKind::PotentSulfur => {
                     this.tick_potent_sulfur(pos)?;
                     // A window that simulates the world itself is its own
@@ -1618,8 +1623,12 @@ mod own_block_entity_tests {
                 event.ticks = true;
             }
         }
-        fn block_entity_tick(&self, _: &mut dyn ServerHost, event: &mut BlockEntityTickEvent<'_>) {
-            event.entity.data.push(mark(self.0));
+        fn block_entity_tick(&self, event: &mut BlockEntityTickEvent<'_>) {
+            event.subject.with_view(|mut entity| {
+                let mut data = entity.data_slots().to_vec();
+                data.push(mark(self.0));
+                assert!(entity.set_data_slots(&data));
+            });
         }
     }
     /// What a tick of mod A's type (1) or mod B's (2) leaves in a block entity's data.

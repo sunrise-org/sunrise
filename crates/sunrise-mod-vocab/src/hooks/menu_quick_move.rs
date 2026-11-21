@@ -36,6 +36,8 @@ pub trait Hooks {
     /// `host.players().acting_player()` names them; `entity` is out of the world
     /// during the call, as in `menu_button`.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_menu_quick_move",
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "handled",
@@ -45,5 +47,12 @@ pub trait Hooks {
         cancellable = true,
         version = 3
     )]
-    fn menu_quick_move();
+    fn menu_quick_move(
+        pos: [i32; 3],
+        entity: &mut ModBlockEntity,
+        container_slots: usize,
+        slot: usize,
+        stack: &mut Option<mod_api::ItemStack>,
+        handled: &mut bool,
+    );
 }

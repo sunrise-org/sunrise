@@ -7,6 +7,10 @@ launcher. All of them run the same code (`crates/sunrise-native-build`). Every S
 signed `sdk.json` gets a tool made from that build's own source.
 Use that SDK's tool for the JSON commands: its horizon-mixins revision and patch match the SDK by construction.
 
+Native mod authors keep the same code and `sunrise-mod.toml`. The SDK's executable stack flag never applied to
+native mod libraries. If your tooling inspects the SDK's `sunrise-prebuilt.json` identity, stop reading `link_args`:
+that field is gone and has no replacement.
+
 The caller does what needs a player or their game: it checks that native code is allowed, fetches and verifies the
 SDK's slices, installs the pinned Rust, chooses the mods and which of them a build leaves out, and installs what the
 tool built. The tool compiles, and nothing else.

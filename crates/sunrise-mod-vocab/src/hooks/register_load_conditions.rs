@@ -6,6 +6,8 @@ pub trait Hooks {
     /// Whether an unknown ID refuses a load or skips a file is determined by the
     /// loader, not the namespace.
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "server",
         version = 2,
         contract = "collect",
@@ -13,5 +15,5 @@ pub trait Hooks {
         context = "registration",
         neoforge = "RegisterEvent"
     )]
-    fn register_load_conditions();
+    fn register_load_conditions(conditions: &mut dyn LoadConditions);
 }

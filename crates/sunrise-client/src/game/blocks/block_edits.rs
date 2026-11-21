@@ -475,7 +475,10 @@ mod tests {
 
             edit.filters.pop();
             edit.palette
-                .push(mod_api::BlockStateRecord::new(api_stone.block(), u16::MAX).into());
+                .push(mod_api::__private::block_state_from_ordinal(
+                    api_stone.block(),
+                    u16::MAX,
+                ));
             let refused = game.edit_blocks(&dimension, &edit);
             assert_eq!(
                 game.world.block(0, 64, 0),

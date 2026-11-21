@@ -809,6 +809,7 @@ impl StackData {
                 "minecraft:potion_contents" => replace_fields!(potion, potion_extra),
                 "minecraft:death_protection" => replace_fields!(death_protection),
                 "minecraft:consumable" => replace_fields!(consumable),
+                "minecraft:villager_food" => replace_fields!(villager_food),
                 "minecraft:kinetic_weapon" => replace_fields!(kinetic_weapon),
                 "minecraft:map_id" => replace_fields!(map_id),
                 "minecraft:banner_patterns" => {
@@ -1026,13 +1027,14 @@ impl ItemStack {
     pub fn data_mut(&mut self) -> &mut StackData {
         self.extra.get_or_insert_with(Box::default)
     }
-    /// Copy only the named component overrides from a decoded snapshot of this same item.
-    /// The other fields stay live: copying an unchanged serialized component can lose
-    /// runtime data, including in nested stacks. The caller supplies the changed names
-    /// (without the removal prefix) and owns item/count validation.
-    pub fn copy_changed_components_from(&mut self, snapshot: ItemStack, changed: &[String]) {
-        let names = changed.iter().map(String::as_str);
-        let mut snapshot = snapshot;
+    /// Apply only the named component fields from a decoded snapshot of this same item.
+    /// Unchanged fields keep their runtime data, including in nested stacks. The engine
+    /// caller supplies unique names without the removal prefix and owns item/count validation.
+    pub fn apply_component_fields_from<'a>(
+        &mut self,
+        mut snapshot: ItemStack,
+        names: impl Iterator<Item = &'a str> + Clone,
+    ) {
         if (self.data().is_some_and(|d| d.ominous_banner)
             || snapshot.data().is_some_and(|d| d.ominous_banner))
             && names.clone().any(is_ominous_component)
@@ -1049,8 +1051,13 @@ impl ItemStack {
         if names.clone().any(|id| id == "minecraft:damage") {
             self.damage = snapshot.damage;
         }
-        self.data_mut()
-            .apply_component_changes(snapshot.extra, names);
+        if let Some(data) = self.extra.as_deref_mut() {
+            data.apply_component_changes(snapshot.extra, names);
+        } else if let Some(extra) = snapshot.extra {
+            let mut data = StackData::default();
+            data.apply_component_changes(Some(extra), names);
+            self.extra = (!data.is_empty()).then(|| Box::new(data));
+        }
         self.tidy();
     }
     /// Canonicalizes the component representation and drops an all-default box.
@@ -1696,13 +1703,23 @@ fn canonical_other_component(id: &str, tag: &Tag) -> Tag {
 /// An explicit component snapshot, preserving live presence even at an item's default.
 /// Persistent stacks use [`encode_components`] with the loaded catalog instead.
 pub fn component_snapshot(stack: &ItemStack) -> Option<Tag> {
-    encode_stack_components(stack, true, &raw_template_tag)
+    encode_stack_components(stack, true, &|_| true, &raw_template_tag)
 }
 
 /// Encode the extra patch for a snapshot whose typed scalar already carries damage.
 /// This uses the same component codec and canonicalization as persistent stacks.
 pub fn encode_extra_components(stack: &ItemStack) -> Option<Tag> {
-    encode_stack_components(stack, false, &raw_template_tag)
+    encode_extra_components_matching(stack, |_| true)
+}
+
+/// Engine-only projection of the extra patch, excluding the typed damage scalar.
+/// The selector sees the component ID without `!` for removals. Selected nested
+/// stacks keep their full patches.
+pub fn encode_extra_components_matching(
+    stack: &ItemStack,
+    selector: impl Fn(&str) -> bool,
+) -> Option<Tag> {
+    encode_stack_components(stack, false, &selector, &raw_template_tag)
 }
 
 /// `PatchedDataComponentMap`: retain sets that differ from the item's prototype and
@@ -1737,7 +1754,7 @@ pub fn component_patch_filter<'a>(
 /// The saved `DataComponentPatch.CODEC`, compared against the loaded prototype.
 /// Nested templates retain their raw patches, including redundant entries and removals.
 pub fn encode_components(stack: &ItemStack, items: &crate::items::Items) -> Option<Tag> {
-    let mut components = encode_stack_components(stack, true, &raw_template_tag)?;
+    let mut components = encode_stack_components(stack, true, &|_| true, &raw_template_tag)?;
     if let Tag::Compound(entries) = &mut components {
         let keep = component_patch_filter(stack, items);
         entries.retain(|id, _| {
@@ -1755,19 +1772,21 @@ pub fn encode_components(stack: &ItemStack, items: &crate::items::Items) -> Opti
 }
 /// Live component fields from damage and extras, without item-prototype elision.
 pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
-    components_tag_inner(damage, data, true, &raw_template_tag)
+    components_tag_inner(damage, data, true, &|_| true, &raw_template_tag)
 }
 
 fn components_tag_inner(
     damage: u32,
     data: Option<&StackData>,
     include_damage: bool,
+    selector: &impl Fn(&str) -> bool,
     template_tag: &impl Fn(&ItemStack) -> Tag,
 ) -> Option<Tag> {
     let mut entries: Vec<(&str, Tag)> = Vec::new();
     // Explicit damage patches survive even at zero; a custom max damage can
     // also make its saved zero meaningful.
     if include_damage
+        && selector("minecraft:damage")
         && (damage > 0
             || data.is_some_and(|data| {
                 data.damage_set
@@ -1777,28 +1796,36 @@ fn components_tag_inner(
         entries.push(("minecraft:damage", Tag::Int(damage as i32)));
     }
     if let Some(d) = data {
-        if !d.enchantments.is_empty() {
+        if !d.enchantments.is_empty() && selector("minecraft:enchantments") {
             entries.push(("minecraft:enchantments", levels_tag(&d.enchantments)));
         }
-        if !d.stored_enchantments.is_empty() {
+        if !d.stored_enchantments.is_empty() && selector("minecraft:stored_enchantments") {
             entries.push((
                 "minecraft:stored_enchantments",
                 levels_tag(&d.stored_enchantments),
             ));
         }
-        if d.repair_cost > 0 {
+        if d.repair_cost > 0 && selector("minecraft:repair_cost") {
             entries.push(("minecraft:repair_cost", Tag::Int(d.repair_cost as i32)));
         }
-        if let Some(name) = &d.custom_name {
+        if let Some(name) = &d.custom_name
+            && selector("minecraft:custom_name")
+        {
             entries.push(("minecraft:custom_name", name.clone()));
         }
-        if let Some(consumable) = &d.consumable {
+        if let Some(consumable) = &d.consumable
+            && selector("minecraft:consumable")
+        {
             entries.push(("minecraft:consumable", consumable.raw.clone()));
         }
-        if let Some(kinetic) = &d.kinetic_weapon {
+        if let Some(kinetic) = &d.kinetic_weapon
+            && selector("minecraft:kinetic_weapon")
+        {
             entries.push(("minecraft:kinetic_weapon", kinetic.raw().clone()));
         }
-        if d.potion.is_some() || !d.potion_extra.is_empty() {
+        if (d.potion.is_some() || !d.potion_extra.is_empty())
+            && selector("minecraft:potion_contents")
+        {
             let potion = d
                 .potion
                 .as_ref()
@@ -1809,25 +1836,38 @@ fn components_tag_inner(
                 Tag::compound(potion.into_iter().chain(extra)),
             ));
         }
-        if let Some(trim) = &d.trim {
+        if let Some(trim) = &d.trim
+            && selector("minecraft:trim")
+        {
             entries.push(("minecraft:trim", trim::to_nbt(trim)));
         }
-        if let Some(id) = d.map_id {
+        if let Some(id) = d.map_id
+            && selector("minecraft:map_id")
+        {
             entries.push(("minecraft:map_id", Tag::Int(id)));
         }
-        entries.extend(d.implicit_banner_values().cloned());
-        if !d.ominous_banner && (!d.banner_layers().is_empty() || d.banner_patterns_set) {
+        entries.extend(
+            d.implicit_banner_values()
+                .filter(|(id, _)| selector(id))
+                .cloned(),
+        );
+        if !d.ominous_banner
+            && (!d.banner_layers().is_empty() || d.banner_patterns_set)
+            && selector("minecraft:banner_patterns")
+        {
             entries.push((
                 "minecraft:banner_patterns",
                 crate::banner_layer::layers_to_nbt(d.banner_layers()),
             ));
         }
-        if let Some(color) = &d.base_color {
+        if let Some(color) = &d.base_color
+            && selector("minecraft:base_color")
+        {
             entries.push(("minecraft:base_color", Tag::String((&**color).into())));
         }
         // Filterable values are saved as {raw: ..}.
         let raw = |t: Tag| Tag::compound([("raw", t)]);
-        if !d.writable_pages.is_empty() {
+        if !d.writable_pages.is_empty() && selector("minecraft:writable_book_content") {
             let pages = d
                 .writable_pages
                 .iter()
@@ -1838,10 +1878,14 @@ fn components_tag_inner(
                 Tag::compound([("pages", Tag::List(pages))]),
             ));
         }
-        if let Some(w) = &d.written {
+        if let Some(w) = &d.written
+            && selector("minecraft:written_book_content")
+        {
             entries.push(("minecraft:written_book_content", written_book_tag(w)));
         }
-        if let Some((flight, explosions)) = &d.fireworks {
+        if let Some((flight, explosions)) = &d.fireworks
+            && selector("minecraft:fireworks")
+        {
             let mut fields = Vec::new();
             if *flight != 0 {
                 fields.push(("flight_duration", Tag::Byte(*flight as i8)));
@@ -1854,13 +1898,19 @@ fn components_tag_inner(
             }
             entries.push(("minecraft:fireworks", Tag::compound(fields)));
         }
-        if let Some(e) = &d.firework_explosion {
+        if let Some(e) = &d.firework_explosion
+            && selector("minecraft:firework_explosion")
+        {
             entries.push(("minecraft:firework_explosion", explosion_tag(e)));
         }
-        if let Some(color) = d.dyed_color {
+        if let Some(color) = d.dyed_color
+            && selector("minecraft:dyed_color")
+        {
             entries.push(("minecraft:dyed_color", Tag::Int(color)));
         }
-        if let Some(sides) = &d.pot_decorations {
+        if let Some(sides) = &d.pot_decorations
+            && selector("minecraft:pot_decorations")
+        {
             let mut sherds = Vec::new();
             for (name, side) in ["back", "left", "right", "front"].iter().zip(sides.iter()) {
                 if let Some(stack) = side {
@@ -1869,13 +1919,13 @@ fn components_tag_inner(
             }
             entries.push(("minecraft:pot_decorations", Tag::compound(sherds)));
         }
-        if !d.bundle_contents.is_empty() {
+        if !d.bundle_contents.is_empty() && selector("minecraft:bundle_contents") {
             entries.push((
                 "minecraft:bundle_contents",
                 Tag::List(d.bundle_contents.iter().map(template_tag).collect()),
             ));
         }
-        if !d.stew_effects.is_empty() {
+        if !d.stew_effects.is_empty() && selector("minecraft:suspicious_stew_effects") {
             entries.push((
                 "minecraft:suspicious_stew_effects",
                 Tag::List(
@@ -1895,16 +1945,18 @@ fn components_tag_inner(
         }
         // minecraft:map_post_processing is transient: ItemStack.CODEC never
         // saves it (only the network carries it).
-        if !d.charged.is_empty() {
+        if !d.charged.is_empty() && selector("minecraft:charged_projectiles") {
             entries.push((
                 "minecraft:charged_projectiles",
                 Tag::List(d.charged.iter().map(template_tag).collect()),
             ));
         }
-        if let Some(a) = d.ominous_amplifier {
+        if let Some(a) = d.ominous_amplifier
+            && selector("minecraft:ominous_bottle_amplifier")
+        {
             entries.push(("minecraft:ominous_bottle_amplifier", Tag::Int(i32::from(a))));
         }
-        if !d.container.is_empty() {
+        if !d.container.is_empty() && selector("minecraft:container") {
             let slots = d
                 .container
                 .iter()
@@ -1924,6 +1976,9 @@ fn components_tag_inner(
         .collect();
     if let Some(d) = data {
         for (k, v) in &d.other {
+            if !selector(k.strip_prefix('!').unwrap_or(k.as_str())) {
+                continue;
+            }
             out.entry(JavaString::from(k.as_str()))
                 .or_insert_with(|| canonical_other_component(k, v));
         }

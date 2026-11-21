@@ -1,3 +1,5 @@
+use crate::game::remote::RemoteDimensionEntry;
+
 /// A client names the level it shows by the server's key, even where `Dim` has
 /// no name for it.
 #[test]
@@ -43,12 +45,12 @@ fn client_handles_reach_a_custom_level() {
             portal_cooldown: 0,
             sea_level: 63,
         };
-        game.enter_remote_dimension(&spawn, false, Reason::Other);
+        game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
         game.remote.as_mut().unwrap().logged_in = true;
 
         let level = game.level("test:pocket").unwrap();
         assert_ne!(level.dimension(), DimensionKey::OVERWORLD);
-        assert_eq!(level.dimension().id(game).as_deref(), Some("test:pocket"));
+        assert_eq!(level.dimension().id(game), Some("test:pocket"));
         assert!(game.level("minecraft:overworld").is_none());
         assert!(level.height(game).is_some());
         let facts = level.dimension_type(game).unwrap();
@@ -67,7 +69,7 @@ fn client_handles_reach_a_custom_level() {
             .unwrap()[0]
             .0 = "test:renamed".into();
         game.set_registries(Arc::new(renamed));
-        game.enter_remote_dimension(&spawn, false, Reason::Other);
+        game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
         assert_eq!(game.dimension_type().id, "test:renamed");
         // Reject invalid server numbers and enums without failing the join.
         for (field, value) in [
@@ -91,7 +93,7 @@ fn client_handles_reach_a_custom_level() {
                 )],
             );
             game.set_registries(Arc::new(registries));
-            game.enter_remote_dimension(&spawn, false, Reason::Other);
+            game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
             assert_eq!(game.dimension_type().coordinate_scale, 8.0, "{field}");
             assert!(game.dimension_type().fast_lava);
         }
@@ -119,7 +121,7 @@ fn client_handles_reach_a_custom_level() {
                 )],
             );
             game.set_registries(Arc::new(registries));
-            game.enter_remote_dimension(&spawn, false, Reason::Other);
+            game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
             assert_eq!(
                 game.dimension_type().coordinate_scale,
                 if valid { value } else { 8.0 }
@@ -142,7 +144,7 @@ fn client_handles_reach_a_custom_level() {
                 )],
             );
             game.set_registries(Arc::new(registries));
-            game.enter_remote_dimension(&spawn, false, Reason::Other);
+            game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
             assert_eq!(game.dimension_type().coordinate_scale, 4.0);
             assert_eq!(game.dimension_type().ambient_light, ambient);
             assert_eq!(
@@ -205,7 +207,7 @@ fn client_handle_reads_answer_from_the_clients_copy() {
             portal_cooldown: 0,
             sea_level: 63,
         };
-        game.enter_remote_dimension(&spawn, false, Reason::Other);
+        game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
         let remote = game.remote.as_mut().unwrap();
         remote.logged_in = true;
         remote.entity_id = 7;
@@ -284,16 +286,18 @@ fn client_handle_reads_answer_from_the_clients_copy() {
             item: stone,
         }))
         .unwrap();
-        let held = living.hand_item(game, Hand::Main).unwrap();
         assert_eq!(
-            (
+            living.with_hand_item(game, Hand::Main, |held| (
                 mod_api::__private::item_key_id(held.item()).unwrap(),
-                held.count()
-            ),
-            ("minecraft:stone", 3)
+                held.count(),
+            )),
+            Some(("minecraft:stone", 3))
         );
-        assert_eq!(living.equipment(game, EquipmentSlot::Head), None);
-        assert_eq!(living.hand_item(game, Hand::Off), None);
+        assert_eq!(
+            living.with_equipment(game, EquipmentSlot::Head, |_| ()),
+            None
+        );
+        assert_eq!(living.with_hand_item(game, Hand::Off, |_| ()), None);
 
         // Blocks of the chunks the client holds; nothing loads another.
         game.world
@@ -372,7 +376,7 @@ fn client_handle_reads_answer_from_the_clients_copy() {
         // A replaced level retires the handles.
         let mut other_level = spawn.clone();
         other_level.dimension = "test:other_overworld".into();
-        game.enter_remote_dimension(&other_level, true, Reason::Other);
+        game.enter_remote_dimension(&other_level, RemoteDimensionEntry::Respawn, Reason::Other);
         assert_eq!(me.position(game), None);
         assert_eq!(living.health(game), None);
         assert_eq!(level.block(game, at), None);

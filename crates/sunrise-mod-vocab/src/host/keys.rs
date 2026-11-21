@@ -88,57 +88,63 @@ pub trait KeysHost {
 #[doc(hidden)]
 #[sunrise_mod_api_macros::host_area]
 pub trait KeysBackend {
-    /// Side: server. Canonical biome id in the installed world generation.
+    /// Side: server. Borrows the canonical biome id from the installed world generation.
     /// A token from another world or reload returns `BiomeKeyError::WrongGeneration`.
     #[access(WorldOnly)]
-    fn biome_key_id(&self, key: BiomeKey) -> Result<String, BiomeKeyError>;
+    fn biome_key_id(&self, key: BiomeKey) -> Result<&str, BiomeKeyError>;
 
     /// Side: both.
     /// Resolve a live typed key's load-owned slot, never its protocol numeric id.
     #[access(WorldOnly)]
     fn registry_entry_key_slot(&self, entry: &RegistryEntry) -> Option<u32>;
 
-    /// Side: both. Exact id of an installed game-event slot; invalid keys are refused.
+    /// Side: both. Pin the exact id of an installed game-event slot; invalid keys are refused.
     #[access(Metadata)]
-    fn game_event_key_id(&self, key: GameEventKey) -> Result<String, GameEventKeyError>;
+    fn game_event_key_id(&self, key: GameEventKey) -> Result<RegistryName, GameEventKeyError>;
     /// Side: both.
-    /// The canonical block id retained by the load-owned registration slot. An invalid slot
-    /// is a boundary error.
+    /// Borrows the canonical block id from the registry. `None` if the host has no
+    /// backend or no name for the slot.
     #[access(Metadata)]
-    fn block_key_id(&self, key: BlockKey) -> String;
+    fn block_key_id(&self, key: BlockKey) -> Option<&str>;
     /// Side: both.
-    /// The canonical item id retained by the load-owned registration slot.
+    /// Borrows the canonical item id from the registry. `None` if the host has no
+    /// backend or no name for the slot.
     #[access(Metadata)]
-    fn item_key_id(&self, key: ItemKey) -> String;
+    fn item_key_id(&self, key: ItemKey) -> Option<&str>;
     /// Side: both. Current numeric item registry id, unavailable before completion.
     #[access(Metadata)]
     fn item_registry_id(&self, key: ItemKey) -> Option<u32>;
     /// Side: both.
-    /// The canonical effect id retained by the load-owned registration slot.
+    /// Borrows the canonical effect id from the registry. `None` if the host has no
+    /// backend or no name for the slot.
     #[access(Metadata)]
-    fn effect_key_id(&self, key: EffectKey) -> String;
+    fn effect_key_id(&self, key: EffectKey) -> Option<&str>;
     /// Side: both. Registered MobEffect.getCategory(); unavailable before registry completion.
     #[access(Metadata)]
     fn effect_category(&self, key: EffectKey) -> Option<EffectCategory>;
     /// Side: both.
-    /// The canonical fluid id of a key from the completed registry, `minecraft:water`. An
-    /// invalid slot is a boundary error.
+    /// Borrows the canonical fluid id, such as `minecraft:water`, from the completed registry.
+    /// `None` if the host has no backend or no name for the slot.
     #[access(Metadata)]
-    fn fluid_key_id(&self, key: FluidKey) -> String;
+    fn fluid_key_id(&self, key: FluidKey) -> Option<&str>;
     /// Side: both.
-    /// The canonical block entity type id retained by the load-owned slot.
+    /// Borrows the canonical block entity type id from the registry. `None` if the host
+    /// has no backend or no name for the slot.
     #[access(WorldOnly)]
-    fn block_entity_type_key_id(&self, key: BlockEntityTypeKey) -> String;
+    fn block_entity_type_key_id(&self, key: BlockEntityTypeKey) -> Option<&str>;
     /// Side: both.
-    /// The canonical entity type id retained by the load-owned slot.
+    /// Pins the canonical entity type id without borrowing the host.
+    /// Returns `None` if the host has no backend or no name for the slot.
     #[access(Metadata)]
-    fn entity_type_key_id(&self, key: EntityTypeKey) -> String;
+    fn entity_type_key_id(&self, key: EntityTypeKey) -> Option<RegistryName>;
     /// Side: both.
-    /// The canonical menu type id retained by the load-owned slot.
+    /// Pins the canonical menu type id without borrowing the host.
+    /// Returns `None` if the host has no backend or no name for the slot.
     #[access(Metadata)]
-    fn menu_key_id(&self, key: MenuKey) -> String;
+    fn menu_key_id(&self, key: MenuKey) -> Option<RegistryName>;
     /// Side: both.
-    /// The canonical enchantment id retained by the load-owned slot.
+    /// Pins the canonical enchantment id without borrowing the host.
+    /// Returns `None` if the host has no backend or no name for the slot.
     #[access(Metadata)]
-    fn enchantment_key_id(&self, key: EnchantmentKey) -> String;
+    fn enchantment_key_id(&self, key: EnchantmentKey) -> Option<RegistryName>;
 }

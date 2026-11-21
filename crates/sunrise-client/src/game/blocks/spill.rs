@@ -1591,14 +1591,14 @@ mod tests {
                 .chunks
                 .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
             let registry = &game.pack.assets.registry;
-            let stone = registry.default_state("minecraft:stone").unwrap();
+            let hoard = registry.default_state("test:hoard").unwrap();
             let granite = registry.default_state("minecraft:granite").unwrap();
             let pos = BlockPos::new(1, 64, 2);
             let key = (pos.x, pos.y, pos.z);
-            game.world.set(pos.x, pos.y, pos.z, stone).unwrap();
+            game.world.set(pos.x, pos.y, pos.z, hoard).unwrap();
             game.world.block_entities.set_mod_containers(
                 [(
-                    stone.0,
+                    hoard.0,
                     Arc::new(ModContainer {
                         slots: 1,
                         ..Default::default()

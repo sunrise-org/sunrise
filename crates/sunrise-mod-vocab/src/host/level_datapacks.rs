@@ -7,20 +7,20 @@ use crate::*;
 #[sunrise_mod_api_macros::host_area]
 pub trait LevelDatapacksBackend {
     /// Side: both.
-    /// The entry ids (`addon:fire`) of a datapack registry a mod declared
-    /// (`declare_datapack_registry`), sorted, as this world session last loaded them. On a client
-    /// they are the ones its server sent at the join and after each reload, and only for a
-    /// registry declared `Required` or `Optional`. None for a stale or parked level and a
-    /// registry no mod declared (or, on a client, one the server did not send). Reads nothing
-    /// from disk.
+    /// The owned entry IDs (`addon:fire`) of a datapack registry, sorted by ID, as this world
+    /// session last loaded them. On a client these are the entries the server sent at join and
+    /// after each reload; a declared registry omitted from the snapshot is empty. An empty
+    /// list means the registry has no entries. `None` means the level or registry is
+    /// unavailable. Reads nothing from disk.
     #[access(WorldOnly)]
     fn level_datapack_entries(&self, level: LevelRef, registry: &str) -> Option<Vec<String>>;
     /// Side: both.
-    /// A handle to `entry` of `registry` at the generation now loaded (on a client, the one its
+    /// A handle to `entry` of `registry` at the published generation (on a client, the one its
     /// server last sent). A handle kept across a reload fails its next read with
-    /// `StaleGeneration`, one from an earlier world session with `WrongSession`. A stale or parked
-    /// level and a registry no mod declared are `UnknownRegistry`; an entry no pack defines is
-    /// `MissingEntry`.
+    /// [`DatapackReadError::StaleGeneration`]; one from another session fails with
+    /// [`DatapackReadError::WrongSession`]. An unknown registry, a stale or parked level, or no
+    /// published set returns [`DatapackReadError::UnknownRegistry`]; a missing entry in the
+    /// registry returns [`DatapackReadError::MissingEntry`].
     #[access(WorldOnly)]
     fn level_datapack_handle(
         &self,
@@ -29,16 +29,25 @@ pub trait LevelDatapacksBackend {
         entry: &str,
     ) -> Result<DatapackHandle, DatapackReadError>;
     /// Side: both.
-    /// The decoded fields of the entry a handle names, in the registry's schema order, as plain
-    /// values: a copy, which carries no authority after the read. The handle is checked first
-    /// (session, then generation), then the entry; the errors are those of
-    /// [`level_datapack_handle`](Self::level_datapack_handle).
+    /// Borrow the published entry a handle names. The generation stays pinned for the duration
+    /// of `visit`, even if its publication is cleared or replaced. No registry lock is held
+    /// while `visit` runs.
+    ///
+    /// `visit` runs exactly once on `Ok(())`. Read `entry.values` in schema order or use
+    /// [`DatapackEntry::get`] by field name. The borrow ends when `visit` returns; retain IDs
+    /// and look them up again, or clone only the fields you need as an owned snapshot.
+    ///
+    /// After finding the level's published set, the read checks the handle's session, then
+    /// generation, then the registry and entry. An unavailable set, unknown registry or
+    /// missing entry is refused as in [`LevelRef::datapack_handle`]. A host without a backend
+    /// returns [`DatapackReadError::Unavailable`]. No error calls `visit`.
     #[access(WorldOnly)]
     fn level_datapack_read(
         &self,
         level: LevelRef,
         handle: &DatapackHandle,
-    ) -> Result<Vec<(String, DatapackValue)>, DatapackReadError>;
+        visit: &mut dyn FnMut(&DatapackEntry),
+    ) -> Result<(), DatapackReadError>;
     /// Side: server.
     /// Match and assemble through the engine's recipe matcher, without consuming inputs.
     /// Covers minecraft:crafting, smelting, blasting, smoking, campfire_cooking,

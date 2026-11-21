@@ -1,8 +1,7 @@
 # Design: per-type batched block entity ticks
 
-> The native contract below still applies. WebAssembly mods were removed; the parts about guests are history.
-> This applies to the individual `BlockEntityTickReply`, not the unbuilt batching proposal.
-> See [block-entity tick write-back](../../modding/src/how-to/world/machine-menu-data.md#skip-unchanged-tick-write-back) for the current native API.
+> Historical design. The individual server ticker now uses a resident scoped view instead of
+> `BlockEntityTickReply`; batching was not implemented. See [Borrow the ticking machine](../../modding/src/how-to/world/machine-menu-data.md#borrow-the-ticking-machine).
 
 **Provisional; implementation waits for a maintainer decision.** This answers
 [#2759](https://github.com/arismoko/horizon/issues/2759).

@@ -7,11 +7,18 @@ pub trait Hooks {
     /// before consumption shrinks it, including components. `user` is the
     /// player or mob consuming it. An unclaimed kind does nothing.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_consume_effect",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         version = 2,
         neoforge = "none (runtime ConsumeEffect.apply; RegisterEvent registers effect types, not invocations)"
     )]
     #[notes = "`consume_effect` receives the custom kind, retained definition data, pre-shrink stack snapshot and consuming entity (player or mob). Entries come from the effective consumable, including stack patches, and run in list order between the built-in entries."]
-    fn consume_effect();
+    fn consume_effect(
+        kind: &str,
+        data: &sunrise_core::nbt::Tag,
+        stack: &ItemStack,
+        user: mod_api::EntityRef,
+    );
 }

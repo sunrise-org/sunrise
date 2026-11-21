@@ -6,10 +6,8 @@
 //! starts, clamped into its own window, and still checks the position against them, so the
 //! hint cannot move a player anywhere the server would not let it stand. A vanilla client
 //! never sends it.
-use crate::{
-    Error, Result,
-    buf::{Reader, Writer},
-};
+use crate::{Error, Result, buf::Reader};
+use sunrise_core::vanilla_bytes::Writer;
 
 /// The custom payload channel, serverbound only.
 pub const CHANNEL: &str = "sunrise:carry_age";

@@ -1478,7 +1478,7 @@ impl Game<'_> {
             self.show_transfer_result(RecipeTransferResult::NotIntoMenu);
             return;
         }
-        let mut request = sunrise_protocol::buf::Writer::new();
+        let mut request = ::sunrise_core::vanilla_bytes::Writer::new();
         request.varint(self.remote_menu_id());
         request.string(recipe);
         request.u8(u8::from(max));
@@ -1539,7 +1539,7 @@ impl Game<'_> {
             return;
         };
         if self.remote.is_some() {
-            let mut request = sunrise_protocol::buf::Writer::new();
+            let mut request = ::sunrise_core::vanilla_bytes::Writer::new();
             request.varint(self.remote_menu_id());
             request.string(&id);
             self.send(sunrise_protocol::packets::play::Serverbound::CustomPayload(
@@ -1671,7 +1671,7 @@ impl Game<'_> {
         let (answer, request_due) = checks.lookup(recipe, now);
         let answer = answer.cloned();
         if request_due {
-            let mut request = sunrise_protocol::buf::Writer::new();
+            let mut request = ::sunrise_core::vanilla_bytes::Writer::new();
             request.varint(self.remote_menu_id());
             let Some(tag) = self.recipe_ui.checks.ask(recipe, now) else {
                 return answer;

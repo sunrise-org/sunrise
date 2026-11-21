@@ -28,9 +28,17 @@ vanilla, and told when the acknowledgement applies it. A write that keeps the st
 An integrated world's own blocks are the server's `block_changed`; a level the server opens for
 viewing is not told."##]
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         neoforge = "none (vanilla ClientLevel.setBlock; NeoForge adds no client event for it)"
     )]
-    fn client_block_changed();
+    fn client_block_changed(
+        dimension: &str,
+        pos: BlockPos,
+        old: BlockState,
+        new: BlockState,
+        predicted: bool,
+    );
 }

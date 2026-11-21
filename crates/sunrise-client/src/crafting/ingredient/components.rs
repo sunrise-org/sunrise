@@ -275,11 +275,11 @@ pub(super) fn validate_recipe_components(value: &Value, items: &Items) -> Result
     };
     validate(&ids, items)?;
     let conversion_error = std::cell::RefCell::new(None);
-    let parsed = WalkedIngredient::walk(
+    let parsed = WalkedIngredient::<()>::walk(
         value,
         &items.item_tag_order,
         &|_| None,
-        &resolved_items,
+        &|_, _| None,
         &|data| {
             let mut converted = sunrise_core::nbt::Compound::new();
             for (id, value) in data {

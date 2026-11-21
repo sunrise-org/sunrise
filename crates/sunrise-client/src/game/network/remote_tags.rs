@@ -234,8 +234,7 @@ mod tests {
                     let view = reader.context();
                     (
                         view.is_in_tag(stick, tag),
-                        view.item_count(tag),
-                        view.item_at(tag, 0),
+                        view.items_in_tag(tag).map(<[_]>::to_vec),
                     )
                 };
 
@@ -263,7 +262,7 @@ mod tests {
                 assert_eq!(seen.lock().unwrap()[0].stone_in_block_tag, Some(true));
                 assert_eq!(seen.lock().unwrap()[0].items, TagMembers::Unavailable);
                 assert_eq!(seen.lock().unwrap()[0].stick_in_item_tag, None);
-                assert_eq!(item_reads(game), (None, None, None));
+                assert_eq!(item_reads(game), (None, None));
 
                 game.handle_packet(C::UpdateTags(UpdateTags {
                     registries: vec![RegistryTags {
@@ -272,7 +271,7 @@ mod tests {
                     }],
                 }))
                 .unwrap();
-                assert_eq!(item_reads(game), (Some(false), Some(0), None));
+                assert_eq!(item_reads(game), (Some(false), Some(vec![])));
                 assert_eq!(seen.lock().unwrap()[1].items, TagMembers::Missing);
                 assert_eq!(seen.lock().unwrap()[1].stick_in_item_tag, Some(false));
 
@@ -327,7 +326,7 @@ mod tests {
                         }
                     );
                 }
-                assert_eq!(item_reads(game), (Some(true), Some(2), Some(potion)));
+                assert_eq!(item_reads(game), (Some(true), Some(vec![potion, stick])));
                 assert_eq!(
                     seen.lock().unwrap()[2],
                     Seen {
@@ -347,7 +346,7 @@ mod tests {
                     &[("minecraft:block", "test:blocks", &["minecraft:stone"])],
                 )))
                 .unwrap();
-                assert_eq!(item_reads(game), (Some(true), Some(2), Some(potion)));
+                assert_eq!(item_reads(game), (Some(true), Some(vec![potion, stick])));
 
                 // An update in play replaces the registries it names and keeps the others.
                 game.handle_packet(C::UpdateTags(update(
@@ -358,6 +357,7 @@ mod tests {
                     ],
                 )))
                 .unwrap();
+                assert_eq!(item_reads(game), (Some(false), Some(vec![])));
                 assert_eq!(mod_api::Tags::items(game, empty_tag), TagMembers::Missing);
                 let seen = seen.lock().unwrap();
                 assert_eq!(seen.len(), 5);

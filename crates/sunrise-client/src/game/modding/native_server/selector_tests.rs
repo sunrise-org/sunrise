@@ -15,24 +15,24 @@ impl mod_api::Hooks for SelectorCommands {
         _: &mut dyn mod_api::ServerHost,
         event: &mut mod_api::RegisterCommandsEvent<'_>,
     ) {
-        event.commands.extend([
-            mod_api::Command::new("heal <targets:players>"),
-            mod_api::Command::new("selectone <target:entity>"),
-            mod_api::Command::new("selectall <targets:entities>"),
-            mod_api::Command::new("selectplayer <target:player>"),
-            mod_api::Command::new("optionalplayers [targets:players]"),
-            mod_api::Command::new("optionalentity [target:entity]"),
-            mod_api::Command::new("optionalentities [targets:entities]"),
-        ]);
-    }
-
-    fn run_mod_command(
-        &self,
-        _: &mut dyn mod_api::ServerHost,
-        event: &mut mod_api::RunModCommandEvent<'_>,
-    ) -> mod_api::Flow {
-        self.0.lock().unwrap().push(event.command.clone());
-        mod_api::Flow::Cancel
+        event.commands.extend(
+            [
+                "heal <targets:players>",
+                "selectone <target:entity>",
+                "selectall <targets:entities>",
+                "selectplayer <target:player>",
+                "optionalplayers [targets:players]",
+                "optionalentity [target:entity]",
+                "optionalentities [targets:entities]",
+            ]
+            .map(|usage| {
+                let heard = self.0.clone();
+                mod_api::Command::new(usage).executes(move |_, _, command| {
+                    heard.lock().unwrap().push(command.clone());
+                    Some(1)
+                })
+            }),
+        );
     }
 }
 

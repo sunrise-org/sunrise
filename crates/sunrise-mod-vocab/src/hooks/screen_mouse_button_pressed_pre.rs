@@ -23,11 +23,19 @@ pub trait Hooks {
     /// click there stays the game's own. A gamepad click or a click the
     /// keyboard's focus sends is not the mouse and fires nothing.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_screen_mouse_button_pressed_pre",
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "cancel",
         out = "canceled",
         neoforge = "ScreenEvent.MouseButtonPressed.Pre",
         cancellable = true
     )]
-    fn screen_mouse_button_pressed_pre();
+    fn screen_mouse_button_pressed_pre(
+        screen: &ScreenView<'_>,
+        button: i32,
+        modifiers: u32,
+        canceled: &mut bool,
+    );
 }

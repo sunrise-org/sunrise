@@ -83,8 +83,6 @@ mod tests {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let mut text = mod_api::Text::literal("AA AA");
             text.style.bold = Some(true);
-            let form = mod_api::text::TextForm::try_from(&text).unwrap();
-            let text = mod_api::Text::try_from(form).unwrap();
             let host: &dyn mod_api::ClientHost = game;
             assert_eq!(host.text_width(&mod_api::Text::literal("AA")).unwrap(), 12);
             assert_eq!(host.text_width(&mod_api::Text::literal("")).unwrap(), 0);

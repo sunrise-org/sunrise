@@ -1,10 +1,9 @@
-use super::*;
-
 /// The local player's own state reads answer on a client from what the
 /// server sent it (`LocalPlayer`); another player reads None there.
 #[test]
 #[ignore = "daily"]
 fn client_player_reads_answer_from_the_local_players_copy() {
+    use crate::game::remote::RemoteDimensionEntry;
     use crate::game::{execution_role::ExecutionRole, native_entity_refs::tests::with_game};
     use mod_api::{EntityRef, GameMode};
     use sunrise_client::{level_loading::Reason, motion::PlayerMotion};
@@ -30,7 +29,7 @@ fn client_player_reads_answer_from_the_local_players_copy() {
             portal_cooldown: 0,
             sea_level: 63,
         };
-        game.enter_remote_dimension(&spawn, false, Reason::Other);
+        game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
         let remote = game.remote.as_mut().unwrap();
         remote.logged_in = true;
         remote.entity_id = 7;
@@ -113,19 +112,23 @@ fn client_player_reads_answer_from_the_local_players_copy() {
         let mut stack = sunrise_client::items::ItemStack::new("minecraft:diamond_pickaxe", 1);
         stack.damage = 7;
         game.inventory.fill(None);
-        game.inventory[3] = Some(stack.clone());
+        game.inventory[3] = Some(stack);
         game.inventory[8] = Some(sunrise_client::items::ItemStack::new("minecraft:stone", 12));
-        assert_eq!(
-            player.inventory(game),
-            Some(
-                vec![
-                    stack,
-                    sunrise_client::items::ItemStack::new("minecraft:stone", 12)
-                ]
-                .try_into_api()
-                .unwrap()
-            )
-        );
+        player
+            .with_inventory(game, |view| {
+                let mut slots = view.iter();
+                let (slot, pickaxe) = slots.next().unwrap();
+                let expected = mod_api::__private::item_key("minecraft:diamond_pickaxe").unwrap();
+                assert_eq!(
+                    (slot, pickaxe.item(), pickaxe.count(), pickaxe.damage()),
+                    (3, expected, 1, 7)
+                );
+                let (slot, stone) = slots.next().unwrap();
+                let expected = mod_api::__private::item_key("minecraft:stone").unwrap();
+                assert_eq!((slot, stone.item(), stone.count()), (8, expected, 12));
+                assert!(slots.next().is_none());
+            })
+            .unwrap();
 
         // Another player: the client isn't sent their state.
         let epoch = player.entity().epoch();
@@ -133,6 +136,6 @@ fn client_player_reads_answer_from_the_local_players_copy() {
         assert_eq!(other.game_mode(game), None);
         assert_eq!(other.food(game), None);
         assert_eq!(other.selected_slot(game), None);
-        assert_eq!(other.inventory(game), None);
+        assert_eq!(other.with_inventory(game, |_| ()), None);
     });
 }

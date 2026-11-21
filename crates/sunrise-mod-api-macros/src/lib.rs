@@ -1,19 +1,5 @@
 //! Derive hook subscriptions from a trait implementation.
-mod payload;
 mod wire;
-
-/// Derive a typed payload's value codec from its fields.
-///
-/// `#[payload(crate = ::mod_vocab)]` selects the contract crate for
-/// lower-layer crates. The default is `::mod_api`.
-/// For mutually recursive types, `#[payload(bound = "T: ::mod_api::PayloadCodec")]`
-/// replaces inferred predicates; use `#[payload(bound = "")]` when none are needed.
-#[proc_macro_derive(PayloadCodec, attributes(payload))]
-pub fn derive_payload_codec(input: TokenStream) -> TokenStream {
-    payload::expand(syn::parse_macro_input!(input as syn::DeriveInput))
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
-}
 
 /// Derive the canonical owned-value encoding.
 ///
@@ -253,10 +239,14 @@ fn expand(mut implementation: ItemImpl, export: bool) -> TokenStream {
     quote!(#implementation #export).into()
 }
 
-/// Generate the panicking defaults of a host area from each method's access declaration.
-/// The same declarations drive game forwarders in the build-time API generator. A backend trait
-/// may carry `#[table_backend("path")]`: the game answers its reads from the borrowed view at
-/// `path`, which implements the trait, and `Game` forwards to it.
+/// Generate the defaults of a host area from each method's access declaration. An optional
+/// callback method marked `#[decline_unavailable]` returns without calling it; others panic if
+/// unimplemented. The same declarations drive game forwarders in the build-time API generator.
+/// A backend trait may carry `#[table_backend("path")]`: the game answers its reads from the
+/// borrowed view at `path`, which implements the trait, and `Game` forwards to it. Methods can
+/// opt out of generated conversion in either direction with `#[forward_api_inputs]` or
+/// `#[forward_api_output]` when the implementation accepts or returns the API types directly.
+/// Use `#[manual_handle]` for an inherent handle wrapper written by hand.
 #[proc_macro_attribute]
 pub fn host_area(_attribute: TokenStream, input: TokenStream) -> TokenStream {
     let mut area = parse_macro_input!(input as syn::ItemTrait);
@@ -299,16 +289,36 @@ pub fn host_area(_attribute: TokenStream, input: TokenStream) -> TokenStream {
             Ok(level) => level,
             Err(error) => return error.to_compile_error().into(),
         };
+        let decline = method
+            .attrs
+            .iter()
+            .any(|attr| attr.path().is_ident("decline_unavailable"));
         method.attrs.retain(|attr| {
             !attr.path().is_ident("static_call")
                 && !attr.path().is_ident("service")
                 && !attr.path().is_ident("read_stack")
+                && !attr.path().is_ident("forward_api_inputs")
+                && !attr.path().is_ident("forward_api_output")
+                && !attr.path().is_ident("decline_unavailable")
+                && !attr.path().is_ident("manual_handle")
         });
-        let operation = method.sig.ident.to_string();
-        let label = format!("{union}::{operation}");
-        method.default = Some(syn::parse_quote!({
-            crate::world::phase::unprovided(#label, #operation, crate::world::phase::LoadAccess::#level)
-        }));
+        method.default = Some(if decline {
+            if !matches!(method.sig.output, syn::ReturnType::Default) {
+                return syn::Error::new_spanned(
+                    &method.sig.output,
+                    "#[decline_unavailable] requires an optional callback method with no return value",
+                )
+                .to_compile_error()
+                .into();
+            }
+            syn::parse_quote!({})
+        } else {
+            let operation = method.sig.ident.to_string();
+            let label = format!("{union}::{operation}");
+            syn::parse_quote!({
+                crate::world::phase::unprovided(#label, #operation, crate::world::phase::LoadAccess::#level)
+            })
+        });
         method.semi_token = None;
     }
     quote!(#area).into()

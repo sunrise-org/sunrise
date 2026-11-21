@@ -9,8 +9,11 @@ Request existing entries inside `Hooks::register` with `r.block_key(id)`,
 - An unknown request refuses the load with the requesting mod and canonical ID, even if
   you never attach the key to a Part.
 - Keys are opaque `u32` slots, not engine numeric IDs.
-- `key.id(host)` returns an owned canonical `String` for diagnostics. It needs a game-backed
-  host; an invalid slot is a boundary error, not an empty name.
+- Block, item, effect, fluid, block-entity-type and dimension keys return a borrowed canonical
+  name (`Option<&str>`) from `key.id(host)`. Compare with `Some("minecraft:stone")`; `None`
+  means the host cannot name the slot. Use `.map(str::to_owned)` only to keep the text after
+  the host borrow. Biome keys [borrow from the current world registry](../how-to/items/data-maps.md)
+  and return a `Result` instead.
 
 Keys identify entries for the running mod load, not persistent data. Persist canonical identifiers
 and property strings rather than registration slots or state ordinals. Reload preserves key identity;
@@ -43,27 +46,40 @@ There is no separate equipment-only type read.
 After the registry is available, resolve the type keys your Part needs once and
 retain them. `host.entity_type_keys()` enumerates built-in and content types in
 registry order, then native general types by declaring mod and type id.
-`key.id(host)` explicitly requests its canonical namespaced name. Name resolution returns an
-owned diagnostic string and can allocate. Persist the name, never the scalar slot.
+`key.id(host)` explicitly pins its canonical namespaced name as `Option<RegistryName>`.
+Persist the name, never the scalar slot.
 For example, retain the zombie key at setup, then compare
 `entity.kind(host) == Some(zombie_key)` in a predicate.
 
 The key derives `Wire` through its scalar slot: host decoding checks the registered
 slot.
 
-This is a clean break from `Option<String>`: callers that need textual names must
-request `.id(host)` explicitly. `UnspawnedMobRef::kind` keeps its separate scoped
-`Identifier`/error contract, and block-entity type reads keep `BlockEntityTypeKey`.
+`UnspawnedMobRef::kind` has a separate scoped `Identifier`/error contract,
+and block-entity type reads use `BlockEntityTypeKey`.
+
+## Pinned registry names
+
+`EntityTypeKey`, `MenuKey` and `EnchantmentKey` return `Option<RegistryName>` from
+`key.id(host)`. `None` means the host has no backend or no name for the slot.
+`GameEventKey::id(host)` returns `Result<RegistryName, GameEventKeyError>` instead.
+
+A `RegistryName` borrows resident text or keeps its registry snapshot alive; it
+holds no registry lock and does not borrow the host. Use `name.as_str()` to borrow
+its text, compare an unwrapped name directly (`name == "minecraft:zombie"`), or compare
+`key.id(host).as_deref() == Some("minecraft:zombie")` without copying. Formatting,
+ordering and hashing use the full namespaced text, not the registry slot. Cloning
+shares the text, and maps keyed by `RegistryName` also support lookup by `&str`.
+The pinned text remains readable across reloads; it does not reflect a later registry
+publication. Bind the snapshot before borrowing it if the text is used beyond the current
+expression. For persistent storage, copy just the text with `name.as_str().to_owned()`.
 
 ## Block states
 
-`BlockState` is a small owned value with private fields, not a tint-specific snapshot or an
-engine numeric ID. `state.block()` reads its `BlockKey`; `state.ordinal()` reads its local
-ordinal. Property operations take explicit metadata: retain `let metadata = host.block_states()`
-and call `state.property(&metadata, "facing")` or `state.with(&metadata, "facing", "east")`.
-`BlockState::of(&metadata, key, constraints)` starts from the published default and applies the
-supplied `StateConstraint`s. Changes return a new value and never mutate the original.
-Unknown keys, ordinals and property combinations return typed `BlockStateError`s.
+`BlockState` is a small `Copy` value with private fields, not an engine numeric ID.
+`state.block()` reads its `BlockKey`; `state.ordinal()` reads its local ordinal. Pass the value
+itself to metadata queries; there is no separate record to convert to. See
+[Block-state facts](../how-to/world/block-state-facts.md) for reading properties, changing a
+property on a copy and constructing a state from a block's default.
 
 `SceneBlock::new(pos, state, entity)` and `StructureTemplateBlock::new(pos, state, nbt)`
 use this owned `BlockState`, including all properties. Structure reads preserve vanilla palette
@@ -79,12 +95,21 @@ Use `host.block_state_default(key)` for a block's default state and
 `host.block_in_tag(key, tag)` for membership in a string tag name. On a restricted
 level host, `schedule_block_tick(pos, key, delay)` also takes a `BlockKey`.
 
-`host.block_states().states_of(key)` returns `Option<BlockStateRange>` in immutable
-local ordinal order. It returns `None` before metadata is published, for an unknown block,
-or without a game-backed host. Its iterator yields owned `BlockState`s; it is not a span of world
-numeric IDs. `BlockStateRange::new(first, count)` returns a typed error if the span would
-exceed the `u16` ordinal domain, and decoded transport spans obey the same check. Membership
-checks both the block key and the ordinal. A zero-count span is empty.
+`host.block_states().states_of(key)` returns `Option<BlockStateRange>` in local ordinal order.
+It returns `None` before metadata is published, for an unknown block, or without a game-backed
+host. Its iterator yields owned `BlockState`s; it is not a span of world numeric IDs. To look up
+an existing local `ordinal`, use:
+
+```rust,ignore
+use mod_api::HostBlockStates;
+
+let state = host.block_states().states_of(key)
+    .and_then(|range| range.iter().nth(usize::from(ordinal)));
+```
+
+An ordinal outside the range returns `None`. `BlockStateRange::new(first, count)` returns a typed
+error if the span would exceed the `u16` ordinal domain, and decoded ranges obey the same check.
+Membership checks both the block key and the ordinal. A zero-count span is empty.
 
 A restricted `LevelHost::block_state(pos)` read returns `Option<BlockState>`. A successful
 engine read retains its vanilla result: unloaded or out-of-height reads that produce air return
@@ -121,10 +146,10 @@ work on the client and the server.
 ```rust
 fn resolve(host: &dyn mod_api::Host) {
     if let Some(block) = host.block_key("minecraft:stone") {
-        assert_eq!(block.id(host), "minecraft:stone");
+        assert_eq!(block.id(host), Some("minecraft:stone"));
     }
     if let Some(effect) = host.effect_key("minecraft:speed") {
-        assert_eq!(effect.id(host), "minecraft:speed");
+        assert_eq!(effect.id(host), Some("minecraft:speed"));
     }
     assert!(host.block_key("test:missing_block").is_none());
     assert!(host.effect_key("test:missing_effect").is_none());
@@ -161,8 +186,10 @@ Resolve item and block keys during load and keep them for tick and menu calls.
 and GUI `item` / `item_model` take `ItemKey`. `block_item`, `fluid_bucket` and
 `screen_hovered_item` return item keys. `level.block`, `lit_block_name` and
 `Hit.block` return block keys; `BlockEntityDrawContext::block` takes one.
-`HeldItemSlot.id` (including use-start/stop events) and `Stack.item`
-carry item keys, not names. Unknown incoming slots are refused at the boundary.
+`ItemStack::item()` returns an `ItemKey`, not a name. Request that same key in `Hooks::register`
+when binding a [`ClientItemUseBehavior`](parts/item-and-tag-parts.md#intercept-main-hand-client-input).
+The callback receives the original typed stack and a separate hotbar slot.
+Unknown incoming slots are refused at the boundary.
 `block_sprites` takes API-owned `BlockState` values, preserving properties without
 parsing state strings or exposing numeric engine state IDs. The pre-change block event carries resolved `from` / `to`
 states and does not allocate their names. Property names and values in
@@ -277,13 +304,21 @@ item/Text writes preserve the refusal in `StackWriteError::Text`, and unspawned-
 reads use `UnspawnedMobError::Text`. `TooDeep` means a component path or opaque NBT
 container path exceeds 512. Unavailable backends are distinct from invalid text or
 unrepresentable payloads.
-A refused hook capture does not dispatch; a refused writeback leaves every field unchanged.
-No subscriber means no conversion or snapshot allocation.
+A refused hook capture does not dispatch. No subscriber means no API conversion or API
+snapshot allocation.
 Mutable stack arguments are compared using value equality with the snapshot passed to
 the listener. An unchanged argument retains the original engine value without strict
 write validation (including engine-legal stacks above effective count or damage maxima).
-A changed argument is validated in full; a refusal commits no outputs. The same
-rule applies to anvil/grindstone records and menu cursor/quick-move stacks.
+A changed argument is validated in full; a refusal commits no listener edits. The same
+rule applies to menu cursor and quick-move stacks.
+
+Anvil and grindstone hook inputs are borrowed, read-only snapshots, not stack writes.
+`anvil_update` validates an output replacement only if it differs from vanilla. An invalid
+replacement or cancellation leaves no result and zero costs. The anvil's Pre and Post
+hooks lend the same pre-take snapshot and do not take any stack edits. `grindstone_place`
+validates an explicit output override and `grindstone_take` validates supplied remainders,
+not the original inputs. See [item and tag Parts](parts/item-and-tag-parts.md) for the staged
+edits and the different cancellation outcomes.
 
 Recursive `Clone`, `Eq` and `Drop` of a tree a mod itself built are ordinary Rust ownership,
 not part of the boundary guarantee.
@@ -342,6 +377,14 @@ error, never silently clamped. Consuming
 `split(n)` returns `StackSplit { taken, remainder }`, both optional; consuming `shrink(n)`
 returns the remainder or `None`. There is no empty-stack sentinel. Component descriptors
 read and write an optional owned NBT patch; a plain stack has no patch allocation.
+
+`ItemStackView` lends a nonempty stack for read-only inspection. Read `item()`, `count()`,
+`damage()` or `damage_component()` without copying the stack or encoding its components.
+Use `project()` to read the component patch or keep an owned `ItemStack` after the loan ends;
+projection returns `None` if the source cannot be represented as an owned stack.
+`InventoryView::get(slot)` reads just that slot. `iter()` visits readable nonempty slots lazily,
+in ascending order, and yields each original slot number with its stack view. Neither operation
+projects a stack.
 
 Resolve and retain a `TagKey` during `Hooks::register` with `r.tag_key("minecraft:logs")`,
 for example when building a Part or a recipe kind.

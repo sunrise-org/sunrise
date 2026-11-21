@@ -15,6 +15,34 @@ Implement the `render_needs` callback to set `RenderNeeds` requests for world de
 and entity geometry; these requests feed the engine's frame requirements so it
 retains the resources your drawing callbacks borrow.
 
+## Reading a hand or equipment slot
+
+Resolve an entity with `host.living(entity)`, then use `living.with_equipment(host, slot, read)`
+for one equipment slot or `living.with_hand_item(host, hand, read)` for the selected main-hand
+stack or off hand. Both return the callback's result in `Some`; an empty or unavailable slot
+returns `None` without running the callback. On the client only the local player's slots are
+available.
+
+```rust,ignore
+let count = living.with_hand_item(host, Hand::Main, |stack| stack.count());
+let helmet = living
+    .with_equipment(host, EquipmentSlot::Head, |stack| stack.project())
+    .flatten();
+```
+
+Use `project()` when you need components or an owned stack after the callback. For the
+server-side attacker's live weapon, use `with_weapon_item`; for the weapon recorded by a
+projectile, see [Death sources and weapons](../items/death-loot-context.md).
+
+## Checking an entity's tags
+
+In a server hook that gives you an entity and a host, use
+`entity.tags(host).is_some_and(|tags| tags.contains("mymod:marked"))` to match a
+scoreboard tag without allocating. To read all tags, the
+[borrowed view](../../concepts/parts/entity-parts-and-mob-goals.md#entity-tags)
+yields UTF-16 slices in saved order. Choose checked or lossy conversion explicitly
+when you need UTF-8.
+
 ## Opening a container
 
 `player_container_open` runs synchronously after a successful open. Failed opens and opening the player's

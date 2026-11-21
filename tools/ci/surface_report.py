@@ -1,22 +1,20 @@
 """The mod API surface report: what a pull request changes in what mods can name.
 
-Exports the surface of the merge base and of the checked-out tree with the head's `sunrise-stage`, diffs them, and
-writes the classified report to the job summary. The base comes from the event: on `pull_request` the checkout is
-GitHub's merge commit, whose first parent is the base; on a dispatch with `pr`, GitHub's compare API gives the merge
-base of that pull request's head and its base branch. Only that one commit is fetched (`--depth 1`, in CI's shallow
-checkout; a full clone is never fetched shallow), and only its `crates/`, `tools/layering` and Cargo manifests are
-unpacked. The exporter uses the manifests to identify workspace library names. The engine catalogs are read from
-source. CI compares published loops, not listed internals.
-To audit internals too, use --with-internals; --trees BASE HEAD accepts local source trees, which it only reads. With --build-base-tool, a BASE the head's tool cannot read is exported by BASE's own `sunrise-stage`,
-built from that tree: it compiles and runs BASE's code, build scripts included, so pass it only for a whole checkout
-you trust.
+In CI, each tree's `sunrise-stage` exports its own SDK surface. The head's tool reads both trees' engine catalogs,
+compares the surfaces and writes the classified report to the job summary. CI compares published loops, not listed
+internals. On `pull_request`, the checkout is GitHub's merge commit, whose first parent is the base; on a dispatch
+with `pr`, GitHub's compare API gives the merge base of the checked-out revision and the PR's base branch. CI builds
+the base's tool from a full archive of that commit (into target/surface-base, which a Dyna slot keeps).
+Only that one commit is fetched (`--depth 1`, in CI's shallow checkout; a full clone is never fetched shallow).
 
-It passes when the base cannot be found or fetched, saying so in one line. When the head's tool cannot read the
-base tree (the base predates a rule or format this tool holds trees to), the base's own `sunrise-stage` is built
-(into target/surface-base, which a Dyna slot keeps) and exports the base instead; the report fails, naming both
-errors, when that cannot give a surface this tool compares. It fails for a new change note that names an id that did
-not change or cannot be read, and, with `gate = true` in tools/ci/surface.toml (on), for a breaking change no new note
-names.
+Use --with-internals to audit listed internals too. With --trees BASE HEAD, use --build-base-tool when the generator
+changed: it always builds and uses BASE's own `sunrise-stage`, even if HEAD's could read the old sources. Only pass
+it for a whole checkout you trust: it compiles and runs BASE's code, build scripts included. Without the flag,
+--trees is a source-only comparison for two trees that use the same generator.
+
+It passes when the CI base cannot be found or fetched, saying so in one line. It fails if either export cannot be
+compared, for a new change note that names an id that did not change or cannot be read, and, with `gate = true` in
+tools/ci/surface.toml (on), for a breaking change no new note names.
 
 A new note that carries `landed = "<merge sha>"` is retroactive: it is left out of the comparison above and checked
 against that merge instead. Both the merge and its first parent must already use the native-only surface schema.
@@ -155,7 +153,7 @@ def export_surface(tool: str, tree: Path, output: Path, *flags: str) -> subproce
     return subprocess.run([tool, "surface", str(tree), str(output), *flags], capture_output=True, text=True)
 
 
-def audited_checkpoint(reset_path: Path, work: Path, old_hash: str, tool: str) -> tuple[Path | None, str]:
+def audited_checkpoint(reset_path: Path, work: Path, old_hash: str) -> tuple[Path | None, str]:
     """Verify the one-time transition using both plain SDK exports, before adding any engine catalogs."""
     reset = json.loads(reset_path.read_text())
     plain = reset["plain"]
@@ -170,10 +168,8 @@ def audited_checkpoint(reset_path: Path, work: Path, old_hash: str, tool: str) -
     output = work / "base.json"
     commit = reset["checkpoint"]
     try:
-        unpack(commit, checkpoint)
-        done = export_surface(tool, checkpoint, output)
-        if done.returncode != 0:
-            done = export_surface(base_tool(commit, work), checkpoint, output)
+        unpack(commit, checkpoint, ())
+        done = export_surface(tree_tool(checkpoint, work), checkpoint, output)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         return None, f"Could not export the schema-reset checkpoint: {error}.\n"
     if done.returncode != 0:
@@ -190,45 +186,44 @@ def report(tool: str, base: Path, head: Path, work: Path, gate_on: bool, *,
            own_head_tool: Callable[[], str] | None = None,
            notes: tuple[Path, Path] | None = None, landed: str | None = None,
            covered: tuple[Path, Path] | None = None) -> tuple[int, str]:
-    """Exports both trees at once, diffs them; (exit code, report text). `own_base_tool` gives the base's own
-    sunrise-stage, for a base the head's cannot read; landed comparisons always use both trees' own exporters.
-    `notes` is the (new, base) pair of change-note folders when they are not the
-    trees' own; `landed` selects the notes of one merge, and `covered` a (new, base) pair whose new notes count as
-    coverage only (that merge's own)."""
-    catalogs = "--with-internals" if with_internals else "--with-loops"
+    """Export and compare the trees; return (exit code, report text).
 
-    exports = {}
-    if landed is None:
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            # Drain both subprocesses' diagnostics while they run so a full pipe cannot stall an export.
-            exports = {name: pool.submit(export_surface, tool, tree, work / f"{name}.json", catalogs)
-                       for name, tree in (("base", base), ("head", head))}
-        head_export = exports["head"].result()
+    When given, `own_base_tool` supplies the base's exporter. Landed comparisons require their own on both sides.
+    `notes` overrides the trees' (new, base) note folders; `landed` selects the notes of one merge, and `covered`
+    is the (new, base) pair whose new notes count only as coverage (the merge's own).
+    """
+    catalogs = "--with-internals" if with_internals else "--with-loops"
+    own_exports = []
+    if own_base_tool is not None or landed is not None:
+        own_exports.append(("base", base, own_base_tool))
+    if landed is not None:
+        own_exports.append(("head", head, own_head_tool))
+    else:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            # Only source-only audits read both sides with the head's generator. Reading different sources
+            # successfully does not prove it generated the same types and signatures as the base's generator.
+            base_export = (pool.submit(export_surface, tool, base, work / "base.json", catalogs)
+                           if own_base_tool is None else None)
+            head_export = export_surface(tool, head, work / "head.json", catalogs)
         if head_export.returncode != 0:
             return 1, f"The surface export of this tree failed: {last_line(head_export.stderr)}.\n"
+        if base_export is not None and (done := base_export.result()).returncode != 0:
+            return 1, f"No surface report: the head's sunrise-stage cannot read the base tree ({last_line(done.stderr)}).\n"
     note = ""
-    trees = (("base", base, own_base_tool), ("head", head, own_head_tool))
-    for name, tree, own_tool in trees:
-        if landed is None:
-            done = exports[name].result()
-            if done.returncode == 0:
-                continue
-            why = f"the head's sunrise-stage cannot read the {name} tree ({last_line(done.stderr)})"
-        else:
-            # The current tool can sometimes export an old tree, but would silently omit records from its schema.
-            why = f"the landed {name} must be exported in its original schema"
+    for name, tree, own_tool in own_exports:
         if own_tool is None:
-            return 1, f"No surface report: {why}.\n"
+            return 1, f"No surface report: the landed {name} must be exported in its original schema.\n"
         try:
             output = work / f"{name}.json"
             # The plain SDK export is shared across tool versions. Use the current catalog reader
             # for both trees so an older generator does not have to know the current audit options.
             own = export_surface(own_tool(), tree, output)
         except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
-            return 1, f"No surface report: {why}, and the {name}'s own could not be used: {error}.\n"
+            return 1, f"No surface report: the {name}'s own sunrise-stage could not be used: {error}.\n"
         if own.returncode != 0:
-            return 1, f"No surface report: {why}, nor can the {name}'s own ({last_line(own.stderr)}).\n"
-        note += f"The {name} was exported by its own sunrise-stage: {why}.\n"
+            return 1, (f"No surface report: the {name}'s own sunrise-stage could not export its tree "
+                       f"({last_line(own.stderr)}).\n")
+        note += f"The {name} was exported by its own sunrise-stage.\n"
         reset_path = head / SCHEMA_RESET
         if landed is not None:
             schema = json.loads(output.read_text())["schema"]
@@ -239,7 +234,7 @@ def report(tool: str, base: Path, head: Path, work: Path, gate_on: bool, *,
         elif name == "base" and not with_internals and reset_path.is_file():
             old = json.loads(output.read_text())
             if old.get("schema") == 2:
-                checkpoint, text = audited_checkpoint(reset_path, work, old["hash"], tool)
+                checkpoint, text = audited_checkpoint(reset_path, work, old["hash"])
                 note += text
                 if checkpoint is None:
                     return 1, note
@@ -359,10 +354,11 @@ def main(argv=None) -> int:
     parser = ArgumentParser(description="Compare mod API surfaces and published engine catalogs.")
     parser.add_argument("--with-internals", action="store_true", help="include advisory listed-internal changes")
     parser.add_argument("--trees", nargs=2, metavar=("BASE", "HEAD"), type=Path,
-                        help="compare two local source trees instead of fetching the CI base")
+                        help="compare two local trees with the same generator instead of fetching the CI base; "
+                             "use --build-base-tool if the generator changed")
     parser.add_argument("--build-base-tool", action="store_true",
-                        help="with --trees: when the head's tool cannot read BASE, build and run BASE's own "
-                             "sunrise-stage (runs BASE's code; a whole, trusted checkout only)")
+                        help="with --trees: always build and use BASE's own sunrise-stage "
+                             "(runs BASE's code; a whole, trusted checkout only)")
     args = parser.parse_args(argv)
     if args.build_base_tool and not args.trees:
         parser.error("--build-base-tool goes with --trees; CI builds the base commit's own tool by itself")

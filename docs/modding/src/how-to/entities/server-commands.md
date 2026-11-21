@@ -1,36 +1,55 @@
 # Typed server commands
 
-Register each server usage with `register_commands` and `Command`. The
-`run_mod_command` event carries a `CommandInvocation`,
-not a raw line to split. Match its `literals` to your command path, then read named
-values through `command.argument(name)` and `CommandArgumentValue`. An integer is
-already an `i32`; a player argument is a live `PlayerRef`, not selector text.
-Return `Flow::Cancel` when your listener handles the command.
+In `register_commands`, push each server usage as
+`Command::new(usage).executes(|host, source, command| { /* ... */ Some(1) })`.
+Use `Command::op(usage, level)` for a usage that requires operator permission.
+The executor receives a borrowed `CommandInvocation`, not a raw line to split
+or a command path to route. Read named values through `command.argument(name)`
+and `CommandArgumentValue`. An integer is already an `i32`; a player argument is
+a live `PlayerRef`, not selector text.
+
+Only the executor whose registration owns the parsed node runs, with its mod's
+identity. If the owner is disabled after registration, the command is refused.
+Return `Some(n)` for success with integer result `n` (zero is also success), or
+`None` for failure. Neither failure nor a disabled owner tries another executor.
+`execute store result` sees `n` on success; `execute store success` sees one.
+An executor can capture owned or shared state, such as an `Arc`, but it cannot
+borrow values from the registration call.
 
 The server asks for commands when it builds the session command tree: at world open before
 functions compile, and again on every `/reload` and data pack change. No player or network hub
 needs to exist yet. Register the complete current set on each call. Plain function lines and
 substituted macro lines are checked against this session tree; commands no longer registered
-are refused when functions next load. Starting the hub reuses the session registration rather
-than asking again.
+are refused when functions next load. Starting the hub reuses the session's accepted command
+grammar rather than asking again. Clients receive only display and completion data,
+never executors. A parsed invocation belongs to the server dispatcher that parsed it;
+if the tree is rebuilt, the server must parse the command again before it can run.
+
+When accepted usages execute at the same node, the usage with the lowest operator
+level supplies both permission and executor; the first registration at that level
+wins. A usage with optional arguments also executes where those arguments begin,
+so `status` and `status [player:player]` overlap at `status`. By contrast, a public
+`status detail` allows traversal through `status`, but does not make an operator-only
+`status` executable. Use distinct paths to keep distinct executors. A root vanilla
+already owns is not registered.
 
 Literal words use lowercase letters, digits, `_` and `-`. Only the first word may
 additionally begin with one `/`: register `/set <x:word>` and type `//set stone` in chat.
 The command's literals retain `/set`. A slash alone, repeated leading slashes and
 slashes in later literal words are refused.
 
-The server parses and checks permissions before resolving arguments or calling a
-listener. Omitted optional arguments are absent, including an omitted optional
+The server parses and checks permissions before resolving arguments or calling the
+executor. Omitted optional arguments are absent, including an omitted optional
 player: they do not silently select the source player. `player` selects exactly one
 online player, `players` one or more online players, `entity` exactly one entity,
 and `entities` one or more entities. Missing or too-large selections produce
-vanilla feedback without calling the listener. Word and greedy text arguments
+vanilla feedback without calling the executor. Word and greedy text arguments
 are strings, numbers are finite doubles, booleans are typed, and item arguments
 are component-bearing stacks of one item. `mod_id` takes a loaded package id and
 delivers it as a string (NeoForge's `ModIdArgument`). `resource:<registry>`, such as
 `<kind:resource:minecraft:entity_type>`, takes an id that registry holds, static or
 from a data pack, and delivers `CommandArgumentValue::Id`; any other id is refused
-with vanilla's `argument.resource.not_found` before a listener runs. Clients see it
+with vanilla's `argument.resource.not_found` before the executor runs. Clients see it
 as vanilla's `minecraft:resource_key`, so unmodded clients complete it too. The registry
 must be a `namespace:path` resource location of at most 256 bytes, and the server takes at
 most 256 distinct registries; a usage past either is left out, with the reason in the log. Block positions are resolved and floored
@@ -60,14 +79,14 @@ as vanilla's parser so `~`, `^` and the dimension list complete as in a vanilla 
 | `nbt` | `minecraft:nbt_compound_tag` | `Nbt(Compound)` |
 
 `~` and `^` resolve against the command source's position and rotation, as `block_pos` does. A
-`dimension` the world has not loaded is refused with `argument.dimension.invalid` before a
-listener runs. A `vec3` and a `vec3_uncentered` cannot share a position in one command's
+`dimension` the world has not loaded is refused with `argument.dimension.invalid` before the
+executor runs. A `vec3` and a `vec3_uncentered` cannot share a position in one command's
 usages, as they look the same to a client.
 A player's source is their position and rotation. The console has no source
 entity and uses the world spawn's block corner, in the level the spawn is in, with zero rotation, so `@s`
-cannot resolve there. Every source receives the same owned data.
+cannot resolve there. Every executor receives the same kind of typed input.
 
-`event.source` is a non-exhaustive `CommandSource`: `Player { player, .. }`,
+The executor's `source` is a non-exhaustive `CommandSource`: `Player { player, .. }`,
 `Console { .. }`, `CommandBlock { position, level, .. }`,
 `CommandBlockMinecart { entity, .. }` or `Function { id, .. }`.
 `source.permission()` returns the effective `PermissionLevel`: functions use
@@ -77,8 +96,15 @@ function permission; blocks and carts use game-master permission. `execute as`,
 `positioned`; the console executes in the Overworld at its spawn corner.
 
 Two reads work in a command and elsewhere on the server. `player.profile(host)` returns
-the player's `GameProfile`: UUID, name and login properties such as the signed `textures`
-skin (empty for an offline-mode player). `host.advancement(&id)` returns a loaded
+the player's `GameProfile<'_>`: UUID, borrowed name and login properties such as the signed
+`textures` skin. Iterate `profile.properties()` in login order; each row lends its `name`,
+`value` and `signature: Option<&str>`. For example, find the skin with
+`profile.properties().find(|p| p.name == "textures")`. An offline-mode player has an empty
+iterator; a stale player has no profile. Copy individual strings only to keep them after the
+host borrow. A [custom test host](../../concepts/testing.md) can lend a profile from
+`testing::GameProfileFixture`.
+
+`host.advancement(&id)` returns a loaded
 `AdvancementInfo`: its parent, display (title, description, icon stack with its components, frame and
 flags), criterion names and requirements, from the set the last `/reload` built. Feedback through
 `host.commands().feedback` honours the underlying source's silence and track-output.
@@ -101,8 +127,8 @@ another level still happen at the next tick's start. `run_command(host, line, le
 
 ## Entity and player selectors
 
-Side: server. Register `Command::new("heal <targets:players>")` to receive
-`CommandArgumentValue::Players(Vec<PlayerRef>)`: `/heal @a` calls the listener once
+Side: server. Bind an executor to `Command::new("heal <targets:players>")` to receive
+`CommandArgumentValue::Players(Vec<PlayerRef>)`: `/heal @a` calls it once
 with all selected online players, not once per player. The other selector kinds
 deliver `Player(PlayerRef)`, `Entity(EntityRef)` and `Entities(Vec<EntityRef>)`.
 For example, `<target:entity>` accepts
@@ -135,9 +161,9 @@ argument's kind:
 
 ```rust,ignore
 use mod_api::{
-    Command, CommandArgumentError, CommandArgumentKind, CommandArgumentType, CommandSender,
-    CommandSuggestion, Hooks, RegisterCommandsEvent, Registrar, RegistrationContext, ServerHost,
-    Text,
+    Command, CommandArgumentError, CommandArgumentKind, CommandArgumentType, CommandArgumentValue,
+    CommandSender, CommandSuggestion, Hooks, RegisterCommandsEvent, Registrar, RegistrationContext,
+    ServerHost, Text,
 };
 
 struct Machine;
@@ -178,15 +204,21 @@ impl Hooks for MyMod {
     }
 
     fn register_commands(&self, _: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
-        event
-            .commands
-            .push(Command::new("machine use <machine:mymod:machine>"));
+        event.commands.push(Command::new("machine use <machine:mymod:machine>").executes(
+            |host, _, command| {
+                let CommandArgumentValue::Custom { value, .. } = command.argument("machine")? else {
+                    return None;
+                };
+                host.commands().feedback(Text::literal(value.as_str())).ok()?;
+                Some(1)
+            },
+        ));
     }
 }
 ```
 
-The server parses the argument with `parse` before calling `run_mod_command`; a
-rejected value shows the returned `Text` and no listener runs. A valid value arrives
+The server parses the argument with `parse` before calling the executor; a
+rejected value shows the returned `Text` and the executor does not run. A valid value arrives
 as `CommandArgumentValue::Custom { kind, value }`, where `kind` is `mymod:machine`
 and `value` is the canonical text `parse` returned. `suggest` is asked for the
 completions while the player types, with the sender: a provider that completes names

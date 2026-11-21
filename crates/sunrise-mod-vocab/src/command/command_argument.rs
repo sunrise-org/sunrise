@@ -155,8 +155,9 @@ impl Default for CommandSender {
 ///
 /// Register it once, from `Hooks::register`, with `Registrar::register_command_argument`. Its
 /// namespaced id (`mymod:machine`) is the kind a `Command` usage names after the argument
-/// name: `Command::new("machine use <machine:mymod:machine>")`. The game then parses the
-/// argument with [`parse`](Self::parse) before calling `run_mod_command`, and asks
+/// name: `Command::new("machine use <machine:mymod:machine>")`. Register that server usage
+/// with [`crate::Command::executes`]. The game validates the argument with [`parse`](Self::parse)
+/// before calling its executor, and asks
 /// [`suggest`](Self::suggest) for the chat box's completions. Players' clients that do not know
 /// the type complete it from the server's answer.
 ///
@@ -166,7 +167,7 @@ pub trait CommandArgumentType: Send + Sync + 'static {
     /// The part of the line the argument takes. The same on every client.
     fn kind(&self) -> CommandArgumentKind;
 
-    /// Validate the text a client wrote and return the value `run_mod_command` receives.
+    /// Validate the text a client wrote and return the value the command executor receives.
     ///
     /// `input` is one word (see [`CommandArgumentKind::Word`] for its characters), or the rest
     /// of the line for [`CommandArgumentKind::Greedy`]. Return the canonical text to deliver (an

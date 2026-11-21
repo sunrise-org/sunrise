@@ -14,7 +14,8 @@ use std::{
     path::{Path, PathBuf},
 };
 use sunrise_core::crc32::Crc32;
-use sunrise_protocol::buf::{Reader, write_varint};
+use sunrise_core::vanilla_bytes::write_varint;
+use sunrise_protocol::buf::Reader;
 
 /// The most `metaData.json` may inflate to: real files are a few hundred bytes.
 const MAX_METADATA_BYTES: u64 = 1 << 20;

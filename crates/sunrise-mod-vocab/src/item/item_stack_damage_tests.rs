@@ -17,13 +17,10 @@ impl crate::prelude::ItemsHost for Definitions {
     }
 }
 impl crate::host::keys::KeysBackend for Definitions {
-    fn item_key_id(&self, item: ItemKey) -> String {
-        match item.0 {
-            0 => "minecraft:iron_sword",
-            1 => "minecraft:stone",
-            _ => "",
-        }
-        .into()
+    fn item_key_id(&self, item: ItemKey) -> Option<&str> {
+        ["minecraft:iron_sword", "minecraft:stone"]
+            .get(item.0 as usize)
+            .copied()
     }
 }
 impl crate::Host for Definitions {

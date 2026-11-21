@@ -131,72 +131,77 @@ fn rejected_native_ingredient_tree_is_disposed_without_recursive_drop() {
     ));
 }
 #[test]
-fn rejected_native_custom_data_is_disposed_without_recursive_drop() {
-    let mut tag = sunrise_core::nbt::Tag::Int(1);
-    for _ in 0..100_000 {
-        tag = sunrise_core::nbt::Tag::List(vec![tag]);
-    }
-    let mut value = info();
-    value.cells[0].as_mut().unwrap().custom = Some((
-        "demo:exact".into(),
-        [("data".into(), tag)].into_iter().collect(),
-    ));
-    assert!(matches!(
-        super::super::ModBookIndex::build(batch(Some(value)), &Registry),
-        Err(DisplayLoadError::InvalidPlacement(_))
-    ));
-}
-#[test]
-fn native_custom_data_keeps_the_independent_vanilla_nbt_depth() {
+fn native_placement_display_keeps_the_independent_vanilla_nbt_depth() {
     for (depth, expected) in [(512, true), (513, false)] {
-        let mut tag = sunrise_core::nbt::Tag::Int(1);
+        let mut tag = Tag::Int(1);
         for _ in 0..depth {
-            tag = sunrise_core::nbt::Tag::List(vec![tag]);
+            tag = Tag::List(vec![tag]);
         }
         let mut value = info();
-        value.cells[0].as_mut().unwrap().custom = Some((
-            "demo:exact".into(),
-            [("data".into(), tag)].into_iter().collect(),
-        ));
-        let mut values = batch(Some(value));
-        let mut wire = mod_api::wire::Writer::new();
-        wire.put(&values);
-        let transport =
-            mod_api::wire::Reader::decode::<Vec<RecipeBookCategory>>(wire.bytes()).is_ok();
-        assert_eq!(transport, expected, "NBT depth {depth}");
+        value.cells[0].as_mut().unwrap().display =
+            Some(Box::new([("data".into(), tag)].into_iter().collect()));
         assert_eq!(
-            validate_batch(&mut values, &Registry).is_ok(),
-            expected,
-            "native NBT depth {depth}"
+            validate_batch(&mut batch(Some(value)), &Registry).is_ok(),
+            expected
         );
     }
 }
 
 #[test]
-fn native_depth_acceptance_matches_the_actual_category_wire_envelope() {
+fn native_depth_acceptance_matches_the_catalogue_envelope() {
     let limit = usize::from(mod_api::wire::MAX_DEPTH);
     for (depth, expected) in [(limit - 5, true), (limit - 4, true), (limit - 3, false)] {
         let mut ingredient = mod_api::Ingredient::of(vec!["minecraft:stone".into()]);
         for _ in 0..depth {
             let mut parent = mod_api::Ingredient::of(vec!["minecraft:stone".into()]);
-            parent.children = Some((mod_api::item::crafting::Shape::Compound, vec![ingredient]));
+            parent.children = Some((Shape::Compound, vec![ingredient]));
             ingredient = parent;
         }
         let mut values = batch(Some(PlacementInfo {
             cells: vec![Some(ingredient)],
             shape: None,
         }));
-        let mut bytes = mod_api::wire::Writer::new();
-        bytes.put(&values);
-        let transport =
-            mod_api::wire::Reader::decode::<Vec<RecipeBookCategory>>(bytes.bytes()).is_ok();
-        assert_eq!(transport, expected, "transport at depth {depth}");
+        let wire = crate::recipe_book::placement_sync::encode_catalogue(&values);
+        assert_eq!(wire.is_ok(), expected, "transport at depth {depth}");
         assert_eq!(
             validate_batch(&mut values, &Registry).is_ok(),
             expected,
             "depth {depth}"
         );
     }
+}
+
+#[test]
+fn network_catalogue_keeps_pictures_but_not_nested_native_predicates() {
+    use crate::recipe_book::placement_sync::{decode_catalogue, encode_catalogue};
+    let mut declarations = batch(Some(info()));
+    let entry = &mut declarations[0].displays[0];
+    entry.displays.push(mod_api::RecipeBookDisplay::Shapeless {
+        ingredients: vec![mod_api::RecipeSlotDisplay::Item("minecraft:stone".into())],
+        result: mod_api::RecipeSlotDisplay::Empty,
+        station: mod_api::RecipeSlotDisplay::Empty,
+    });
+    let mut child = mod_api::Ingredient::of(vec!["minecraft:stone".into()]);
+    child.custom = Some(
+        mod_api::__private::bind_ingredient_predicate(
+            "demo",
+            0,
+            mod_api::IngredientDefinition::new(vec![], |_, _| false),
+        )
+        .1,
+    );
+    entry.placement.as_mut().unwrap().cells[0]
+        .as_mut()
+        .unwrap()
+        .children = Some((Shape::Compound, vec![child]));
+    let received = decode_catalogue(&encode_catalogue(&declarations).unwrap()).unwrap();
+    let original = &declarations[0].displays[0];
+    assert_ne!(original.placement, Some(PlacementInfo::NOT_PLACEABLE));
+    assert_eq!(
+        received[0].displays[0].placement,
+        Some(PlacementInfo::NOT_PLACEABLE)
+    );
+    assert_eq!(received[0].displays[0].displays, original.displays);
 }
 
 #[test]

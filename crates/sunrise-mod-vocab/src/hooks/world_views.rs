@@ -76,5 +76,5 @@ that a clip plane leaves out what is behind it and that a child's picture is thi
         target = "mod_render::render::world_views",
         neoforge = "none (Sunrise-only; NeoForge has no counterpart)"
     )]
-    fn world_views();
+    fn world_views(views: &mut WorldViews<'_>);
 }

@@ -1,4 +1,6 @@
 //! Connection/menu-instance scoped custom recipe placement, distinct from vanilla IDs.
+#[path = "placement_catalogue.rs"]
+mod catalogue;
 #[cfg(test)]
 #[path = "placement_sync_tests.rs"]
 mod tests;
@@ -127,12 +129,28 @@ pub enum Frame {
     },
 }
 
-/// The number of this frame set and catalogue body: bump it when `Frame`, the catalogue's
-/// types (`mod_api::RecipeBookCategory`) or their encoding change. The fragmentation policy is
-/// mixed in below, so changing a limit changes the schema by itself. A daily test in
-/// `sunrise-mod-api-gen` (`the_recipe_placement_protocol_is_pinned_to_the_shapes_it_carries`)
-/// fails when those shapes change without a bump.
-const PROTOCOL: u64 = 1;
+/// Bump when `Frame` or the code-free catalogue body changes on the wire. The
+/// fragmentation limits are part of `schema()` independently.
+const PROTOCOL: u64 = 2;
+
+/// Encode the remote display projection of already validated native declarations.
+pub fn encode_catalogue(declarations: &[mod_api::RecipeBookCategory]) -> Result<Vec<u8>, Refusal> {
+    let categories: Vec<_> = declarations.iter().map(catalogue::Category::from).collect();
+    let mut writer = mod_api::wire::Writer::new();
+    writer.limit(MAX_CATALOG_BYTES);
+    writer.put(&categories);
+    if writer.error().is_some() {
+        return Err(Refusal::TooLarge);
+    }
+    Ok(writer.into_bytes())
+}
+
+/// Decode display data. The caller validates it before publishing a book index.
+pub fn decode_catalogue(bytes: &[u8]) -> Result<Vec<mod_api::RecipeBookCategory>, Refusal> {
+    let categories: Vec<catalogue::Category> =
+        mod_api::wire::Reader::decode(bytes).map_err(|_| Refusal::Invalid)?;
+    Ok(categories.into_iter().map(Into::into).collect())
+}
 
 /// What the client and the server must agree on before either sends a frame.
 pub fn schema() -> u64 {

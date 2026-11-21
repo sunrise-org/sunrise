@@ -26,6 +26,7 @@ menu without a crafting grid. Vanilla menu types are never asked. The contract i
 for a LAN host's own player: the game is the server there, and asks the part on the same server-side path
 (the player's own block container menu, its UUID, `dry_run` for the viewer's check) before its grid transfer."##]
     #[hook(
+        dispatch = "api_carrier",
         side = "server",
         contract = "replace",
         out = "result",

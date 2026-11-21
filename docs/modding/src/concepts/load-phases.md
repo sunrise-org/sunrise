@@ -21,21 +21,23 @@ Each owning thread progresses through `Packages → Registration → Setup → C
 | Reloading | Published asset/data queries, registry facts, settings and mod-list reads, listener registration, and `DataLoadContext` callbacks; no world handles or transactions. |
 | World | The owning game's side-typed `ServerHost` or `ClientHost`. |
 
-`RegistrationContext::instance_dir()` reads the instance directory captured before
-registration begins, as an `InstanceDirectory`: `Unix(Vec<u8>)` preserves raw Unix
-path bytes, and `Windows(Vec<u16>)` preserves Windows UTF-16 code units, including
-unpaired surrogates. Never convert Unix bytes with a lossy UTF-8 conversion when
-constructing a filesystem path. A context
-with no engine snapshot returns `RegistrationReadError::Unavailable`.
+`RegistrationContext::instance_dir()` returns `Result<&std::path::Path, RegistrationReadError>`.
+The path is borrowed from the startup snapshot and preserves the host's native encoding,
+including non-Unicode names. Use it directly for path operations, or call
+`cx.instance_dir()?.to_path_buf()` if you need to keep it beyond registration. A context
+with no startup snapshot returns `RegistrationReadError::Unavailable`.
 
 A mod that does slow work while the game starts shows it on the startup loading screen
 (NeoForge's `StartupNotificationManager` and `ProgressMeter`). `RegistrationContext::progress(label,
-steps)` opens a bar under the game's stage bar and returns `Result<StartupProgress, StartupProgressError>` (handle `TooManyBars` when 64 bars are already open): `step()`, `set(n)` and
-`label(text)` move it, and dropping it removes the bar. The mod may keep the handle past
-`register` and step it or call `bar.message(text)` from a worker thread or from `client_setup`.
-`RegistrationContext::message(text)` shows a line for a few seconds. The newest four bars and the
-last three lines are drawn, each cut to one line. A dedicated server logs each label, line and
-tenth of a bar's steps instead.
+steps)` opens a bar under the game's stage bar and returns `Result<StartupProgress, StartupProgressError>`.
+It returns `TooManyBars` when 64 bars are already open. The returned bar is owned and `Send + Sync`:
+call `step()`, `set(n)` and `label(text)` to update it, and drop it to remove it. A mod can keep the bar
+after registration and update it or call `bar.message(text)` from a worker thread or from `client_setup`.
+
+`RegistrationContext::message(text)` shows a line for a few seconds without opening a bar. Both
+message methods and `bar.label(text)` borrow `text`; the caller need not keep it alive after the call.
+The newest four bars and the last three lines are drawn, each cut to one line. A dedicated server
+logs each label, line and progress in 10% increments instead.
 
 This is part of the startup progress feature, not live rendering of synchronous setup work.
 Bars can be opened through `RegistrationContext`; `client_setup` has no creation context and
@@ -45,11 +47,31 @@ updates cannot draw live and may appear only after it returns, if another loadin
 Slow work can run in a mod-owned worker and step a retained bar, but neither that worker nor
 the bar keeps the loading screen open. Live display of synchronous setup work and a creation
 route from `client_setup` remain outside this change.
+
 ## Registration and setup
 
-Registration runs once: `register`, `component_types`, `blocks`, `items` and `standalone_models`
+Startup hooks such as `register`, `component_types`, `blocks`, `items` and `standalone_models`
 receive no `Host` and read startup facts through `RegistrationContext`.
-`register` also receives `&mut dyn Registrar` for writing declarations. The context's `mods()`, `registry(name)` and `setting(mod_id, key)` read
+`register` receives `&mut dyn Registrar` for writing declarations. In `component_types`, call
+`event.register("mymod:charge".into())` with each owned, namespaced ID. The game checks IDs and
+duplicates before freezing the component registry.
+
+Scoped registration events are borrowed only for the listener call. Their registration methods
+add entries in dispatch order without letting a listener read, edit or remove earlier registrations.
+If the phase gate refuses a listener, its additions are discarded and earlier registrations stand.
+
+A callback registered on the event cannot borrow the event or the context. Capture owned inputs
+for its `Send + Sync + 'static` closure. A model layer supplier runs once at the startup freeze;
+a particle group factory runs once per particle engine, not on sprite reload. A standalone model
+baker can run on a resource worker during each load, and borrows its bake context only for that
+invocation. See [model drawing](../how-to/client/model-drawing.md) and
+[particle render groups](../how-to/client/particles-and-movement-queries.md#particle-render-groups).
+
+Not every registration-context hook runs only at startup. `register_fluid_models` and
+`register_texture_atlases` collect declarations again on client resource reload before baking or
+stitching, respectively. Atlas admission, duplicate handling and dispatch timing are unchanged.
+
+The context's `mods()`, `registry(name)` and `setting(mod_id, key)` read
 one view captured before the first of them runs, so every registration step sees the same values
 whatever the dispatch order: the loaded packages, the built-in registries as `registries.json`
 lists them (not what mods declare during registration) and the settings on disk when the snapshot is captured. A
@@ -89,15 +111,34 @@ game thread.
 
 ## Load contexts
 
-`DataLoadContext` and `LoopContext` expose frozen registry and settings metadata. Use
-`DataLoadOrigin` to identify the load origin and `LoopSide` to identify the owning side.
-Registry entries retain registry ID order.
+`DataLoadContext`, `LoopContext` and `WorldgenHost` lend frozen metadata for their resource
+generation. `registry(name)` returns `Option<&[String]>` in registry ID order,
+`setting(mod_id, key)` returns `Option<&str>`, and `mods()` returns `&LoadedMods` in dispatch order.
+The getters do not read files. `None` means the registry or setting is unavailable, not that it is
+present and empty. Use the references within the callback; take an owned value only if it must
+outlive the context borrow. Use `DataLoadOrigin` to identify the load origin and `LoopSide` to identify
+the owning side.
+
+`DataLoadContext::fluid_tags()` borrows the recipe pass's fluid-tag table. It returns `None` when
+there is no recipe overlay, `Some(&[])` when that overlay has no fluid tags, and otherwise a slice
+of `(tag ID, members)` pairs with each tag's members in source order.
+
+During registration, `RegistrationContext::mods()` already lends the startup inventory.
+`RegistrationContext::registry` and `RegistrationContext::setting` still return their original
+owned results and report `RegistrationReadError` as described above.
+[Chunk disk callbacks](../how-to/chunk-data-load.md) also borrow registry names, but from the
+resource generation retained by their worker.
+
+### Ordinary Host reads
 
 In World, both client and server hosts expose `registry_entry(registry, id)`,
 `registry_entries(registry)` and `registry_entry_in_tag(&entry, tag)`. These read the
 current side's live registry and merged tags, not pending reload data. Unknown or
 unavailable registries and entries return `None`; an absent tag or a tag that does
 not contain the entry returns `Some(false)`. Enumeration yields each identity once.
+
+`ConfigHost::setting` still returns `Option<String>` on an ordinary `Host`; it is not the
+captured `Option<&str>` read on a load, loop or worldgen context.
 
 Server world-generation reads use the published decoded owners, including the
 live feature data in worlds without a terrain locator. Invalid source files do
@@ -129,8 +170,12 @@ reload cover common setup, client setup is `client_setup`, dedicated setup is `s
 and dependencies express intermod ordering. Load complete is the edge after initial Config and before
 `server_about_to_start`, not a hook.
 
-FML's file and path APIs (`ModList` file reads, config full paths, the game directory, update URLs) are
-replaced on purpose; [FML loader APIs and their Sunrise routes](../reference/fml-loader-apis.md) lists each one.
+`DataLoadOrigin` and `LoopSide` describe the local load or loop, not data to encode. Read them
+through `DataLoadContext::origin()` and `LoopContext::side()` as before; if a payload needs such
+a fact, map it into a field of your own [Wire record](wire-types.md).
+
+[FML loader APIs and their Sunrise routes](../reference/fml-loader-apis.md) compares the two loaders'
+file and path APIs, including the game directory.
 
 ## Settings snapshot limits
 

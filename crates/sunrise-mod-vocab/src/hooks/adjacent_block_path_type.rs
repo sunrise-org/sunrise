@@ -14,6 +14,8 @@ pub trait Hooks {
     /// classification; per-search evaluator caches remain.
     /// Diverges from upstream: new hook.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "server",
         version = 2,
         contract = "replace",
@@ -23,5 +25,10 @@ pub trait Hooks {
         host = "read",
         neoforge = "IBlockExtension.getAdjacentBlockPathType"
     )]
-    fn adjacent_block_path_type();
+    fn adjacent_block_path_type(
+        pos: BlockPos,
+        state: BlockState,
+        path_type: mod_api::PathType,
+        adjacent: &mut Option<mod_api::PathType>,
+    );
 }

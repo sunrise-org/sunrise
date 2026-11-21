@@ -7,10 +7,13 @@ use crate::*;
 #[sunrise_mod_api_macros::host_area]
 pub trait EntityDataBackend {
     /// Side: server.
-    /// The entity's tags (`Entity.getTags`), as `/tag <entity> list` shows
-    /// them. API 386.
+    /// Borrow the entity's scoreboard tag set (`Entity.entityTags()`).
+    /// An entity without tags has an [`empty view`](EntityTags::is_empty). A stale handle
+    /// or unavailable context returns `None`. Use [`EntityTags::contains`] for an exact
+    /// match, or [`EntityTags::iter_utf16`] to read tags in saved order and choose how
+    /// to convert them to UTF-8.
     #[access(WorldOnly)]
-    fn entity_tags(&self, entity: EntityRef) -> Option<Vec<String>>;
+    fn entity_tags(&self, entity: EntityRef) -> Option<EntityTags<'_>>;
 }
 /// The handles' writes of the `entity_data` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

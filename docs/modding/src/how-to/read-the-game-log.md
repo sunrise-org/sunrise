@@ -27,7 +27,7 @@ On builds affected by [#3677](https://github.com/sunrise-org/sunrise/issues/3677
 `log` macros in native mods built against the prebuilt SDK do not reach the game logger.
 
 For a loading problem players should see, call
-`RegistrationContext::warn("mymod.warn.optional_integration", &["other_mod"])` in
-`Hooks::register`. Put the key in your mod's language files, with a `%s` for the
-argument. This records a [loading warning](../concepts/registration-and-diagnostics.md#loading-warnings)
-that the Mods screen can show without refusing the mod.
+`cx.warn("mymod.warn.optional_integration", &["other_mod"])` on the
+`RegistrationContext` passed to `Hooks::register`. Put the key in your mod's language
+files, with a `%s` for the argument. Sunrise logs the [loading warning](../concepts/registration-and-diagnostics.md#loading-warnings)
+under your mod's ID, and the Mods screen can show it without refusing the mod.

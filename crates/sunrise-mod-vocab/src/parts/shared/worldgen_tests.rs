@@ -2,6 +2,7 @@
 //! threads with no game. The published table itself is tested with the engine's tree-grow
 //! adapter (`sunrise-client` `native_tree_grow`), where Parts can be registered.
 use super::*;
+use crate::testing::TestReader;
 use crate::*;
 
 struct Draws;
@@ -35,8 +36,8 @@ fn with_no_part_subscribed_a_worldgen_dispatch_looks_nothing_up() {
     TEST_PART_LOOKUPS.set(0);
     let mut soil = None;
     crate::world::ground::native_on_tree_grow(
-        &OwningWorldgen::new(&|_| None, &|_, _| None, &|_, _, _| None),
-        BlockState::from(BlockStateRecord::new(BlockKey(0), 0)),
+        &OwningWorldgen::new(&TestReader::default(), &|_, _, _| None),
+        crate::__private::block_state_from_ordinal(BlockKey(0), 0),
         [0, 63, 0],
         &mut Draws,
         &mut soil,

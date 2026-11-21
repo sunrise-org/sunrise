@@ -35,11 +35,13 @@ number, then the highest threshold at or below it wins, else `fallback`, as for 
 resource reload keeps reading the mod's number. An id in vanilla's namespace, not `<namespace>:<path>`, or
 registered twice is logged and left out. A property no mod registers reads 0, decided once at load."#]
     #[hook(
+        receiver = "associated",
+        dispatch = "flat",
         side = "client",
         contract = "collect",
         out = "properties",
         context = "registration",
         neoforge = "RegisterRangeSelectItemModelPropertyEvent"
     )]
-    fn register_range_select_item_model_property();
+    fn register_range_select_item_model_property(properties: &mut Vec<String>);
 }

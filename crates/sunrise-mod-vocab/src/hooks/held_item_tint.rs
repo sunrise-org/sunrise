@@ -14,6 +14,8 @@ pub trait Hooks {
     /// next Part, then to the model's own colors. First-person hands, GUI previews, worn
     /// equipment, item frames and dropped items are not asked. Client-side.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         version = 1,
         contract = "replace",
@@ -23,5 +25,11 @@ pub trait Hooks {
         event_per_listener = true,
         neoforge = "none (vanilla ItemInHandLayer.submitArmWithItem and PlayerItemInHandLayer.submitArmWithItem)"
     )]
-    fn held_item_tint();
+    fn held_item_tint(
+        entity_id: u32,
+        hand: Hand,
+        stack: &ItemStack,
+        partial_tick: f32,
+        tint: &mut Option<u32>,
+    );
 }

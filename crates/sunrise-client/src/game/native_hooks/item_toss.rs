@@ -72,10 +72,13 @@ mod item_toss_tests {
     impl Hooks for Tosser {
         fn item_toss(&self, host: &mut dyn ServerHost, event: &mut ItemTossEvent) -> Flow {
             *self.0.lock().unwrap() += 1;
-            let stack = event.item.stack(host).expect("the tossed item reads");
-            if mod_api::__private::item_key_id(stack.item())
-                .is_some_and(|id| id == "minecraft:dirt")
-            {
+            let is_dirt = event
+                .item
+                .with_stack(host, |stack| {
+                    mod_api::__private::item_key_id(stack.item()) == Some("minecraft:dirt")
+                })
+                .expect("the tossed item reads");
+            if is_dirt {
                 assert!(event.item.set_no_pickup_delay(host));
                 Flow::Continue
             } else {

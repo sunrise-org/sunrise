@@ -1,4 +1,3 @@
-// game-module-visibility: pub(crate)
 //! Direct, owner-scoped adapters for the two loot map-codec registries.
 use super::api_values::{TryIntoApi, TryIntoEngine};
 #[cfg(test)]

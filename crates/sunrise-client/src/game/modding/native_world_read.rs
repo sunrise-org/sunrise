@@ -697,8 +697,11 @@ mod tests {
                     panic!("the oak logs tag is loaded");
                 };
                 assert_eq!(
-                    keys.into_iter().map(|key| key.id(host)).collect::<Vec<_>>(),
-                    oak
+                    keys.into_iter()
+                        .map(|key| key.id(host))
+                        .collect::<Option<Vec<_>>>()
+                        .as_deref(),
+                    Some(&oak.each_ref().map(String::as_str)[..])
                 );
                 let item = host
                     .item_key(&mod_api::Identifier::parse("minecraft:oak_log").unwrap())
@@ -842,7 +845,7 @@ mod tests {
             use super::super::api_values::TryIntoApi;
             let stone = stone.try_into_api().unwrap();
             let slab = slab.try_into_api().unwrap();
-            let invalid = mod_api::BlockStateRecord::new(stone.block(), u16::MAX).into();
+            let invalid = mod_api::__private::block_state_from_ordinal(stone.block(), u16::MAX);
             let parsed = game
                 .block_state_id("minecraft:oak_slab[waterlogged=true]")
                 .try_into_api()

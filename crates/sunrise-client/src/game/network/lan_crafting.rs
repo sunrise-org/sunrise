@@ -1205,7 +1205,7 @@ impl Game<'_> {
     }
 
     pub(super) fn guest_recipe_transfer(&mut self, conn: u32, data: &[u8]) {
-        use sunrise_protocol::buf::Writer;
+        use sunrise_core::vanilla_bytes::Writer;
         let Some(host) = self.lan.as_ref() else {
             return;
         };
@@ -1253,7 +1253,8 @@ impl Game<'_> {
     /// packet but the reply. Each guest can burst ten checks, then gains one
     /// check per server tick (twenty per second at 20 TPS); more go unanswered.
     pub(super) fn guest_recipe_check(&mut self, conn: u32, data: &[u8]) {
-        use sunrise_protocol::buf::{Reader, Writer};
+        use sunrise_core::vanilla_bytes::Writer;
+        use sunrise_protocol::buf::Reader;
         let Some(host) = self.lan.as_mut() else {
             return;
         };
@@ -2403,7 +2404,7 @@ mod recipe_check_tests {
     }
 
     fn request(window: i32, tag: i32, id: &str) -> Vec<u8> {
-        let mut w = sunrise_protocol::buf::Writer::new();
+        let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
         w.varint(window);
         w.varint(tag);
         w.string(id);
@@ -2505,6 +2506,7 @@ mod recipe_check_tests {
                 sent: vec![None; 46],
                 drag: None,
                 sent_data: Vec::new(),
+                reported_unsent_data_len: None,
                 blockless_data: Vec::new(),
                 hidden: Vec::new(),
                 mod_type: Some(station),
@@ -2544,7 +2546,7 @@ mod recipe_check_tests {
             );
             // The transfer the first check answered for does move them.
             game.guest_recipe_transfer(2, &{
-                let mut w = sunrise_protocol::buf::Writer::new();
+                let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
                 w.varint(WINDOW);
                 w.string("minecraft:stick");
                 w.data
@@ -2596,8 +2598,10 @@ mod empty_ingredient_placement_tests {
             &self,
             _: &dyn mod_api::DataLoadContext,
             event: &mut mod_api::IngredientEvent<'_>,
-        ) {
-            assert_eq!(event.kind, "empty_fixture:predicate");
+        ) -> Option<mod_api::IngredientDefinition> {
+            let kind = event.kind;
+            (kind == "empty_fixture:predicate")
+                .then(|| mod_api::IngredientDefinition::new(vec![], |_, _| true))
         }
     }
 
@@ -2706,8 +2710,8 @@ mod empty_ingredient_placement_tests {
                     game.build_registries();
                     {
                         // The generated Host entrypoint serves mod callers;
-                        // roundtrip its real answer, not a hand-constructed ingredient.
-                        use mod_api::wire::{Reader, Wire, Writer};
+                        // check its real answer directly (Ingredient holds in-process
+                        // predicates and has no Wire form).
                         let host: &dyn mod_api::Host = game;
                         let empty = host
                             .recipe_ingredient(r##""#empty_fixture:empty""##)
@@ -2721,15 +2725,10 @@ mod empty_ingredient_placement_tests {
                                 .is_none()
                         );
                         assert!(host.recipe_ingredient("[]").unwrap().is_none());
-                        let mut writer = Writer::default();
-                        empty.put(&mut writer);
-                        let decoded: mod_api::Ingredient =
-                            Reader::decode(&writer.into_bytes()).unwrap();
-                        assert_eq!(decoded, empty);
                         let stone = mod_api::ItemStack::of(
                             mod_api::__private::item_key("minecraft:stone").unwrap(),
                         );
-                        assert!(!decoded.test(host, &stone));
+                        assert!(!empty.test(host, &stone));
                     }
                     game.lan_host(
                         crate::game::lan::LanSettings {

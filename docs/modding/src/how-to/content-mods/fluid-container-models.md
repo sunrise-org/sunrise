@@ -70,9 +70,11 @@ impl Hooks for MyMod {
 ```
 
 - The answer is a fluid, never a sprite or a colour: the model draws the fluid's own still sprite and item tint, as
-  for a water bucket. A mod fluid needs a look (`data/<mod>/sunrise/fluid/<name>.json`) to draw in an item; a model
-  from `register_fluid_models` changes how a fluid with a look draws, but does not make one drawable alone. A
-  registered fluid with no look draws the missing texture through the mask, so the missing file shows.
+  for a water bucket. A mod fluid needs a look (`data/<mod>/sunrise/fluid/<name>.json`) to draw in an item.
+  To supply model sprites for a fluid that has a look, call `event.register(model)` with a `FluidModel` in
+  `Hooks::register_fluid_models`. The client collects those declarations at startup and again before
+  each resource reload's bake. A model alone does not supply a look: a registered fluid with no look
+  draws the missing texture through the mask.
 - Leaving `event.fluid` at `None` draws the stack as holding none: the model's declared `fluid`, untinted, or no
   fluid layer when that is `minecraft:empty`.
 - Registration returns keys for registered fluids. An unregistered key

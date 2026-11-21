@@ -301,10 +301,7 @@ fn a_later_write_that_puts_the_block_back_keeps_its_block_entity_at_the_commit()
 #[ignore = "daily"]
 fn journal_level_host_stages_block_entity_random_and_effect_changes() {
     use crate::game::journal_level_write::JournalLevelWrite;
-    use mod_api::{
-        BlockPos, BlockUpdateFlags, LevelHost, LevelRandomHost, LevelTicksHost, LevelWriteHost,
-        RandomSource,
-    };
+    use mod_api::{BlockPos, BlockUpdateFlags, LevelWriteHost};
     use sunrise_core::{position::ChunkPos, ticks::TickTypeId};
     use sunrise_world::fluid::FluidKind;
 
@@ -327,6 +324,7 @@ fn journal_level_host_stages_block_entity_random_and_effect_changes() {
             dispense_fixture::start_recording();
             {
                 let mut host = JournalLevelWrite::new(game, level).unwrap();
+                let host: &mut dyn LevelWriteHost = &mut host;
                 assert!(host.block_entity(AT).is_some());
                 assert_eq!(
                     host.state_block(host.block_state(AT).unwrap()),
@@ -340,9 +338,7 @@ fn journal_level_host_stages_block_entity_random_and_effect_changes() {
                 ));
                 assert_eq!(host.block_state(AT), Some(stone));
                 assert!(host.block_entity(AT).is_none());
-                let mut random = host.random().unwrap();
-                random.next_int();
-                assert!(host.set_random(random));
+                host.with_random(|random| random.next_int()).unwrap();
                 assert!(host.schedule_fluid_tick(AT, "minecraft:water", 5));
                 assert!(host.level_event(1501, AT, 0));
                 assert!(!host.level_event(2001, AT, -1));

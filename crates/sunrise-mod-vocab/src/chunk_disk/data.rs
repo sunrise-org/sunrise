@@ -1,9 +1,15 @@
 //! The callback's typed store: only encoded values cross the worker boundary.
 use super::*;
+use sunrise_core::nbt::{self, JavaString, Limits};
+use sunrise_mod_runtime::attachments::ATTACHMENTS_KEY;
 
 /// A job-local attachment transaction. No decoded value is shared with live state.
 /// Use [`Self::get`] and [`Self::set`] with the ordinary typed attachment key.
-/// Any refused operation poisons the job even if the listener ignores its error.
+/// The uncompressed disk NBT budget is 65,536 bytes per named `value` tag,
+/// 64 container levels in that value, and 1,048,576 bytes for the entire
+/// named attachment compound, including unknown data. Anything that would
+/// exceed a limit or require truncation is refused. Any refusal poisons the
+/// job even if the listener ignores its error.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ChunkDiskData {
@@ -12,8 +18,8 @@ pub struct ChunkDiskData {
 }
 
 impl ChunkDiskData {
-    /// Detach the captured encoded envelopes, checking unknown keys as well.
-    /// No attachment decoder or encoder runs during capture.
+    /// Check the captured encoded envelopes, including unknown keys, before
+    /// opening the transaction. This does not run any attachment codec.
     pub fn from_nbt(entries: Compound) -> Result<Self, ChunkDiskFailure> {
         validate(&entries)?;
         Ok(Self {
@@ -121,11 +127,21 @@ fn failure(key: &str, reason: &str) -> ChunkDiskFailure {
     }
 }
 
+/// Bytes of a disk NBT name, excluding its tag ID. Unlike vanilla's disk
+/// fallback, reject names that would be replaced with an empty string.
+fn name_bytes(name: &JavaString) -> Option<usize> {
+    u16::try_from(name.modified_utf8_len())
+        .ok()
+        .map(|len| 2 + usize::from(len))
+}
+
 fn validate(entries: &Compound) -> Result<(), ChunkDiskFailure> {
-    let mut total = wire::Writer::new();
-    total.limit(1_048_576);
-    // Treat the attachment root as an NBT tree so its internal nesting does not
-    // consume Wire's smaller structural-record recursion budget.
+    const TOTAL_EXCEEDED: &str = "chunk attachments exceed 1048576 bytes";
+    const LONG_NAME: &str = "modified UTF-8 exceeds 65535 bytes";
+    // The named `sunrise:attachments` compound: tag ID, u16-prefixed name,
+    // and the closing TAG_End. Each namespace under it has the same framing.
+    let mut remaining = 1_048_576 - (1 + 2 + ATTACHMENTS_KEY.len() + 1);
+    let value_name = "value".into();
     for (namespace, names) in entries {
         let Tag::Compound(names) = names else {
             return Err(failure(
@@ -133,29 +149,64 @@ fn validate(entries: &Compound) -> Result<(), ChunkDiskFailure> {
                 "invalid attachment namespace",
             ));
         };
-        total.put(namespace);
-        for (name, envelope) in names {
-            let key = format!("{}:{}", namespace.to_string_lossy(), name.to_string_lossy());
-            let Tag::Compound(envelope) = envelope else {
-                return Err(failure(&key, "invalid persistence envelope"));
+        let framing = name_bytes(namespace)
+            .ok_or_else(|| failure(&namespace.to_string_lossy(), LONG_NAME))?;
+        remaining = remaining
+            .checked_sub(1 + framing + 1)
+            .ok_or_else(|| failure(&namespace.to_string_lossy(), TOTAL_EXCEEDED))?;
+        for (name, tag) in names {
+            let refuse = |reason| {
+                let key = format!("{}:{}", namespace.to_string_lossy(), name.to_string_lossy());
+                failure(&key, reason)
             };
-            let Some(value) = envelope.get(&"value".into()) else {
-                return Err(failure(&key, "missing encoded value"));
+            let Tag::Compound(envelope) = tag else {
+                return Err(refuse("invalid persistence envelope"));
             };
-            if !sunrise_core::nbt::within_depth(value, 64) {
-                return Err(failure(&key, "attachment depth exceeds 64"));
-            }
-            let mut encoded = wire::Writer::new();
-            encoded.limit(65_536);
-            encoded.put(value);
-            if encoded.error().is_some() {
-                return Err(failure(&key, "encoded attachment exceeds 65536 bytes"));
-            }
-            total.put(name);
-            total.put(envelope);
-            if total.error().is_some() {
-                return Err(failure(&key, "chunk attachments exceed 1048576 bytes"));
-            }
+            let value = envelope
+                .get(&value_name)
+                .ok_or_else(|| refuse("missing encoded value"))?;
+
+            // Both NBT writers use the same tag IDs, payload framing and mixed
+            // list wrappers. NaN canonicalization doesn't change the length.
+            // Use the strict writer so too-long strings cannot silently shrink;
+            // add the disk-only root name to its tag ID and payload.
+            nbt::write_network(
+                value,
+                Limits {
+                    max_bytes: 65_536 - (2 + "value".len()),
+                    max_nodes: usize::MAX,
+                    max_depth: 64,
+                },
+            )
+            .map_err(|error| {
+                refuse(match error.reason {
+                    "byte limit exceeded" => "encoded attachment exceeds 65536 bytes",
+                    "depth limit exceeded" => "attachment depth exceeds 64",
+                    reason => reason,
+                })
+            })?;
+
+            let framing = name_bytes(name).ok_or_else(|| refuse(LONG_NAME))?;
+            remaining = remaining
+                .checked_sub(framing)
+                .ok_or_else(|| refuse(TOTAL_EXCEEDED))?;
+            let envelope_len = nbt::write_network(
+                tag,
+                Limits {
+                    max_bytes: remaining,
+                    max_nodes: usize::MAX,
+                    // Root, attachment compound and namespace are outside this envelope.
+                    max_depth: Limits::saved().max_depth - 3,
+                },
+            )
+            .map_err(|error| {
+                refuse(match error.reason {
+                    "byte limit exceeded" => TOTAL_EXCEEDED,
+                    reason => reason,
+                })
+            })?
+            .len();
+            remaining -= envelope_len;
         }
     }
     Ok(())

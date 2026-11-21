@@ -7,9 +7,16 @@ pub trait Hooks {
     /// The owned stack snapshot is the one being resolved, including nested bundle items.
     /// `bundle_selected` is the runtime bundle selection index; -1 means none.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         neoforge = "RegisterSelectItemModelPropertyEvent"
     )]
-    fn item_model_select_property();
+    fn item_model_select_property(
+        property: &str,
+        stack: &mod_api::ItemStack,
+        bundle_selected: i32,
+        value: &mut Option<String>,
+    );
 }

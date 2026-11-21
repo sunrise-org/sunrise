@@ -7,9 +7,10 @@ use std::{
     collections::BTreeMap,
     time::{Duration, Instant},
 };
+use sunrise_core::vanilla_bytes::Writer;
 use sunrise_protocol::{
     PROTOCOL_VERSION, State,
-    buf::{Reader, Writer},
+    buf::Reader,
     connection::Connection,
     ids,
     packets::{Empty, configuration as cfg, handshake, login, play},

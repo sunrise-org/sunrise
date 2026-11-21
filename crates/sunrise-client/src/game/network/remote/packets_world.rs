@@ -187,6 +187,9 @@ impl Game<'_> {
                 if let Some(r) = self.remote.as_mut() {
                     r.game_mode = mode;
                 }
+                if self.spectator() {
+                    self.reset_client_item_use();
+                }
             }
             // IMMEDIATE_RESPAWN: LocalPlayer.setShowDeathScreen.
             11 => {

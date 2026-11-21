@@ -125,32 +125,68 @@ fn a_special_type_draws_by_its_renderer_or_fails_by_name() {
         "{error}"
     );
     // A mod may replace a vanilla type: its models then go to the mod's renderer.
-    register_special_model_types(vec!["foreigntest:skillet".into(), "minecraft:bell".into()]);
-    let n = node(
-        r#"{"type":"minecraft:special","base":"foreigntest:item/pan","model":{"type":"foreigntest:skillet","handle":2}}"#,
+    let skillet = RegisteredSpecialModel(Arc::new(2));
+    let bell = RegisteredSpecialModel(Arc::new(()));
+    let load = |kind: &str, base: &str, json: &Map<String, Value>| {
+        Ok(match kind {
+            "foreigntest:skillet" => {
+                assert_eq!(base, "minecraft:item/pan");
+                assert_eq!(json["handle"], serde_json::json!(2));
+                Some(skillet.clone())
+            }
+            "minecraft:bell" => Some(bell.clone()),
+            _ => None,
+        })
+    };
+    let decode = |json| {
+        ClientItem::from_json_with_specials(json, &load)
+            .unwrap()
+            .model
+    };
+    let pan = decode(
+        r#"{"model":{"type":"special","base":"item/pan","model":{"type":"foreigntest:skillet","handle":2}}}"#,
+    );
+    let mut dependencies = Vec::new();
+    pan.dependencies(&mut dependencies);
+    assert_eq!(dependencies, ["minecraft:item/pan"]);
+    assert!(matches!(pan, ItemModelNode::RegisteredSpecial { model, .. } if model == skillet));
+    let shield = decode(r#"{"model":{"type":"special","base":"a:b","model":{"type":"shield"}}}"#);
+    assert!(matches!(shield, ItemModelNode::Special { .. }));
+    let overridden = decode(r#"{"model":{"type":"special","base":"a:b","model":{"type":"bell"}}}"#);
+    assert!(matches!(overridden, ItemModelNode::RegisteredSpecial { model, .. } if model == bell));
+}
+
+#[test]
+fn a_registered_vanilla_override_error_rejects_only_its_enclosing_item() {
+    let load = |kind: &str, _: &str, _: &Map<String, Value>| match kind {
+        "minecraft:bell" => Err("the bell override rejected its model".into()),
+        _ => Ok(None),
+    };
+    let composite = r#"{"model":{"type":"composite","models":[
+        {"type":"model","model":"a:plain"},
+        {"type":"select","property":"display_context","cases":[{"when":"gui","model":
+            {"type":"special","base":"a:bell","model":{"type":"bell"}}
+        }]}
+    ]}}"#;
+    // The same tree decodes with no registrations, so a builtin fallback would hide the error.
+    assert!(ClientItem::from_json(composite).is_ok());
+    assert_eq!(
+        ClientItem::from_json_with_specials(composite, &load)
+            .unwrap_err()
+            .to_string(),
+        "the bell override rejected its model"
+    );
+    let other = ClientItem::from_json_with_specials(
+        r#"{"model":{"type":"special","base":"a:shield","model":{"type":"shield"}}}"#,
+        &load,
     )
     .unwrap();
-    let ItemModelNode::RegisteredSpecial {
-        base, slot, config, ..
-    } = &n
-    else {
-        panic!("not a registered special model: {n:?}");
-    };
-    assert_eq!(
-        (base.as_str(), *slot),
-        ("foreigntest:item/pan", SpecialModelSlot(0))
-    );
-    assert_eq!(config.get("handle"), Some(&sunrise_core::nbt::Tag::Byte(2)));
-    let n =
-        node(r#"{"type":"minecraft:special","base":"a:b","model":{"type":"minecraft:shield"}}"#)
-            .unwrap();
-    assert!(matches!(n, ItemModelNode::Special { .. }));
-    let n = node(r#"{"type":"minecraft:special","base":"a:b","model":{"type":"minecraft:bell"}}"#)
-        .unwrap();
     assert!(matches!(
-        &n,
-        ItemModelNode::RegisteredSpecial {
-            slot: SpecialModelSlot(1),
+        other.model,
+        ItemModelNode::Special {
+            model: SpecialModel {
+                kind: SpecialKind::Shield
+            },
             ..
         }
     ));

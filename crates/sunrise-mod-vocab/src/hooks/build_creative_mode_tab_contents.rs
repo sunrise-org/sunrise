@@ -15,10 +15,16 @@ pub trait Hooks {
     /// snapshots. Both-list edits check and change parent before search without undoing parent
     /// on a search error.
     #[hook(
+        dispatch = "flat",
         side = "both",
         contract = "listen",
         version = 2,
         neoforge = "BuildCreativeModeTabContentsEvent"
     )]
-    fn build_creative_mode_tab_contents();
+    fn build_creative_mode_tab_contents(
+        tab: &str,
+        features: Vec<String>,
+        permissions: mod_api::CreativeTabPermissions,
+        edit: mod_api::CreativeTabEdit,
+    );
 }

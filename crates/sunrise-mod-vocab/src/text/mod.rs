@@ -15,9 +15,11 @@ pub struct InlineImageReplacement {
 }
 
 /// A component tree, retaining translation keys, styles and ordered children.
+/// Build it directly with [`Text::literal`], [`Text::translate`] or [`Text::new`]
+/// and lend it to host reads. The host validates it at the boundary.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-// no wire: handwritten Wire uses the validated iterative TextForm node table.
+// no wire: handwritten Wire uses a private, validated iterative node table.
 pub struct Text {
     /// The component's contents before its children.
     pub content: TextContent,
@@ -224,7 +226,7 @@ impl Text {
             if depth > MAX_TEXT_DEPTH {
                 return Err(TextFormError::TooDeep);
             }
-            text.visit_children(|child, _| pending.push((child, depth + 1)));
+            text.visit_children(|child| pending.push((child, depth + 1)));
         }
         Ok(())
     }
@@ -323,47 +325,31 @@ impl Default for TextStyle {
     }
 }
 
-/// Flat representation of a component tree.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct TextForm {
+/// Internal Wire representation of a component tree.
+#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+pub(crate) struct TextForm {
     /// Nodes in parent-before-child order.
-    pub nodes: Vec<TextNode>,
+    nodes: Vec<TextNode>,
 }
 /// One typed shallow component and its position in the tree.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct TextNode {
+#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+struct TextNode {
     /// Parent node index, or None for the root.
-    pub parent: Option<u32>,
+    parent: Option<u32>,
     /// Relation to the parent.
-    pub relation: TextRelation,
+    relation: TextRelation,
     /// Contents without recursive component slots.
-    pub content: TextNodeContent,
+    content: TextNodeContent,
     /// Style without recursive component slots.
-    pub style: TextNodeStyle,
+    style: TextNodeStyle,
     /// Unknown component fields, as a compound.
-    pub metadata: Tag,
-}
-impl TextNode {
-    /// A root row with no style overrides or unknown fields.
-    pub fn new(content: TextNodeContent) -> Self {
-        Self {
-            parent: None,
-            relation: TextRelation::Child,
-            content,
-            style: TextNodeStyle::default(),
-            metadata: Tag::Compound(Default::default()),
-        }
-    }
+    metadata: Tag,
 }
 /// Shallow content. Recursive values appear only in related rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 // exhaustive: closed wire vocabulary
 #[derive(sunrise_mod_api_macros::Wire)]
-pub enum TextNodeContent {
+enum TextNodeContent {
     /// Literal characters.
     Literal(String),
     /// Translation key and optional literal fallback template.
@@ -415,7 +401,7 @@ pub enum TextNodeContent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 // exhaustive: closed wire vocabulary
 #[derive(sunrise_mod_api_macros::Wire)]
-pub enum TextNodeHover {
+enum TextNodeHover {
     /// Exactly one HoverText row is required.
     Text,
     /// Item identity and optional component patch.
@@ -436,40 +422,36 @@ pub enum TextNodeHover {
     },
 }
 /// The nonrecursive form of TextStyle, with the same inheritance semantics.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct TextNodeStyle {
+#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+struct TextNodeStyle {
     /// Named colour or `#RRGGBB` component colour.
-    pub color: Option<String>,
+    color: Option<String>,
     /// Packed ARGB shadow colour; zero suppresses shadows.
-    pub shadow_color: Option<u32>,
+    shadow_color: Option<u32>,
     /// Bold decoration.
-    pub bold: Option<bool>,
+    bold: Option<bool>,
     /// Italic decoration.
-    pub italic: Option<bool>,
+    italic: Option<bool>,
     /// Underline decoration.
-    pub underlined: Option<bool>,
+    underlined: Option<bool>,
     /// Strikethrough decoration.
-    pub strikethrough: Option<bool>,
+    strikethrough: Option<bool>,
     /// Obfuscated decoration.
-    pub obfuscated: Option<bool>,
+    obfuscated: Option<bool>,
     /// Action invoked by clicking the component.
-    pub click: Option<TextClick>,
+    click: Option<TextClick>,
     /// Information displayed on hover.
-    pub hover: Option<TextNodeHover>,
+    hover: Option<TextNodeHover>,
     /// Text inserted into the chat input on Shift-click.
-    pub insertion: Option<String>,
+    insertion: Option<String>,
     /// Font identifier.
-    pub font: Option<String>,
+    font: Option<String>,
     /// Unknown style metadata remains owned data, without engine types.
-    pub metadata: Tag,
+    metadata: Tag,
 }
-/// Relation to an earlier row. Unknown discriminants are rejected by bindings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub enum TextRelation {
+/// Relation to an earlier row. Unknown discriminants are rejected by Wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+enum TextRelation {
     /// Appended component.
     Child,
     /// Translation argument.
@@ -495,7 +477,7 @@ pub enum TextFormError {
     Unavailable,
     /// A component path or opaque NBT container path exceeds 512.
     TooDeep,
-    /// Fields or parent/relation tables are inconsistent.
+    /// The component has inconsistent or invalid fields.
     Malformed,
     /// Tag→JSON emission cannot represent NaN or infinity.
     NonFinite,
@@ -546,13 +528,18 @@ impl Text {
                 item,
                 profile,
             )?;
-            text.visit_children(|child, _| pending.push(child));
+            text.visit_children(|child| pending.push(child));
         }
         Ok(())
     }
-    /// Visit recursive component slots in their relation order, without cloning.
-    /// Opaque NBT data is not a component edge.
-    pub fn visit_children<'a>(&'a self, mut visit: impl FnMut(&'a Text, TextRelation)) {
+    /// Lend each directly nested component in order: appended children first,
+    /// then the content's arguments, separator or fallback, then hover text or
+    /// a hover entity name. This does not descend further or visit opaque NBT.
+    pub fn visit_children<'a>(&'a self, mut visit: impl FnMut(&'a Text)) {
+        self.visit_related(|child, _| visit(child));
+    }
+
+    fn visit_related<'a>(&'a self, mut visit: impl FnMut(&'a Text, TextRelation)) {
         for child in &self.children {
             visit(child, TextRelation::Child);
         }
@@ -615,24 +602,6 @@ fn clone_click(source: &TextClick) -> TextClick {
             id: id.clone(),
             payload: payload.as_ref().map(clone_tag),
         },
-    }
-}
-impl Default for TextNodeStyle {
-    fn default() -> Self {
-        Self {
-            color: None,
-            shadow_color: None,
-            bold: None,
-            italic: None,
-            underlined: None,
-            strikethrough: None,
-            obfuscated: None,
-            insertion: None,
-            font: None,
-            click: None,
-            hover: None,
-            metadata: Tag::Compound(Default::default()),
-        }
     }
 }
 impl TextNodeStyle {
@@ -767,9 +736,8 @@ fn validate_payload(
     Ok(())
 }
 
-impl TryFrom<&Text> for TextForm {
-    type Error = TextFormError;
-    fn try_from(value: &Text) -> Result<Self, Self::Error> {
+impl TextForm {
+    pub(crate) fn from_text(value: &Text) -> Result<Self, TextFormError> {
         value.validate()?;
         let mut nodes = Vec::new();
         let mut pending = vec![(value, None, TextRelation::Child)];
@@ -820,13 +788,12 @@ impl TryFrom<&Text> for TextForm {
                 metadata: clone_tag(&text.metadata),
             });
             let mut children = Vec::new();
-            text.visit_children(|child, relation| children.push((child, Some(index), relation)));
+            text.visit_related(|child, relation| children.push((child, Some(index), relation)));
             pending.extend(children.into_iter().rev());
         }
         Ok(Self { nodes })
     }
-}
-impl TextForm {
+
     fn validate(&self) -> Result<(), TextFormError> {
         let mut depths = Vec::with_capacity(self.nodes.len());
         let mut masks = vec![0u8; self.nodes.len()];
@@ -939,14 +906,13 @@ fn discard_form(form: TextForm) {
         sunrise_core::nbt::discard_tag(tag);
     }
 }
-impl TryFrom<TextForm> for Text {
-    type Error = TextFormError;
-    fn try_from(value: TextForm) -> Result<Self, Self::Error> {
-        if let Err(error) = value.validate() {
-            discard_form(value);
+impl TextForm {
+    pub(crate) fn into_text(self) -> Result<Text, TextFormError> {
+        if let Err(error) = self.validate() {
+            discard_form(self);
             return Err(error);
         }
-        let mut nodes: Vec<_> = value
+        let mut nodes: Vec<_> = self
             .nodes
             .into_iter()
             .map(|node| {
@@ -1056,6 +1022,29 @@ mod tests {
         }
     }
     #[test]
+    fn visit_children_lends_appended_components_then_arguments_then_hover() {
+        let mut root = Text::translate(
+            "key",
+            vec![Text::literal("arg one"), Text::literal("arg two")],
+        )
+        .append(Text::literal("child one").append(Text::literal("grandchild")))
+        .append(Text::literal("child two"));
+        root.style.hover = Some(TextHover::Text(Box::new(Text::literal("hover"))));
+
+        let mut visited = Vec::new();
+        root.visit_children(|child| {
+            let TextContent::Literal(value) = &child.content else {
+                panic!("expected a literal child");
+            };
+            visited.push(value.as_str());
+        });
+        assert_eq!(
+            visited,
+            ["child one", "child two", "arg one", "arg two", "hover"]
+        );
+    }
+
+    #[test]
     fn recursive_fields_styles_and_metadata_survive_typed_rows() {
         let mut root =
             Text::translate("key", vec![Text::literal("first"), Text::literal("second")]);
@@ -1105,17 +1094,17 @@ mod tests {
         root.style.bold = Some(false);
         root.metadata = Tag::compound([("future", Tag::Byte(7))]);
         root.style.metadata = Tag::compound([("future-style", Tag::IntArray(vec![1, 2]))]);
-        let form = TextForm::try_from(&root).unwrap();
+        let form = TextForm::from_text(&root).unwrap();
         assert!(matches!(
             form.nodes[0].content,
             TextNodeContent::Translatable { .. }
         ));
-        assert_eq!(Text::try_from(form).unwrap(), root);
+        assert_eq!(form.into_text().unwrap(), root);
     }
     #[test]
     fn malformed_relations_duplicates_and_missing_hover_markers_refuse() {
         let form =
-            TextForm::try_from(&Text::literal("root").append(Text::literal("child"))).unwrap();
+            TextForm::from_text(&Text::literal("root").append(Text::literal("child"))).unwrap();
         for relation in [
             TextRelation::Argument,
             TextRelation::Separator,
@@ -1125,28 +1114,25 @@ mod tests {
         ] {
             let mut bad = form.clone();
             bad.nodes[1].relation = relation;
-            assert_eq!(Text::try_from(bad), Err(TextFormError::Malformed));
+            assert_eq!(bad.into_text(), Err(TextFormError::Malformed));
         }
-        for parent in [Some(0), Some(1), None] {
+        for parent in [Some(1), None] {
             let mut bad = form.clone();
             bad.nodes[1].parent = parent;
-            if parent == Some(0) {
-                continue;
-            }
-            assert_eq!(Text::try_from(bad), Err(TextFormError::Malformed));
+            assert_eq!(bad.into_text(), Err(TextFormError::Malformed));
         }
         let mut bad = form.clone();
         bad.nodes[0].parent = Some(0);
-        assert_eq!(Text::try_from(bad), Err(TextFormError::Malformed));
+        assert_eq!(bad.into_text(), Err(TextFormError::Malformed));
         let mut valid = form;
         valid.nodes[0].style.hover = Some(TextNodeHover::Text);
         valid.nodes[1].relation = TextRelation::HoverText;
-        assert!(Text::try_from(valid.clone()).is_ok());
+        assert!(valid.clone().into_text().is_ok());
         let mut duplicate = valid.clone();
         duplicate.nodes.push(valid.nodes[1].clone());
-        assert_eq!(Text::try_from(duplicate), Err(TextFormError::Malformed));
+        assert_eq!(duplicate.into_text(), Err(TextFormError::Malformed));
         valid.nodes.pop();
-        assert_eq!(Text::try_from(valid), Err(TextFormError::Malformed));
+        assert_eq!(valid.into_text(), Err(TextFormError::Malformed));
     }
     #[test]
     fn fallback_absence_and_component_styles_remain_distinct() {
@@ -1173,10 +1159,8 @@ mod tests {
                     }
                 };
                 let text = Text::new(TextContent::Object(object));
-                assert_eq!(
-                    Text::try_from(TextForm::try_from(&text).unwrap()).unwrap(),
-                    text
-                );
+                let form = TextForm::from_text(&text).unwrap();
+                assert_eq!(form.into_text().unwrap(), text);
             }
         }
     }
@@ -1197,16 +1181,16 @@ mod tests {
                 fallback: None,
             }))
         };
-        assert!(TextForm::try_from(&text(profile.clone())).is_ok()); // one unsigned map key, not17 signed entries
+        assert!(TextForm::from_text(&text(profile.clone())).is_ok()); // one unsigned map key, not 17 signed entries
         profile.properties[0].signature = Some("signed".into());
         assert_eq!(
-            TextForm::try_from(&text(profile.clone())),
+            TextForm::from_text(&text(profile.clone())),
             Err(TextFormError::Malformed)
         );
         profile.properties.clear();
         profile.name = Some("seventeen-chars!!!".into());
         assert_eq!(
-            TextForm::try_from(&text(profile)),
+            TextForm::from_text(&text(profile)),
             Err(TextFormError::Malformed)
         );
     }
@@ -1256,20 +1240,17 @@ mod tests {
                         })
                     }
                 }
-                let form = TextForm::try_from(&text);
+                let form = TextForm::from_text(&text);
                 if depth == 512 {
-                    assert_eq!(Text::try_from(form.unwrap()).unwrap(), text, "slot {slot}");
+                    assert_eq!(form.unwrap().into_text().unwrap(), text, "slot {slot}");
                 } else {
                     assert_eq!(form, Err(TextFormError::TooDeep), "slot {slot}");
                 }
             }
         }
-        let mut row = TextNode::new(TextNodeContent::Literal("root".into()));
-        row.metadata = Tag::compound([("test:deep", nested_tag(512))]);
-        assert_eq!(
-            Text::try_from(TextForm { nodes: vec![row] }),
-            Err(TextFormError::TooDeep)
-        );
+        let mut form = TextForm::from_text(&Text::literal("root")).unwrap();
+        form.nodes[0].metadata = Tag::compound([("test:deep", nested_tag(512))]);
+        assert_eq!(form.into_text(), Err(TextFormError::TooDeep));
     }
     #[test]
     fn mixed_component_and_tag_depths_have_no_100_container_gap() {
@@ -1291,25 +1272,22 @@ mod tests {
                 for _ in 1..512 {
                     tree = Text::literal("parent").append(tree);
                 }
-                let form = TextForm::try_from(&tree).unwrap();
+                let form = TextForm::from_text(&tree).unwrap();
                 assert_eq!(form.nodes.len(), 512);
-                let decoded = Text::try_from(form).unwrap();
+                let decoded = form.into_text().unwrap();
                 let mut leaf = &decoded;
                 for _ in 1..512 {
                     leaf = &leaf.children[0];
                 }
                 assert!(matches!(leaf.metadata.get("deep"), Some(Tag::List(_))));
                 let too_deep = Text::literal("root").append(tree);
-                assert_eq!(TextForm::try_from(&too_deep), Err(TextFormError::TooDeep));
+                assert_eq!(TextForm::from_text(&too_deep), Err(TextFormError::TooDeep));
                 std::mem::forget(too_deep);
                 std::mem::forget(decoded);
-                let mut bad = TextNode::new(TextNodeContent::Literal("bad".into()));
-                bad.metadata = Tag::compound([("deep", nested_tag(4096))]);
+                let mut bad = TextForm::from_text(&Text::literal("bad")).unwrap();
+                bad.nodes[0].metadata = Tag::compound([("deep", nested_tag(4096))]);
                 // The consuming decoder must iteratively release refused input too.
-                assert_eq!(
-                    Text::try_from(TextForm { nodes: vec![bad] }),
-                    Err(TextFormError::TooDeep)
-                );
+                assert_eq!(bad.into_text(), Err(TextFormError::TooDeep));
             })
             .unwrap()
             .join()
@@ -1325,9 +1303,7 @@ mod tests {
                 Tag::String(sunrise_core::nbt::JavaString(vec![0xd800])),
             ),
         ]);
-        assert_eq!(
-            Text::try_from(TextForm::try_from(&text).unwrap()).unwrap(),
-            text
-        );
+        let form = TextForm::from_text(&text).unwrap();
+        assert_eq!(form.into_text().unwrap(), text);
     }
 }

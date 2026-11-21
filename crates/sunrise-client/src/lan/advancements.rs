@@ -13,7 +13,8 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,
 };
-use sunrise_protocol::buf::{Codec, Writer};
+use sunrise_core::vanilla_bytes::Writer;
+use sunrise_protocol::buf::Codec;
 
 #[derive(Clone)]
 pub struct ServerAdvancements {
@@ -1554,7 +1555,7 @@ mod tests {
         .to_string();
         assert!(error.contains("mymod_kind.json"), "{error}");
         assert!(
-            error.contains("ingredient kind mymod:x is not registered by any mod"),
+            error.contains("ingredient kind mymod:x was not answered by any mod"),
             "{error}"
         );
         let _ = std::fs::remove_dir_all(&root);

@@ -1,6 +1,7 @@
 #[test]
 #[ignore = "daily"]
 fn client_epochs_follow_level_replacement_and_logout() {
+    use crate::game::remote::RemoteDimensionEntry;
     use crate::game::{
         execution_role::ExecutionRole, native_entity_refs::tests::with_game,
         native_lifecycle::NativeLifecycle,
@@ -32,7 +33,7 @@ fn client_epochs_follow_level_replacement_and_logout() {
             portal_cooldown: 0,
             sea_level: 63,
         };
-        game.enter_remote_dimension(&spawn, false, Reason::Other);
+        game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
         let joined = game.native_lifecycle.epoch().unwrap();
         let old = EntityRef::new(joined, 12);
         let remote = game.remote.as_mut().unwrap();
@@ -64,7 +65,7 @@ fn client_epochs_follow_level_replacement_and_logout() {
         // A different level key replaces the world even with the same
         // dimension type; IDs can be reused but old handles cannot.
         spawn.dimension = "test:other_overworld".into();
-        game.enter_remote_dimension(&spawn, true, Reason::Other);
+        game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Respawn, Reason::Other);
         let replaced = game.native_lifecycle.epoch().unwrap();
         assert_ne!(replaced, joined);
         let current = EntityRef::new(replaced, 12);
@@ -97,7 +98,7 @@ fn client_epochs_follow_level_replacement_and_logout() {
         let (client, _server) = Pipe::pair();
         game.connect_local(client, "EpochTest").unwrap();
         assert!(game.native_lifecycle.epoch().is_none());
-        game.enter_remote_dimension(&spawn, false, Reason::Other);
+        game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
         assert_ne!(game.native_lifecycle.epoch(), Some(replaced));
         game.client_logging_out();
         assert!(game.native_lifecycle.epoch().is_none());

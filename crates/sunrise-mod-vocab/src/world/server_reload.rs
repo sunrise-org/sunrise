@@ -4,8 +4,8 @@
 mod tests;
 
 use crate::{
-    FileToIdConverter, Identifier, ReloadApply, ReloadResourceError,
-    world::reload::{Boundary, ReloadFiles},
+    FileToIdConverter, Identifier, ReloadResourceError,
+    world::reload::{Boundary, ReloadCore, ReloadFiles},
     world::reload_order::ReloadOrderError,
 };
 use std::{
@@ -16,8 +16,9 @@ use std::{
 };
 
 /// Sunrise's vanilla server reload listeners and ordering boundaries.
+/// Use these methods to obtain IDs for server reload dependencies.
+// no wire: namespace for local reload dependency IDs, not a payload.
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct VanillaServerListeners;
 impl VanillaServerListeners {
     /// Boundary before every reload listener.
@@ -43,11 +44,11 @@ impl VanillaServerListeners {
 
 /// Selected server data files for one converter, with pack overrides resolved.
 /// Keys have their directory and extension removed. This cannot read assets or
-/// filesystem paths. Its fields are private so the view can grow.
+/// filesystem paths. IDs and bytes are borrowed from this view.
 // exhaustive: its fields are private, so mods cannot build or destructure it
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: a local prepare view of the winning server data files.
 pub struct ServerReloadContext {
-    pub(crate) files: ReloadFiles,
+    files: ReloadFiles,
 }
 impl ServerReloadContext {
     pub(crate) fn new(files: ReloadFiles) -> Self {
@@ -64,31 +65,37 @@ impl ServerReloadContext {
 }
 
 /// A server-side `SimplePreparableReloadListener`: prepare reads the new pack
-/// view without changing live state; its returned apply publishes the result.
-/// All prepares finish before any apply, including vanilla's, runs. Prepare
-/// cannot see another listener's new published state. Dependencies order both
-/// phases deterministically; they do not remove the barrier. On any error all
-/// pending applies are dropped, keeping the previous data and function library.
+/// view without changing live state; the game consumes its returned action to
+/// publish the result. All prepares finish before any apply, including vanilla's,
+/// runs on the server's owning thread. Prepare cannot see another listener's new
+/// published state. Dependencies order both phases; they do not remove the barrier.
+/// On a prepare error, pending actions are dropped without running, keeping the
+/// previous data and function library.
 pub trait ServerReloadListener: Send + Sync + 'static {
     /// Parse and validate new data without changing the listener's live state.
+    /// Return `Ok(Box::new(move || { /* publish prepared data */ }))` with owned
+    /// data. The action is consumed once and cannot report an error. A later
+    /// server table refusal leaves the previous engine generation in place but
+    /// does not undo effects of actions that already ran.
     ///
     /// As vanilla's `SimpleJsonResourceReloadListener.scanDirectory`, a
     /// listener that parses its files logs and skips one that won't parse,
     /// carrying the rest through; returning `Err` aborts the whole reload and
-    /// keeps every listener's previous data. A panic in `prepare` or the
-    /// returned apply is not recovered: it stops the server, and the crash
+    /// keeps every listener's previous data. Attach the original error to the
+    /// file's ID with [`ReloadResourceError::new`] to preserve its cause.
+    /// A panic in `prepare` or the returned apply stops the server; the crash
     /// report names the listener and the mod that registered it.
     fn prepare(
         &self,
         context: &ServerReloadContext,
-    ) -> Result<Box<dyn ReloadApply>, ReloadResourceError>;
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError>;
 }
 impl ServerReloadListener for Boundary {
     fn prepare(
         &self,
         _: &ServerReloadContext,
-    ) -> Result<Box<dyn ReloadApply>, ReloadResourceError> {
-        Ok(<dyn ReloadApply>::new(|| {}))
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
+        Ok(Box::new(|| {}))
     }
 }
 
@@ -119,12 +126,45 @@ pub trait ServerReloadListeners {
         first: Identifier,
         second: Identifier,
     ) -> Result<(), ReloadOrderError>;
-    /// The registered names in registration order, boundaries included.
-    fn get_registry(&self) -> Vec<Identifier>;
-    /// The dependency edges as `(first, second)` names.
-    fn get_graph(&self) -> Vec<(Identifier, Identifier)>;
-    /// The name of the vanilla anchor preceding mod listeners by default.
-    fn get_last_vanilla_listener(&self) -> Identifier;
+    /// Borrow the registered names in registration order, boundaries included.
+    fn get_registry(&self) -> ServerReloadRegistryView<'_>;
+    /// Borrow the dependency graph as `(first, second)` names.
+    fn get_graph(&self) -> ServerReloadGraphView<'_>;
+    /// Borrow the effective vanilla anchor preceding mod listeners by default.
+    /// On the server this is the built-in loot modifier listener once registered,
+    /// not the function library. Use `VanillaServerListeners::functions()` to
+    /// order against the function library itself.
+    fn get_last_vanilla_listener(&self) -> &Identifier;
+}
+
+// no wire: borrows the live server reload registry during registration.
+/// The names registered so far in one server reload, borrowed from the registry.
+// exhaustive: its fields are private, so mods cannot build or destructure it
+pub struct ServerReloadRegistryView<'a> {
+    core: &'a ReloadCore<dyn ServerReloadListener>,
+}
+
+impl<'a> ServerReloadRegistryView<'a> {
+    /// Iterate over registered names in registration order, boundaries included.
+    pub fn iter(&self) -> impl Iterator<Item = &'a Identifier> + use<'a> {
+        self.core.registry().map(|(id, _)| id)
+    }
+}
+
+// no wire: borrows the live server reload dependency graph during registration.
+/// The current server reload dependencies, borrowed from the registry.
+// exhaustive: its fields are private, so mods cannot build or destructure it
+pub struct ServerReloadGraphView<'a> {
+    core: &'a ReloadCore<dyn ServerReloadListener>,
+}
+
+impl<'a> ServerReloadGraphView<'a> {
+    /// Iterate over dependency edges in insertion order. Each `(first, second)`
+    /// edge requires `first` to run before `second`; the edges include the
+    /// built-in ordering boundaries and are not a sorted list of listeners.
+    pub fn iter(&self) -> impl Iterator<Item = (&'a Identifier, &'a Identifier)> + use<'a> {
+        self.core.graph()
+    }
 }
 
 impl dyn ServerReloadListeners + '_ {
@@ -146,7 +186,7 @@ impl dyn ServerReloadListeners + '_ {
 /// The game's [`ServerReloadListeners`].
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct ServerListenerRegistry {
-    core: crate::world::reload::ReloadCore<dyn ServerReloadListener>,
+    core: ReloadCore<dyn ServerReloadListener>,
     retained: Vec<RetainedEntry>,
     pub(crate) default_anchor: Identifier,
 }
@@ -177,23 +217,20 @@ impl ServerReloadListeners for ServerListenerRegistry {
     ) -> Result<(), ReloadOrderError> {
         self.core.add_dependency(first, second)
     }
-    fn get_registry(&self) -> Vec<Identifier> {
-        self.core.registry().map(|(id, _)| id.clone()).collect()
+    fn get_registry(&self) -> ServerReloadRegistryView<'_> {
+        ServerReloadRegistryView { core: &self.core }
     }
-    fn get_graph(&self) -> Vec<(Identifier, Identifier)> {
-        self.core
-            .graph()
-            .map(|(first, second)| (first.clone(), second.clone()))
-            .collect()
+    fn get_graph(&self) -> ServerReloadGraphView<'_> {
+        ServerReloadGraphView { core: &self.core }
     }
-    fn get_last_vanilla_listener(&self) -> Identifier {
-        self.default_anchor.clone()
+    fn get_last_vanilla_listener(&self) -> &Identifier {
+        &self.default_anchor
     }
 }
 impl ServerListenerRegistry {
     pub(crate) fn new() -> Self {
         Self {
-            core: crate::world::reload::ReloadCore::new(
+            core: ReloadCore::new(
                 VanillaServerListeners::first(),
                 VanillaServerListeners::functions(),
                 VanillaServerListeners::last(),

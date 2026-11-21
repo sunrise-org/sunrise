@@ -669,9 +669,10 @@ pub fn block_entity_id<'a>(e: &'a crate::containers::BlockEntity, block: &'a str
 }
 /// `block_entity_nbt::overlay`, then a container that now holds items loses its
 /// loot table (vanilla clears it when the loot is generated into the container).
-fn merge_block_entity(original: &Tag, loaded: &Tag, current: &Tag) -> Tag {
-    let mut merged = crate::block_entity_nbt::overlay(original, loaded, current);
-    let has_items = matches!(current.get("Items"), Some(Tag::List(items)) if !items.is_empty());
+fn merge_block_entity(original: &Tag, loaded: &Tag, current: &Tag, items_are_payload: bool) -> Tag {
+    let mut merged = crate::block_entity_nbt::overlay(original, loaded, current, items_are_payload);
+    let has_items = !items_are_payload
+        && matches!(current.get("Items"), Some(Tag::List(items)) if !items.is_empty());
     if has_items
         && current.get("LootTable").is_none()
         && let Tag::Compound(map) = &mut merged
@@ -703,9 +704,15 @@ pub fn decode_end_gateway(tag: &Tag) -> crate::containers::EndGateway {
     }
 }
 /// A mod's block entity: its compound without `id` and the position, and
+/// (when `decode_items` is true, i.e. container-backed or unknown-block loads)
 /// the `Items` rows that can be represented losslessly as modeled slots.
+/// Slotless holders loaded at a known block keep `Items` verbatim in `nbt`.
 /// The game sizes the modeled vector to its container when it uses it.
-fn decode_mod_block_entity(id: String, tag: &Tag) -> Option<crate::containers::ModBlockEntity> {
+fn decode_mod_block_entity(
+    id: String,
+    tag: &Tag,
+    decode_items: bool,
+) -> Option<crate::containers::ModBlockEntity> {
     use crate::block_entity_nbt::saved_item_slot;
     let Tag::Compound(map) = tag else {
         return None;
@@ -719,33 +726,35 @@ fn decode_mod_block_entity(id: String, tag: &Tag) -> Option<crate::containers::M
         .remove(&crate::containers::SHAPES_KEY.into())
         .and_then(|tag| crate::containers::PublishedShapes::from_tag(&tag));
     let mut items = Vec::new();
-    let key = "Items".into();
-    if let Some(Tag::List(entries)) = nbt.get_mut(&key) {
-        let mut occurrences = [0u8; 256];
-        for slot in entries.iter().filter_map(saved_item_slot) {
-            occurrences[slot] = occurrences[slot].saturating_add(1);
-        }
-        entries.retain(|raw| {
-            let Some(slot) = saved_item_slot(raw) else {
-                return true;
-            };
-            if occurrences[slot] == 1
-                && let Some(stack) = item_from_nbt(raw)
-                && let Tag::Compound(mut canonical) = Tag::from(&stack)
-            {
-                canonical.insert("Slot".into(), Tag::Byte(slot as i8));
-                if raw == &Tag::Compound(canonical) {
-                    if items.len() <= slot {
-                        items.resize(slot + 1, None);
-                    }
-                    items[slot] = Some(stack);
-                    return false;
-                }
+    if decode_items {
+        let key = "Items".into();
+        if let Some(Tag::List(entries)) = nbt.get_mut(&key) {
+            let mut occurrences = [0u8; 256];
+            for slot in entries.iter().filter_map(saved_item_slot) {
+                occurrences[slot] = occurrences[slot].saturating_add(1);
             }
-            true
-        });
-        if entries.is_empty() && !items.is_empty() {
-            nbt.remove(&key);
+            entries.retain(|raw| {
+                let Some(slot) = saved_item_slot(raw) else {
+                    return true;
+                };
+                if occurrences[slot] == 1
+                    && let Some(stack) = item_from_nbt(raw)
+                    && let Tag::Compound(mut canonical) = Tag::from(&stack)
+                {
+                    canonical.insert("Slot".into(), Tag::Byte(slot as i8));
+                    if raw == &Tag::Compound(canonical) {
+                        if items.len() <= slot {
+                            items.resize(slot + 1, None);
+                        }
+                        items[slot] = Some(stack);
+                        return false;
+                    }
+                }
+                true
+            });
+            if entries.is_empty() && !items.is_empty() {
+                nbt.remove(&key);
+            }
         }
     }
     let mut entity = crate::containers::ModBlockEntity::new(
@@ -759,6 +768,11 @@ fn decode_mod_block_entity(id: String, tag: &Tag) -> Option<crate::containers::M
     entity.set_shapes(shapes.map(std::sync::Arc::new));
     Some(entity)
 }
+/// Whether a mod block owns the saved `Items` field as engine-managed inventory.
+fn block_has_mod_item_slots(block: &str) -> bool {
+    mod_api::__private::parts_installation::block_container(block).is_some_and(|c| c.slots > 0)
+}
+
 /// Decode an entity at a known block, refusing undeclared IDs and invalid native membership.
 /// Canonical membership wins; blocks absent from the table use vanilla membership.
 pub fn decode_block_entity_for_block(
@@ -775,7 +789,7 @@ pub fn decode_block_entity_replacing(
     block: &str,
     previous: Option<&crate::containers::BlockEntity>,
 ) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
-    let decoded = decode_block_entity_with_history(tag, previous)?;
+    let decoded = decode_block_entity_with_history(tag, previous, block_has_mod_item_slots(block))?;
     // Several vanilla types share a decoded representation (for example barrel
     // and chest). Membership belongs to the saved type, not that representation.
     let saved_id = text(tag.get("id"))?;
@@ -790,12 +804,13 @@ pub fn decode_block_entity_replacing(
 }
 
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
-    decode_block_entity_with_history(tag, None)
+    decode_block_entity_with_history(tag, None, true)
 }
 
 fn decode_block_entity_with_history(
     tag: &Tag,
     previous: Option<&crate::containers::BlockEntity>,
+    decode_mod_items: bool,
 ) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
     let int = |k: &str| tag.get(k).and_then(crate::nbt_path::int_value); // getIntOr
@@ -804,7 +819,11 @@ fn decode_block_entity_with_history(
     if id.contains(':') && !id.starts_with("minecraft:") {
         return Some((
             pos,
-            BlockEntity::Mod(Box::new(decode_mod_block_entity(id, tag)?)),
+            BlockEntity::Mod(Box::new(decode_mod_block_entity(
+                id,
+                tag,
+                decode_mod_items,
+            )?)),
         ));
     }
     if id == "minecraft:end_gateway" {
@@ -1455,38 +1474,43 @@ fn encode_full(
             );
             let mut saved = match source {
                 Some(original) => {
-                    let loaded = decode_block_entity(original).map_or_else(
-                        || current.clone(),
-                        |(q, e)| {
-                            // External name removal must win over the source overlay.
-                            let custom_name = (!matches!(
-                                e,
-                                crate::containers::BlockEntity::Banner(_)
-                                    | crate::containers::BlockEntity::Sign(_)
-                                    | crate::containers::BlockEntity::Mod(_)
-                            ))
-                            .then(|| {
-                                original
-                                    .get("CustomName")
-                                    .and_then(crate::block_entity_nbt::component)
-                            })
-                            .flatten();
-                            block_entity_encode::encode_with(
-                                q,
-                                &e,
-                                &block,
-                                block_entity_encode::DataFields {
-                                    lock,
-                                    custom_name: custom_name.as_ref(),
-                                    pending: PendingContainerLoot::from_tag(original).as_ref(),
-                                    hopper_cooldown,
+                    let items_are_payload = matches!(e, crate::containers::BlockEntity::Mod(_))
+                        && !block_has_mod_item_slots(&block);
+                    let loaded =
+                        decode_block_entity_with_history(original, None, !items_are_payload)
+                            .map_or_else(
+                                || current.clone(),
+                                |(q, e)| {
+                                    // External name removal must win over the source overlay.
+                                    let custom_name = (!matches!(
+                                        e,
+                                        crate::containers::BlockEntity::Banner(_)
+                                            | crate::containers::BlockEntity::Sign(_)
+                                            | crate::containers::BlockEntity::Mod(_)
+                                    ))
+                                    .then(|| {
+                                        original
+                                            .get("CustomName")
+                                            .and_then(crate::block_entity_nbt::component)
+                                    })
+                                    .flatten();
+                                    block_entity_encode::encode_with(
+                                        q,
+                                        &e,
+                                        &block,
+                                        block_entity_encode::DataFields {
+                                            lock,
+                                            custom_name: custom_name.as_ref(),
+                                            pending: PendingContainerLoot::from_tag(original)
+                                                .as_ref(),
+                                            hopper_cooldown,
+                                        },
+                                        items,
+                                        |_| None,
+                                    )
                                 },
-                                items,
-                                |_| None,
-                            )
-                        },
-                    );
-                    merge_block_entity(original, &loaded, &current)
+                            );
+                    merge_block_entity(original, &loaded, &current, items_are_payload)
                 }
                 None => current,
             };
@@ -10697,7 +10721,7 @@ mod jukebox_song_clock_tests {
         record_kept(&current);
         // The chunk writer uses this real overlay after encoding its model.
         // A stale input clock must not resurrect the removed modeled field.
-        let merged = merge_block_entity(&raw, &loaded, &current);
+        let merged = merge_block_entity(&raw, &loaded, &current, false);
         check("contradictory raw clock", &merged, None);
         record_kept(&merged);
         let canonical = crate::block_entity_nbt::canonical(&merged).unwrap();

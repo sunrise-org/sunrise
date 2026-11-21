@@ -1,10 +1,9 @@
 //! Reads from the actual mob loaned to the active goal, or a disjoint live mob.
-use super::super::api_values::TryIntoApi;
+use super::super::native_living_refs::{hand_slot, lend_equipment};
 use super::{GoalCx, Resolved};
 use crate::mobs::Mob;
-use mod_api::ItemStack;
-use mod_api::{ActiveEffect, EffectKey, EquipmentSlot, Hand, LivingRef, Pose};
-use sunrise_client::mobs::villager;
+use mod_api::{ActiveEffect, EffectKey, EquipmentSlot, Hand, ItemStackView, LivingRef, Pose};
+use sunrise_client::mobs::{finalize, villager};
 
 impl GoalCx<'_, '_> {
     fn live_living_mob(&self, living: LivingRef) -> Option<&Mob> {
@@ -81,19 +80,21 @@ impl GoalCx<'_, '_> {
         &self,
         living: LivingRef,
         slot: EquipmentSlot,
-    ) -> Option<ItemStack> {
-        self.live_living_mob(living)?.equipment_stacks()[slot as usize]
-            .as_ref()?
-            .try_into_api()
-            .ok()
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) -> Option<()> {
+        lend_equipment(
+            finalize::equipment_slot(self.live_living_mob(living)?, slot)?,
+            read,
+        )
     }
 
-    pub(super) fn r_living_hand_item(&self, living: LivingRef, hand: Hand) -> Option<ItemStack> {
-        let slot = match hand {
-            Hand::Main => EquipmentSlot::MainHand,
-            Hand::Off => EquipmentSlot::OffHand,
-        };
-        self.r_living_equipment(living, slot)
+    pub(super) fn r_living_hand_item(
+        &self,
+        living: LivingRef,
+        hand: Hand,
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) -> Option<()> {
+        self.r_living_equipment(living, hand_slot(hand), read)
     }
 
     pub(super) fn r_living_is_tamed(&self, living: LivingRef) -> Option<bool> {

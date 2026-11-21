@@ -11,6 +11,7 @@ pub trait Hooks {
     /// respawned player is left with none). `player_entity_id` is the server's entity id for
     /// the player. Server-side.
     #[hook(
+        dispatch = "api_carrier",
         side = "server",
         contract = "cancel",
         out = "cancel",

@@ -12,6 +12,8 @@ pub trait Hooks {
     /// screen with no holder), `level` the level it is drawn in (`None` outside a world), and
     /// `seed` the draw's random seed.
     #[hook(
+        receiver = "read",
+        dispatch = "api_carrier",
         side = "client",
         version = 2,
         contract = "listen",

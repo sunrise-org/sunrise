@@ -1,0 +1,124 @@
+ids = [
+    "hook:component_types",
+    "hook:component_types.types",
+    "type:ComponentTypesEvent.types",
+    "handle:ComponentTypesEvent::register",
+    "hook:create_skull_models",
+    "hook:create_skull_models.models",
+    "type:CreateSkullModelsEvent.models",
+    "handle:CreateSkullModelsEvent::register",
+    "hook:map_decoration_types",
+    "hook:map_decoration_types.types",
+    "type:MapDecorationTypesEvent.types",
+    "handle:MapDecorationTypesEvent::register",
+    "hook:register_entity_spectator_shaders",
+    "hook:register_entity_spectator_shaders.shaders",
+    "type:RegisterEntitySpectatorShadersEvent.shaders",
+    "handle:RegisterEntitySpectatorShadersEvent::register",
+    "hook:register_fluid_models",
+    "hook:register_fluid_models.models",
+    "type:RegisterFluidModelsEvent.models",
+    "handle:RegisterFluidModelsEvent::register",
+    "hook:register_render_pipelines",
+    "hook:register_render_pipelines.pipelines",
+    "type:RegisterRenderPipelinesEvent.pipelines",
+    "handle:RegisterRenderPipelinesEvent::register",
+    "hook:register_texture_atlases",
+    "hook:register_texture_atlases.atlases",
+    "type:RegisterTextureAtlasesEvent.atlases",
+    "handle:RegisterTextureAtlasesEvent::register",
+    "hook:block_entity_type_add_blocks",
+    "hook:block_entity_type_add_blocks.additions",
+    "type:BlockEntityTypeAddBlocksEvent.additions",
+    "hook:register_particle_groups",
+    "hook:register_particle_groups.groups",
+    "type:RegisterParticleGroupsEvent.groups",
+    "handle:RegisterParticleGroupsEvent::register",
+    "type:ParticleGroup",
+    "type:ParticleGroup.id",
+    "hook:register_layer_definitions",
+    "hook:register_layer_definitions.layers",
+    "type:RegisterLayerDefinitionsEvent.layers",
+    "handle:RegisterLayerDefinitionsEvent::register",
+    "hook:standalone_models",
+    "hook:standalone_models.models",
+    "hook:standalone_models.forms",
+    "type:StandaloneModelsEvent.models",
+    "type:StandaloneModelsEvent.forms",
+    "type:StandaloneModelForm",
+    "type:StandaloneModelForm.Rotated",
+    "type:StandaloneModelForm.Combined",
+    "handle:StandaloneModelForm::id",
+    "handle:StandaloneModelsEvent::register_model",
+    "handle:StandaloneModelsEvent::register",
+    "type:StandaloneModelBakeContext",
+    "handle:StandaloneModelBakeContext::append_dependency",
+    "type:StandaloneModelBakeError",
+    "type:StandaloneModelBakeError.UndeclaredDependency",
+    "type:StandaloneModelBakeError.DependencyBake",
+    "type:StandaloneModelBakeError.Rejected",
+]
+why = "Scoped registration methods let each listener append without reading, editing or removing earlier registrations. A phase refusal discards only that listener's additions. Particle groups are constructed once per particle engine, and layer suppliers run once at startup when the layer table freezes. Standalone model bakers assemble declared files at resource load without publishing partial geometry. Atlas timing and duplicate parity are separate from this API change."
+migrate = """
+In Hooks::component_types, replace event.types.push(id) with event.register(id), passing the same owned String.
+In Hooks::create_skull_models, replace event.models.push(model) with event.register(model), passing the same SkullModel.
+In Hooks::map_decoration_types, replace event.types.push(decoration) with event.register(decoration), passing the same MapDecorationType.
+In Hooks::register_entity_spectator_shaders, replace event.shaders.push(shader) with event.register(shader), passing the same EntitySpectatorShader.
+In Hooks::register_fluid_models, replace event.models.push(model) with event.register(model), passing the same FluidModel.
+In Hooks::register_render_pipelines, replace event.pipelines.push(pipeline) with event.register(pipeline), passing the same RenderPipeline.
+In Hooks::register_texture_atlases, replace event.atlases.push(atlas) with event.register(atlas), passing the same TextureAtlasRegistration.
+For multiple entries, call event.register(entry) once per entry in the same order.
+In Hooks::block_entity_type_add_blocks, replace event.additions.push((kind, block)) with event.modify(kind, &[block]). For one block list shared by matching types, call event.modify_matching(predicate, blocks). Read event.types as before to inspect registered type keys.
+The event is borrowed only during the listener call. Reading, replacing or removing earlier staged entries has no replacement.
+
+In Hooks::register_particle_groups, replace `event.groups.push(ParticleGroup { id, blend, particles })` with:
+
+```rust
+if let Ok(id) = Identifier::parse(&id) {
+    event.register(id, move || ParticleGroup { blend, particles: particles.clone() });
+}
+```
+
+Use an explicit, nonempty namespace other than `minecraft` and a nonempty path. Store the `Identifier`
+separately if you formerly read `ParticleGroup.id`. `ParticleGroup` no longer implements `Wire`;
+for your own payload, define a separate `#[derive(Wire)]` record for the data you send, and construct
+`ParticleGroup` from that data in the factory. Factories are `Fn() -> ParticleGroup + Send + Sync + 'static`:
+capture owned data and return a fresh definition per engine. Sprite reloads reuse that definition.
+
+In Hooks::register_layer_definitions, move mesh and layer construction into a supplier:
+replace `event.layers.push((id, create_golem_layer()))` with `event.register(id, create_golem_layer)`.
+For an inline definition use `event.register(id, move || LayerDefinition::create(build_mesh(), 64, 32))`,
+with your own mesh and texture dimensions. The supplier is `Fn() -> LayerDefinition + Send + Sync + 'static`;
+capture owned inputs, and if reusing a definition already built, return `definition.clone()`.
+The game retains only the definition after the startup freeze, not the supplier. Keep the same
+`<namespace>:<path>#<layer>` ID and the same calls to `ClientHost::bake_layer`.
+
+In `Hooks::standalone_models`, replace `event.models.push(id)` with `event.register_model(id)`.
+`StandaloneModelForm` and its `id()` accessor are gone; keep the result ID separately. Replace
+`event.forms.push(StandaloneModelForm::Rotated { id, model, turns, uvlock })` with:
+
+```rust
+event.register(id, [model.clone()], move |bake| {
+    bake.append_dependency(&model, turns, uvlock)
+});
+```
+
+Replace `event.forms.push(StandaloneModelForm::Combined { id, parts })` with:
+
+```rust
+event.register(id, parts.clone(), move |bake| {
+    for part in &parts {
+        bake.append_dependency(part, [0; 3], false)?;
+    }
+    Ok(())
+});
+```
+
+Declare every file ID that the baker may append. The baker is `Send + Sync + 'static` and may run
+on a resource worker; capture owned inputs, not the event or `RegistrationContext`. Its
+`StandaloneModelBakeContext` is borrowed for that invocation only. Return
+`Err(StandaloneModelBakeError::Rejected(reason))` to decline the bake. An undeclared or failed append
+also discards the whole model, even if ignored. A successfully baked plain file takes precedence;
+otherwise the first successful baker for an ID wins. Keep the same namespaced result ID in
+`RenderAssets::model` lookups and resolve it again after each successful resource load.
+"""

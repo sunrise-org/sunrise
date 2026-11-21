@@ -824,7 +824,7 @@ mod tests {
                 ((*t).to_owned(), rect)
             })
             .collect();
-        use super::super::{ItemRenderState, LayerGeometry, LayerRender, NoHost};
+        use super::super::{ItemRenderState, LayerGeometry, LayerRender, LayerTints, NoHost};
         use sunrise_assets::item_model::{DisplayContext, FoilType};
         let display = DisplayContext::ThirdPersonRightHand;
         let drawn = |argument: Value, has_foil: bool, tint: Option<u32>| {
@@ -837,14 +837,14 @@ mod tests {
                         },
                         argument,
                     },
-                    tints: Vec::new(),
+                    tints: LayerTints::Owned(Vec::new()),
                     foil: if has_foil {
                         FoilType::Standard
                     } else {
                         FoilType::None
                     },
                     matrix: Mat4::IDENTITY,
-                    particle: String::new(),
+                    particle: "".into(),
                     uses_block_light: false,
                     extents: Default::default(),
                     display,

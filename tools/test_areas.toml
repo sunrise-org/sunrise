@@ -379,7 +379,7 @@ name = "mod-api"
 about = "the native mod API: hooks, the Host, handles and parts"
 paths = [
   "crates/sunrise-mod-*", "crates/cargo-sunrise-mod/*", "crates/sunrise-native-build/*",
-  "crates/sunrise-guest-stack/*", "crates/sunrise-hooks/*", "crates/sunrise-client/src/game/native_hooks/*",
+  "crates/sunrise-hooks/*", "crates/sunrise-client/src/game/native_hooks/*",
   "crates/sunrise-client/src/game/modding/*",
 ]
 cargo = [

@@ -13,6 +13,8 @@ pub trait Hooks {
     /// Asked when lines are built for display, recipe book search or `ItemResource::tooltip`,
     /// except during reentrant line queries. Client-side, only while a mod listens.
     #[hook(
+        receiver = "read",
+        dispatch = "api_carrier",
         side = "client",
         contract = "listen",
         neoforge = "GatherSkippedAttributeTooltipsEvent",

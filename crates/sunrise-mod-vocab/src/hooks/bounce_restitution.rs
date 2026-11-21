@@ -24,6 +24,8 @@ pub trait Hooks {
     /// owning game checks the hook subscription and prepared API block key before any event
     /// conversion, so the cost is one table lookup. Diverges from upstream: new hook.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "both",
         contract = "collect",
         out = "factor",
@@ -33,5 +35,11 @@ pub trait Hooks {
         target = "sunrise_client::game::native_hooks::bounce_restitution::HitLevel<'_>::native_bounce_restitution",
         neoforge = "IBlockExtension.getBounceRestitution"
     )]
-    fn bounce_restitution();
+    fn bounce_restitution(
+        entity: i32,
+        kind: &str,
+        state: BlockState,
+        pos: BlockPos,
+        factor: &mut f32,
+    );
 }

@@ -27,6 +27,7 @@ pub trait Hooks {
 - Cancelling, or removing the baby, breeds no child: both parents keep age 6000 and love 0, and nothing awards experience, the `animals_bred` statistic, an advancement or hearts. The inheritance draws already made stay spent. A replacement is inserted exactly once at the original insertion point, and breeding's own finalization (credit, statistics, experience, the parent's cooldown) reads it as the child.
 - Turtle and frog breeding, sniffer egg laying and turtle hatching make eggs, not babies, and do not fire it. Armadillos breed through the ordinary animal path and do. Villagers breed through their own behavior and do not (a separate moment)."#]
     #[hook(
+        dispatch = "api_carrier",
         side = "server",
         version = 2,
         contract = "cancel",

@@ -58,6 +58,7 @@ fn open_mod_menu(game: &mut Game<'_>) -> ((i32, i32, i32), MenuSnapshot, sync::S
             sent: vec![],
             drag: None,
             sent_data: vec![],
+            reported_unsent_data_len: None,
             blockless_data: Vec::new(),
             hidden: vec![],
             mod_type: Some(kind),
@@ -314,7 +315,10 @@ fn a_listening_part_places_the_recipe_through_the_real_stage() {
             game.transaction_close(&root, true);
             let placed = {
                 let host: &mut dyn ServerHost = game;
-                ItemPlace::MenuSlot { menu, slot: 0 }.stack(host).unwrap()
+                ItemPlace::MenuSlot { menu, slot: 0 }
+                    .with_stack(host, |stack| stack.project())
+                    .flatten()
+                    .unwrap()
             };
             assert_eq!(
                 placed.item(),

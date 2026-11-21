@@ -1,4 +1,53 @@
 use super::*;
+use crate::{ClientHost, ItemStack};
+
+// no wire: in-process behavior called with a borrowed stack and client host.
+/// Client-only main-hand input. Capturing it does not make the player use or block with the
+/// item. For ordinary item use on both sides, use [`ItemPart::use_item`] and
+/// [`ItemPart::release_using`]. Register one owner for an item with
+/// [`ItemsRegistrar::register_client_item_use`].
+///
+/// Every callback receives the original stack snapshot and its hotbar slot (0–8), never a
+/// replacement. Track the capture in these callbacks, not through the living-item use reads.
+/// A disabled owner receives no callbacks.
+pub trait ClientItemUseBehavior: Send + Sync + 'static {
+    /// Consume a main-hand use input before the client handles the crosshair target.
+    fn use_item(&self, host: &mut dyn ClientHost, stack: &ItemStack, slot: u32);
+
+    /// Run only on input release while the same item kind is still selected in the original
+    /// slot and the player can still use it. The game clears the capture before calling this.
+    /// `ticks_held` counts elapsed held ticks.
+    fn release_using(
+        &self,
+        _host: &mut dyn ClientHost,
+        _stack: &ItemStack,
+        _slot: u32,
+        _ticks_held: u32,
+    ) {
+    }
+
+    /// Clean up after [`Self::release_using`] on a valid release, or on its own when the
+    /// capture resets (for example, when the player switches slots, dies or disconnects).
+    /// The game clears the capture before the end callbacks. `ticks_held` counts elapsed held
+    /// ticks.
+    fn on_stop_using(
+        &self,
+        _host: &mut dyn ClientHost,
+        _stack: &ItemStack,
+        _slot: u32,
+        _ticks_held: u32,
+    ) {
+    }
+}
+
+/// The bound owner of client input for a canonical item id, if registered.
+pub fn client_item_use(
+    item: &str,
+) -> Option<(usize, &'static str, Arc<dyn ClientItemUseBehavior>)> {
+    let attached = installed()?.keys.client_item_uses.get(item)?;
+    Some((attached.mod_index, attached.mod_id, attached.part.clone()))
+}
+
 #[derive(Clone)]
 pub(crate) struct PlaceProviderPart {
     pub(crate) mod_id: &'static str,
@@ -170,6 +219,17 @@ pub fn item_listens(hook: HookId, id: &str) -> bool {
 pub trait ItemsRegistrar {
     /// Request an item by registry id, validated after all declarations.
     fn item_key(&mut self, id: &str) -> crate::ItemKey;
+
+    /// Register the sole client input behavior for `item` in [`crate::Hooks::register`]. An
+    /// enabled owner consumes main-hand use input before crosshair handling, without sending a
+    /// use or release packet. This intercepts only main-hand input; it does not enter ordinary
+    /// item use or blocking state on either side. Any registered item may be used; a second
+    /// registration for the same item refuses startup, even from the same mod.
+    fn register_client_item_use(
+        &mut self,
+        item: crate::ItemKey,
+        behavior: Arc<dyn ClientItemUseBehavior>,
+    );
 
     /// Attach `part`, of kind `kind`, to item `item`.
     fn attach_item_part(

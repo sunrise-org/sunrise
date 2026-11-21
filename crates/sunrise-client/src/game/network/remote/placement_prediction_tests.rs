@@ -385,7 +385,11 @@ fn a_denied_break_restores_wall_sign_text_and_synced_attachments() {
             portal_cooldown: 0,
             sea_level: 63,
         };
-        game.enter_remote_dimension(&spawn, false, sunrise_client::level_loading::Reason::Other);
+        game.enter_remote_dimension(
+            &spawn,
+            RemoteDimensionEntry::Login,
+            sunrise_client::level_loading::Reason::Other,
+        );
         game.remote.as_mut().unwrap().logged_in = true;
         game.world
             .chunks

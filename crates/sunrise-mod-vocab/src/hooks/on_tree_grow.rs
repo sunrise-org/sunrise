@@ -42,5 +42,10 @@ pub trait Hooks {
         target = "mod_api::world::ground::native_on_tree_grow",
         neoforge = "IBlockExtension.onTreeGrow"
     )]
-    fn on_tree_grow();
+    fn on_tree_grow(
+        state: BlockState,
+        pos: [i32; 3],
+        random: &mut dyn RandomSource,
+        soil: &mut Option<Option<BlockState>>,
+    );
 }

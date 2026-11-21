@@ -372,8 +372,7 @@ mod tests {
                 let state = chunk.state(self.0);
                 assert_eq!(chunk.metadata().name(state.block()), Ok("minecraft:stone"));
                 assert!(chunk.set_block([1, chunk.min_y(), 2], state));
-                let invalid =
-                    mod_api::BlockState::from(mod_api::BlockStateRecord::new(self.0, u16::MAX));
+                let invalid = mod_api::__private::block_state_from_ordinal(self.0, u16::MAX);
                 assert!(!chunk.set_block([2, chunk.min_y(), 2], invalid));
             }
         }

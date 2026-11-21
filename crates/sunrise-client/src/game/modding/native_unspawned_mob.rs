@@ -296,7 +296,7 @@ impl Game<'_> {
         })
     }
 
-    /// The tags a mod gave the mob so far (`Entity.getTags`).
+    /// The tags a mod gave the mob so far (`Entity.entityTags()`).
     pub(super) fn unspawned_mob_tags(
         &self,
         mob: UnspawnedMobRef,

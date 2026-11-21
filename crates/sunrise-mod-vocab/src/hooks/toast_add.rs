@@ -10,11 +10,18 @@ pub trait Hooks {
     /// do not fire another add event. Client-lib and title producers prepare
     /// candidates for the game to admit with a `ClientHost` before applying.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "cancel",
         out = "cancel",
         neoforge = "ToastAddEvent",
         cancellable = true
     )]
-    fn toast_add();
+    fn toast_add(
+        kind: mod_api::ToastKind,
+        title: &mut Text,
+        description: &mut Option<Text>,
+        cancel: &mut bool,
+    );
 }

@@ -9,10 +9,10 @@ use super::super::{
 };
 use super::{GoalCx, Resolved};
 use crate::mobs::Mob;
-use mod_api::{EntityRef, MobCategory};
+use mod_api::{EntityRef, EntityTags, MobCategory};
 
 impl GoalCx<'_, '_> {
-    pub(super) fn r_entity_tags(&self, entity: EntityRef) -> Option<Vec<String>> {
+    pub(super) fn r_entity_tags(&self, entity: EntityRef) -> Option<EntityTags<'_>> {
         self.w.goal_host?.mob_tags(self.entity_mob(entity)?)
     }
 

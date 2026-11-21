@@ -13,6 +13,7 @@ impl PartRegistrar {
 mod tests {
     use super::*;
     use crate::*;
+    use mod_vocab::__private::game::RegistrationContextNew;
 
     fn with_porter(f: impl FnOnce()) {
         crate::load_state::with_test_package_inventory(

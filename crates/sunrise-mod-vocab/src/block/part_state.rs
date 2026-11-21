@@ -32,8 +32,8 @@ use std::{cell::RefCell, fmt, sync::Arc};
 /// their own nested transaction and store the new value only when the closure returns.
 /// Every call first checks that `entity` is still the block entity it named, in the
 /// level this host is in: a replaced, removed or unloaded one refuses with
-/// [`PartStateError::Stale`]. A block entity out of the world for its own tick still
-/// answers, through [`BlockEntitiesHost::block_entity_identity`].
+/// [`PartStateError::Stale`]. In `block_entity_tick`, take the resident entity's handle
+/// from `event.subject.with_view` before borrowing the Host from `event.subject.host()`.
 ///
 /// Server-side only for now: `DATA` must not sync, and a client's copy holds nothing
 /// of it, so a client reads the default.
@@ -97,9 +97,9 @@ pub trait BlockEntityPartState: BlockEntityPart + Sized {
 
 /// Why a block entity's or an entity's Part state could not be read or changed. Nothing was
 /// stored.
+// no wire: reports a local Part-state operation's failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum PartStateError {
     /// The handle names a block entity or an entity of another level than the one this host
     /// is in.
@@ -152,7 +152,8 @@ impl fmt::Display for PartStateError {
 impl std::error::Error for PartStateError {}
 
 /// Why a Part's state declaration was refused at registration.
-#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq)]
+// no wire: only describes a local registrar refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PartStateRefusal {
     /// `DATA.sync` is set: Part state is not sent to clients yet.
@@ -190,7 +191,8 @@ impl PartStateRefusal {
 }
 
 /// A Part with state could not be attached.
-#[derive(sunrise_mod_api_macros::Wire, Clone, Debug, PartialEq, Eq)]
+// no wire: reports local block entity Part or state registration failures.
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BlockEntityStateError {
     /// The Part itself was refused, as by `block_entity_part`.
@@ -242,7 +244,8 @@ impl From<BlockEntityPartError> for BlockEntityStateError {
 }
 
 /// One Part state declaration, as the registrar checks it.
-#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq)]
+// no wire: native registration metadata, not the Part's saved value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PartStateDeclaration {
     /// The state's namespace.

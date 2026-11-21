@@ -33,6 +33,8 @@ coefficient is used; any finite value is used as given. Physics still applies va
 used them before. Register the part on both sides and keep its answer pure so prediction and
 replay agree."#]
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "both",
         contract = "listen",
         cancellable = false,
@@ -44,5 +46,5 @@ replay agree."#]
         target = "sunrise_client::game::native_hooks::friction::FrictionView<'_>::native_friction",
         neoforge = "IBlockExtension.getFriction"
     )]
-    fn friction();
+    fn friction(pos: BlockPos, state: BlockState, entity: Option<(u32, &str)>, friction: &mut f32);
 }

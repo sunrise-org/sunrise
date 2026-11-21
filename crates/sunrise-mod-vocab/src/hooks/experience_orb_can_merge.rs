@@ -12,9 +12,18 @@ pub trait Hooks {
     /// raises `into`'s value with `native_set_experience_orb` in `experience_orb_merge`.
     /// Server-side.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_experience_orb_can_merge",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "none (vanilla ExperienceOrb.canMerge; NeoForge adds no event or extension for it)"
     )]
-    fn experience_orb_can_merge();
+    fn experience_orb_can_merge(
+        dimension: &str,
+        into: u32,
+        from: u32,
+        into_value: i32,
+        from_value: i32,
+        can_merge: &mut bool,
+    );
 }
