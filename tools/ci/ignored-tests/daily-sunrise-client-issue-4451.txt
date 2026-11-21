@@ -769,7 +769,7 @@ sunrise-client game::inline_loot_reference_tests::an_inline_reference_to_a_missi
 sunrise-client game::inline_loot_reference_tests::inline_references_follow_the_codec_and_the_reloaded_registry lib daily resources
 sunrise-client game::integrated::tests::client_session_identifies_only_its_own_integrated_server lib daily resources
 sunrise-client game::integrated::tests::integrated_rules_screen_shares_server_session_registry lib daily resources
-sunrise-client game::integrated::tests::integrated_tick_panic_saves_changed_world lib daily resources
+sunrise-client game::integrated::tests::integrated_tick_panic_saves_changed_world lib daily child-process
 sunrise-client game::integrated::tests::posted_native_panic_writes_one_server_report lib daily resources
 sunrise-client game::interaction_data_tests::data_edits_reach_the_same_live_interaction lib daily resources
 sunrise-client game::interaction_data_tests::the_live_settings_are_what_the_interaction_saves lib daily resources

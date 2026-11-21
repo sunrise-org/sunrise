@@ -541,9 +541,20 @@ fn emergency_save_with_timeout(timeout: Duration) {
 }
 
 /// Writes the report and tells where it is; the log gets the error too.
-fn deliver(home: &Path, report: Report) -> Option<PathBuf> {
+fn deliver(
+    home: &Path,
+    mut report: Report,
+    suppressed_exceptions: impl FnOnce() -> Option<String>,
+) -> Option<PathBuf> {
     if REPORTED.swap(true, Ordering::SeqCst) {
         return None;
+    }
+    if report.side == "server"
+        && let Some(summary) = suppressed_exceptions()
+    {
+        report
+            .details
+            .push(("Suppressed Exceptions".into(), summary));
     }
     // The panic is on stderr already: the stack goes to the log only.
     crate::logging::write_current(
@@ -590,6 +601,7 @@ pub fn report_watchdog(
     side: &'static str,
     message: String,
     server_stack: Result<String, sunrise_threads::stack_dump::NoStack>,
+    suppressed_exceptions: impl FnOnce() -> Option<String>,
 ) -> Option<PathBuf> {
     let mut details = system_details(side);
     let stack = match server_stack {
@@ -612,6 +624,7 @@ pub fn report_watchdog(
             details,
             log: crate::logging::recent_lines(),
         },
+        suppressed_exceptions,
     )
 }
 
@@ -757,7 +770,11 @@ pub fn worker_panic_report(info: &std::panic::PanicHookInfo, side: &'static str)
 /// with it; on other threads the error goes to the log, as vanilla's uncaught exception handler
 /// does. The default hook still prints the panic. A panic inside `contain` is only logged. A
 /// panic inside a native mod's hook names the mod and the hook.
-pub fn install(home: PathBuf, side: &'static str) {
+pub fn install(
+    home: PathBuf,
+    side: &'static str,
+    suppressed_exceptions: impl Fn() -> Option<String> + Send + Sync + 'static,
+) {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if contained_panic(info) {
@@ -772,12 +789,16 @@ pub fn install(home: PathBuf, side: &'static str) {
                 description: "Exception in server tick loop".into(),
                 ..panic_report(info, "server")
             };
-            deliver(&home, report);
+            deliver(&home, report, &suppressed_exceptions);
             SERVER_CRASHED.store(true, std::sync::atomic::Ordering::Release);
         } else if main {
-            deliver(&home, panic_report(info, side));
+            deliver(&home, panic_report(info, side), &suppressed_exceptions);
         } else if is_worker_thread(std::thread::current().name()) {
-            deliver(&home, worker_panic_report(info, side));
+            deliver(
+                &home,
+                worker_panic_report(info, side),
+                &suppressed_exceptions,
+            );
             emergency_save();
             // The crash ends the game, as the relayed report does on vanilla's main thread.
             std::process::exit(101);
@@ -824,6 +845,7 @@ pub fn report_error(
     home: &Path,
     side: &'static str,
     error: &(dyn std::error::Error + 'static),
+    suppressed_exceptions: impl FnOnce() -> Option<String>,
 ) -> Option<PathBuf> {
     if let Some(debug) = error.downcast_ref::<DebugCrash>() {
         return deliver(
@@ -839,6 +861,7 @@ pub fn report_error(
                 details: system_details(side),
                 log: crate::logging::recent_lines(),
             },
+            suppressed_exceptions,
         );
     }
     let mut message = error.to_string();
@@ -860,6 +883,7 @@ pub fn report_error(
             details: system_details(side),
             log: crate::logging::recent_lines(),
         },
+        suppressed_exceptions,
     )
 }
 
@@ -959,6 +983,7 @@ mod tests {
             install(
                 home.clone(),
                 if name == "main" { "server" } else { "client" },
+                || Some("chunk/save:std::io::Error x 9".into()),
             );
             let result = std::thread::Builder::new()
                 .name(name.into())
@@ -1001,6 +1026,7 @@ mod tests {
                 let text = std::fs::read_to_string(&reports[0]).unwrap();
                 assert!(text.contains(&format!("Description: {title}")));
                 assert!(text.contains("posted server crash 3494"));
+                assert!(text.contains("Suppressed Exceptions: chunk/save:std::io::Error x 9"));
                 if name == "Server thread" {
                     assert!(text.contains("Server thread"));
                 }

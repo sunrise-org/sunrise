@@ -749,6 +749,7 @@ impl Game<'_> {
                 .unwrap_or_else(|| self.res.biomes())
                 .clone(),
             generate.as_ref(),
+            self.save.save_failure_reporter().clone(),
         )?;
         self.bind_chunk_disk_worker(&save, dim);
         save.install_profession_snapshot(self.stations().professions.clone());
@@ -1715,10 +1716,9 @@ impl Game<'_> {
         }
     }
 
-    /// Save the levels mods asked for since the last tick, each as an autosave does but with its
-    /// chunks on disk when it ends: `level_save` fires for each that was written, and one that
-    /// could not be is logged. A level not open any more is opened to be saved, like a parked one.
-    /// The level in place is put back.
+    /// Run the requested level save passes. `level_save` fires after a pass even if an
+    /// individual record failed and was reported. A failed awaited flush ends the pass with
+    /// an error and no hook. Reopen levels as needed, then restore the active one.
     pub(super) fn run_requested_saves(&mut self) {
         if Self::admit_entity_save().is_err() {
             return;
@@ -1748,12 +1748,16 @@ impl Game<'_> {
             return Ok(());
         }
         let back = self.dim;
-        let dims: Vec<Dim> = self.levels.parked.keys().copied().collect();
-        for dim in dims {
-            self.enter_level(dim)?;
-            self.save_level(wait)?;
-        }
-        self.enter_level(back)
+        let parked = self.levels.parked_dims();
+        let saved = (|| {
+            for dim in parked {
+                self.enter_level(dim)?;
+                self.save_level(wait)?;
+            }
+            Ok(())
+        })();
+        let restored = self.enter_level(back);
+        saved.and(restored)
     }
 }
 
@@ -1795,6 +1799,96 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dirty_test_chunk(game: &mut Game<'_>) {
+        let chunk = sunrise_client::chunk::Chunk::with_layout(0, 0, game.world.layout());
+        game.world.chunks.insert((0, 0), Arc::new(chunk));
+        game.world.modified.insert((0, 0));
+    }
+
+    fn queue_unencodable_entity_record(save: &SaveDir) {
+        use sunrise_core::nbt::{DISK_WRITE_NESTING_GUARD, Tag};
+        let invalid =
+            (0..=DISK_WRITE_NESTING_GUARD).fold(Tag::Int(0), |nested, _| Tag::List(vec![nested]));
+        save.save_entities_later(vec![((2, 0), vec![invalid])])
+            .unwrap();
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn save_all_succeeds_after_reported_failures_in_multiple_levels() {
+        use crate::game::native_entity_refs::tests::with_game;
+        use sunrise_client::save::{Level, LevelShape};
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            with_game(|game| {
+                let root = tempfile::tempdir().unwrap();
+                game.world_root = root.path().to_path_buf();
+                game.save = Arc::new(SaveDir::new(
+                    game.world_root.clone(),
+                    LevelShape::OVERWORLD,
+                    Some(Default::default()),
+                ));
+                game.level.name = "saved despite two refused records".into();
+                let mut folders = Vec::new();
+                for dim in [Dim::Nether, Dim::End, Dim::Overworld] {
+                    game.enter_level(dim).unwrap();
+                    dirty_test_chunk(game);
+                    folders.push((dim, game.save.root.clone(), game.save.shape));
+                    if dim != Dim::End {
+                        queue_unencodable_entity_record(&game.save);
+                    }
+                }
+                assert_eq!(
+                    game.save_all_reply().translation_key(),
+                    Some("commands.save.success")
+                );
+                assert_eq!(game.save.record_save_failures(), 2);
+                assert_eq!(game.dim, Dim::Overworld);
+                assert_eq!(
+                    Level::read(root.path()).unwrap().name,
+                    "saved despite two refused records"
+                );
+                for (_, folder, shape) in folders {
+                    assert!(
+                        SaveDir::new(folder.clone(), shape, None)
+                            .raw_chunk(0, 0)
+                            .is_some(),
+                        "{} was not written",
+                        folder.display()
+                    );
+                }
+            });
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn an_idle_level_closes_after_reporting_a_record_failure() {
+        use crate::game::native_entity_refs::tests::with_game;
+        use sunrise_client::save::LevelShape;
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            with_game(|game| {
+                let root = tempfile::tempdir().unwrap();
+                game.world_root = root.path().to_path_buf();
+                game.save = Arc::new(SaveDir::new(
+                    game.world_root.clone(),
+                    LevelShape::OVERWORLD,
+                    Some(Default::default()),
+                ));
+                game.enter_level(Dim::Nether).unwrap();
+                dirty_test_chunk(game);
+                queue_unencodable_entity_record(&game.save);
+                let disk = SaveDir::new(game.save.root.clone(), game.save.shape, None);
+                game.enter_level(Dim::Overworld).unwrap();
+                game.levels.parked.get_mut(&Dim::Nether).unwrap().idle = IDLE_TICKS - 1;
+                game.close_idle_levels().unwrap();
+                assert_eq!(game.dim, Dim::Overworld);
+                assert!(!game.levels.parked.contains_key(&Dim::Nether));
+                assert_eq!(game.save.record_save_failures(), 1);
+                assert!(disk.raw_chunk(0, 0).is_some());
+            });
+        });
+    }
 
     #[test]
     fn levels_clear_empties_parked_and_heard_open() {

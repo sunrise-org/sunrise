@@ -18,11 +18,8 @@ impl mod_api::Hooks for Logouts {
     }
 }
 
-/// A mod whose logout listener panics for guest 13, so the stop path itself panics, and whose
-/// level-unload listener (heard by the close-failure callback) then starts a new turn for
-/// guest 13, through the handle it kept, that panics too.
-#[derive(Default)]
-struct PanicsInShutdown(Mutex<Option<mod_api::PlayerRef>>);
+/// A mod whose logout listener starts a turn for guest 13 that panics before the checkpoint.
+struct PanicsInShutdown;
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for PanicsInShutdown {
     fn player_logged_out(
@@ -31,17 +28,9 @@ impl mod_api::Hooks for PanicsInShutdown {
         event: &mut mod_api::PlayerLoggedOutEvent<'_>,
     ) {
         if event.player == 13 {
-            *self.0.lock().unwrap() = host.player(13);
-            panic!("mod panic stopping the server");
+            let player = host.player(13).expect("guest 13 is still online");
+            player.set_game_mode(host, mod_api::GameMode::Creative);
         }
-    }
-    fn level_unload(
-        &self,
-        host: &mut dyn mod_api::ServerHost,
-        _: &mut mod_api::LevelUnloadEvent<'_>,
-    ) {
-        let player = self.0.lock().unwrap().expect("guest 13 was online");
-        player.set_game_mode(host, mod_api::GameMode::Creative);
     }
     fn player_game_mode_changed(
         &self,
@@ -76,8 +65,8 @@ fn taking_turn(game: &mut crate::game::Game<'_>) {
 }
 
 /// Runs the scenario: the panic goes through the real turn helpers, then the real stop path
-/// saves. `nested` puts guest 13's turn inside guest 12's; `callback` has the shutdown itself
-/// panic and the close-failure callback panic in a new turn of guest 13.
+/// saves. `nested` puts guest 13's turn inside guest 12's; `callback` interrupts a new turn
+/// for guest 13 during logout, before the shutdown save.
 fn scenario(nested: bool, callback: bool) {
     with_guests(|game| {
         game.options.execution_role = ExecutionRole::DedicatedServer;
@@ -153,8 +142,7 @@ fn scenario(nested: bool, callback: bool) {
         // The stop path saves; no tick has run since, so the record stands.
         let logouts = std::sync::Arc::new(Mutex::new(Vec::new()));
         let entry = if callback {
-            game.native_level_opened(game.dim);
-            mod_api::ModEntry::new("panics", Box::new(PanicsInShutdown::default()))
+            mod_api::ModEntry::new("panics", Box::new(PanicsInShutdown))
         } else {
             mod_api::ModEntry::new("logouts", Box::new(Logouts(logouts.clone())))
         };
@@ -163,7 +151,17 @@ fn scenario(nested: bool, callback: bool) {
                 *began = true;
                 Ok(())
             });
-            assert_eq!(result.is_err(), callback, "{result:?}");
+            if callback {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("mod panic in a new turn"),
+                    "the logout's nested turn must panic before the checkpoint"
+                );
+            } else {
+                result.unwrap();
+            }
         });
         if !callback {
             // An interrupted player stays online: each login still gets its one logout.

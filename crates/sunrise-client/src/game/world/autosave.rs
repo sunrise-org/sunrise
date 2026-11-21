@@ -118,7 +118,6 @@ impl Game<'_> {
             }
         }
         self.save_world_state();
-        self.message = Some(("Saved the game".into(), Instant::now()));
         Ok(())
     }
 
@@ -140,6 +139,12 @@ impl Game<'_> {
         self.save_parked_levels(wait)?;
         self.save_game_metadata()?;
         let _ = self.finish_player_autosaves(wait);
+        if wait {
+            self.message = Some((
+                sunrise_client::lang::get("commands.save.success"),
+                Instant::now(),
+            ));
+        }
         self.native_world_saved(wait);
         if dedicated {
             dedicated::events::record_server("saved", serde_json::json!({}));

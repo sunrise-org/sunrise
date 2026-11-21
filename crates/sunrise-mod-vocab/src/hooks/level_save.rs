@@ -1,10 +1,10 @@
 //! The `level_save` hooks and helpers: declarations the mod API generator reads (see `hooks/mod.rs`).
 
 pub trait Hooks {
-    /// `dimension`'s level was saved (NeoForge's `LevelEvent.Save`, in
-    /// `ServerLevel.save`): its level data, chunks and entities, by the
-    /// autosave, `/save-all`, a pause, a closing level or the server
-    /// stopping; each level of a world save in turn. Server-side.
+    /// The end of `dimension`'s level save pass (NeoForge's `LevelEvent.Save`
+    /// in `ServerLevel.save`), for autosave, `/save-all`, pause and shutdown.
+    /// Individual record failures are reported and do not suppress this hook;
+    /// a failed awaited storage flush does. Server-side.
     #[hook(
         side = "server",
         contract = "listen",

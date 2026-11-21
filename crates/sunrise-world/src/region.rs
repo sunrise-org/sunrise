@@ -65,7 +65,8 @@ impl ChunkRecord {
             timestamp,
         })
     }
-    fn check_compressed_size(&self) -> io::Result<()> {
+    /// Check the compressed payload's region-file limit before entering the write lock.
+    pub fn check_compressed_size(&self) -> io::Result<()> {
         if self.compressed.len() > MAX_COMPRESSED {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -92,6 +93,7 @@ impl ChunkRecord {
 
 pub struct RegionFile {
     file: File,
+    writable: bool,
     path: PathBuf,
     position: ChunkPos,
     offsets: [u32; 1024],
@@ -250,7 +252,7 @@ impl RegionFile {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_owned();
         let file = File::open(&path)?;
-        Self::from_file(path, file)
+        Self::from_file(path, file, false)
     }
 
     /// Open for reading and in-place writes (`write`, `clear`), creating an
@@ -263,14 +265,15 @@ impl RegionFile {
             .create(create)
             .truncate(false)
             .open(&path)?;
-        Self::from_file(path, file)
+        Self::from_file(path, file, true)
     }
 
-    fn from_file(path: PathBuf, mut file: File) -> io::Result<Self> {
+    fn from_file(path: PathBuf, mut file: File, writable: bool) -> io::Result<Self> {
         let position = position_from_path(&path)?;
         let (offsets, timestamps) = read_header(&mut file)?;
         let mut region = Self {
             file,
+            writable,
             path,
             position,
             offsets,
@@ -419,6 +422,33 @@ impl RegionFile {
     /// Flush the writes to the disk.
     pub fn sync(&self) -> io::Result<()> {
         self.file.sync_data()
+    }
+
+    /// `RegionFile.flush`: force file data and metadata. The read-only fallback
+    /// has no writes to force (and some systems require a writable handle).
+    pub fn sync_all(&self) -> io::Result<()> {
+        if self.writable {
+            self.file.sync_all()?;
+        }
+        Ok(())
+    }
+
+    /// `RegionFile.close`: pad the last sector, force data and metadata even if
+    /// padding fails, then close the file on either outcome.
+    pub fn close(self) -> io::Result<()> {
+        if !self.writable {
+            return Ok(());
+        }
+        let padding = self.file.metadata().and_then(|metadata| {
+            let len = metadata.len();
+            let padded = len.next_multiple_of(SECTOR as u64);
+            if padded == len {
+                Ok(())
+            } else {
+                self.file.set_len(padded)
+            }
+        });
+        self.file.sync_all().and(padding)
     }
 
     /// Clone the file handle so a caller can flush after releasing the region lock.

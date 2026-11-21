@@ -64,12 +64,12 @@ pub trait LevelSavedDataBackendMut {
     fn level_set_map_data(&mut self, level: LevelRef, id: i32, colors: &[u8]) -> bool;
     /// Side: server.
     /// Ask for the level to be saved: its level data, chunks and entities, as the autosave and
-    /// `/save-all` save a level, with its chunks on disk when it ends. The save runs at the start
-    /// of the next server tick, not inside the call, which may be in a hook of the very tick that
-    /// is saving; a level asked for twice before then is saved once. True when the request was
-    /// taken: the call cannot tell whether the save worked. `level_save` fires with the level's
-    /// dimension once it was written; a save that fails fires nothing and is logged. False for a
-    /// stale handle and on a client.
+    /// `/save-all` save a level. The save runs at the start of the next server tick, not inside
+    /// the call; multiple requests before then save it once. True when the request was taken,
+    /// not when the save succeeds. `level_save` fires with the level's dimension after the save
+    /// pass. Individual record failures are logged but do not fail the pass. A failed awaited
+    /// storage flush does fail the pass and suppresses `level_save`. False for a stale handle
+    /// and on a client.
     #[access(WorldOnly)]
     fn level_request_save(&mut self, level: LevelRef) -> bool;
 }

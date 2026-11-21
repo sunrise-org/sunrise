@@ -1012,12 +1012,14 @@ impl Game<'_> {
 
     /// `MinecraftServer.stopServer`: the players are saved and sent away,
     /// then the world is saved.
-    pub(super) fn stop_integrated(&mut self, crashed: bool) -> Result<()> {
+    pub(super) fn stop_integrated(&mut self, crashed: bool, run_error: Option<&str>) -> Result<()> {
         // Abort background terrain generation/decoration on shutdown, matching vanilla behavior.
         self.streaming.abort_generation();
         self.levels.abort_parked_generation();
-        // The close request: lifecycle observation stops.
-        self.native_lifecycle.begin_close();
+        // A failed open keeps its opening phase until the final save attempts finish.
+        if run_error.is_none() || !self.native_lifecycle.is_opening() {
+            self.native_lifecycle.begin_close();
+        }
         self.native_configs_server_stop();
         self.native_players_leaving();
         // IntegratedServer.stopServer: teardownPublishedState.
@@ -1040,7 +1042,7 @@ impl Game<'_> {
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
-        self.finish_server_save(crashed)
+        self.finish_server_save(crashed, run_error)
     }
 }
 
@@ -1506,7 +1508,7 @@ pub(super) mod tests {
         let scratch = tempfile::tempdir().unwrap();
         let home = scratch.path().to_path_buf();
         let previous = std::panic::take_hook();
-        sunrise_client::crash::install(home.clone(), "client");
+        sunrise_client::crash::install(home.clone(), "client", || None);
         let (tasks, receiver) = channel::<OwnerRequest>();
         let mut server = Integrated {
             emergency_save: None,
@@ -1737,28 +1739,201 @@ pub(super) mod tests {
         });
     }
 
+    #[derive(Debug, PartialEq, Eq)]
+    enum CheckpointEvent {
+        LevelSaved,
+        WorldSaved,
+        LevelUnloaded,
+        Closed(mod_api::WorldPhase, String),
+    }
+
+    struct CheckpointMod(Arc<Mutex<Vec<CheckpointEvent>>>);
+
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for CheckpointMod {
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            let kind = r
+                .block_entity_type("counter")
+                .blocks(&["crash_checkpoint:counter"])
+                .build();
+            r.block_entity_part(&kind, CheckpointCounter).unwrap();
+        }
+
+        fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
+            event
+                .register(
+                    mod_api::Block::new("crash_checkpoint:counter", "minecraft:barrel")
+                        .with_item(false),
+                )
+                .unwrap();
+        }
+
+        fn level_save(
+            &self,
+            _: &mut dyn mod_api::ServerHost,
+            event: &mut mod_api::LevelSaveEvent<'_>,
+        ) {
+            if event.dimension == Dim::Overworld.id() {
+                self.0.lock().unwrap().push(CheckpointEvent::LevelSaved);
+            }
+        }
+
+        fn world_saved(&self, _: &mut dyn mod_api::ServerHost, _: &mut mod_api::WorldSavedEvent) {
+            self.0.lock().unwrap().push(CheckpointEvent::WorldSaved);
+        }
+
+        fn level_unload(
+            &self,
+            _: &mut dyn mod_api::ServerHost,
+            event: &mut mod_api::LevelUnloadEvent<'_>,
+        ) {
+            if event.dimension == Dim::Overworld.id() {
+                self.0.lock().unwrap().push(CheckpointEvent::LevelUnloaded);
+            }
+        }
+
+        fn world_lifecycle(
+            &self,
+            _: &mut dyn mod_api::ServerHost,
+            event: &mut mod_api::WorldLifecycleEvent<'_>,
+        ) {
+            use mod_api::WorldPhase::{WorldCloseFailed, WorldCloseFinal};
+            if matches!(event.phase, WorldCloseFailed | WorldCloseFinal) {
+                self.0.lock().unwrap().push(CheckpointEvent::Closed(
+                    event.phase,
+                    event.error_text.to_owned(),
+                ));
+            }
+        }
+    }
+
+    struct CheckpointCounter;
+    #[mod_api::sunrise_part]
+    impl mod_api::BlockPart for CheckpointCounter {}
+    #[mod_api::sunrise_part]
+    impl mod_api::BlockEntityPart for CheckpointCounter {
+        fn block_entity_save_additional(
+            &self,
+            host: &dyn mod_api::LevelHost,
+            event: &mut mod_api::BlockEntitySaveAdditionalEvent<'_>,
+        ) {
+            let entity = host
+                .block_entity(event.pos)
+                .expect("counter is still resident");
+            let data = host
+                .block_entity_data(entity)
+                .expect("counter handle is live");
+            event.tag.insert(
+                "saved_progress".into(),
+                data.get(&"progress".into()).unwrap().clone(),
+            );
+        }
+    }
+
+    /// Install the mod before building the fixture's frozen block and block entity registries.
+    fn with_checkpoint_mod(test: impl FnOnce(&mut Game<'_>, &Mutex<Vec<CheckpointEvent>>)) {
+        use crate::game::native_entity_refs::tests::{fixture_root, with_game_at};
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+            "crash_checkpoint",
+            Box::new(CheckpointMod(events.clone())),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods.clone(), || {
+            crate::game::api_values::install_parts(&mods).unwrap();
+            mod_api::__private::mark_game_thread();
+            let resources =
+                crate::game::mods::content_root(&fixture_root(), &Default::default()).unwrap();
+            with_game_at(resources.prepared().to_path_buf(), |game| {
+                test(game, &events)
+            });
+        });
+    }
+
     #[test]
     #[ignore = "daily"]
     fn integrated_tick_panic_saves_changed_world() {
-        crate::game::native_entity_refs::tests::with_game(|game| {
-            let root = std::env::temp_dir().join(format!(
-                "sunrise-integrated-crash-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
-            std::fs::create_dir_all(&root).unwrap();
-            game.world_root = root.clone();
-            game.save = Arc::new(sunrise_client::save::SaveDir::new(
-                root.clone(),
-                sunrise_client::save::LevelShape::OVERWORLD,
-                Some(Default::default()),
-            ));
+        use crate::game::{
+            native_entity_refs::tests::run_fresh_cases,
+            native_living_refs::tests::{ZOMBIE_UUID, hurt_pig, send_to_the_nether, summon_mob},
+        };
+        use sunrise_client::{
+            chunk::Chunk,
+            containers::{BlockEntity, ModBlockEntity, ModBlockEntityFields},
+            save::{LevelShape, SaveDir, SessionLock},
+        };
+        use sunrise_core::nbt::Tag;
+
+        const NAME: &str = "game::integrated::tests::integrated_tick_panic_saves_changed_world";
+        // The mod's block and block entity declarations freeze process-wide registries.
+        if run_fresh_cases(NAME, "SUNRISE_CRASH_CHECKPOINT_CHILD", &["crash"]) {
+            return;
+        }
+        with_checkpoint_mod(|game, events| {
+            let scratch = tempfile::tempdir().unwrap();
+            let root = scratch.path();
+            let open = || {
+                SaveDir::new(
+                    root.to_path_buf(),
+                    LevelShape::OVERWORLD,
+                    Some(Default::default()),
+                )
+            };
+            game.world_root = root.to_path_buf();
+            game.save = Arc::new(open());
             // Crash shutdown only saves an adopted world whose storage is owned.
-            game.session_lock = Some(sunrise_client::save::SessionLock::acquire(&root).unwrap());
+            game.session_lock = Some(SessionLock::acquire(root).unwrap());
             game.world_adopted = true;
+            game.native_level_opened(Dim::Overworld);
+            game.native_lifecycle_world_ready();
+
+            if !game.world.chunks.contains_key(&(0, 0)) {
+                game.world
+                    .chunks
+                    .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            }
+            let (victim, attacker) = hurt_pig(game);
+            send_to_the_nether(game, attacker);
+            let bystander = summon_mob(game, "minecraft:pig", "{NoAI:1b,UUID:[I;21,22,23,24]}");
+            let victim_uuid = Tag::IntArray(game.persist.uuid_of(victim).unwrap().to_vec());
+            let bystander_uuid = Tag::IntArray(game.persist.uuid_of(bystander).unwrap().to_vec());
+            let slot = game.mobs.iter().position(|m| m.id == victim).unwrap();
+            let ticks_since_hurt = 17;
+            assert!(game.mobs[slot].ai.last_hurt_by_ref.is_none());
+            game.mobs.update(slot, |m| {
+                m.age = (m.ai.last_hurt_by_time + ticks_since_hurt) as u32;
+            });
+            // The victim joined first, but re-enters the bystander's section last.
+            let at = game.mobs[slot].position;
+            let outside = sunrise_core::geometry::Vec3::new(at.x, 50.0, at.z);
+            for (from, to) in [(at, outside), (outside, at)] {
+                game.mobs.update(slot, |m| m.position = to);
+                game.entity_section_step(victim, [from.x, from.y, from.z], [to.x, to.y, to.z]);
+            }
+            let living = game.living(game.entity(victim).unwrap()).unwrap();
+            assert_eq!(
+                living.last_attacker(game).unwrap().level(game),
+                game.level(Dim::Nether.id())
+            );
+
+            let block = game
+                .pack
+                .assets
+                .registry
+                .default_state("crash_checkpoint:counter")
+                .unwrap();
+            game.world.set(1, 64, 1, block).unwrap();
+            game.world.block_entities.insert(
+                (1, 64, 1),
+                BlockEntity::Mod(Box::new(ModBlockEntity::new(
+                    "crash_checkpoint:counter".into(),
+                    ModBlockEntityFields {
+                        nbt: [("progress".into(), Tag::Int(41))].into(),
+                        ..Default::default()
+                    },
+                ))),
+            );
             game.player = Some(
                 sunrise_client::motion::PlayerMotion::new(
                     game.motion,
@@ -1769,7 +1944,7 @@ pub(super) mod tests {
             // The owner's file as last saved, with an experience total the panicking tick's
             // state (37) differs from.
             game.level.xp_total = 11;
-            game.level.write_player(&root, game.res.items()).unwrap();
+            game.level.write_player(root, game.res.items()).unwrap();
             let owner_file = std::fs::read_dir(root.join("players").join("data"))
                 .unwrap()
                 .next()
@@ -1795,18 +1970,49 @@ pub(super) mod tests {
                 pending: None,
                 load: LoadPhase::default(),
             });
-            let error = game.integrated_tick_loop(&flags).unwrap_err();
-            assert_eq!(
-                error.to_string(),
-                "the server thread panicked: integrated tick fixture"
-            );
-            let saved = sunrise_client::save::Level::read(&root).unwrap();
+            events.lock().unwrap().clear();
+            let error = game.integrated_tick_loop(&flags).unwrap_err().to_string();
+            assert!(error.contains("integrated tick fixture"));
+            let saved = sunrise_client::save::Level::read(root).unwrap();
             assert_eq!(saved.name, "saved after integrated tick panic");
+            // A fresh reader has no pending writes or captured payload to fall back to.
+            let disk = open();
+            let chunk = disk
+                .raw_chunk(0, 0)
+                .expect("crash checkpoint wrote the chunk");
+            let Some(Tag::List(entities)) = chunk.tag.get("block_entities") else {
+                panic!("crash checkpoint lost the block entities");
+            };
+            let counter = entities
+                .iter()
+                .find(|tag| tag.get("id") == Some(&Tag::String("crash_checkpoint:counter".into())))
+                .expect("crash checkpoint lost the counter");
+            assert_eq!(counter.get("saved_progress"), Some(&Tag::Int(41)));
+            let entities = disk.load_entities(0, 0);
+            let ids: Vec<_> = entities.iter().map(|tag| tag.get("UUID")).collect();
+            assert_eq!(ids, [Some(&bystander_uuid), Some(&victim_uuid)]);
+            let victim = &entities[1];
+            assert_eq!(
+                victim.get("last_hurt_by_mob"),
+                Some(&Tag::IntArray(ZOMBIE_UUID.to_vec()))
+            );
+            assert_eq!(
+                victim.get("ticks_since_last_hurt_by_mob"),
+                Some(&Tag::Int(ticks_since_hurt))
+            );
+            assert_eq!(
+                *events.lock().unwrap(),
+                [
+                    CheckpointEvent::LevelSaved,
+                    CheckpointEvent::WorldSaved,
+                    CheckpointEvent::LevelUnloaded,
+                    CheckpointEvent::Closed(mod_api::WorldPhase::WorldCloseFailed, error),
+                ]
+            );
             // No hub: players are not saved, so the owner's file keeps what it had.
             assert_eq!(owner_xp(), Some(11));
             assert_eq!(flags.published.load(Ordering::Relaxed), 0);
             assert!(game.session_lock.is_none());
-            std::fs::remove_dir_all(&root).ok();
         });
     }
 

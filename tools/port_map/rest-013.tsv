@@ -112,9 +112,9 @@ MinecraftServer.createGameModeForPlayer	missing		minor: demo mode is not impleme
 MinecraftServer.stopTimeProfiler	skip:debug		debug profiler stop
 MinecraftServer.setAutoSave	port	crates/sunrise-client/src/game/interface/dedicated/mod.rs::set_auto_save	changes the shared server-level save flag; the tick skips periodic saves while it is disabled
 MinecraftServer.isAutoSave	port	crates/sunrise-client/src/game/interface/dedicated/mod.rs::auto_save	reads the shared server-level save flag
-MinecraftServer.storeChunkIoError	skip:debug		writes a chunk IO crash report
+MinecraftServer.storeChunkIoError	port	crates/sunrise-client/src/chunk_io.rs::store_chunk_io_error	writes nonfatal save diagnostics under the world's debug folder; gap: no report on load failure
 MinecraftServer.reportChunkLoadFailure	port	crates/sunrise-client/src/chunk_io.rs::report_load_failure	logs, warns on low disk space and records the failed chunk for the toast; gap: no suppressed-exception store and no debug crash report
-MinecraftServer.reportChunkSaveFailure	port	crates/sunrise-client/src/chunk_io.rs::report_save_failure	logs, warns on low disk space and records the failed chunk; gap: no suppressed-exception store and no debug crash report
+MinecraftServer.reportChunkSaveFailure	port	crates/sunrise-client/src/chunk_io.rs::report_save_failure	logs, records the suppressed exception and writes a chunk IO report before checking disk space
 PlayerAdvancements.reload	port	crates/sunrise-client/src/lan/advancements.rs::ServerAdvancements::reload	on /reload every guest loaded so far has its visible set cleared and its progress re-read against the new tree, then the tick advancements are granted and the reward recipes added; gap: the host's own progress is not reloaded
 PlayerAdvancements.registerListeners	skip:other		no per-criterion listener map; trigger() tests every criterion when an event fires
 PlayerAdvancements.checkForAutomaticTriggers	missing		minor: criteria-less advancements from data packs are not granted when a player loads

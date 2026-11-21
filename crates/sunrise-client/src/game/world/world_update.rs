@@ -196,24 +196,18 @@ impl Game<'_> {
         }
         let dirty: Vec<_> = unloaded
             .iter()
-            .filter(|c| self.world.modified.contains(&(c.x, c.z)))
+            .filter(|c| self.world.modified.remove(&(c.x, c.z)))
             .cloned()
             .collect();
         let modified = sunrise_client::spans::time("with_entities", || self.with_entities(&dirty));
         self.native_full_chunk_snapshots(&modified);
-        if !modified.is_empty() {
-            match sunrise_client::spans::time("save_chunks", || {
+        if !modified.is_empty()
+            && let Err(e) = sunrise_client::spans::time("save_chunks", || {
                 self.save
                     .save_later(&modified, self.pack.assets.registry, world_biomes!(self))
-            }) {
-                // The writer's pending snapshots now hold the dirty data until sync.
-                Ok(_) => {
-                    for chunk in &dirty {
-                        self.world.modified.remove(&(chunk.x, chunk.z));
-                    }
-                }
-                Err(e) => log::warn!("Sunrise: failed to save unloaded chunks: {e}"),
-            }
+            })
+        {
+            log::warn!("Sunrise: failed to save unloaded chunks: {e}");
         }
         sunrise_client::spans::time("spawn_fresh_chunks", || self.spawn_fresh_chunks());
         self.ask_loaded_light_emission();
