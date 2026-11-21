@@ -144,3 +144,90 @@ fn missing_nonfinite_and_wrong_book_geometry_refuse_registration() {
     assert!(registrar.menu_recipe_books.is_empty());
     assert_eq!(registrar.refused.len(), 3);
 }
+
+#[test]
+fn menu_recipe_book_accepts_served_content_namespace_only_for_its_host() {
+    let packages = vec![
+        crate::PackageInfo::new(
+            "horizon_java".into(),
+            "1".into(),
+            crate::PackageKind::Code,
+            crate::Side::Both,
+            vec!["horizon_java".into()],
+            vec![],
+        ),
+        crate::PackageInfo::new(
+            "third".into(),
+            "1".into(),
+            crate::PackageKind::Code,
+            crate::Side::Both,
+            vec!["third".into()],
+            vec![],
+        ),
+        crate::PackageInfo::new(
+            "runes".into(),
+            "1".into(),
+            crate::PackageKind::Content,
+            crate::Side::Both,
+            vec!["runes".into()],
+            vec![],
+        )
+        .with_served_by(Some("horizon_java".into())),
+        crate::PackageInfo::new(
+            "plain".into(),
+            "1".into(),
+            crate::PackageKind::Content,
+            crate::Side::Both,
+            vec!["plain".into()],
+            vec![],
+        ),
+    ];
+    crate::load_state::with_test_package_inventory(packages, || {
+        let mut host = PartRegistrar::new("horizon_java");
+        let book = host.recipe_book_type("runes:book").unwrap();
+        assert!(
+            host.menu_recipe_book(
+                "runes:altar",
+                &book,
+                "runes:crafting",
+                roles(),
+                screen(&book)
+            )
+            .is_ok()
+        );
+        assert!(
+            host.menu_recipe_book(
+                "plain:table",
+                &book,
+                "runes:crafting",
+                roles(),
+                screen(&book)
+            )
+            .is_err()
+        );
+        assert!(
+            host.menu_recipe_book(
+                "minecraft:crafting",
+                &book,
+                "runes:crafting",
+                roles(),
+                screen(&book)
+            )
+            .is_err()
+        );
+
+        let mut third = PartRegistrar::new("third");
+        let third_book = third.recipe_book_type("third:book").unwrap();
+        assert!(
+            third
+                .menu_recipe_book(
+                    "runes:altar",
+                    &third_book,
+                    "runes:crafting",
+                    roles(),
+                    screen(&third_book)
+                )
+                .is_err()
+        );
+    });
+}

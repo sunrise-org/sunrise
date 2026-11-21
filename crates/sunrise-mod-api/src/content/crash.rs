@@ -137,6 +137,8 @@ pub(crate) fn ensure_installed() -> Result<(), &'static str> {
             phase_state: crate::load_state::phase_snapshot,
             set_phase: crate::load_state::set_phase,
             packages: crate::load_state::current_packages,
+            namespace_authority: crate::load_state::current_namespace_authority,
+            owns_namespace: crate::load_state::owns_namespace,
             registration_data: crate::load_state::registration_data,
         })
     })

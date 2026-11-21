@@ -121,8 +121,8 @@ pub enum GeneralEntityRegistrationError {
     /// is still in its registration phase, before any world or connection
     /// opens.
     Frozen,
-    /// Only both-side packages may declare entity types, which the network
-    /// names.
+    /// Only both-side packages (and both-side served namespace suppliers) may declare entity
+    /// types, which the network names.
     WrongSide,
     /// The type's id is malformed, empty or in a namespace the declaring mod
     /// does not own (a vanilla type's included).

@@ -68,7 +68,8 @@ pub trait ClientRenderClientHost {
     ///
     /// Refused by name, with nothing changed and nothing allocated, as [`DynamicTextureError`]
     /// lists: `Unavailable` when the atlas has no pool, `NotOwned` for an id outside the mod's
-    /// namespace, `BadSize` for a side of 0 or pixels that are not `width * height * 4` bytes,
+    /// owned namespaces (its manifest namespaces or a content package it serves via `served_by`),
+    /// `BadSize` for a side of 0 or pixels that are not `width * height * 4` bytes,
     /// `TooLarge` for a side past [`DYNAMIC_TEXTURE_MAX_SIDE`], `NameTaken` for an id that
     /// already names an image or a GUI sprite, `OverBudget` past the mod's
     /// [`DYNAMIC_TEXTURE_MOD_IMAGES`] images or [`DYNAMIC_TEXTURE_MOD_BYTES`] of pixels, and

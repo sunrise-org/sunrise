@@ -4270,7 +4270,9 @@ impl Game<'_> {
     /// turned off does nothing (check this first in each hook) until the
     /// launcher's next build leaves it out.
     pub(in crate::game) fn on(&self, mod_id: &str) -> bool {
-        !self.settings.mods.disabled.contains(mod_id)
+        !self
+            .mods
+            .code_disabled(&self.settings.mods.disabled, mod_id)
     }
     /// The most of the item `item` one slot holds (`Item.getDefaultMaxStackSize`),
     /// or `None` for an unknown item: for a mod's container that fills or

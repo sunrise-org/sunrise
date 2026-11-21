@@ -62,36 +62,42 @@ pub struct ContentMod {
 /// overlay would fail on it and no content mod at all would load. Returns what was left out.
 pub fn drop_dangling_remainders(mods: &mut Vec<ContentMod>) -> Vec<String> {
     let mut dropped = Vec::new();
-    mods.retain(|m| {
-        // The mod's items and its blocks that have an item (`Content::read`'s own rule).
-        let ids: BTreeSet<&str> = m
-            .content
-            .items
+    loop {
+        let all_ids: BTreeSet<String> = mods
             .iter()
-            .map(|i| i.id.as_str())
-            .chain(
-                m.content
-                    .blocks
-                    .iter()
-                    .filter(|b| b.item)
-                    .map(|b| b.id.as_str()),
-            )
+            .flat_map(|m| {
+                m.content.items.iter().map(|i| i.id.clone()).chain(
+                    m.content
+                        .blocks
+                        .iter()
+                        .filter(|b| b.item)
+                        .map(|b| b.id.clone()),
+                )
+            })
             .collect();
-        let dangling = m.content.items.iter().find(|i| {
-            i.crafting_remainder
-                .as_deref()
-                .is_some_and(|r| !r.starts_with("minecraft:") && !ids.contains(r))
+        let before = mods.len();
+        mods.retain(|m| {
+            // Every item or item-bearing block admitted into the overlay; per-package ownership
+            // was already enforced by `Content::read_declaring` and `accept_declared`.
+            let dangling = m.content.items.iter().find(|i| {
+                i.crafting_remainder
+                    .as_deref()
+                    .is_some_and(|r| !r.starts_with("minecraft:") && !all_ids.contains(r))
+            });
+            if let Some(item) = dangling {
+                dropped.push(format!(
+                    "mod {} content not loaded: {}: crafting_remainder {:?} is not one of its items",
+                    m.id,
+                    item.id,
+                    item.crafting_remainder.as_deref().unwrap_or_default()
+                ));
+            }
+            dangling.is_none()
         });
-        if let Some(item) = dangling {
-            dropped.push(format!(
-                "mod {} content not loaded: {}: crafting_remainder {:?} is not one of its items",
-                m.id,
-                item.id,
-                item.crafting_remainder.as_deref().unwrap_or_default()
-            ));
+        if mods.len() == before {
+            break;
         }
-        dangling.is_none()
-    });
+    }
     dropped
 }
 
@@ -925,12 +931,69 @@ pub fn accept_declared(
             content.blocks.clone_from(&mods[i].content.blocks);
             content.items.clone_from(&mods[i].content.items);
         }
-        if let Err(refusals) = content.declare_validated(&batch.blocks, &batch.items) {
+        let served_item_ids: Vec<&str> = mods
+            .iter()
+            .filter(|m| {
+                m.id != id
+                    && manifests.iter().any(|manifest| {
+                        manifest.id == m.id && manifest.served_by.as_deref() == Some(id)
+                    })
+            })
+            .flat_map(|m| {
+                m.content.items.iter().map(|i| i.id.as_str()).chain(
+                    m.content
+                        .blocks
+                        .iter()
+                        .filter(|b| b.item)
+                        .map(|b| b.id.as_str()),
+                )
+            })
+            .collect();
+        if let Err(refusals) =
+            content.declare_validated(&batch.blocks, &batch.items, &served_item_ids)
+        {
             errors.extend(
                 refusals
                     .into_iter()
                     .map(|(kind, error)| DeclarationRefusal::new(id, kind, error)),
             );
+        }
+        for block in &batch.blocks {
+            let block_id = block.get().id.as_str();
+            if let Some(other) = mods.iter().find(|m| {
+                m.id != id
+                    && (m.content.blocks.iter().any(|b| b.id == block_id)
+                        || (block.get().item && m.content.items.iter().any(|i| i.id == block_id)))
+            }) {
+                errors.push(DeclarationRefusal::new(
+                    id,
+                    DeclarationKind::Block,
+                    DeclarationError::Rejected {
+                        id: block_id.to_owned(),
+                        reason: format!("declared twice (already declared by mod {})", other.id),
+                    },
+                ));
+            }
+        }
+        for item in &batch.items {
+            let item_id = item.get().id.as_str();
+            if let Some(other) = mods.iter().find(|m| {
+                m.id != id
+                    && (m.content.items.iter().any(|i| i.id == item_id)
+                        || m.content.blocks.iter().any(|b| b.item && b.id == item_id))
+            }) {
+                errors.push(DeclarationRefusal::new(
+                    id,
+                    DeclarationKind::Item,
+                    DeclarationError::Rejected {
+                        id: item_id.to_owned(),
+                        reason: format!(
+                            "declared twice, or is also a block's item (already declared by mod {})",
+                            other.id
+                        ),
+                    },
+                ));
+            }
         }
         for (kind, name, components) in batch
             .items

@@ -145,6 +145,10 @@ pub struct Manifest {
     /// that are on may share one (`content::clash`).
     #[serde(default)]
     pub namespaces: Vec<String>,
+    /// Native runtime mod that serves code-side parts and registrations for
+    /// this content package's namespaces; refused on `[native]` packages.
+    #[serde(default)]
+    pub served_by: Option<String>,
     /// Other native mods whose hooks must be available before this one.
     #[serde(default)]
     pub dependencies: std::collections::BTreeMap<String, Dependency>,
@@ -292,6 +296,9 @@ pub struct Native {
     /// SDK names (see [`Native::mixins_or`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mixins: Option<String>,
+    /// Whether this native mod opts in to serving content packages that name it in `served_by`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub serves_content: bool,
     /// Source-level edits of game functions, native only: the one form that compiles game code.
     #[serde(default)]
     pub mixin: Vec<mixin::Mixin>,
@@ -519,6 +526,38 @@ impl Manifest {
                 m.id
             ));
         }
+        if let Some(host) = &m.served_by {
+            if m.native.is_some() {
+                return Err(format!(
+                    "{MANIFEST}: a [native] mod cannot declare served_by"
+                ));
+            }
+            if RESERVED_NAMESPACES.contains(&host.as_str()) {
+                return Err(format!(
+                    "{MANIFEST}: served_by {host:?} is a reserved namespace, not a mod id"
+                ));
+            }
+            if RESERVED_IDS.contains(&host.as_str()) {
+                return Err(format!(
+                    "{MANIFEST}: served_by {host:?} is a page of the mod site, not a mod id"
+                ));
+            }
+            if reserved_mod_id(host) {
+                return Err(format!(
+                    "{MANIFEST}: served_by {host:?} is a reserved Windows device name"
+                ));
+            }
+            if !valid_mod_id(host) {
+                return Err(format!(
+                    "{MANIFEST}: served_by {host:?} is not [a-z0-9_]{{1,64}}"
+                ));
+            }
+            if host == &m.id {
+                return Err(format!(
+                    "{MANIFEST}: served_by cannot name this package's own id {host:?}"
+                ));
+            }
+        }
         let rules = m.incompatible.iter().chain(&m.discouraged);
         for id in m
             .dependencies
@@ -739,22 +778,67 @@ impl Manifest {
     /// kind and the id: every client must have that content.
     pub fn server_only_declaration<'a>(
         &self,
-        mut declared: impl Iterator<Item = (&'a str, &'a str)>,
+        declared: impl Iterator<Item = (&'a str, &'a str)>,
     ) -> Option<String> {
-        if self.side != Side::Server {
-            return None;
-        }
-        let (kind, id) = declared.find(|(_, id)| {
+        self.server_only_declaration_for(&[self], declared)
+            .map(|refusal| refusal.to_string())
+    }
+    /// Refuses any client-required declaration in `declared` when either `self` or the package
+    /// in `suppliers` supplying the declaration's namespace is `side = "server"`.
+    pub fn server_only_declaration_for<'a>(
+        &self,
+        suppliers: &[&Manifest],
+        mut declared: impl Iterator<Item = (&'a str, &'a str)>,
+    ) -> Option<ServerOnlyDeclaration> {
+        let (supplier, kind, id) = declared.find_map(|(kind, id)| {
             let ns = id.split_once(':').map_or("", |(ns, _)| ns);
-            self.owned_namespaces().any(|owned| owned == ns)
+            let supplier = suppliers
+                .iter()
+                .copied()
+                .find(|m| m.owned_namespaces().any(|owned| owned == ns))?;
+            (self.side == Side::Server || supplier.side == Side::Server)
+                .then_some((supplier, kind, id))
         })?;
-        Some(format!(
-            "{}: a side = \"server\" mod declares the {kind} {id}, which every client must have; \
-             declare side = \"both\"",
-            self.id
-        ))
+        Some(ServerOnlyDeclaration {
+            declarer: self.id.clone(),
+            supplier: supplier.id.clone(),
+            kind: kind.to_owned(),
+            id: id.to_owned(),
+        })
     }
 }
+
+/// Refusal when code declares client-required content for a `side = "server"` declarer or
+/// served namespace supplier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerOnlyDeclaration {
+    pub declarer: String,
+    pub supplier: String,
+    pub kind: String,
+    pub id: String,
+}
+
+impl std::fmt::Display for ServerOnlyDeclaration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.declarer == self.supplier {
+            write!(
+                f,
+                "{}: a side = \"server\" mod declares the {} {}, which every client must have; \
+                 declare side = \"both\"",
+                self.declarer, self.kind, self.id
+            )
+        } else {
+            write!(
+                f,
+                "{}: declares the {} {} in side = \"server\" package {}'s namespace, which every \
+                 client must have; declare side = \"both\"",
+                self.declarer, self.kind, self.id, self.supplier
+            )
+        }
+    }
+}
+
+impl std::error::Error for ServerOnlyDeclaration {}
 
 /// Folders of a mod's project that are never part of its package: Git's, Cargo's build output
 /// and the pinned SDK the mod tool fetches into `.sunrise/`.
@@ -1961,6 +2045,108 @@ capabilities = ["registries"]
         assert!(with("\"a\", \"a\"").unwrap_err().contains("twice"));
         assert!(with("\"Kaisyn\"").unwrap_err().contains("is not"));
         assert!(with("\"\"").unwrap_err().contains("is not"));
+    }
+
+    #[test]
+    fn checks_served_by_and_native_serves_content() {
+        let default = Manifest::parse(EXAMPLE).unwrap();
+        assert_eq!(default.served_by, None);
+
+        let served = Manifest::parse(&format!("{EXAMPLE}served_by = \"horizon_java\"\n")).unwrap();
+        assert_eq!(served.served_by.as_deref(), Some("horizon_java"));
+
+        let native_header = format!(
+            "[native]\ngame = \"26.3\"\nsunrise = \"{}\"\n",
+            "a".repeat(40)
+        );
+        let native_default = Manifest::parse(&format!("{EXAMPLE}{native_header}")).unwrap();
+        assert!(!native_default.native.as_ref().unwrap().serves_content);
+        assert!(
+            !toml::to_string(native_default.native.as_ref().unwrap())
+                .unwrap()
+                .contains("serves_content")
+        );
+
+        let native_host =
+            Manifest::parse(&format!("{EXAMPLE}{native_header}serves_content = true\n")).unwrap();
+        assert!(native_host.native.as_ref().unwrap().serves_content);
+
+        let native_served_by = Manifest::parse(&format!(
+            "{EXAMPLE}served_by = \"horizon_java\"\n{native_header}"
+        ))
+        .unwrap_err();
+        assert!(native_served_by.contains("served_by"), "{native_served_by}");
+
+        let self_ref = Manifest::parse(&format!("{EXAMPLE}served_by = \"ruby\"\n")).unwrap_err();
+        assert!(
+            self_ref.contains("served_by") && self_ref.contains("ruby"),
+            "{self_ref}"
+        );
+
+        for invalid_id in RESERVED_NAMESPACES
+            .into_iter()
+            .chain(["account", "index", "con", "com1", "", "Bad_Id", "has-dash"])
+        {
+            let err =
+                Manifest::parse(&format!("{EXAMPLE}served_by = \"{invalid_id}\"\n")).unwrap_err();
+            assert!(err.contains("served_by"), "{invalid_id}: {err}");
+            if !invalid_id.is_empty() {
+                assert!(err.contains(invalid_id), "{invalid_id}: {err}");
+            }
+        }
+
+        let server_host = Manifest::parse(&format!("{EXAMPLE}side = \"server\"\n")).unwrap();
+        let both_host = Manifest::parse(&format!("{EXAMPLE}side = \"both\"\n")).unwrap();
+        let server_runes = Manifest::parse(
+            "id = \"runes\"\nname = \"Runes\"\nversion = \"1.0.0\"\napi = \"0.2\"\n\
+             side = \"server\"\nserved_by = \"ruby\"\ncapabilities = [\"registries\"]\n",
+        )
+        .unwrap();
+        let both_runes = Manifest::parse(
+            "id = \"runes\"\nname = \"Runes\"\nversion = \"1.0.0\"\napi = \"0.2\"\n\
+             side = \"both\"\nserved_by = \"ruby\"\ncapabilities = [\"registries\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            server_host.server_only_declaration_for(
+                &[&server_host, &server_runes],
+                [("block", "minecraft:stone"), ("block", "runes:altar")].into_iter(),
+            ),
+            Some(ServerOnlyDeclaration {
+                declarer: "ruby".into(),
+                supplier: "runes".into(),
+                kind: "block".into(),
+                id: "runes:altar".into(),
+            })
+        );
+        // A side = "both" host declaring client-required content in a side = "server" served
+        // package's namespace must also be refused, while its own or side = "both" namespaces pass.
+        assert_eq!(
+            both_host.server_only_declaration_for(
+                &[&both_host, &server_runes],
+                [("block", "ruby:gear"), ("block", "runes:altar")].into_iter(),
+            ),
+            Some(ServerOnlyDeclaration {
+                declarer: "ruby".into(),
+                supplier: "runes".into(),
+                kind: "block".into(),
+                id: "runes:altar".into(),
+            })
+        );
+        assert_eq!(
+            both_host.server_only_declaration_for(
+                &[&both_host, &both_runes],
+                [("block", "ruby:gear"), ("block", "runes:altar")].into_iter(),
+            ),
+            None
+        );
+        assert_eq!(
+            server_host.server_only_declaration_for(
+                &[&server_host, &server_runes],
+                [("block", "other:altar")].into_iter(),
+            ),
+            None
+        );
     }
 
     #[test]

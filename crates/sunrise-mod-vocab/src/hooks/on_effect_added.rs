@@ -15,14 +15,16 @@ pub trait Hooks {
     /// pass; `has_effect(key)` reads it, reflecting removals earlier in the pass.
     /// The current level's game rules remain readable through `host.level(dimension)`.
     /// Called only when this Part's own cadence requests it. All Parts see
-    /// the same snapshots; their queued changes apply in Part order afterward.
+    /// the same snapshots; their queued changes apply in Part order afterward
+    /// (with the declaring package's — or, for a `served_by` content package,
+    /// its serving native host's — Parts running first).
     /// Clearing `keep` skips later Parts. Server-side.
     #[hook(
         side = "server",
         scope = "effect",
         key = "effect",
         target = "mod_api::parts::effects::dispatch_mob_effect_tick",
-        version = 3,
+        version = 4,
         contract = "listen",
         host = "read",
         neoforge = "none (vanilla MobEffect.applyEffectTick; NeoForge adds no event or extension for it)"

@@ -58,7 +58,8 @@ A `side = "server"` package whose Part on such a type listens to a client hook i
 client-side Part.
 
 The Part's state (`block_entity_part_with_state`) is a key the attaching package declared with
-`register_attachment_type`, which accepts only that package's own namespace. It is saved in the block entity's
+`register_attachment_type`, which accepts any namespace that package owns (its manifest namespaces
+or a content package it serves via `served_by`). It is saved in the block entity's
 attachment compound under that package's id, not under the owner's. A Part reaches the owner's state only through an
 attachment the owner declared (the public attachment API); a key nobody declared is refused at load, naming the
 package. When the attaching package is removed, what it saved stays in the block entity, unread (the saved

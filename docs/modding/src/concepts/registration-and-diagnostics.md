@@ -88,6 +88,16 @@ not during registration. Return `None` to omit a line.
 If your native runtime hosts other packages, declare their IDs with
 `mod_api::content::crash::ConvertedPackages::new(runtime_id, ids)`. Obtain a handle with
 `packages.package(id)`, then call its `enter(export, site)` method around the converted package’s call.
+To also register recipe types, serializers, menu screens and other
+`owns_namespace`-checked declarations for generated content packages, opt the
+runtime in with `[native] serves_content = true` and declare
+`served_by = "<runtime_id>"` in each served content package's manifest
+([Manifest reference](../reference/manifest.md#sunrise-modtoml)). Because
+`serves_content = true` accepts any installed content package naming the runtime,
+verify that a package in `context.mods()` belongs to your runtime before
+registering declarations for its namespaces. All namespace-owned registrations
+delegate uniformly through `served_by`; only filesystem paths keyed strictly by
+package ID (such as `config/<mod_id>.toml`) stay scoped to the host's own ID.
 
 The scope adds `in converted package <id>, export <export>, call site <site>` below the runtime's
 `in native mod` line. Nested scopes restore the previous attribution on return and panic unwind.

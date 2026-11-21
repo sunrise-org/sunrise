@@ -4,7 +4,7 @@
 
 `Hooks::recipe_property_sets` runs once after recipes resolve for each load and again after
 `/reload`. Add `RecipePropertyAddition::new("mymod:cooking_pot_input", items)` to its
-`event.additions`: a key in the listener's manifest-owned namespaces creates a set. Ownership
+`event.additions`: a key in the listener's manifest-owned namespaces, or in a namespace delegated to it through `served_by` (see [Declare content in code](../../how-to/content-mods.md#declare-content-in-code)), creates a set. Ownership
 uses the package ID plus the manifest's `namespaces`, so a package named
 `ported_farmersdelight` with `namespaces = ["farmersdelight"]` can create
 `farmersdelight:cooking_pot_input`. A later listener may extend an existing set but cannot

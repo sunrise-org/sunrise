@@ -6,7 +6,9 @@ impl CustomStatsRegistrar for PartRegistrar {
         use crate::DeclarationError;
         let id = qualified(self.mod_id, id);
         let result = (|| {
-            if mod_vocab::__private::parts_installation::parts_installed() {
+            if mod_vocab::__private::parts_installation::parts_installed()
+                && !REGISTERING_KEYS.with_borrow(Option::is_some)
+            {
                 return Err(DeclarationError::RegistrationClosed { id });
             }
             let Some(identifier) = crate::Identifier::parse_namespaced(&id) else {
@@ -26,6 +28,7 @@ impl CustomStatsRegistrar for PartRegistrar {
                 });
             }
             self.custom_stats.push(id);
+            self.custom_stat_owners.push(self.mod_id);
             Ok(())
         })();
         result.inspect_err(|error| {

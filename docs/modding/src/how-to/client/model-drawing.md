@@ -82,7 +82,8 @@ event.extensions.client_item_extensions(item, Arc::new(ChestLayers {
 
 Trees are API-owned `ModelPart` trees, built directly or baked from a
 `LayerDefinition`. Register them once per resource load, never during a frame.
-Model names belong to the registering mod's namespace. Duplicate model names,
+Model names belong to a namespace owned by the registering mod (its manifest
+namespaces or a content package it serves via `served_by`). Duplicate model names,
 non-finite geometry or poses, an unknown texture, an unknown item and two
 providers for one item refuse the resource-load registration by name. A duplicate
 item diagnostic names both providers. Disabling the owning mod stops its Part.

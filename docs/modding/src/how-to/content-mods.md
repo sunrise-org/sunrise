@@ -98,11 +98,26 @@ Code mods declare content through `BlocksEvent` and `ItemsEvent`, using API-owne
 run before resources load. These are load-time declarations, not live registry entries. The game
 admits them with the content-file checks, atomically for each owner.
 A block's `item` defaults to true, in code as in a file: `Block::with_item(false)` gives it none.
-New identifiers from code—including block entity types and other registrar
-declarations—may use any namespace owned by that mod's manifest. Bare names use
-the mod ID; an explicit owned namespace stays unchanged. An unowned namespace
-refuses registration with a diagnostic naming both the mod and namespace. Attaching a Part to an existing vanilla or
-foreign block or item is a reference, not a new declaration, and remains allowed.
+New identifiers from code across every namespace-owned registration—including
+blocks, items, block entity types, fluids, general entity types, attributes,
+custom stats, game rules, recipe types and serializers, recipe book types, menu
+recipe books, menu screen dispatch, mob-effect tick ownership (`MobEffectPart`),
+recipe property sets, render pipelines, armour models, arm poses, attachment
+types, biome modifiers, datapack registries, client dynamic textures, and
+runtime levels—may use any namespace owned by that mod's manifest, or any
+namespace of an installed content package that delegates to it via `served_by`
+(when the native host opts in with `[native] serves_content = true`; see
+[Manifest reference](../reference/manifest.md#sunrise-modtoml)). Only filesystem
+paths keyed strictly by package ID (such as `config/<mod_id>.toml`) stay scoped
+to the host's own ID. Bare names use the mod ID; an
+explicit owned namespace stays unchanged. An unowned namespace refuses
+registration with a diagnostic naming both the mod and namespace. A host cannot
+re-declare a block or item ID that its served content package already declares,
+and opting in with `serves_content = true` grants delegation to any installed
+content package that names the host—so a host runtime must inspect
+`context.mods()` and serve only packages it recognizes or generated. Attaching a
+Part to an existing vanilla or foreign block or item is a reference, not a new
+declaration, and remains allowed.
 
 Code declarations carry component patches as `Vec<(String, Option<Tag>)>`:
 `Some(tag)` sets the named component and `None` removes it (without a `!` prefix).
@@ -142,6 +157,7 @@ homepage = "https://..."     # optional: the Mods screen's Homepage button
 issues = "https://..."       # optional: the Mods screen's Issues button
 side = "both"
 namespaces = []              # optional: more namespaces the mod's files use (below)
+served_by = "my_runtime"     # optional (content only): native runtime mod with serves_content = true
 
 [properties]                 # optional: values other mods read (reference/manifest.md)
 tier = 3
@@ -716,8 +732,12 @@ round-trip through saved NBT; negative zero is not supported. A key such as
 
 `crafting_remainder` names what the item leaves in the crafting grid when a
 recipe uses it, as a milk bucket leaves a bucket (vanilla's
-`Item.Properties.craftRemainder`, not a data component): a vanilla item or
-one of the mod's own, refused at load otherwise. It holds on the crafting
+`Item.Properties.craftRemainder`, not a data component): a vanilla item, one
+of the mod's own, or, across a `served_by` delegation (see
+[Declare content in code](#declare-content-in-code)), an item or item-bearing block the other
+side declares: a served package's file may name one its serving runtime declares in that
+package's namespaces, and the runtime may name one from a package it serves. Anything else
+is refused at load. It holds on the crafting
 table, the inventory grid, the crafter and as furnace fuel (the last of the stack leaves it in
 the fuel slot, a stack with more left drops it), not in a brewing stand. What the item leaves once eaten
 or drunk is the `minecraft:use_remainder` component instead:
@@ -970,13 +990,13 @@ world load.
 
 A code mod can declare a datapack registry of its own with `Registrar::declare_datapack_registry(path, sync,
 fields)` (NeoForge's `DataPackRegistryEvent.NewRegistry`).
-`path` lands in the mod's namespace (`spell` of `example` is `example:spell`), and `fields` is a flat record
+`path` lands in a namespace the mod owns (`spell` of `example` is `example:spell`; explicit IDs may use extra manifest namespaces or a content package served via `served_by`), and `fields` is a flat record
 schema: `Bool`, `Int { min, max }`, `Float { min, max }`, `Text { max_len }`, `Identifier` or `Reference { registry }`,
 each required or given a default. Entry `addon:fire` is `data/addon/example/spell/fire.json`
 (`DatapackRegistryDeclaration::entry_file`), the registry's namespace being a folder as NeoForge's modded
 registries have it. The game decodes entries against the schema without running mod code: an undeclared key, a missing required key, a wrong type or an out-of-range value fails
 the entry, and a default never stands in for invalid data. The engine adds no entry-size or field-count limit
-of its own. Only both-side packages may declare registries. The game loads entries from mod content and enabled data packs.
+of its own. Only both-side packages (and both-side served namespace suppliers) may declare registries. The game loads entries from mod content and enabled data packs.
 
 Use the host's `level_datapack_entries(level, registry)` to list sorted entry IDs,
 `level_datapack_handle(level, registry, entry)` to obtain a `DatapackHandle`, and
@@ -1337,7 +1357,7 @@ A code mod declares the same modifiers without a file: `Registrar::declare_biome
 `AddSpawnCosts`, `RemoveSpawnCosts`, `AddCarvers`, `RemoveCarvers` or `ModifyBiome`, whose `Option` fields are the
 values above). `BiomeModifier::json` renders it as the file above, so a declared modifier and
 a shipped one are applied by the same code, in the same order (additions first, then removals, then modifications, mods in dispatch
-order, declarations in registration order). An id outside the mod's namespace or that is not a file path, a repeated
+order, declarations in registration order). An id outside the mod's owned namespaces (or `minecraft`) or that is not a file path, a repeated
 id, an empty list, a name that is not namespaced, an unknown generation step, a spawner of weight 0 or with its
 smallest group above its largest, a spawn cost that is not finite, a climate number that is not finite, a colour above
 0xFFFFFF and a temperature modifier other than `none` or `frozen` refuse the mods at startup, naming the mod.

@@ -44,8 +44,8 @@ not from inside a draw.
 
 ## Names
 
-The id is in the calling mod's namespace (`mymod:...`); the path is the mod's to choose. No mod can update or free
-another's image: an id in another namespace is `NotOwned`. An id that already names one of the mod's images, or a GUI
+The id is in a namespace owned by the calling mod (`mymod:...`, its extra manifest namespaces, or a content package it serves via `served_by`); the path is the mod's to choose. No mod can update or free
+another's image: an id outside the calling mod's owned namespaces (or created by another mod) is `NotOwned`, and textures created under served namespaces share the calling host's per-mod budget. An id that already names one of the mod's images, or a GUI
 sprite of the packs (`mymod:gui/panel`), is `NameTaken`.
 
 ## Slots and size classes

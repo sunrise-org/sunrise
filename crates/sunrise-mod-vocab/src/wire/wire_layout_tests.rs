@@ -438,6 +438,30 @@ fn registration_and_attribute_records_have_declared_field_bytes() {
                     None,
                 )],
                 PackageDetails::default(),
+                None::<String>,
+            ),
+        ),
+    );
+    fields(
+        PackageInfo::new(
+            "runes".into(),
+            "1.0.0".into(),
+            PackageKind::Content,
+            Side::Both,
+            vec!["runes".into()],
+            vec![],
+        )
+        .with_served_by(Some("horizon_java".into())),
+        (
+            "runes".to_owned(),
+            "1.0.0".to_owned(),
+            PackageKind::Content,
+            Side::Both,
+            vec!["runes".to_owned()],
+            (
+                Vec::<PackageDependency>::new(),
+                PackageDetails::default(),
+                Some("horizon_java".to_owned()),
             ),
         ),
     );

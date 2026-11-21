@@ -8,11 +8,13 @@ let _ = registrar.register_attachment_type("example:counter", false);
 
 The registrar records any refusal even if the returned result is ignored.
 The boolean states whether the attachment syncs to clients. A persistence codec
-alone does not make it synced. Only the owning package may declare an id.
+alone does not make it synced. Only a package that owns the namespace (through
+its manifest or `served_by` delegation) may declare an id.
 The owner's declaration allows other packages to use that id.
 An undeclared use returns `AttachmentError::Undeclared` with the calling package
 id and attachment id. Synced declarations refuse a `side = "server"` package
-before registration is installed. Here “carries a synced attachment” means
+(or a `side = "both"` host declaring into a `side = "server"` served package's
+namespace) before registration is installed. Here “carries a synced attachment” means
 **declares** one: a server package may use A's synced attachment if A is a
 client-compared package. If A is itself a server package, A is refused.
 Load checks declaration conflicts (including foreign namespaces) first, then

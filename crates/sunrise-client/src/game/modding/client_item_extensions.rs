@@ -60,7 +60,9 @@ impl ClientItemExtensionsRegistrar for Registration<'_> {
                 .ok_or_else(|| format!("armour model {name}: no registering provider"))?;
             let id = mod_api::Identifier::parse(name)
                 .map_err(|why| format!("armour model {name}: {why}"))?;
-            if id.namespace() != owner {
+            if id.namespace() == "minecraft"
+                || !mod_api::__private::owns_namespace(owner, id.namespace())
+            {
                 return Err(format!("armour model {name}: expected namespace {owner}"));
             }
             if self.state.models.iter().any(|model| model.name == name) {
@@ -1025,6 +1027,59 @@ mod tests {
                     }
                 },
             );
+        });
+    }
+
+    #[test]
+    fn served_by_armor_model_delegates_to_serving_host_only() {
+        let packages = vec![
+            mod_api::PackageInfo::new(
+                "host".into(),
+                "1".into(),
+                mod_api::PackageKind::Code,
+                mod_api::Side::Both,
+                vec!["host".into()],
+                vec![],
+            ),
+            mod_api::PackageInfo::new(
+                "other".into(),
+                "1".into(),
+                mod_api::PackageKind::Code,
+                mod_api::Side::Both,
+                vec!["other".into()],
+                vec![],
+            ),
+            mod_api::PackageInfo::new(
+                "runes".into(),
+                "1".into(),
+                mod_api::PackageKind::Content,
+                mod_api::Side::Both,
+                vec!["runes".into()],
+                vec![],
+            )
+            .with_served_by(Some("host".into())),
+        ];
+        mod_platform::__private::with_test_package_inventory(packages, || {
+            let mut registry = Registration {
+                state: Default::default(),
+                sprite_exists: &|_| true,
+                refused: None,
+            };
+            {
+                let _owner = owner("host");
+                registry.register_model("runes:helm", &tree(0.0)).unwrap();
+                assert!(
+                    registry
+                        .register_model("minecraft:helm", &tree(0.0))
+                        .is_err()
+                );
+            }
+            {
+                let _owner = owner("other");
+                assert!(registry.register_model("runes:other", &tree(0.0)).is_err());
+            }
+            assert_eq!(registry.state.models.len(), 1);
+            assert_eq!(registry.state.models[0].name, "runes:helm");
         });
     }
 }

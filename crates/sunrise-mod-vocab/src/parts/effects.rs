@@ -19,7 +19,8 @@ pub(crate) fn resolved_effects() -> &'static OnceLock<sunrise_mod_runtime::regis
 pub trait EffectsRegistrar {
     /// Request an effect by canonical registry id. All mods' declarations are checked at load.
     fn effect_key(&mut self, id: &str) -> crate::EffectKey;
-    /// Attach tick behaviour to an effect declared by this package or an active dependency.
+    /// Attach tick behaviour to an effect declared by this package, by a content package it
+    /// serves (`served_by`), or by an active dependency.
     /// An absent package with an active optional dependency row skips its Parts; other unknown
     /// effects refuse loading.
     fn attach_mob_effect_part(
@@ -54,8 +55,10 @@ pub enum MobEffectPartError {
 }
 
 impl dyn crate::Registrar + '_ {
-    /// Attach a Part to an effect declared by this package or an active dependency.
-    /// The declaring package's effect Parts run first. Other Parts execute in
+    /// Attach a Part to an effect declared by this package, by a content package it serves
+    /// (`served_by`), or by an active dependency.
+    /// The owning package's effect Parts (or, for a `served_by` content package, its serving
+    /// native host's) run first. Other Parts execute in
     /// dispatch order, then registration order. Each Part keeps its own cadence.
     /// Vanilla effects refuse immediately.
     pub fn mob_effect_part<P: MobEffectPart>(

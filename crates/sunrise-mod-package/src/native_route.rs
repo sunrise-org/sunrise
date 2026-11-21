@@ -41,6 +41,7 @@ pub fn changes_game(manifest: &Manifest, cargo: &toml::Table) -> Option<&'static
         game: _,
         sunrise: _,
         mixins: _,
+        serves_content: _,
         mixin,
         module,
         bridge,

@@ -64,8 +64,8 @@ pub trait AttributesRegistrar {
     /// tooltip lines read (`tooltip`: percentages, on/off, a base modifier; NeoForge's
     /// `PercentageAttribute`, `BooleanAttribute` and `IAttributeExtension.getBaseId`).
     ///
-    /// Only both-side packages may declare attributes; other sides refuse because
-    /// declarations assign network registry IDs.
+    /// Only both-side packages (and both-side served namespace suppliers) may declare attributes;
+    /// other sides refuse because declarations assign network registry IDs.
     /// The declarations join the attribute catalog once, at load, appended
     /// after every vanilla attribute **sorted by declaring mod id, then by
     /// attribute id** — the order is the network id's, so every side running

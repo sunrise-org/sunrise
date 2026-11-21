@@ -4,8 +4,11 @@
 pub trait Hooks {
     /// Declare blocks in code once at startup on each side, before resources load.
     /// Pass each `mod_api::Block` to `event.register`. The declaration belongs to the
-    /// submitting package and works like `data/<id>/sunrise/block/<path>.json` in a
+    /// submitting package — in its own namespaces or in a content package it serves
+    /// (`served_by`) — and works like `data/<id>/sunrise/block/<path>.json` in a
     /// content mod, including a block item unless disabled with `Block::with_item(false)`.
+    /// Duplicate IDs across the host and served layers, and declarations into a
+    /// `side = "server"` package's namespace, are refused.
     /// `register` returns a typed `DeclarationError` for invalid IDs or fields.
     /// The game records the refusal and stops startup even if you ignore the error.
     #[notes = r#"## Villager farming
@@ -23,7 +26,7 @@ requires a farmer at work and `mob_griefing` enabled."#]
         out = "blocks",
         context = "registration",
         neoforge = "RegisterEvent",
-        version = 2
+        version = 3
     )]
     fn blocks();
 }

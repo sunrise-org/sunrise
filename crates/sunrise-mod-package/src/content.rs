@@ -1218,16 +1218,28 @@ pub fn clash(a: (&str, &[String]), b: (&str, &[String])) -> Option<String> {
 
 impl Content {
     /// The content of the mod at `path` (a `.smod` or a mod folder).
+    ///
+    /// For package-only checks (`cargo sunrise-mod build`, `check`, archive inspection) without
+    /// runtime code declarations, a `[native]` or `served_by` package may name a valid
+    /// `crafting_remainder` in one of its own namespaces; engine loading calls
+    /// [`Content::read_declaring`] with the actual code-declared items.
     pub fn read(path: &Path, manifest: &Manifest) -> Result<Content, String> {
-        Self::read_declaring(path, manifest, &[])
+        Self::read_inner(path, manifest, None)
     }
-    /// [`Content::read`] for a mod whose native code also declares items (`native_items`):
-    /// a file's `crafting_remainder` may name one of those `declared` ids, which are not in the
-    /// files.
+    /// [`Content::read`] for a mod whose native code (or serving host) also declares items
+    /// (`native_items` / `blocks`): a file's `crafting_remainder` may name one of those `declared`
+    /// ids, which are not in the files.
     pub fn read_declaring(
         path: &Path,
         manifest: &Manifest,
         declared: &[String],
+    ) -> Result<Content, String> {
+        Self::read_inner(path, manifest, Some(declared))
+    }
+    fn read_inner(
+        path: &Path,
+        manifest: &Manifest,
+        declared: Option<&[String]>,
     ) -> Result<Content, String> {
         let (source, sized) = if path.is_dir() {
             (Source::Dir(path.to_owned()), folder_files(path)?)
@@ -1330,6 +1342,7 @@ impl Content {
             items
                 .iter()
                 .map(|i| (i, in_own(&i.id).and_then(|()| check_item(i)))),
+            &[],
         )?;
         self.blocks.extend_from_slice(blocks);
         self.items.extend_from_slice(items);
@@ -1337,14 +1350,19 @@ impl Content {
     }
 
     /// Joins declarations whose fields and submitting namespaces were checked at registration.
+    /// `admitted_items` lists item IDs (items and item-bearing blocks) already admitted in
+    /// content packages served by this host, so code-declared items may name them as
+    /// `crafting_remainder`.
     pub fn declare_validated(
         &mut self,
         blocks: &[LocalDeclaration<Block>],
         items: &[LocalDeclaration<Item>],
+        admitted_items: &[&str],
     ) -> Result<(), Vec<(DeclarationKind, DeclarationError)>> {
         self.check_declaration_batch(
             blocks.iter().map(|b| (b.get(), Ok(()))),
             items.iter().map(|i| (i.get(), Ok(()))),
+            admitted_items,
         )?;
         self.blocks.extend(blocks.iter().map(|b| b.get().clone()));
         self.items.extend(items.iter().map(|i| i.get().clone()));
@@ -1355,6 +1373,7 @@ impl Content {
         &self,
         blocks: impl IntoIterator<Item = (&'a Block, Result<(), String>)>,
         items: impl IntoIterator<Item = (&'a Item, Result<(), String>)>,
+        admitted_items: &[&str],
     ) -> Result<(), Vec<(DeclarationKind, DeclarationError)>> {
         let mut ids: BTreeSet<&str> = self
             .blocks
@@ -1415,7 +1434,9 @@ impl Content {
         for item in valid_items {
             if let Some(rest) = &item.crafting_remainder
                 && (rest == "minecraft:air"
-                    || !vanilla_id(rest) && !item_ids.contains(rest.as_str()))
+                    || !vanilla_id(rest)
+                        && !item_ids.contains(rest.as_str())
+                        && !admitted_items.contains(&rest.as_str()))
             {
                 refuse(
                     DeclarationKind::Item,
@@ -1482,7 +1503,7 @@ impl Content {
     }
 
     /// Where content may go, and the declarations.
-    fn check(&mut self, manifest: &Manifest, declared: &[String]) -> Result<(), String> {
+    fn check(&mut self, manifest: &Manifest, declared: Option<&[String]>) -> Result<(), String> {
         let id = manifest.id.as_str();
         let mut blocks = Vec::new();
         let mut items = Vec::new();
@@ -1630,7 +1651,20 @@ impl Content {
                     "{name}: crafting_remainder {rest:?} is no remainder (leave it out)"
                 ));
             }
-            if !vanilla_id(&rest) && !ids.contains(&rest) && !declared.contains(&rest) {
+            let valid_id = namespaced_id(&rest);
+            let known_local = vanilla_id(&rest) || ids.contains(&rest);
+            let allowed = valid_id
+                && match declared {
+                    Some(declared) => known_local || declared.contains(&rest),
+                    None => {
+                        known_local
+                            || ((manifest.native.is_some() || manifest.served_by.is_some())
+                                && rest.split_once(':').is_some_and(|(ns, _)| {
+                                    manifest.owned_namespaces().any(|owned| owned == ns)
+                                }))
+                    }
+                };
+            if !allowed {
                 return Err(format!(
                     "{name}: crafting_remainder {rest:?} is not a vanilla item (minecraft:...) or one of this mod's"
                 ));
@@ -2798,6 +2832,77 @@ capabilities = ["registries"]
         assert_eq!(
             content.items[0].crafting_remainder.as_deref(),
             Some("ruby:wrench")
+        );
+    }
+
+    #[test]
+    fn served_package_crafting_remainder_defers_host_declaration_only_to_load() {
+        let served_manifest =
+            format!("{MANIFEST_TEXT}namespaces = [\"ruby_extra\"]\nserved_by = \"horizon_java\"\n");
+        let check = |label: &str, manifest: &str, remainder: &str, declared: Option<&[String]>| {
+            let body = format!(
+                r#"{{"template": "minecraft:mushroom_stew", "crafting_remainder": "{remainder}"}}"#
+            );
+            let dir = scratch(&format!("served-rem-{label}"));
+            let path = dir.join("m.smod");
+            std::fs::write(
+                &path,
+                Package::write_files(
+                    manifest,
+                    &[("data/ruby/sunrise/item/stew.json", body.as_bytes())],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let package = Package::read(&path).unwrap();
+            let result = match declared {
+                None => Content::read(&path, &package.manifest),
+                Some(declared) => Content::read_declaring(&path, &package.manifest, declared),
+            };
+            std::fs::remove_dir_all(&dir).unwrap();
+            result
+        };
+        // Package-only read (build/check/inspect) accepts owned-namespace host remainders.
+        for remainder in ["ruby:host_bowl", "ruby_extra:host_bowl"] {
+            let content = check("ok-read", &served_manifest, remainder, None).unwrap();
+            assert_eq!(
+                content.items[0].crafting_remainder.as_deref(),
+                Some(remainder)
+            );
+        }
+        // Package-only read still refuses minecraft:air, malformed IDs, foreign namespaces,
+        // and undeclared remainders on unserved content packages.
+        for (label, manifest, remainder) in [
+            ("air", served_manifest.as_str(), "minecraft:air"),
+            ("bad-id", served_manifest.as_str(), "ruby:Bad"),
+            ("foreign", served_manifest.as_str(), "other:bowl"),
+            ("unserved", MANIFEST_TEXT, "ruby:host_bowl"),
+        ] {
+            assert!(
+                check(label, manifest, remainder, None).is_err(),
+                "{label} ({remainder}) should be refused"
+            );
+        }
+        // Load-time admission (`read_declaring`) requires the host to actually declare the item.
+        assert!(
+            check(
+                "missing-host",
+                &served_manifest,
+                "ruby:host_bowl",
+                Some(&[])
+            )
+            .is_err()
+        );
+        let loaded = check(
+            "declared-host",
+            &served_manifest,
+            "ruby:host_bowl",
+            Some(&["ruby:host_bowl".to_owned()]),
+        )
+        .unwrap();
+        assert_eq!(
+            loaded.items[0].crafting_remainder.as_deref(),
+            Some("ruby:host_bowl")
         );
     }
 

@@ -10,6 +10,47 @@ pub(crate) struct MenuBookDeclaration {
     pub(crate) screen: crate::Screen,
 }
 
+// no wire: pre-indexed screen dispatch entry containing process-local trait objects.
+#[derive(Clone)]
+pub(crate) enum MenuScreenIndex {
+    /// Non-vanilla menu type or registered recipe-book screen: owner is fixed at load.
+    Fixed(Attached<dyn MenuPart>),
+    /// Vanilla menu type without a recipe-book screen: dispatch keyed by opening block namespace.
+    ByNamespace(HashMap<Box<str>, Attached<dyn MenuPart>>),
+}
+
+pub(crate) fn index_menu_screens(
+    menus: &HashMap<Box<str>, Vec<Attached<dyn MenuPart>>>,
+    menu_recipe_books: &HashMap<String, MenuBookDeclaration>,
+    authority: &NamespaceAuthority,
+) -> HashMap<Box<str>, MenuScreenIndex> {
+    let mut indexed = HashMap::with_capacity(menus.len());
+    for (menu, parts) in menus {
+        if let Some(book) = menu_recipe_books.get(menu.as_ref()) {
+            if let Some(part) = parts.iter().find(|p| authority.owns(p.mod_id, book.owner)) {
+                indexed.insert(menu.clone(), MenuScreenIndex::Fixed(part.clone()));
+            }
+        } else if vanilla_menu(menu) {
+            let mut by_namespace = HashMap::new();
+            for part in parts {
+                for namespace in authority.namespaces_for(part.mod_id) {
+                    by_namespace
+                        .entry(Box::<str>::from(namespace))
+                        .or_insert_with(|| part.clone());
+                }
+            }
+            if !by_namespace.is_empty() {
+                indexed.insert(menu.clone(), MenuScreenIndex::ByNamespace(by_namespace));
+            }
+        } else if let Some((namespace, _)) = menu.split_once(':')
+            && let Some(part) = parts.iter().find(|p| authority.owns(p.mod_id, namespace))
+        {
+            indexed.insert(menu.clone(), MenuScreenIndex::Fixed(part.clone()));
+        }
+    }
+    indexed
+}
+
 impl HookParts {
     pub(crate) fn menu<'k>(
         &self,
@@ -17,32 +58,16 @@ impl HookParts {
     ) -> &[Attached<dyn MenuPart>] {
         attached(&self.menus, id)
     }
-    /// The menu's owner lookup: only the part whose package owns the menu type, or the block
-    /// opening a vanilla menu, receives callbacks. A registered recipe-book screen is owned by
-    /// its declaring mod even though its menu type is vanilla.
+    /// The menu's pre-indexed owner lookup: only the part whose package owns the menu type, or
+    /// the block opening a vanilla menu, receives callbacks. A registered recipe-book screen is
+    /// owned by its declaring mod even though its menu type is vanilla.
     pub(crate) fn menu_screen(&self, menu: &str, block: Option<&str>) -> &[Attached<dyn MenuPart>] {
-        let parts = attached(&self.menus, || Some(menu));
-        let owner = crate::RecipeBookLayout::declaring_mod(menu);
-        let namespace = match owner {
-            Some(owner) => owner,
-            None if vanilla_menu(menu) => {
-                let Some((namespace, _)) = block.and_then(|b| b.split_once(':')) else {
-                    return &[];
-                };
-                namespace
-            }
-            None => {
-                let Some((namespace, _)) = menu.split_once(':') else {
-                    return &[];
-                };
-                namespace
-            }
-        };
-        match parts
-            .iter()
-            .position(|p| owns_namespace(p.mod_id, namespace))
-        {
-            Some(i) => std::slice::from_ref(&parts[i]),
+        match self.menu_screens.get(menu) {
+            Some(MenuScreenIndex::Fixed(part)) => std::slice::from_ref(part),
+            Some(MenuScreenIndex::ByNamespace(by_namespace)) => block
+                .and_then(|b| b.split_once(':'))
+                .and_then(|(namespace, _)| by_namespace.get(namespace))
+                .map_or(&[], std::slice::from_ref),
             None => &[],
         }
     }

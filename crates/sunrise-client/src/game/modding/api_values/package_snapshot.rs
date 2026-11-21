@@ -95,6 +95,7 @@ fn package_snapshot(
         dependencies,
     )
     .with_details(details)
+    .with_served_by(manifest.served_by.clone())
 }
 impl TryIntoApi for sunrise_mod_package::manifest::Package {
     type Api = mod_api::PackageInfo;
@@ -262,5 +263,25 @@ mod tests {
         let info = content.try_into_api().unwrap();
         assert_eq!(info.kind(), mod_api::PackageKind::Content);
         assert_eq!(info.icon_path(), None);
+        assert_eq!(info.served_by(), None);
+    }
+
+    #[test]
+    fn package_metadata_propagates_served_by_without_merging_namespaces() {
+        let content = manifest("served_by='horizon_java'\nnamespaces=['runes_extra']\n");
+        let info = package_snapshot(&content, mod_api::PackageKind::Content, false);
+        assert_eq!(info.served_by(), Some("horizon_java"));
+        assert_eq!(
+            info.namespaces().collect::<Vec<_>>(),
+            ["test", "runes_extra"]
+        );
+
+        let host = manifest(&format!(
+            "[native]\ngame='26.3'\nsunrise='{}'\nserves_content=true\n",
+            "a".repeat(40)
+        ));
+        let host_info = package_snapshot(&host, mod_api::PackageKind::Code, false);
+        assert_eq!(host_info.served_by(), None);
+        assert_eq!(host_info.namespaces().collect::<Vec<_>>(), ["test"]);
     }
 }

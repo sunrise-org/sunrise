@@ -8,6 +8,36 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::Path;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InvalidServerReason {
+    NativeDeclaresServedBy,
+    MissingHost,
+    HostIsContentPackage,
+    HostDoesNotServeContent,
+    SideNotCovered { host: Side, content: Side },
+}
+
+impl fmt::Display for InvalidServerReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NativeDeclaresServedBy => f.write_str("a [native] mod cannot declare served_by"),
+            Self::MissingHost => f.write_str("serving native mod is not installed"),
+            Self::HostIsContentPackage => {
+                f.write_str("target is a content package, not a [native] mod")
+            }
+            Self::HostDoesNotServeContent => {
+                f.write_str("target does not declare [native] serves_content = true")
+            }
+            Self::SideNotCovered { host, content } => write!(
+                f,
+                "side {:?} is not covered by host side {:?}",
+                side_name(*content),
+                side_name(*host)
+            ),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Error {
     Manifest {
@@ -47,7 +77,14 @@ pub enum Error {
         /// The owner's reason and link on one logical line, or empty.
         note: String,
     },
+    InvalidServer {
+        owner: String,
+        target: String,
+        reason: InvalidServerReason,
+    },
 }
+
+impl std::error::Error for Error {}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -96,6 +133,11 @@ impl fmt::Display for Error {
                 version,
                 note,
             } => write!(f, "{owner} is incompatible with {target} {version}{note}"),
+            Self::InvalidServer {
+                owner,
+                target,
+                reason,
+            } => write!(f, "{owner}: served_by {target}: {reason}"),
         }
     }
 }
@@ -199,7 +241,7 @@ pub fn build_dependencies(
 
 /// Validate and order a mixed set of code and content declarations.
 pub fn resolve(mods: &[Mod<'_>]) -> Result<Resolution, Error> {
-    resolve_all(mods, &[], &Overrides::default(), false)
+    resolve_all(mods, &[], &[], &Overrides::default(), false)
 }
 
 /// Physical library order, independent of manifest validation/dispatch overrides.
@@ -209,7 +251,7 @@ pub fn resolve(mods: &[Mod<'_>]) -> Result<Resolution, Error> {
 /// ranges and dispatch order are logical rules; Cargo and the native linker
 /// still enforce actual imports and ABI requirements.
 pub fn resolve_links(mods: &[Mod<'_>]) -> Result<Resolution, Error> {
-    resolve_all(mods, &[], &Overrides::default(), true)
+    resolve_all(mods, &[], &[], &Overrides::default(), true)
 }
 
 /// Validate the applicable installed set with its instance overrides, then return
@@ -219,7 +261,82 @@ pub fn resolve_with_rules(
     rules: &[Vec<Rule>],
     overrides: &Overrides,
 ) -> Result<Resolution, Error> {
-    resolve_all(mods, rules, overrides, false)
+    resolve_all(mods, rules, &[], overrides, false)
+}
+
+fn side_name(side: Side) -> &'static str {
+    match side {
+        Side::Client => "client",
+        Side::Both => "both",
+        Side::Server => "server",
+        _ => "unknown",
+    }
+}
+
+fn side_covers(host: Side, content: Side) -> bool {
+    match content {
+        Side::Both => host == Side::Both,
+        Side::Client => matches!(host, Side::Client | Side::Both),
+        Side::Server => matches!(host, Side::Server | Side::Both),
+        _ => false,
+    }
+}
+
+/// Validate every `served_by` declaration against the installed manifest set.
+///
+/// Each `served_by` target must be an installed `[native]` package with
+/// `serves_content = true`, and its declared `side` must cover the content package's `side`.
+pub fn validate_served_by(manifests: &[&crate::Manifest]) -> Result<(), Error> {
+    let mut by_id = HashMap::with_capacity(manifests.len());
+    for manifest in manifests {
+        if by_id.insert(manifest.id.as_str(), *manifest).is_some() {
+            return Err(Error::Duplicate(manifest.id.clone()));
+        }
+    }
+    for manifest in manifests {
+        let Some(target_id) = manifest.served_by.as_deref() else {
+            continue;
+        };
+        if manifest.native.is_some() {
+            return Err(Error::InvalidServer {
+                owner: manifest.id.clone(),
+                target: target_id.to_owned(),
+                reason: InvalidServerReason::NativeDeclaresServedBy,
+            });
+        }
+        let Some(host) = by_id.get(target_id).copied() else {
+            return Err(Error::InvalidServer {
+                owner: manifest.id.clone(),
+                target: target_id.to_owned(),
+                reason: InvalidServerReason::MissingHost,
+            });
+        };
+        let Some(native) = &host.native else {
+            return Err(Error::InvalidServer {
+                owner: manifest.id.clone(),
+                target: target_id.to_owned(),
+                reason: InvalidServerReason::HostIsContentPackage,
+            });
+        };
+        if !native.serves_content {
+            return Err(Error::InvalidServer {
+                owner: manifest.id.clone(),
+                target: target_id.to_owned(),
+                reason: InvalidServerReason::HostDoesNotServeContent,
+            });
+        }
+        if !side_covers(host.side, manifest.side) {
+            return Err(Error::InvalidServer {
+                owner: manifest.id.clone(),
+                target: target_id.to_owned(),
+                reason: InvalidServerReason::SideNotCovered {
+                    host: host.side,
+                    content: manifest.side,
+                },
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Resolve one applicable installed manifest snapshot with one shared policy for
@@ -229,6 +346,20 @@ pub fn resolve_manifests(
     running: Side,
     overrides: &Overrides,
 ) -> Result<Resolution, Error> {
+    validate_served_by(manifests)?;
+    let id_index: HashMap<&str, usize> = manifests
+        .iter()
+        .enumerate()
+        .map(|(index, manifest)| (manifest.id.as_str(), index))
+        .collect();
+    let served_edges: Vec<(usize, usize)> = manifests
+        .iter()
+        .enumerate()
+        .filter_map(|(index, manifest)| {
+            let host = manifest.served_by.as_deref()?;
+            Some((index, id_index[host]))
+        })
+        .collect();
     let declared: Vec<_> = manifests
         .iter()
         .map(|manifest| from_manifest(&manifest.dependencies, running))
@@ -251,7 +382,7 @@ pub fn resolve_manifests(
         .iter()
         .map(|manifest| rules(manifest, running))
         .collect();
-    resolve_with_rules(&inputs, &rules, overrides)
+    resolve_all(&inputs, &rules, &served_edges, overrides, false)
 }
 
 fn diagnostic_note(reason: Option<&str>, url: Option<&str>) -> String {
@@ -377,6 +508,7 @@ impl Overrides {
 fn resolve_all(
     mods: &[Mod<'_>],
     rules: &[Vec<Rule>],
+    mandatory_edges: &[(usize, usize)],
     overrides: &Overrides,
     links: bool,
 ) -> Result<Resolution, Error> {
@@ -510,6 +642,11 @@ fn resolve_all(
                 url: rule.url.clone(),
                 kind: NoticeKind::Discouraged,
             });
+        }
+    }
+    if !links {
+        for &(dependent, target) in mandatory_edges {
+            edges[dependent].push(target);
         }
     }
     let mut done = vec![false; mods.len()];
@@ -1248,6 +1385,126 @@ mod tests {
         assert!(matches!(
             resolve_links(&[item("user", "1.0.0", &required), base]),
             Err(Error::NoApi { .. })
+        ));
+    }
+
+    #[test]
+    fn served_by_validation_orders_after_host_enforces_sides_and_ignores_overrides() {
+        let native = |id: &str, side: &str, serves: bool, extra: &str| {
+            manifest(
+                id,
+                &format!(
+                    "side='{side}'\n{extra}\n[native]\ngame='26.3'\nsunrise='{}'\nserves_content={serves}\n",
+                    "a".repeat(40),
+                ),
+            )
+        };
+        let content = |id: &str, side: &str, host: &str| {
+            manifest(id, &format!("side='{side}'\nserved_by='{host}'\n"))
+        };
+
+        let runes = content("runes", "both", "horizon_java");
+        let missing = validate_served_by(&[&runes]).unwrap_err();
+        assert!(
+            matches!(
+                &missing,
+                Error::InvalidServer {
+                    owner,
+                    target,
+                    reason: InvalidServerReason::MissingHost,
+                } if owner == "runes" && target == "horizon_java"
+            ),
+            "{missing}"
+        );
+        // dependency-overrides.toml cannot drop served_by validation.
+        let drop_override: Overrides = toml::from_str("[runes]\nhorizon_java='drop'\n").unwrap();
+        assert!(matches!(
+            resolve_manifests(&[&runes], Side::Client, &drop_override),
+            Err(Error::InvalidServer {
+                owner,
+                target,
+                reason: InvalidServerReason::MissingHost,
+            }) if owner == "runes" && target == "horizon_java"
+        ));
+
+        let content_target = manifest("horizon_java", "side='both'\n");
+        let err = validate_served_by(&[&runes, &content_target]).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                Error::InvalidServer {
+                    owner,
+                    target,
+                    reason: InvalidServerReason::HostIsContentPackage,
+                } if owner == "runes" && target == "horizon_java"
+            ),
+            "{err}"
+        );
+
+        let unopted = native("horizon_java", "both", false, "");
+        let err = validate_served_by(&[&runes, &unopted]).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                Error::InvalidServer {
+                    owner,
+                    target,
+                    reason: InvalidServerReason::HostDoesNotServeContent,
+                } if owner == "runes" && target == "horizon_java"
+            ),
+            "{err}"
+        );
+
+        for ((host_side, expected_host), (content_side, expected_content)) in [
+            (("client", Side::Client), ("both", Side::Both)),
+            (("server", Side::Server), ("both", Side::Both)),
+            (("server", Side::Server), ("client", Side::Client)),
+            (("client", Side::Client), ("server", Side::Server)),
+        ] {
+            let host = native("horizon_java", host_side, true, "");
+            let pkg = content("runes", content_side, "horizon_java");
+            let err = validate_served_by(&[&pkg, &host]).unwrap_err();
+            assert!(
+                matches!(
+                    &err,
+                    Error::InvalidServer {
+                        owner,
+                        target,
+                        reason: InvalidServerReason::SideNotCovered { host, content },
+                    } if owner == "runes"
+                        && target == "horizon_java"
+                        && *host == expected_host
+                        && *content == expected_content
+                ),
+                "host={host_side} content={content_side}: {err}"
+            );
+        }
+
+        for (host_side, content_side) in [
+            ("both", "both"),
+            ("both", "client"),
+            ("client", "client"),
+            ("both", "server"),
+            ("server", "server"),
+        ] {
+            let host = native("horizon_java", host_side, true, "");
+            let pkg = content("runes", content_side, "horizon_java");
+            assert!(
+                validate_served_by(&[&pkg, &host]).is_ok(),
+                "host={host_side} content={content_side}"
+            );
+        }
+
+        // Content is ordered after its host, even when dependency-overrides.toml tries to drop it.
+        let host = native("horizon_java", "both", true, "");
+        let resolved = resolve_manifests(&[&runes, &host], Side::Client, &drop_override).unwrap();
+        assert_eq!(resolved.order, [1, 0]);
+
+        // A host depending on its served content creates a cycle.
+        let cyclic_host = native("horizon_java", "both", true, "[dependencies]\nrunes='^1'");
+        assert!(matches!(
+            resolve_manifests(&[&runes, &cyclic_host], Side::Client, &Overrides::default()),
+            Err(Error::Cycle { .. })
         ));
     }
 }

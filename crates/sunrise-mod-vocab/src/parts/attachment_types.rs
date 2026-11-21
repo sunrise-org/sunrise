@@ -3,10 +3,12 @@ use super::*;
 
 /// Attachment declarations.
 pub trait AttachmentTypesRegistrar {
-    /// Declare an explicitly namespaced attachment owned by this package.
+    /// Declare an explicitly namespaced attachment in a namespace owned by this
+    /// package (its manifest namespaces or a content package it serves via `served_by`).
     /// `has_sync_codec` means the type synchronizes to clients, not merely that
     /// it has a persistence codec. At load, declaration conflicts are checked
-    /// first, then undeclared uses, then server packages declaring true.
+    /// first, then undeclared uses, then server packages (or `side = "server"`
+    /// served namespace suppliers) declaring true.
     /// A server package may use another package's synced attachment.
     /// A refusal fails installation even when the caller ignores this result.
     fn register_attachment_type(&mut self, id: &str, has_sync_codec: bool) -> Result<(), String>;

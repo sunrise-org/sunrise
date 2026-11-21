@@ -10,7 +10,8 @@ pub trait Hooks {
     /// `MenuRef::set_data_slot`. Data is empty until the server's first values
     /// arrive, so read it with `get`. Draw with `event.draw.sprite`,
     /// `event.draw.fill` and `event.draw.text`.
-    /// `block` is the mod block whose menu it is, as in `screen`.
+    /// `block` is the mod block whose menu it is, as in `screen` (including
+    /// menus and blocks in a content package served by this mod via `served_by`).
     /// `pos` is the open menu's block position, as reported by the server
     /// (or the clicked block for a server without menu-extra support).
     /// It is `None` for a menu opened without a block position. Read the
@@ -22,7 +23,7 @@ pub trait Hooks {
     /// `origin` is the panel's top-left in the same coordinates. The pointer may
     /// be outside the panel; use these frame values rather than caching a size.
     #[hook(
-        version = 4,
+        version = 5,
         side = "client",
         contract = "listen",
         scope = "menu",

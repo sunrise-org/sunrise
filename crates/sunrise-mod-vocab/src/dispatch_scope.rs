@@ -31,6 +31,8 @@ pub struct Backend {
     pub phase_state: fn() -> crate::__private::PhaseState,
     pub set_phase: fn(crate::__private::PhaseState),
     pub packages: fn() -> std::sync::Arc<[crate::PackageInfo]>,
+    pub namespace_authority: fn() -> std::sync::Arc<crate::parts::NamespaceAuthority>,
+    pub owns_namespace: fn(&str, &str) -> bool,
     pub registration_data: fn() -> Option<crate::__private::RegistrationData>,
 }
 

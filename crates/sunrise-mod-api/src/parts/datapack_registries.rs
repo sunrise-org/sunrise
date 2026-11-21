@@ -17,10 +17,14 @@ impl DatapackRegistriesRegistrar for PartRegistrar {
             }
             let (namespace, name) = path.split_once(':').unwrap_or((self.mod_id, path));
             let key = format!("{namespace}:{name}");
-            if namespace != self.mod_id
+            if namespace == "minecraft"
+                || !owns_namespace(self.mod_id, namespace)
                 || !mod_vocab::__private::parts_installation::valid_datapack_id(&key)
             {
                 return Err(DatapackRegistrationError::InvalidKey);
+            }
+            if self.declaration_side_not_both(&key) {
+                return Err(DatapackRegistrationError::WrongSide);
             }
             if self
                 .datapack_registries
@@ -139,6 +143,74 @@ mod tests {
             DatapackRegistryDeclaration::take(&mut Reader::new(&bytes)).unwrap(),
             declaration
         );
+    }
+
+    #[test]
+    fn served_by_datapack_registry_delegates_and_enforces_supplier_side() {
+        use DatapackRegistrationError as E;
+        let packages = vec![
+            crate::PackageInfo::new(
+                "host".into(),
+                "1".into(),
+                crate::PackageKind::Code,
+                crate::Side::Both,
+                vec!["host".into()],
+                vec![],
+            ),
+            crate::PackageInfo::new(
+                "other".into(),
+                "1".into(),
+                crate::PackageKind::Code,
+                crate::Side::Both,
+                vec!["other".into()],
+                vec![],
+            ),
+            crate::PackageInfo::new(
+                "runes".into(),
+                "1".into(),
+                crate::PackageKind::Content,
+                crate::Side::Both,
+                vec!["runes".into()],
+                vec![],
+            )
+            .with_served_by(Some("host".into())),
+            crate::PackageInfo::new(
+                "srv_runes".into(),
+                "1".into(),
+                crate::PackageKind::Content,
+                crate::Side::Server,
+                vec!["srv_runes".into()],
+                vec![],
+            )
+            .with_served_by(Some("host".into())),
+        ];
+        crate::load_state::with_test_package_inventory(packages, || {
+            let sync = DatapackRegistrySync::Required;
+            let mut registrar = PartRegistrar::new("host");
+            registrar
+                .declare_datapack_registry("runes:spell", sync, power())
+                .unwrap();
+            assert_eq!(registrar.datapack_registries[0].mod_id, "host");
+            assert_eq!(registrar.datapack_registries[0].key, "runes:spell");
+            assert_eq!(
+                registrar.datapack_registries[0].entry_file("addon:fire"),
+                Some("data/addon/runes/spell/fire.json".to_owned())
+            );
+            assert_eq!(
+                registrar.declare_datapack_registry("srv_runes:spell", sync, power()),
+                Err(E::WrongSide)
+            );
+            assert_eq!(
+                registrar.declare_datapack_registry("minecraft:spell", sync, power()),
+                Err(E::InvalidKey)
+            );
+            registrar.mod_id = "other";
+            assert_eq!(
+                registrar.declare_datapack_registry("runes:other", sync, power()),
+                Err(E::InvalidKey)
+            );
+            assert_eq!(registrar.datapack_registries.len(), 1);
+        });
     }
 }
 

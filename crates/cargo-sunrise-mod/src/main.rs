@@ -1446,4 +1446,86 @@ mod tests {
             assert!(error.contains(named), "{line}: {error}");
         }
     }
+
+    #[test]
+    fn served_by_package_with_host_crafting_remainder_packs_and_checks() {
+        let dir = std::env::temp_dir().join(format!(
+            "sunrise-mod-tool-served-rem-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("runes");
+        std::fs::create_dir_all(root.join("data/runes/sunrise/item")).unwrap();
+        std::fs::create_dir_all(root.join("data/runes/recipe")).unwrap();
+        let manifest_text = "\
+id = \"runes\"
+name = \"Runes\"
+version = \"1.0.0\"
+side = \"both\"
+namespaces = [\"runes_extra\"]
+served_by = \"horizon_java\"
+";
+        std::fs::write(root.join(MANIFEST), manifest_text).unwrap();
+        // Item references a host-declared crafting remainder in a served namespace, and a recipe
+        // references a host-declared item in the same namespace.
+        std::fs::write(
+            root.join("data/runes/sunrise/item/stew.json"),
+            r#"{"template":"minecraft:mushroom_stew","crafting_remainder":"runes_extra:host_bowl"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("data/runes/recipe/host_bowl.json"),
+            r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:oak_planks"],"result":{"id":"runes_extra:host_bowl"}}"#,
+        )
+        .unwrap();
+        let manifest = Package::read(&root).unwrap().manifest;
+        let smod = pack_into(
+            &root,
+            &PackageOutput::in_project(&root).unwrap(),
+            &manifest,
+            None,
+            None,
+        )
+        .unwrap();
+        let report = check::check(&smod, check::kind_of(&smod).unwrap(), None, None).unwrap();
+        assert_eq!(report.facts.id.as_deref(), Some("runes"));
+
+        // Invalid syntax, minecraft:air, foreign namespace, or unserved undeclared remainder still fail.
+        for (label, manifest_override, remainder) in [
+            ("air", None, "minecraft:air"),
+            ("bad-id", None, "runes:Bad"),
+            ("foreign", None, "other:bowl"),
+            (
+                "unserved",
+                Some(manifest_text.replace("served_by = \"horizon_java\"\n", "")),
+                "runes_extra:host_bowl",
+            ),
+        ] {
+            if let Some(text) = &manifest_override {
+                std::fs::write(root.join(MANIFEST), text).unwrap();
+            } else {
+                std::fs::write(root.join(MANIFEST), manifest_text).unwrap();
+            }
+            std::fs::write(
+                root.join("data/runes/sunrise/item/stew.json"),
+                format!(
+                    r#"{{"template":"minecraft:mushroom_stew","crafting_remainder":"{remainder}"}}"#
+                ),
+            )
+            .unwrap();
+            let manifest = Package::read(&root).unwrap().manifest;
+            assert!(
+                pack_into(
+                    &root,
+                    &PackageOutput::in_project(&root).unwrap(),
+                    &manifest,
+                    None,
+                    None,
+                )
+                .is_err(),
+                "{label} ({remainder}) should fail pack_into"
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
