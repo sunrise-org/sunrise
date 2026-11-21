@@ -1844,6 +1844,14 @@ impl Game<'_> {
             Some(Target::Spawner(id))
         } else if self.creatures.projectiles.iter().any(|p| p.id == id) {
             Some(Target::Projectile(id))
+        } else if self.orbs.iter().any(|o| o.id == id) {
+            Some(Target::Orb(id))
+        } else if self.fangs.list.iter().any(|f| f.id == id) {
+            Some(Target::Fangs(id))
+        } else if self.breath_clouds.iter().any(|c| c.id == id) {
+            Some(Target::Cloud(id))
+        } else if self.dragon.as_ref().is_some_and(|d| d.id == id) {
+            Some(Target::Dragon(id))
         } else {
             None
         }

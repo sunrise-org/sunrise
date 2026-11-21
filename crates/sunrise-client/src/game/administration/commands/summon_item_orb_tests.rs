@@ -101,3 +101,36 @@ fn a_summoned_orb_keeps_the_position_it_was_asked_for() {
         assert_eq!(orb.count, 1);
     });
 }
+
+/// `SummonCommand.spawnEntity` replies with `Entity.getDisplayName`, the
+/// `CustomName` when there is one (#2694).
+#[test]
+#[ignore = "daily"]
+fn summon_replies_with_the_custom_name_of_every_kind() {
+    with_game(|game| {
+        for (i, kind) in [
+            "evoker_fangs",
+            "experience_orb",
+            "area_effect_cloud",
+            "ender_dragon",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let command = format!(
+                "summon {kind} {}.5 200 4.5 {{CustomName:\"fz\"}}",
+                2 + 3 * i
+            );
+            assert!(
+                game.run_command(&command),
+                "{command}: {:?}",
+                game.ui.chat.recent_lines(3)
+            );
+            assert_eq!(
+                game.ui.chat.recent_lines(1),
+                ["Summoned new fz"],
+                "{command}"
+            );
+        }
+    });
+}
