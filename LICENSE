@@ -71,10 +71,10 @@ d. Whole product. 3b and 3c also apply to everything your group ships the fork i
    is named or branded after the fork, or is published from the same account, organization or signing key, or
    from a domain your group controls. A server that the fork contains, starts or needs for single-player play is
    part of the fork.
-e. Own identity. The fork states that it is an unofficial product based on Sunrise and links to
-   https://github.com/sunrise-org/sunrise. If its name contains "Sunrise", the word "unofficial" (or its
-   translation) appears beside the name on its download page or store listing and on its title or about
-   screen. It does not use the Project's logo or icon as its own, and it does not use the Project's sign-in,
+e. Own identity. The fork states that it is based on Sunrise and links to
+   https://github.com/sunrise-org/sunrise. If its name contains "Sunrise", it also states that it is
+   unofficial, and the word "unofficial" (or its translation) appears beside the name on its download page
+   or store listing and on its title or about screen. It does not use the Project's logo or icon as its own, and it does not use the Project's sign-in,
    update, telemetry or signing services unless the Project's published policy allows it.
 
 If you stop meeting these conditions, this permission no longer covers what you do from then on, and Shield's
