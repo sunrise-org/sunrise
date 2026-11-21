@@ -1164,3 +1164,116 @@ fn anger_at_a_mob_not_saved_yet_names_it() {
         game.persist.uuid_of(2).as_ref().map(|u| &u[..])
     );
 }
+
+/// `Entity.saveWithoutId` writes an experience orb's live `remainingFireTicks`
+/// and `airSupply`: an orb loaded with `Fire:40s` that burned for a tick saves
+/// `39s`, not the loaded `40s`, while a field it doesn't simulate
+/// (`Invulnerable`) still comes from the loaded compound.
+#[test]
+fn an_orb_saves_its_live_fire_and_air_over_the_loaded_ones() {
+    let raw =
+        sunrise_core::nbt::parse_snbt("{Pos:[4.5d,100d,4.5d],Fire:40s,Air:300s,Invulnerable:1b}")
+            .unwrap()
+            .0;
+    let mut orb = entity_nbt::orbs_from_nbt(&raw).remove(0);
+    (orb.fire_ticks, orb.air) = (39, 299);
+    let saved = with_raw_over(entity_nbt::orb_to_nbt(&orb, [0; 4]), Some(&raw), ORB_LIVE);
+    assert_eq!(saved.get("Fire"), Some(&Tag::Short(39)));
+    assert_eq!(saved.get("Air"), Some(&Tag::Short(299)));
+    assert_eq!(saved.get("Invulnerable"), Some(&Tag::Byte(1)));
+}
+
+/// `Entity.saveWithoutId` writes the live `portalCooldown` that
+/// `processPortalCooldown` counts down, in the chunk save and in `/data get`,
+/// with the live `remainingFireTicks` and `airSupply` over the loaded ones
+/// (an orb's `Air` is only stored: nothing ticks it). One real tick — the
+/// orb's ordered tick, then the entity portal pass — turns a loaded
+/// `Fire:40s` and `PortalCooldown:20` into 39 and 19, the chunk reload reads
+/// them back, and `/data merge entity` reads `Fire` and `Air` into the live
+/// orb while an unrelated key's merge leaves them.
+#[test]
+#[ignore = "daily"]
+fn an_orb_saves_its_live_portal_cooldown() {
+    crate::game::native_entity_refs::tests::with_game(|game| {
+        game.world
+            .chunks
+            .insert((0, 0), std::sync::Arc::new(Chunk::empty(0, 0)));
+        game.block_ticks
+            .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
+            .unwrap();
+        game.load_orb(
+            sunrise_core::nbt::parse_snbt(
+                "{Pos:[4.5d,100d,4.5d],Value:3s,Count:1,Fire:40s,Air:299s,PortalCooldown:20}",
+            )
+            .unwrap()
+            .0,
+            Some([9, 0, 0, 1]),
+        );
+        let id = game.orbs[0].id;
+        // One tick: the orb's own (ordered) tick, then Entity.handlePortal's
+        // pass over the entities.
+        game.ordered.announced = sunrise_client::join_seq::JoinSeq::MAX;
+        game.tickets.update(None);
+        game.begin_ordered_ticks();
+        game.run_ordered_ticks(sunrise_client::join_seq::JoinSeq::MAX, false)
+            .unwrap();
+        game.handle_entity_portals();
+        assert_eq!(game.orbs[0].fire_ticks, 39, "one tick of Fire");
+        assert_eq!(game.orbs[0].air, 299, "the stored air does not tick");
+        assert_eq!(
+            game.portals.entities.get(&id).map(|p| p.cooldown),
+            Some(19),
+            "the tick's portal cooldown"
+        );
+        // The real persistence path: the chunk save takes the orb out of the
+        // level, and loading the chunk again builds it from the saved
+        // compound.
+        let written: Vec<Tag> = game
+            .entity_chunks(&HashSet::from([(0, 0)]), true)
+            .into_iter()
+            .flat_map(|(_, tags)| tags)
+            .collect();
+        assert_eq!(written.len(), 1, "the orb leaves with its chunk");
+        game.world.queue_entity_nbt((0, 0), written);
+        game.spawn_loaded_entities();
+        assert_eq!(game.orbs[0].fire_ticks, 39, "the reload keeps the fire");
+        assert_eq!(game.orbs[0].air, 299, "and the air");
+        let read = game
+            .command_target_nbt(crate::game::commands::Target::Orb(game.orbs[0].id))
+            .unwrap();
+        assert_eq!(read.get("PortalCooldown"), Some(&Tag::Int(19)));
+        assert_eq!(read.get("Fire"), Some(&Tag::Short(39)));
+        assert_eq!(read.get("Air"), Some(&Tag::Short(299)));
+        // `/data merge entity`: `Fire` and `Air` are read into the live orb,
+        // and a merge that does not name them leaves them alone.
+        game.build_registries();
+        game.set_allow_commands(true);
+        let sel = "00000009-0000-0000-0000-000000000001";
+        assert!(
+            game.run_command_quietly(&format!("data merge entity {sel} {{Fire:40s,Air:299s}}")),
+            "the merge runs"
+        );
+        let orb = &game.orbs[0];
+        assert_eq!(
+            (orb.fire_ticks, orb.air),
+            (40, 299),
+            "the merge reached the live orb"
+        );
+        assert!(
+            game.run_command_quietly(&format!("data merge entity {sel} {{Invulnerable:1b}}")),
+            "the unrelated merge runs"
+        );
+        let orb = &game.orbs[0];
+        assert_eq!(
+            (orb.fire_ticks, orb.air),
+            (40, 299),
+            "an unrelated edit preserves the live fire and air"
+        );
+        let read = game
+            .command_target_nbt(crate::game::commands::Target::Orb(game.orbs[0].id))
+            .unwrap();
+        assert_eq!(read.get("Invulnerable"), Some(&Tag::Byte(1)));
+        assert_eq!(read.get("Fire"), Some(&Tag::Short(40)));
+        assert_eq!(read.get("Air"), Some(&Tag::Short(299)));
+    });
+}

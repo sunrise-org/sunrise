@@ -241,7 +241,14 @@ impl Game<'_> {
             Target::Orb(id) => {
                 let uuid = self.uuid_for(id);
                 let tag = entity_nbt::orb_to_nbt(self.orbs.iter().find(|o| o.id == id)?, uuid);
-                crate::game::persist::with_raw(tag, self.persist.raw.get(&id))
+                // Entity.saveWithoutId: the live fire, air and portal cooldown.
+                let mut tag = crate::game::persist::with_raw_over(
+                    tag,
+                    self.persist.raw.get(&id),
+                    crate::game::persist::ORB_LIVE,
+                );
+                self.save_portal_cooldown(id, &mut tag);
+                tag
             }
             Target::Projectile(id) => {
                 let uuid = self.uuid_for(id);
@@ -798,6 +805,8 @@ impl Game<'_> {
                 orb.health = new.health;
                 orb.no_gravity = new.no_gravity;
                 orb.fall_distance = new.fall_distance;
+                orb.fire_ticks = new.fire_ticks;
+                orb.air = new.air;
                 // Entity.load reads portalCooldown and leaves the portal
                 // process as it is.
                 if let Some(portal) = self.portals.entities.get_mut(&id) {

@@ -196,6 +196,7 @@ sunrise-client-lib mobs::enderman::tests::an_enderman_teleports_inside_the_world
 sunrise-client-lib mobs::equine::bolt_pos_tests::a_bucking_horse_bolts_only_where_the_filters_allow lib daily resources
 sunrise-client-lib mobs::equine::follow_mommy_tests::a_bred_foal_paths_to_the_nearest_bred_horse lib daily resources
 sunrise-client-lib mobs::equine::tests::a_mob_riding_an_untamed_horse_starts_the_bolt lib daily resources
+sunrise-client-lib mobs::equine_graze_tests::a_grazing_horse_clears_eating_haystack_after_51_ticks_while_a_llama_keeps_it lib daily resources
 sunrise-client-lib mobs::fox::consume_tests::a_chorus_fruit_carries_the_fox_to_free_ground lib daily resources
 sunrise-client-lib mobs::fox::consume_tests::a_golden_apple_feeds_the_fox_and_posts_the_eat_event lib daily resources
 sunrise-client-lib mobs::fox::consume_tests::alertable_tests::an_invisible_player_far_away_is_not_alerting lib daily resources
@@ -241,6 +242,7 @@ sunrise-client-lib mobs::golem::tests::the_poppy_goes_to_a_villager_in_the_box_w
 sunrise-client-lib mobs::golem::tests::the_poppy_needs_sight_and_a_dimension_with_a_day lib daily resources
 sunrise-client-lib mobs::guardian::elder_home_tests::a_silent_elder_guardian_curses_without_the_sound lib daily resources
 sunrise-client-lib mobs::guardian::elder_home_tests::an_elder_guardian_homes_where_it_stands lib daily resources
+sunrise-client-lib mobs::guardian::tests::a_seeded_flop_pins_the_motion lib daily resources
 sunrise-client-lib mobs::guardian::tests::a_silent_guardian_flops_without_a_sound lib daily resources
 sunrise-client-lib mobs::guardian_tests::a_displaced_elder_guardian_swims_back_toward_its_home lib daily resources
 sunrise-client-lib mobs::guardian_tests::a_still_guardian_spikes_whoever_hits_it lib daily resources

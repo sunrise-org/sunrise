@@ -1025,8 +1025,8 @@ pub fn mob_to_nbt(
             map.insert("Tame".into(), Tag::Byte(i8::from(m.extra.tame)));
             map.insert("Temper".into(), Tag::Int(m.extra.equine_temper));
             map.insert("Bred".into(), Tag::Byte(i8::from(m.extra.bred)));
-            // AbstractHorse.addAdditionalSaveData; the eating haystack is not modelled yet.
-            map.entry("EatingHaystack".into()).or_insert(Tag::Byte(0));
+            // AbstractHorse.addAdditionalSaveData: `putBoolean("EatingHaystack", isEating())`.
+            map.insert("EatingHaystack".into(), Tag::Byte(i8::from(m.extra.flag)));
             if let Some(owner) = m.extra.owner {
                 map.insert("Owner".into(), Tag::IntArray(owner.to_vec()));
             }
@@ -2154,6 +2154,8 @@ fn mob_from_nbt_at(
         // AbstractHorse.readAdditionalSaveData: the saved Int as is, camels included.
         m.extra.equine_temper = tag.get("Temper").and_then(int_value).unwrap_or(0);
         m.extra.bred = flag(tag, "Bred");
+        // `setEating(getBooleanOr("EatingHaystack", false))`, camels included.
+        m.extra.flag = flag(tag, "EatingHaystack");
         m.extra.owner = crate::save::uuid_from_tag(tag.get("Owner"));
         let v = number(tag.get("Variant")).unwrap_or(0) as i32;
         (m.extra.variant, m.extra.variant2) = crate::mobs::equine::horse_look(v);
@@ -2378,9 +2380,6 @@ fn mob_from_nbt_at(
         crate::mobs::frog::set_pregnant(&mut m, true);
     }
     if crate::mobs::camel::is_camel(m.species()) {
-        // AbstractHorse.readAdditionalSaveData: the eating state (Temper is
-        // read with the other equines' above).
-        m.extra.flag = flag(tag, "EatingHaystack");
         // The tick is a game time: `camel::finish_load` puts it on the mob's
         // clock once the world's time is known.
         let tick = match tag.get("LastPoseTick") {
@@ -4710,6 +4709,40 @@ mod tests {
         assert!(crate::mobs::bat::resting(&m));
         crate::mobs::bat::set_resting(&mut m, false);
         assert_eq!(saved(&m), Some(Tag::Byte(-2)));
+    }
+
+    /// `AbstractHorse.readAdditionalSaveData` reads `EatingHaystack` with
+    /// `getBooleanOr` and `addAdditionalSaveData` writes `putBoolean(isEating())`:
+    /// a horse loaded with `2b` and a llama with `-1b` save `1b`, and a mule that
+    /// starts eating after loading without the key saves `1b`.
+    #[test]
+    fn a_horse_or_llama_saves_its_eating_state() {
+        let saved = |id: &str, species, loaded: Option<i8>, eat: bool| {
+            let mut kind = crate::mobs::sensor_scan_tests::kind();
+            let ty = Arc::make_mut(&mut kind);
+            ty.id = id.into();
+            ty.species = species;
+            let types = [(id.into(), kind)].into();
+            let raw = Tag::compound(
+                [("id", string(id)), ("Pos", doubles(&[4.5, 220.0, 4.5]))]
+                    .into_iter()
+                    .chain(loaded.map(|b| ("EatingHaystack", Tag::Byte(b)))),
+            );
+            let mut m = mob_from_nbt(&raw, &types, 1, None).unwrap();
+            m.extra.flag |= eat;
+            mob_to_nbt(&m, [0; 4], Some(&raw), None, |_| None, &Default::default())
+                .get("EatingHaystack")
+                .cloned()
+        };
+        use crate::mobs::Species as S;
+        let one = Some(Tag::Byte(1));
+        assert_eq!(saved("minecraft:horse", S::Horse, Some(2), false), one);
+        assert_eq!(saved("minecraft:llama", S::Llama, Some(-1), false), one);
+        assert_eq!(saved("minecraft:mule", S::Mule, None, true), one);
+        assert_eq!(
+            saved("minecraft:zombie_horse", S::ZombieHorse, None, false),
+            Some(Tag::Byte(0))
+        );
     }
 
     /// A body item taken off (`/item replace entity <cube> armor.body with minecraft:air`)

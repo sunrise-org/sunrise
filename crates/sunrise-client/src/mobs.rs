@@ -122,6 +122,8 @@ pub mod witch;
 pub mod wither;
 
 #[cfg(test)]
+mod equine_graze_tests;
+#[cfg(test)]
 mod invisible_follow_tests;
 #[cfg(test)]
 mod template_mob_tests;
