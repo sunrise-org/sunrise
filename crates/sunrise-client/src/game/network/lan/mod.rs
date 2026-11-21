@@ -1885,6 +1885,7 @@ impl Game<'_> {
             e.on_ground = place.on_ground;
             e.velocity = place.velocity;
             e.needs_sync = m.needs_sync;
+            e.sync_velocity = m.sync_velocity;
             e.sync_position = m.sync_position;
             e.stepped = true;
             (e.idle, e.bare) = (idle, bare);
@@ -2874,13 +2875,18 @@ impl Game<'_> {
                 }));
                 (events, pass.last && !defer_connections)
             };
+            self.clear_sent_mob_velocity();
             // The mods hear the pass's starts and stops of tracking at each one's packet, before
             // the players' own state and the end of the tick (#4522).
             self.run_native_tracking();
             if let Some(host) = self.lan.as_mut() {
                 host.hub.finish_tracking_pass();
+                let velocity_syncs = std::mem::take(&mut host.hub.native_velocity_syncs);
                 if last {
                     sunrise_client::spans::time("lan_end_tick", || host.hub.end_tick());
+                }
+                for (uuid, name, velocity) in velocity_syncs {
+                    self.native_player_velocity(uuid, &name, velocity);
                 }
             }
             self.wake_woken_guests();

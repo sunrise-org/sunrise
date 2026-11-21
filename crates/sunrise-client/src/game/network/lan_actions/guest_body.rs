@@ -290,7 +290,7 @@ impl Game<'_> {
             let burn_immune = game.wears_burn_from_stepping_immunity();
             let boat = game.riding_boat_fluid_box();
             let Some(player) = game.player.as_mut() else {
-                return (Vec::new(), None, ServerTravel::Continue);
+                return (Vec::new(), ServerTravel::Continue);
             };
             player.fluids.boat = boat;
             player.leather_boots = leather_boots;
@@ -364,7 +364,7 @@ impl Game<'_> {
                     step => step.map(|step| (step, step.vanilla)),
                 };
                 let Some(player) = game.player.as_mut() else {
-                    return (collected, None, ServerTravel::Continue);
+                    return (collected, ServerTravel::Continue);
                 };
                 collected.append(&mut player.events);
                 player.events = collected;
@@ -418,7 +418,7 @@ impl Game<'_> {
             soul = game.tick_soul_speed();
             game.handle_shoulder_entities();
             let Some(player) = game.player.as_mut() else {
-                return (Vec::new(), None, ServerTravel::Continue);
+                return (Vec::new(), ServerTravel::Continue);
             };
             let _ = player.peaceful_regeneration(&game.loop_context, rules);
             let _ = player.food_tick(
@@ -438,29 +438,31 @@ impl Game<'_> {
             let travel = motion_world!(game, side, player)
                 .server_travel()
                 .unwrap_or(ServerTravel::Continue);
-            // Player.aiStep's entity contacts run with the player's body,
-            // even when the level and its mobs are frozen. Flush their damage
-            // events and marked velocity through the existing guest path.
+            // Player.aiStep's contacts still run while the level is frozen.
             game.touch_pufferfish();
             let Some(player) = game.player.as_mut() else {
-                return (events, None, ServerTravel::Continue);
+                return (events, ServerTravel::Continue);
             };
-            // Landing damage from this travel reaches the tracker too.
             events.append(&mut player.events);
-            // A hurt since the last tick marked the velocity (Entity.markHurt):
-            // ServerEntity.sendChanges sends it as it is after this travel.
-            let marked = std::mem::take(&mut player.health.sync_velocity);
-            let velocity = marked.then_some(player.velocity);
             game.record_guest_motion_combat(&events);
-            (events, velocity, travel)
+            (events, travel)
         });
-        let Some((events, marked, travel)) = events else {
+        let Some((events, travel)) = events else {
             return;
         };
-        let travel_synced = self
-            .lan
-            .as_mut()
-            .is_some_and(|host| host.hub.apply_server_travel(conn, travel_teleport, travel));
+        let travel_sync = self.lan.as_mut().and_then(|host| {
+            // A native travel replacement already put the motion in the
+            // correction. Ordinary hurt leaves its mark for ChunkMap.tick.
+            if !host.hub.apply_server_travel(conn, travel_teleport, travel) {
+                return None;
+            }
+            host.hub.update_guest(conn, |g| {
+                let body = g.motion.as_mut()?;
+                let marked = std::mem::take(&mut body.health.sync_velocity);
+                (marked && mod_api::__private::listened(mod_api::HookId::PlayerVelocity))
+                    .then(|| (g.uuid, g.name.clone(), body.velocity.components()))
+            })?
+        });
         if let Some((at, velocity)) = soul
             && let Some(host) = self.lan.as_ref()
         {
@@ -477,24 +479,8 @@ impl Game<'_> {
             }
         });
         self.guest_motion_events(conn, at, events);
-        if let Some(v) = marked {
-            if mod_api::__private::listened(mod_api::HookId::PlayerVelocity)
-                && let Some((uuid, name)) = self
-                    .lan
-                    .as_ref()
-                    .and_then(|host| host.hub.guest(conn))
-                    .map(|g| (g.uuid, g.name.clone()))
-            {
-                self.native_player_velocity(uuid, &name, [v.x, v.y, v.z]);
-            }
-            if !travel_synced
-                && let Some(g) = self.lan.as_ref().and_then(|host| host.hub.guest(conn))
-            {
-                g.send(&C::SetEntityMotion(play::SetEntityMotion {
-                    id: g.entity_id,
-                    velocity: [v.x, v.y, v.z],
-                }));
-            }
+        if let Some((uuid, name, velocity)) = travel_sync {
+            self.native_player_velocity(uuid, &name, velocity);
         }
     }
 

@@ -349,6 +349,8 @@ pub struct Hub {
     /// The entities players started and stopped tracking, collected by
     /// `collect_tracking`, for the game to tell the mods.
     pub native_tracking: Vec<TrackingBatch>,
+    /// `player_velocity` for marked motion sent by this level's tracker.
+    pub native_velocity_syncs: Vec<(u128, String, [f64; 3])>,
     /// The players' own state waits for the game to tell the mods of the pass
     /// (`finish_tracking_pass`).
     players_after_tracking: bool,
@@ -820,6 +822,7 @@ impl Hub {
             dispatch_move_effects: false,
             transfers: None,
             native_tracking: Vec::new(),
+            native_velocity_syncs: Vec::new(),
             players_after_tracking: false,
             tracking_after_sounds: Vec::new(),
             attachment_snapshots: Vec::new(),
@@ -3352,6 +3355,14 @@ impl Hub {
             .is_some_and(|l| l.tracks(id))
     }
 
+    /// Marks the current level's tracker consumed on its last pass.
+    pub fn drain_sent_sync_velocity(&mut self) -> impl Iterator<Item = i32> + '_ {
+        self.entities
+            .get_mut(&self.config.dimension)
+            .into_iter()
+            .flat_map(Entities::drain_sent_sync_velocity)
+    }
+
     /// All entities as one client sees them: the world's and the other players.
     pub(in crate::lan) fn track_entities(&mut self, ctx: &mut TickCtx) {
         let mut all: Vec<EntityState> = Vec::with_capacity(ctx.entities.len() + self.guests.len());
@@ -3361,8 +3372,8 @@ impl Hub {
             .filter(|&i| self.here(&self.guests[i]) && self.guests[i].body_present())
             .collect();
         let guest_states: Vec<_> = placed
-            .into_iter()
-            .map(|i| {
+            .iter()
+            .map(|&i| {
                 let equipment = self.guest_equipment(i);
                 let g = &self.guests[i];
                 let mut state = self.player_state(
@@ -3384,6 +3395,10 @@ impl Hub {
                         .unwrap_or_default(),
                     self.player_effect_meta(g, modified_particles),
                 );
+                if let Some(motion) = g.motion.as_ref().filter(|m| m.health.sync_velocity) {
+                    state.velocity = motion.velocity.components();
+                    state.sync_velocity = true;
+                }
                 state.spectator = g.spectator();
                 state.watching = g.watching;
                 state.hidden = self.hidden.get(&g.uuid).copied();
@@ -3428,6 +3443,18 @@ impl Hub {
             entity_type(types, sync, kind)
         });
         drop(viewers);
+        if !level.sync_velocity_sent().is_empty() {
+            let listened = mod_api::__private::listened(mod_api::HookId::PlayerVelocity);
+            for (i, state) in placed.into_iter().zip(&all) {
+                if state.sync_velocity && level.sync_velocity_sent().contains(&state.id) {
+                    let notice = self.guests.update(i, |g| {
+                        g.motion.as_mut().unwrap().health.sync_velocity = false;
+                        listened.then(|| (g.uuid, g.name.clone(), state.velocity))
+                    });
+                    self.native_velocity_syncs.extend(notice);
+                }
+            }
+        }
         // While a mod listens, a player's output that started or stopped tracking waits for the
         // game to tell the mods at each pairing's packet (`tracking_pass`).
         let hold = tracking_pass::tracking_listened();

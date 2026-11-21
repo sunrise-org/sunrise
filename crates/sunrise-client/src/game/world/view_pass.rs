@@ -86,6 +86,7 @@ impl Game<'_> {
             streaming: Some(&self.streaming),
         };
         host.hub.viewed_pass(&mut ctx);
+        self.clear_sent_mob_velocity();
     }
 
     /// The level's entities as `tick_lan` describes them for the tracking pass: nobody is in the

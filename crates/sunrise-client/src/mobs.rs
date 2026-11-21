@@ -600,8 +600,10 @@ impl NamedDamage {
     pub const BYPASSES_WOLF_ARMOR: u32 = 1 << 16;
     pub const SULFUR_CUBE_WITH_BLOCK_IMMUNE_TO: u32 = 1 << 17;
 
+    pub const NO_IMPACT: u32 = 1 << 18;
+
     /// Each flag with the damage tag it stands for.
-    const TAG_FLAGS: [(u32, &'static str); 18] = [
+    const TAG_FLAGS: [(u32, &'static str); 19] = [
         (Self::IS_FIRE, "minecraft:is_fire"),
         (Self::BYPASSES_ARMOR, "minecraft:bypasses_armor"),
         (Self::NO_KNOCKBACK, "minecraft:no_knockback"),
@@ -624,6 +626,7 @@ impl NamedDamage {
         (Self::IS_FREEZING, "minecraft:is_freezing"),
         (Self::WITCH_RESISTANT_TO, "minecraft:witch_resistant_to"),
         (Self::NO_ANGER, "minecraft:no_anger"),
+        (Self::NO_IMPACT, "minecraft:no_impact"),
         (Self::BYPASSES_WOLF_ARMOR, "minecraft:bypasses_wolf_armor"),
         (
             Self::SULFUR_CUBE_WITH_BLOCK_IMMUNE_TO,
@@ -1573,6 +1576,8 @@ pub struct Mob {
     /// `Entity.needsSync`: knocked back, pushed or jumped since its server
     /// last sent it, so the next update goes out at once.
     pub needs_sync: bool,
+    /// `Entity.markHurt`: send current velocity when the tracker next runs.
+    pub sync_velocity: bool,
     /// `Entity.syncPosition`: it bounced this tick (`restituteMovementAfterCollisions`),
     /// so its tracker keeps this position as a step of the next move it sends.
     pub sync_position: bool,
@@ -3678,6 +3683,7 @@ impl Mob {
             horizontal_collision: false,
             vertical_collision_below: false,
             needs_sync: false,
+            sync_velocity: false,
             sync_position: false,
             movement_emission: None,
             gear_knockback_resistance: None,
@@ -4271,6 +4277,14 @@ impl Mob {
         self.last_direct = None;
         hurt_by::resolve(self, &source);
         level.accepted_mob_hit(self);
+        // LivingEntity.hurtServer marks motion only for a new, not wholly
+        // blocked impact. The default knockback has a separate damage tag.
+        let no_impact = match source.kind {
+            DamageKind::Named(damage) => damage.has(NamedDamage::NO_IMPACT),
+            DamageKind::Drown => true,
+            _ => false,
+        };
+        self.sync_velocity |= knock && !no_impact && (blocked <= 0.0 || incoming > 0.0);
         // dealDefaultKnockback, unless the damage type is tagged no_knockback or
         // the hit was blocked whole; a source without a position knocks in a
         // random direction.

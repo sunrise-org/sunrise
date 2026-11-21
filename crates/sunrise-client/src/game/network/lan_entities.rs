@@ -772,6 +772,18 @@ impl Game<'_> {
         }
     }
 
+    /// Clear motion marks consumed by the tracker; idle entities keep theirs.
+    pub(super) fn clear_sent_mob_velocity(&mut self) {
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        for id in host.hub.drain_sent_sync_velocity() {
+            if let Some(index) = self.mob_index.find(&self.mobs, id as u32) {
+                self.mobs[index].sync_velocity = false;
+            }
+        }
+    }
+
     /// ServerEntity.sendChanges clears needsSync once it has looked, and
     /// SteppedInterpolationTracker.updateTracking clears syncPosition: once the states for the
     /// tracking pass are taken.
