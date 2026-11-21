@@ -302,14 +302,16 @@ impl Game<'_> {
         alpha: f64,
         mut draw: impl FnMut(BlockItemDraw),
     ) {
-        for (key, entity) in &self.world.block_entities {
+        let reach = Reach::Default;
+        let radius = f64::from(reach.view_distance(0));
+        for (key, entity) in self.world.block_entities.near(camera.x, camera.z, radius) {
             let BlockEntity::Vault(vault) = entity else {
                 continue;
             };
             let Some(stack) = &vault.display_item else {
                 continue;
             };
-            if !Reach::Default.should_render([key.0, key.1, key.2], camera, 0) {
+            if !reach.should_render([key.0, key.1, key.2], camera, 0) {
                 continue;
             }
             let state = self.resolve_item(stack, DisplayContext::Ground, None, 0);

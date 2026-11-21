@@ -1,15 +1,18 @@
 //! Named timings (wall and thread CPU) of a frame or tick, on with `SUNRISE_SPIKES` or while a capture records; the slow ones go to the slow ring, not as span lists to the log.
 use std::{
     cell::{Cell, RefCell},
+    marker::PhantomData,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
+const ONGOING: u8 = 1;
+const FRAME: u8 = 2;
 thread_local! {
     static SPANS: RefCell<Vec<Span>> = const { RefCell::new(Vec::new()) };
-    /// Spans recorded on this thread alone, wall time only ([`record_here`]).
-    static HERE: Cell<bool> = const { Cell::new(false) };
+    /// Wall-only recording on this thread: the ongoing setting and the scoped frame override.
+    static HERE: Cell<u8> = const { Cell::new(0) };
     /// How many timed spans the thread is inside: the next span's [`Span::depth`].
     static DEPTH: Cell<u8> = const { Cell::new(0) };
     /// What this thread's slowest steps were busy with since it last took them ([`note`]).
@@ -47,12 +50,40 @@ pub fn enabled() -> bool {
 /// what the render thread's slow frames spent their time in. The thread takes them every
 /// frame ([`take`]).
 pub fn record_here(on: bool) {
-    HERE.with(|h| h.set(on));
+    HERE.with(|h| {
+        h.set(if on {
+            h.get() | ONGOING
+        } else {
+            h.get() & !ONGOING
+        })
+    });
 }
-/// Whether this thread records spans: all of them on, or [`record_here`].
+
+/// Record wall time during a measured frame without changing the ongoing setting.
+pub fn record_frame() -> FrameRecording {
+    let previous = HERE.with(|h| h.replace(h.get() | FRAME) & FRAME);
+    FrameRecording {
+        previous,
+        _thread: PhantomData,
+    }
+}
+
+#[must_use = "frame recording ends when the guard is dropped"]
+pub struct FrameRecording {
+    previous: u8,
+    _thread: PhantomData<*const ()>,
+}
+
+impl Drop for FrameRecording {
+    fn drop(&mut self) {
+        HERE.with(|h| h.set((h.get() & !FRAME) | self.previous));
+    }
+}
+
+/// Whether this thread records spans: globally, here, or for a timeline capture.
 #[inline]
 pub fn recording_here() -> bool {
-    ENABLED.load(Ordering::Relaxed) || HERE.with(Cell::get) || timeline::on()
+    ENABLED.load(Ordering::Relaxed) || HERE.with(Cell::get) != 0 || timeline::on()
 }
 /// The thread's CPU time when spans are on for every thread (`SUNRISE_SPIKES`): spans recorded
 /// by `record_here` alone keep wall time only.
@@ -733,6 +764,28 @@ mod tests {
         let names: Vec<&str> = notes.iter().map(|(_, w)| w.as_str()).collect();
         assert_eq!(names, ["b", "e", "c"]);
         assert!(super::take_notes().is_empty(), "taking them clears them");
+    }
+
+    #[test]
+    fn recording_one_frame_does_not_change_ongoing_recording() {
+        let _switch = spans_switch();
+        super::time("before", || ());
+        {
+            let _frame = super::record_frame();
+            super::time("frame", || ());
+        }
+        super::time("after", || ());
+        {
+            let _frame = super::record_frame();
+            super::record_here(true);
+        }
+        super::time("ongoing", || ());
+        super::record_here(false);
+        let names: Vec<_> = super::take_raw()
+            .into_iter()
+            .map(|span| span.name)
+            .collect();
+        assert_eq!(names, ["frame", "ongoing"]);
     }
 
     /// Spans of one name add up, the slowest first; a span that waited keeps its small CPU time.

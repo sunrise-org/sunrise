@@ -610,7 +610,7 @@ pub const COMMANDS: &[Cmd] = &[
         "on meshes every section and far tile again so the copies are complete (SUNRISE_RENDER_CAPTURE=1 keeps them from the start). DIR gets the camera, frame inputs, settings and every resident near section and far tile mesh; entities, particles, weather, the hand and the HUD are left out. See docs/graphics.md.",
         ["sunrise-ctl render-capture on", "sunrise-ctl render-capture /tmp/scene"], &[], mcp: false, local: false),
     cmd!("fly", Scripting, "fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH [raw]]", "fly the camera along a line, then reply with the frame summary",
-        "The reply's tick_ms and tick_ms_max are the world's smoothed tick time over the flight (the server thread's when single player runs on one). With raw, the reply also lists every frame time in milliseconds (frame_ms).",
+        "The reply's tick_ms and tick_ms_max are the world's smoothed tick time over the flight (the server thread's when single player runs on one). With raw, the reply lists each rendered frame's time in milliseconds (frame_ms) and streaming_work as [unload_entries_visited, upload_elements_sorted, upload_elements_merged]. The streaming_span_ms object holds per-frame wall milliseconds for unload_block_entities (column removal) and order_uploads (stale-entry filtering and queue ordering), summed by name and null on frames where a span did not run.",
         ["sunrise-ctl fly 0 100 0 500 100 0 20"], &[], mcp: false, local: false),
     // Repro recordings
     cmd!("record-start", Scripting, "record-start [NAME] [--no-world]", "record input, state and the world for a bug repro",

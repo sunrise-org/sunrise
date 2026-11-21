@@ -313,14 +313,16 @@ impl Game<'_> {
     /// The items [`Self::brushable_geometry`] draws.
     pub(super) fn brushable_items(&self, camera: glam::DVec3, mut draw: impl FnMut(BlockItemDraw)) {
         use sunrise_assets::item_model::DisplayContext;
-        for (key, entity) in &self.world.block_entities {
+        let reach = Reach::Default;
+        let radius = f64::from(reach.view_distance(0));
+        for (key, entity) in self.world.block_entities.near(camera.x, camera.z, radius) {
             let BlockEntity::Brushable(b) = entity else {
                 continue;
             };
             let (Some(stack), Some(face)) = (&b.item, b.hit_direction) else {
                 continue;
             };
-            if !Reach::Default.should_render([key.0, key.1, key.2], camera, 0) {
+            if !reach.should_render([key.0, key.1, key.2], camera, 0) {
                 continue;
             }
             let state = self.world.block(key.0, key.1, key.2);

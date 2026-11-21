@@ -85,14 +85,36 @@ pub struct Flight {
     started: Instant,
     seconds: f64,
     /// Reply with every frame time too (`fly ... PITCH raw`).
-    raw: bool,
+    pub(super) raw: bool,
+    upload_queue_work: [usize; 2],
     reply: Sender<String>,
     /// The world's smoothed tick time each frame (the F3 server line): the
     /// server thread's when single player runs on one.
     tick_ms: Vec<f32>,
 }
 
+impl Flight {
+    pub(in crate::game) fn note_upload_queue_work(&mut self, work: [usize; 2]) {
+        self.upload_queue_work = work;
+    }
+}
+
 impl Game<'_> {
+    pub(super) fn record_streaming_work(
+        &mut self,
+        rendered: bool,
+        spans: &[sunrise_client::spans::Span],
+    ) {
+        if let Some(flight) = self.flight.as_mut().filter(|flight| flight.raw) {
+            let visited = self.world.block_entities.take_column_unload_entries();
+            let [sorted, merged] = std::mem::take(&mut flight.upload_queue_work);
+            if rendered {
+                self.frame_stats
+                    .record_streaming_work(visited, sorted, merged, spans);
+            }
+        }
+    }
+
     /// Move the camera along the running flight; reply when it ends.
     pub(super) fn advance_flight(&mut self) {
         let tick_ms = self
@@ -129,6 +151,7 @@ impl Game<'_> {
             summary["tick_ms_max"] = flight.tick_ms.iter().copied().fold(0.0, f32::max).into();
             if flight.raw {
                 self.add_raw_series(&mut summary);
+                self.frame_stats.add_flight_series(&mut summary);
             }
             let _ = flight.reply.send(summary.to_string());
         }
@@ -1268,6 +1291,10 @@ impl Game<'_> {
                 }
                 let n = |i: usize| -> Result<f64> { Ok(arg(i)?.parse()?) };
                 let pitch = words.get(8).map_or(Ok(10.0), |p| p.parse::<f32>())?;
+                let raw = words.get(9) == Some(&"raw");
+                if raw {
+                    self.world.block_entities.take_column_unload_entries();
+                }
                 self.reset_frame_stats();
                 self.flight = Some(Flight {
                     from: Vec3::new(n(1)?, n(2)?, n(3)?),
@@ -1275,7 +1302,8 @@ impl Game<'_> {
                     pitch,
                     started: Instant::now(),
                     seconds: n(7)?.max(0.1),
-                    raw: words.get(9) == Some(&"raw"),
+                    raw,
+                    upload_queue_work: [0; 2],
                     reply: reply.clone(),
                     tick_ms: Vec::new(),
                 });

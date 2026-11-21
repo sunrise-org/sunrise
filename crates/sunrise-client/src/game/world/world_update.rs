@@ -180,7 +180,7 @@ impl Game<'_> {
         let (commit, protos) = self.streaming.prepare_commit(&mut self.world, plan);
         self.native_proto_snapshots(&protos);
         self.streaming.submit_protos(protos);
-        let (uploads, unloaded) = sunrise_client::spans::time("streaming", || {
+        let (mut uploads, unloaded) = sunrise_client::spans::time("streaming", || {
             self.streaming.complete_commit(&mut self.world, commit)
         });
         // Sections chosen to mesh wait for the mods' `section_visibility` (none without a mod).
@@ -255,12 +255,13 @@ impl Game<'_> {
         }
         sunrise_client::spans::time("unload_entities", || self.unload_entities(&unloaded));
         if !unloaded.is_empty() {
-            let _span = sunrise_client::spans::guard("unload_block_entities");
             let gone: sunrise_client::fast_hash::FxHashSet<(i32, i32)> =
                 unloaded.iter().map(|c| (c.x, c.z)).collect();
-            self.world
-                .block_entities
-                .unload(|p| gone.contains(&(p.0 >> 4, p.2 >> 4)));
+            sunrise_client::spans::time("unload_block_entities", || {
+                for &column in &gone {
+                    self.world.block_entities.unload_column(column);
+                }
+            });
             self.world
                 .block_names
                 .retain(|p, _| !gone.contains(&(p.0 >> 4, p.2 >> 4)));
@@ -317,6 +318,7 @@ impl Game<'_> {
                 // mesh of a waiting section replaces it, and sections of
                 // chunks no longer loaded are dropped.
                 let pending = &mut self.pending_uploads;
+                let order_span = sunrise_client::spans::guard("order_uploads");
                 let fresh: sunrise_client::fast_hash::FxHashSet<(i32, i32, i32)> =
                     uploads.iter().map(|upload| upload.key).collect();
                 let current = |upload: &sunrise_client::streaming::MeshUpload| {
@@ -325,16 +327,11 @@ impl Game<'_> {
                         .contains_key(&(upload.key.0, upload.key.2))
                         && self.streaming.can_publish_mesh(&self.world, upload)
                 };
+                // Filtering leaves the surviving waiting run in the same order.
                 let mut spent: Vec<_> = pending
                     .extract_if(.., |upload| fresh.contains(&upload.key) || !current(upload))
                     .collect();
-                for upload in uploads {
-                    if current(&upload) {
-                        pending.push(upload);
-                    } else {
-                        spent.push(upload);
-                    }
-                }
+                spent.extend(uploads.extract_if(.., |upload| !current(upload)));
                 let centre = self.streaming.center;
                 // Section keys count from the world's bottom (`origin`'s min_y + y * 16).
                 let bottom = f64::from(self.world.bottom_y());
@@ -345,7 +342,22 @@ impl Game<'_> {
                 let far = |k: &(i32, i32, i32)| {
                     (k.0 - centre.0).pow(2) + (k.1 - cam_y).pow(2) + (k.2 - centre.1).pow(2)
                 };
-                pending.sort_unstable_by_key(|upload| std::cmp::Reverse(far(&upload.key)));
+                let order = Some((centre, cam_y));
+                let priority = |upload: &sunrise_client::streaming::MeshUpload| {
+                    std::cmp::Reverse(far(&upload.key))
+                };
+                let work = order_uploads(
+                    pending,
+                    &mut uploads,
+                    &mut self.pending_uploads_merge,
+                    self.pending_uploads_order == order,
+                    priority,
+                );
+                self.pending_uploads_order = order;
+                drop(order_span);
+                if let Some(flight) = &mut self.flight {
+                    flight.note_upload_queue_work(work);
+                }
                 let (limit, budget) = if budgeted {
                     (
                         g.chunk_updates as usize,
@@ -433,5 +445,80 @@ impl Game<'_> {
                 });
             }
         }
+    }
+}
+
+/// Farthest first (the uploader pops from the back). Returns the number of
+/// elements passed to a sort and to the merge, respectively.
+fn order_uploads<T, K: Ord>(
+    waiting: &mut Vec<T>,
+    fresh: &mut Vec<T>,
+    scratch: &mut Vec<T>,
+    same_section: bool,
+    priority: impl Fn(&T) -> K,
+) -> [usize; 2] {
+    if !same_section {
+        waiting.append(fresh);
+        if waiting.len() < 2 {
+            return [0, 0];
+        }
+        waiting.sort_unstable_by_key(priority);
+        return [waiting.len(), 0];
+    }
+    let sorted = if fresh.len() > 1 {
+        fresh.sort_unstable_by_key(&priority);
+        fresh.len()
+    } else {
+        0
+    };
+    if waiting
+        .last()
+        .zip(fresh.first())
+        .is_none_or(|(old, new)| priority(old) <= priority(new))
+    {
+        waiting.append(fresh);
+        return [sorted, 0];
+    }
+
+    // At equal distance, write the waiting mesh first so the fresh mesh is
+    // popped first, as on the former stable merge path.
+    let merged = waiting.len() + fresh.len();
+    scratch.reserve(merged);
+    let mut old = waiting.drain(..).peekable();
+    let mut new = fresh.drain(..).peekable();
+    while let (Some(a), Some(b)) = (old.peek(), new.peek()) {
+        scratch.extend(if priority(a) <= priority(b) {
+            old.next()
+        } else {
+            new.next()
+        });
+    }
+    scratch.extend(old);
+    scratch.extend(new);
+    std::mem::swap(waiting, scratch);
+    [sorted, merged]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::order_uploads;
+    use std::cmp::Reverse;
+
+    #[test]
+    fn stationary_upload_budget_gives_fresh_meshes_priority_on_ties() {
+        let mut waiting = vec![(20, "far"), (4, "waiting")];
+        let mut fresh = vec![(1, "nearest"), (9, "middle"), (4, "fresh")];
+        let mut scratch = Vec::new();
+        let priority = |&(distance, _): &(i32, &str)| Reverse(distance);
+        order_uploads(&mut waiting, &mut fresh, &mut scratch, true, priority);
+        // Two uploads this frame leave the waiting (equal-distance) mesh first
+        // in line for the next frame.
+        let selected: Vec<_> = std::iter::from_fn(|| waiting.pop().map(|(_, name)| name))
+            .take(2)
+            .collect();
+        assert_eq!(selected, ["nearest", "fresh"]);
+        assert_eq!(waiting.pop(), Some((4, "waiting")));
+        assert_eq!(waiting.pop(), Some((9, "middle")));
+        assert_eq!(waiting.pop(), Some((20, "far")));
     }
 }

@@ -45,9 +45,22 @@ fn place(game: &mut Game<'_>, case: &serde_json::Value) {
             .properties
             .insert(k.clone(), v.as_str().unwrap().to_owned());
     }
-    game.world
-        .set(key.0, key.1, key.2, registry.id(&state).unwrap())
-        .unwrap();
+    let state = registry.id(&state).unwrap();
+    game.world.set(key.0, key.1, key.2, state).unwrap();
+    // A lit chunk's light storage already includes the source block's own emission.
+    let emission = game.res.facts().get(state).emission;
+    if emission > packed & 15 {
+        let column = game
+            .world
+            .chunks
+            .get_mut(&(key.0 >> 4, key.2 >> 4))
+            .unwrap();
+        let chunk = Arc::make_mut(column);
+        let section = chunk.section_index(key.1).unwrap();
+        let mut light = Box::new([packed; 4096]);
+        light[sunrise_client::chunk::index(key.0, key.1, key.2)] = (packed & 0xf0) | emission;
+        Arc::make_mut(&mut chunk.sections[section]).light = Light::packed(light);
+    }
     let slots = |n: usize| {
         let mut items = vec![None; n];
         for e in case["items"].as_array().into_iter().flatten() {

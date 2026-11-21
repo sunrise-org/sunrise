@@ -217,6 +217,7 @@ public final class VanillaBlockEntityItemOracle {
         var renderer = renderers.get(c.get("kind").getAsString());
         var cam = c.getAsJsonArray("camera");
         var cameraPos = new Vec3(cam.get(0).getAsDouble(), cam.get(1).getAsDouble(), cam.get(2).getAsDouble());
+        if (!renderer.shouldRender(be, cameraPos)) return new JsonArray();
         var rs = (BlockEntityRenderState) renderer.createRenderState();
         renderer.extractRenderState(be, rs, partial, cameraPos, null);
         // Each resolved state is swapped for one that records its submits.

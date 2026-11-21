@@ -224,11 +224,13 @@ impl Game<'_> {
 
     /// The items [`Self::shelf_geometry`] draws, slot by slot.
     pub(super) fn shelf_items(&self, camera: glam::DVec3, mut draw: impl FnMut(BlockItemDraw)) {
-        for (key, entity) in &self.world.block_entities {
+        let reach = Reach::Default;
+        let radius = f64::from(reach.view_distance(0));
+        for (key, entity) in self.world.block_entities.near(camera.x, camera.z, radius) {
             let BlockEntity::Shelf(shelf) = entity else {
                 continue;
             };
-            if !Reach::Default.should_render([key.0, key.1, key.2], camera, 0) {
+            if !reach.should_render([key.0, key.1, key.2], camera, 0) {
                 continue;
             }
             let block = self.world.block(key.0, key.1, key.2);

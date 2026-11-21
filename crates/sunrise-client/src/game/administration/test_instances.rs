@@ -224,7 +224,8 @@ impl Game<'_> {
             .map(|(&pos, (text, _))| ([pos.0, pos.1, pos.2], text.clone(), HIGHLIGHT_FILL))
             .collect();
         let render_distance = self.effective_render_distance();
-        for (pos, entity) in &self.world.block_entities {
+        // Test instance blocks show a box: `boxes` lists them without a scan of every block entity.
+        for (pos, entity) in self.world.block_entities.boxes() {
             let BlockEntity::TestInstanceBlock(b) = entity else {
                 continue;
             };
