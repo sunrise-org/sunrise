@@ -88,6 +88,9 @@ pub trait EntityDamageBackendMut {
     /// (such as its shooter). The normal armor, cooldown, hooks and damage
     /// broadcast still apply. True when the damage was accepted, false if
     /// refused (including an unregistered type), and None for a stale target.
+    /// Accepted does not mean health was lost: `hurtServer` can report success
+    /// without any (a heart-bound creaking's reaction, a ghast's reflected
+    /// large fireball on hurt cooldown).
     /// Stale direct or causing handles are treated as absent.
     #[access(WorldOnly)]
     fn entity_hurt(

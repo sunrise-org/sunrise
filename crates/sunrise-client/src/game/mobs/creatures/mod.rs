@@ -2159,13 +2159,46 @@ impl Game<'_> {
         if killed && let Some(Who::Mob(killer)) = source.attacker {
             self.zombie_killed(killer, target);
         }
+        self.settle_warden_hurt(target);
         hurt
     }
-    /// `LivingEntity.resolvePlayerResponsibleForDamage` after `source` hurt a
-    /// mob: a tame wolf's hit is its owner's (`setLastHurtByPlayer(uuid, 100)`),
-    /// so the kill drops experience and player-only loot and the owner, when
-    /// in the world, gets the credit (`getKillCredit`); a tame wolf without an
-    /// owner clears it. A player's own hits are recorded where they land.
+    /// Run `Warden.hurtServer`'s anger and target selection synchronously after a hit,
+    /// matching vanilla even while ticked simulation is frozen or the base hurt call returned false.
+    pub(in crate::game) fn settle_warden_hurt(&mut self, id: u32) {
+        let Some(index) = self.mobs.iter().position(|m| {
+            m.id == id
+                && m.extra
+                    .warden
+                    .as_ref()
+                    .is_some_and(|st| st.has_pending_hurt())
+        }) else {
+            return;
+        };
+        let uuid = self.level.player_uuid;
+        let others: Vec<_> = self
+            .mobs
+            .iter()
+            .map(|m| seen(m, uuid, self.items()))
+            .collect();
+        let mut mob = self.mobs.swap_remove(index);
+        let mut events = Vec::new();
+        {
+            let world = self.mob_world_base(&others);
+            sunrise_client::mobs::warden::handle_hurt(&mut mob, &world, &mut events);
+        }
+        self.mobs.push(mob);
+        let last = self.mobs.len() - 1;
+        if index < last {
+            self.mobs.swap(index, last);
+        }
+        if !events.is_empty() {
+            let _ = self.handle_mob_events(events);
+        }
+    }
+    /// `LivingEntity.resolvePlayerResponsibleForDamage` after `source` hurt a mob, through the
+    /// hit's credit loan (a tame wolf's hit is its owner's; an ownerless tame wolf clears it):
+    /// what an accepted hit's site commits, for tests that set up the credit without a hit.
+    #[cfg(test)]
     pub(super) fn resolve_player_responsible(&mut self, victim: u32, source: Damage) {
         if !matches!(source.attacker, Some(Who::Mob(_))) {
             return;
@@ -2193,18 +2226,9 @@ impl Game<'_> {
         &self,
         credit: super::combat::PlayerCredit,
     ) -> Option<Option<u32>> {
-        let uuid = sunrise_client::lan::playerdata::uuid_ints(credit.0);
-        if self.player.is_some()
-            && sunrise_client::mobs::tame::owned_by(Some(uuid), self.acting_uuid())
-        {
-            return Some(self.lan_acting);
-        }
-        let uuid = sunrise_client::lan::playerdata::ints_uuid(uuid);
-        self.lan
-            .iter()
-            .flat_map(|h| h.hub.guests.iter())
-            .find(|g| g.placed && g.uuid == uuid)
-            .map(|g| Some(g.conn))
+        crate::game::entity::player_resolver!(self)
+            .resolve(credit.0)
+            .map(|guest| guest.or(self.lan_acting))
     }
     /// `LivingEntity.dropFromGiftLootTable`: the gift table from its random
     /// sequence with the mob as `this` (a chicken's egg depends on its
@@ -2783,6 +2807,10 @@ impl Game<'_> {
                     // carries its kind. A sulfur cube's blast is TNT's.
                     let mut source =
                         super::explosion::ExplosionSource::default().with_silence(silent);
+                    if let Some(id) = source_mob {
+                        source = source
+                            .with_damage_direct(id, sunrise_client::health::DirectEntity::Living);
+                    }
                     if let Some(id) = source_mob
                         && matches!(species, Species::Creeper | Species::Wither)
                     {
@@ -2790,7 +2818,11 @@ impl Game<'_> {
                             Species::Creeper => "minecraft:creeper",
                             _ => "minecraft:wither",
                         };
-                        source = source.with_entity(id, kind);
+                        source = source.with_entity(
+                            id,
+                            kind,
+                            sunrise_client::health::DirectEntity::Living,
+                        );
                     }
                     let result = match species {
                         Species::Creeper | Species::Wither => self.with_hive_emptying_blast(|g| {
@@ -4309,7 +4341,9 @@ impl Game<'_> {
             None => self.current_attack(),
         };
         attack.projectile = self.combat.attack().projectile;
+        attack.projectile_kind = self.combat.attack().projectile_kind;
         attack.direct = self.combat.attack().direct;
+        attack.direct_kind = self.combat.attack().direct_kind;
         attack.position = from;
         attack.projectile_weapon = self.combat.attack().projectile_weapon.clone();
         if let Some(a) = attacker.or(owner) {
@@ -5581,6 +5615,12 @@ impl Game<'_> {
         let result = self.with_attack(attack, |g| g.projectile_hit_landed(p, hit));
         self.settle_dealt_absorbed(p.owner == Some(Who::Player));
         result?;
+        if let Hit::Entity {
+            who: Who::Mob(id), ..
+        } = hit
+        {
+            self.settle_warden_hurt(id);
+        }
         // The hit's hurt teleports an enderman or a shulker now (`hurtServer`).
         self.settle_hurt_teleports()
     }
@@ -6432,7 +6472,11 @@ impl Game<'_> {
                     fire,
                     super::explosion::ExplosionSource::default()
                         .with_silence(self.entity_silent(p.id))
-                        .with_entity(p.id, "minecraft:fireball"),
+                        .with_entity(
+                            p.id,
+                            "minecraft:fireball",
+                            sunrise_client::health::DirectEntity::LargeFireball,
+                        ),
                 );
                 self.combat.explosion_direct = None;
                 self.set_blast_by_player(false);

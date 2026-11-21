@@ -392,6 +392,9 @@ impl Warden {
     pub fn target(&self) -> Option<Who> {
         self.brain.mem.attack_target.value()
     }
+    pub fn has_pending_hurt(&self) -> bool {
+        !self.hurt_by.is_empty()
+    }
 }
 
 pub fn register(m: &mut Mob) {
@@ -492,15 +495,18 @@ pub fn can_be_targeted(m: &Mob) -> bool {
 }
 
 /// `Warden.canTargetEntity`: living, neither creative nor spectator, not a
-/// warden, not an ally, not invulnerable, alive.
+/// warden, not an armor stand, not an ally, not invulnerable, alive.
 pub fn can_target(w: &MobWorld, warden: u32, who: Who) -> bool {
     let targetable = match who {
         Who::Player => w
             .selected_player()
             .is_some_and(|p| p.alive && !p.creative && !p.spectator),
-        Who::Mob(id) => w
-            .seen(id)
-            .is_some_and(|s| s.alive && s.species != Species::Warden && !s.invulnerable),
+        Who::Mob(id) => {
+            w.seen(id)
+                .is_some_and(|s| s.alive && s.species != Species::Warden && !s.invulnerable)
+                || w.dragon
+                    .is_some_and(|(dragon, target)| dragon == id && target.alive)
+        }
     };
     targetable && !allied(&w.teams, warden, Some(who))
 }
@@ -573,17 +579,17 @@ pub fn accepts_damage(m: &Mob, source: &Damage) -> bool {
     !(digging_or_emerging(m) && !source.kind.bypasses_invulnerability())
 }
 /// `Warden.hurtServer`'s reaction, handled at the warden's next tick.
-pub fn hurt(m: &mut Mob, source: &Damage) {
+pub fn hurt(m: &mut Mob, source: &Damage, attack: &crate::health::Attack) {
     if m.no_ai || digging_or_emerging(m) {
         return;
     }
-    let direct = !source.implies_projectile_source();
+    let direct = attack.is_direct(source);
     if let Some(st) = m.extra.warden.as_mut() {
         st.hurt_by.push((source.attacker, direct));
     }
 }
 /// The rest of `Warden.hurtServer`.
-fn handle_hurt(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+pub fn handle_hurt(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let hurt = m
         .extra
         .warden
@@ -1400,6 +1406,118 @@ mod tests {
         ] {
             assert_eq!(Pose::from_code(p.code()), p);
         }
+    }
+
+    #[test]
+    fn hurt_checks_causing_and_direct_entities_not_damage_type() {
+        use crate::health::{Attack, DirectEntity, TestLevel};
+        use crate::mobs::{DamageKind, NamedDamage};
+        use std::sync::Arc;
+
+        let mut test_level = TestLevel::new(0);
+        let warden = || {
+            let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+            kind.id = "minecraft:warden".into();
+            kind.species = Species::Warden;
+            kind.max_health = 500.0;
+            let mut m = Mob::new(1, Arc::new(kind), Vec3::ZERO, 0.0);
+            register(&mut m);
+            m
+        };
+        let mob_projectile = DamageKind::Named(NamedDamage::new(
+            "minecraft:mob_projectile",
+            NamedDamage::IS_PROJECTILE,
+        ));
+
+        // 1. Vary damage type with fixed same causing & direct entity: always recorded as direct.
+        let same_mob = Attack {
+            attacker: 5,
+            direct: Some(5),
+            direct_kind: Some(DirectEntity::Living),
+            ..Default::default()
+        };
+        for kind in [
+            mob_projectile,
+            DamageKind::Arrow,
+            DamageKind::Fireball,
+            DamageKind::MobAttack,
+            DamageKind::Generic,
+        ] {
+            let mut m = warden();
+            let source = Damage {
+                kind,
+                attacker: Some(Who::Mob(5)),
+                from: None,
+                attacker_species: None,
+            };
+            assert!(m.damage(&mut test_level.level().attacked_by(&same_mob), 1.0, source));
+            assert_eq!(
+                m.extra.warden.as_ref().unwrap().hurt_by,
+                [(Some(Who::Mob(5)), true)],
+                "same causing and direct entity must be direct for {kind:?}"
+            );
+        }
+
+        // 2. Vary entities with fixed melee damage types: different direct & causing entities
+        // (such as a projectile carrying a melee damage type) are recorded as indirect.
+        let indirect_mob = Attack {
+            attacker: 5,
+            direct: Some(12),
+            direct_kind: Some(DirectEntity::Arrow),
+            ..Default::default()
+        };
+        let indirect_player = Attack {
+            attacker: 7,
+            direct: Some(12),
+            direct_kind: Some(DirectEntity::Projectile),
+            ..Default::default()
+        };
+        for (attack, attacker, kind) in [
+            (&indirect_mob, Some(Who::Mob(5)), DamageKind::MobAttack),
+            (&indirect_mob, Some(Who::Mob(5)), DamageKind::Thorns),
+            (
+                &indirect_player,
+                Some(Who::Player),
+                DamageKind::PlayerAttack,
+            ),
+            (&indirect_player, Some(Who::Player), DamageKind::MaceSmash),
+        ] {
+            let mut m = warden();
+            let source = Damage {
+                kind,
+                attacker,
+                from: None,
+                attacker_species: None,
+            };
+            assert!(m.damage(&mut test_level.level().attacked_by(attack), 1.0, source));
+            assert_eq!(
+                m.extra.warden.as_ref().unwrap().hurt_by,
+                [(attacker, false)],
+                "different causing and direct entity must be indirect for {kind:?}"
+            );
+        }
+
+        // 3. Hurt cooldown rejection still runs Warden.hurtServer's reaction.
+        let mut m = warden();
+        m.invulnerable = 20;
+        m.last_hurt = 10.0;
+        let before = m.health;
+        let source = Damage {
+            kind: mob_projectile,
+            attacker: Some(Who::Mob(5)),
+            from: None,
+            attacker_species: None,
+        };
+        assert!(
+            !m.damage(&mut test_level.level().attacked_by(&same_mob), 1.0, source),
+            "hit within hurt cooldown should return false"
+        );
+        assert_eq!(m.health, before);
+        assert_eq!(
+            m.extra.warden.as_ref().unwrap().hurt_by,
+            [(Some(Who::Mob(5)), true)],
+            "Warden still reacts to a hit rejected on hurt cooldown"
+        );
     }
 }
 

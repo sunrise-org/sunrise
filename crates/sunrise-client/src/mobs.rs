@@ -1028,19 +1028,6 @@ impl Damage {
                 | DamageKind::WitherSkull
         )
     }
-
-    /// The kinds Warden and Creaking currently use to infer a projectile
-    /// entity. This does not test a named type's projectile tag: only the
-    /// explicit ids previously represented by `Thrown` and `Fireball` count.
-    fn implies_projectile_source(&self) -> bool {
-        match self.kind {
-            DamageKind::Named(named) => matches!(
-                named.name,
-                "minecraft:mob_projectile" | "minecraft:unattributed_fireball"
-            ),
-            _ => self.is_projectile(),
-        }
-    }
 }
 /// Per-mob attribute base values (the type's defaults unless changed).
 #[derive(Clone, Copy, Debug)]
@@ -3357,6 +3344,8 @@ pub struct MobWorld<'a> {
     pub live_mobs: Option<&'a dyn LiveMobs>,
     /// The separately simulated dragon, visible to revenge and melee goals.
     pub dragon: Option<(u32, TargetInfo)>,
+    /// The separately simulated armor stands (`LivingEntity` causes for `Warden.hurtServer`).
+    pub armor_stands: &'a [crate::entities::ArmorStand],
     /// The boats and rafts a lead can hang on (`Holder::Boat`): id and state.
     pub leash_boats: &'a [(u32, leash::HolderState)],
     /// `others` by position, when the caller keeps one (the mob ticks).
@@ -3985,6 +3974,7 @@ impl Mob {
         // follows `super.hurtServer` whatever it answered (a hurt cooldown, a
         // dead enderman), its hurt sound's pitch included.
         let enderman = self.species() == Species::Enderman;
+        let warden = self.species() == Species::Warden;
         let mut passed_invulnerability = false;
         let hurt = self.hurt_server(
             level,
@@ -3995,6 +3985,12 @@ impl Mob {
         );
         if enderman && passed_invulnerability {
             enderman::after_hurt(self, &source, level.attack().direct.is_some());
+        }
+        // `Warden.hurtServer` runs its own anger/targeting reaction after
+        // `super.hurtServer` regardless of whether `super.hurtServer` accepted
+        // the hit (e.g. when the hit was rejected on hurt cooldown).
+        if warden && !self.extra.client_side {
+            warden::hurt(self, &source, level.attack());
         }
         hurt
     }
@@ -4023,13 +4019,20 @@ impl Mob {
         if self.extra.client_side {
             return false;
         }
-        let reflected = self.reflected_fireball(&source);
+        let reflected = self.reflected_fireball(&source, level.attack());
         if self.invulnerable_to_attempt(level, &source) {
             return reflected;
         }
         *passed_invulnerability = true;
         if !self.alive() {
-            return false;
+            return reflected;
+        }
+        if self.species() == Species::Creaking {
+            match creaking::hurt_server(self, &source, level) {
+                creaking::HurtOutcome::Proceed => {}
+                creaking::HurtOutcome::Reacted => return true,
+                creaking::HurtOutcome::Refused => return false,
+            }
         }
         if !self.attacker_allows_damage(&source)
             || !ai::accepts_damage(self, &source, amount, level.attack())
@@ -4104,7 +4107,9 @@ impl Mob {
         let cooldown = self.invulnerable as f32 > 10.0 && !source.kind.bypasses_cooldown();
         if cooldown {
             if incoming <= self.last_hurt {
-                return false;
+                // `Ghast.hurtServer` returns true for a reflected large fireball
+                // even when `super.hurtServer` refuses it on hurt cooldown.
+                return reflected;
             }
             amount = incoming - self.last_hurt;
         }
@@ -4367,7 +4372,9 @@ impl Mob {
         }
         // Squid.hurtServer (also GlowSquid's result): parent health damage has
         // happened, but without a last living attacker the subclass returns false.
-        success
+        // Ghast.hurtServer returns true for a reflected large fireball whatever
+        // super.hurtServer did.
+        (success || reflected)
             && (!matches!(self.species(), Species::Squid | Species::GlowSquid)
                 || self.ai.last_hurt_by.is_some())
     }
@@ -5917,23 +5924,49 @@ mod fire_resistance_damage_tests {
     }
 
     #[test]
-    fn reflected_ghast_fireball_still_reports_success_when_fire_resistance_refuses_health_damage() {
+    fn reflected_ghast_fireball_checks_large_fireball_and_player_not_damage_type() {
         let mut test_level = crate::health::TestLevel::new(0);
-        let level = &mut test_level.level();
-        let mut mob = pig();
-        let kind = Arc::make_mut(&mut mob.kind);
-        kind.id = "minecraft:ghast".into();
-        kind.species = Species::Ghast;
-        kind.flags.fire_immune = true;
-        mob.add_effect("minecraft:fire_resistance", -1, 0);
-        // An explicit unattributed fireball used the same source inference
-        // before it kept its own registry id.
+        let ghast = || {
+            let mut mob = pig();
+            let kind = Arc::make_mut(&mut mob.kind);
+            kind.id = "minecraft:ghast".into();
+            kind.species = Species::Ghast;
+            kind.flags.fire_immune = true;
+            mob
+        };
+        let large_fireball = crate::health::Attack {
+            attacker: 7,
+            direct: Some(15),
+            direct_kind: Some(crate::health::DirectEntity::LargeFireball),
+            ..Default::default()
+        };
+        let small_fireball = crate::health::Attack {
+            attacker: 7,
+            direct: Some(16),
+            direct_kind: Some(crate::health::DirectEntity::Projectile),
+            ..Default::default()
+        };
+        let player_direct = crate::health::Attack {
+            attacker: 7,
+            direct: Some(7),
+            direct_kind: Some(crate::health::DirectEntity::Living),
+            ..Default::default()
+        };
+        let unattributed = DamageKind::Named(NamedDamage::new(
+            "minecraft:unattributed_fireball",
+            NamedDamage::IS_FIRE,
+        ));
+        let custom_fire =
+            DamageKind::Named(NamedDamage::new("example:flame", NamedDamage::IS_FIRE));
+
+        // Varying damage type with fixed LargeFireball + Player still counts as reflected:
+        // bypasses fire immunity, deals 1000 damage, and reports success even under Fire Resistance.
         for kind in [
             DamageKind::Fireball,
-            DamageKind::Named(NamedDamage::new(
-                "minecraft:unattributed_fireball",
-                NamedDamage::IS_FIRE,
-            )),
+            unattributed,
+            DamageKind::InFire,
+            custom_fire,
+            DamageKind::Generic,
         ] {
             let source = Damage {
                 kind,
@@ -5941,9 +5974,85 @@ mod fire_resistance_damage_tests {
                 from: None,
                 attacker_species: None,
             };
-            assert!(mob.damage(level, 1.0, source));
+            let mut mob = ghast();
+            assert!(
+                mob.damage(
+                    &mut test_level.level().attacked_by(&large_fireball),
+                    1.0,
+                    source
+                ),
+                "LargeFireball + Player must hurt ghast for {kind:?}"
+            );
+            assert_eq!(
+                mob.health, 0.0,
+                "reflected LargeFireball deals 1000 damage for {kind:?}"
+            );
+
+            if source.is_fire() {
+                let mut resistant = ghast();
+                resistant.add_effect("minecraft:fire_resistance", -1, 0);
+                assert!(resistant.damage(
+                    &mut test_level.level().attacked_by(&large_fireball),
+                    1.0,
+                    source,
+                ));
+                assert_eq!(resistant.health, 10.0);
+                assert_eq!(resistant.invulnerable, 0);
+            }
+
+            // Even when `super.hurtServer` refuses on hurt cooldown, `Ghast.hurtServer` still
+            // reports success for a reflected large fireball.
+            let mut cooling = ghast();
+            cooling.invulnerable = 20;
+            cooling.last_hurt = 2000.0;
+            assert!(
+                cooling.damage(
+                    &mut test_level.level().attacked_by(&large_fireball),
+                    1.0,
+                    source,
+                ),
+                "reflected LargeFireball must return true on hurt cooldown for {kind:?}"
+            );
+            assert_eq!(cooling.health, 10.0);
+        }
+
+        // Varying entities with fixed fireball damage type: non-LargeFireball direct entity or
+        // non-player cause does NOT bypass fire immunity or trigger the 1000-damage reflection.
+        for kind in [DamageKind::Fireball, unattributed] {
+            let by_player = Damage {
+                kind,
+                attacker: Some(Who::Player),
+                from: None,
+                attacker_species: None,
+            };
+            for attack in [&small_fireball, &player_direct, &crate::health::NO_ATTACK] {
+                let mut mob = ghast();
+                assert!(
+                    !mob.damage(&mut test_level.level().attacked_by(attack), 1.0, by_player),
+                    "non-LargeFireball must not bypass ghast fire immunity for {kind:?}"
+                );
+                assert_eq!(mob.health, 10.0);
+            }
+
+            let by_mob = Damage {
+                kind,
+                attacker: Some(Who::Mob(5)),
+                from: None,
+                attacker_species: None,
+            };
+            let mob_fireball = crate::health::Attack {
+                attacker: 5,
+                direct: Some(15),
+                direct_kind: Some(crate::health::DirectEntity::LargeFireball),
+                ..Default::default()
+            };
+            let mut mob = ghast();
+            assert!(!mob.damage(
+                &mut test_level.level().attacked_by(&mob_fireball),
+                1.0,
+                by_mob
+            ));
             assert_eq!(mob.health, 10.0);
-            assert_eq!(mob.invulnerable, 0);
         }
     }
 }
@@ -7048,20 +7157,6 @@ mod named_damage_tests {
             assert!(wolf.damage(level, 2.0, Damage::of(kind)));
             assert_eq!(wolf.health, health);
             assert_eq!(wolf.extra.body_damage(), armor_damage);
-        }
-    }
-
-    #[test]
-    fn inferred_projectile_source_keeps_the_old_kind_set_not_the_projectile_tag() {
-        for (name, tags, inferred) in [
-            ("minecraft:mob_projectile", 0, true),
-            ("minecraft:unattributed_fireball", 0, true),
-            ("minecraft:indirect_magic", 0, false),
-            ("minecraft:trident", NamedDamage::IS_PROJECTILE, false),
-            ("example:shot", NamedDamage::IS_PROJECTILE, false),
-        ] {
-            let source = Damage::of(DamageKind::Named(NamedDamage::new(name, tags)));
-            assert_eq!(source.implies_projectile_source(), inferred, "{name}");
         }
     }
 

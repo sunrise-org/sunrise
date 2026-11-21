@@ -16,11 +16,13 @@ pub(super) struct CreditEntity {
 pub(super) struct CreditPlan {
     victim: i32,
     player: Option<(PlayerCredit, CreditEntity)>,
+    existing_player_live: bool,
     /// The mob the victim's hurt memory names, by that recorded id, and the
     /// entity the credit resolves to now (`LivingRef::kill_credit`'s).
     previous_mob: (u32, CreditEntity),
     attacking_mob: CreditEntity,
     responsibility: Option<Option<(PlayerCredit, CreditEntity)>>,
+    responsibility_live: bool,
     fixed: CreditEntity,
 }
 
@@ -52,6 +54,20 @@ impl KnockbackCredit for CreditLoan<'_> {
                 }
             }
             self.plan.player = responsibility;
+        }
+    }
+
+    fn resolve_player_responsible(&mut self, mob: &mut Mob) -> bool {
+        assert_eq!(mob.id as i32, self.plan.victim);
+        let updated = self.plan.responsibility.is_some();
+        self.accepted_mob_hit(mob);
+        if mob.ai.last_hurt_by_player <= 0 {
+            return false;
+        }
+        if updated {
+            self.plan.responsibility_live
+        } else {
+            self.players.contains_key(&mob.id) && self.plan.existing_player_live
         }
     }
 
@@ -120,9 +136,10 @@ impl Game<'_> {
         let mob = observed
             .then(|| self.mobs.iter().find(|mob| mob.id as i32 == victim))
             .flatten();
-        let player = mob
-            .and_then(|mob| self.last_hurt_by_player.get(&mob.id))
-            .copied();
+        let existing_player = self.last_hurt_by_player.get(&(victim as u32)).copied();
+        let existing_player_live =
+            existing_player.is_some_and(|credit| self.resolve_player_credit(credit).is_some());
+        let player = mob.and(existing_player);
         let responsibility = match attacker {
             Some(Who::Player) => attack.player_uuid.map(|uuid| {
                 Some(PlayerCredit(sunrise_client::lan::playerdata::ints_uuid(
@@ -140,6 +157,9 @@ impl Game<'_> {
                 }),
             None => None,
         };
+        let responsibility_live = responsibility
+            .flatten()
+            .is_some_and(|credit| self.resolve_player_credit(credit).is_some());
         let entity = |id| {
             if observed {
                 self.knockback_credit_entity(id)
@@ -176,12 +196,14 @@ impl Game<'_> {
         CreditPlan {
             victim,
             player: player.map(credited_player),
+            existing_player_live,
             previous_mob: previous_mob.unwrap_or_default(),
             attacking_mob: match attacker {
                 Some(Who::Mob(id)) => entity(id as i32),
                 _ => CreditEntity::default(),
             },
             responsibility: responsibility.map(|credit| credit.map(credited_player)),
+            responsibility_live,
             fixed,
         }
     }

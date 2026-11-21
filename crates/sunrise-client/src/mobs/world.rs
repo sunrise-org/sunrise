@@ -671,17 +671,44 @@ impl MobWorld<'_> {
                 creative: p.creative,
                 passenger: p.passenger,
             }),
-            Who::Mob(id) => self.seen(id).map(|s| TargetInfo {
-                position: s.position,
-                eye_y: s.eye_y,
-                bounds: s.bounds,
-                hitbox: s.hitbox,
-                alive: s.alive,
-                can_be_seen_as_enemy: !s.playing_dead,
-                is_player: false,
-                creative: false,
-                passenger: s.passenger,
-            }),
+            Who::Mob(id) => self
+                .seen(id)
+                .map(|s| TargetInfo {
+                    position: s.position,
+                    eye_y: s.eye_y,
+                    bounds: s.bounds,
+                    hitbox: s.hitbox,
+                    alive: s.alive,
+                    can_be_seen_as_enemy: !s.playing_dead,
+                    is_player: false,
+                    creative: false,
+                    passenger: s.passenger,
+                })
+                .or_else(|| {
+                    self.armor_stands.iter().find(|s| s.id == id).map(|s| {
+                        let (width, height, eye) = s.probe_dimensions();
+                        let half = width / 2.0;
+                        let bounds = Aabb::new(
+                            Vec3::new(s.position.x - half, s.position.y, s.position.z - half),
+                            Vec3::new(
+                                s.position.x + half,
+                                s.position.y + height,
+                                s.position.z + half,
+                            ),
+                        );
+                        TargetInfo {
+                            position: s.position,
+                            eye_y: s.position.y + eye,
+                            bounds,
+                            hitbox: bounds,
+                            alive: s.health > 0.0,
+                            can_be_seen_as_enemy: false,
+                            is_player: false,
+                            creative: false,
+                            passenger: false,
+                        }
+                    })
+                }),
         }
     }
     /// The other mobs whose boxes may meet `area` (callers test the boxes),
@@ -987,6 +1014,7 @@ fn run_test_world(
         others,
         live_mobs: None,
         dragon: None,
+        armor_stands: &[],
         leash_boats: &[],
         who_lookup: None,
         others_grid: None,

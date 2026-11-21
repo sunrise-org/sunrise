@@ -560,7 +560,11 @@ impl Game<'_> {
                     super::explosion::ExplosionSource::default()
                         .with_silence(silent)
                         .with_portal_proof(used_portal)
-                        .with_entity(id, "minecraft:tnt"),
+                        .with_entity(
+                            id,
+                            "minecraft:tnt",
+                            sunrise_client::health::DirectEntity::Other,
+                        ),
                 )
             });
             self.combat.blast_owner = None;

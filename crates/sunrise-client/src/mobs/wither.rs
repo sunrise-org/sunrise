@@ -803,7 +803,7 @@ mod upstream_sync_tests {
         let mut m = mob(Species::Wither, 150.0);
         let attack = crate::health::Attack {
             projectile: Some(2),
-            projectile_is_arrow: true,
+            projectile_kind: crate::health::DirectEntity::Arrow,
             ..Default::default()
         };
         assert!(!m.damage(

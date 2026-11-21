@@ -275,6 +275,8 @@ impl Game<'_> {
                     }
                     None => false,
                 };
+                // Warden.hurtServer: anger and target at hurt time, refused hit or not.
+                self.settle_warden_hurt(id);
                 if survived_hit && live_owner.is_some() {
                     self.mob_post_attack(
                         id,
@@ -318,7 +320,12 @@ impl Game<'_> {
                     at,
                     1.0,
                     super::explosion::ExplosionSource::default()
-                        .with_silence(g.entity_silent(p.id)),
+                        .with_silence(g.entity_silent(p.id))
+                        .with_entity(
+                            p.id,
+                            "minecraft:wither_skull",
+                            sunrise_client::health::DirectEntity::Projectile,
+                        ),
                 )
             })
         });

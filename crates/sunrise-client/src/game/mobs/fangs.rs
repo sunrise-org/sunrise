@@ -284,6 +284,8 @@ impl Game<'_> {
                     Some("minecraft:indirect_magic"),
                 );
             }
+            // Warden.hurtServer: anger and target at hurt time, refused hit or not.
+            self.settle_warden_hurt(id);
         }
     }
     /// `EvokerFangsRenderer`: the jaws snapping up and closing.

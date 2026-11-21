@@ -217,6 +217,7 @@ impl Game<'_> {
                     Some(&self.pack.block_registries),
                     &self.damage_hooks,
                 )
+                .with_player_resolver(crate::game::entity::player_resolver!(self))
                 .with_effects(crate::game::entity::hit_effects_of!(
                     self,
                     None,

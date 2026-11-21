@@ -362,6 +362,7 @@ mod tests {
             nearest_player: None,
             others: &[],
             dragon: None,
+            armor_stands: &[],
             leash_boats: &[],
             who_lookup: None,
             others_grid: None,

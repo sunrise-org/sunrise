@@ -882,7 +882,8 @@ impl Game<'_> {
                             if attacker {
                                 m.ai.last_hurt_by
                             } else {
-                                m.ai.target
+                                // `Mob.getTarget`, as brain-backed mobs override it.
+                                sunrise_client::mobs::ai::brain_target(m).unwrap_or(m.ai.target)
                             }
                         })
                         .map(|w| match w {

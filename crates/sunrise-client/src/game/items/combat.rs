@@ -42,6 +42,11 @@ struct PendingAttacker {
 /// `LivingEntity.lastHurtByPlayer`: a reference that survives a disconnect.
 #[derive(Clone, Copy)]
 pub(super) struct PlayerCredit(pub(super) u128);
+impl From<PlayerCredit> for u128 {
+    fn from(credit: PlayerCredit) -> Self {
+        credit.0
+    }
+}
 impl CombatTracker {
     /// `LivingEntity.lastHurtByPlayer`, remembered for 100 ticks (taken, as a
     /// dead player's memory goes with them).

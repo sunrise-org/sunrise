@@ -1548,7 +1548,25 @@ macro_rules! damage_level_of {
     };
 }
 pub(super) use damage_level_of;
+/// `$game`'s [`PlayerResolver`](sunrise_client::health::PlayerResolver) over its
+/// `last_hurt_by_player` records, borrowing only the fields it reads (`Game::acting_uuid`'s).
+macro_rules! player_resolver {
+    ($game:ident) => {
+        sunrise_client::health::PlayerResolver {
+            memory: &$game.last_hurt_by_player,
+            in_place: $game.player.is_some().then(|| {
+                $game
+                    .lan_acting_uuid
+                    .map(sunrise_client::lan::playerdata::uuid_ints)
+                    .or($game.level.player_uuid)
+                    .unwrap_or_default()
+            }),
+            hub: $game.lan.as_ref().map(|lan| &lan.hub),
+        }
+    };
+}
 pub(super) use hit_effects_of;
+pub(super) use player_resolver;
 
 macro_rules! walk_lists {
     (($lists:expr, $entity:ident, $body:block)

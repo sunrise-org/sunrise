@@ -79,6 +79,7 @@ fn a_pearl_feels_the_water_its_box_touches() {
         nearest_player: None,
         others: &[],
         dragon: None,
+        armor_stands: &[],
         leash_boats: &[],
         who_lookup: None,
         others_grid: None,

@@ -77,7 +77,11 @@ impl Game<'_> {
                 false,
                 super::super::explosion::ExplosionSource::default()
                     .with_silence(silent)
-                    .with_entity(c.id, "minecraft:tnt_minecart"),
+                    .with_entity(
+                        c.id,
+                        "minecraft:tnt_minecart",
+                        sunrise_client::health::DirectEntity::Other,
+                    ),
             )
         });
         self.combat.explosion_direct = None;

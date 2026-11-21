@@ -815,7 +815,7 @@ impl Game<'_> {
                         let aim = self.attacker_aim(Some(Who::Player));
                         let mut attack = self.attack_of(attacker as i32);
                         attack.projectile = Some(t.id as i32);
-                        attack.projectile_is_arrow = true;
+                        attack.projectile_kind = sunrise_client::health::DirectEntity::Arrow;
                         Self::set_projectile_weapon(&mut attack, Some(&t.stack));
                         let trident_source = DamageKind::Named(
                             sunrise_client::mobs::NamedDamage::registered(
