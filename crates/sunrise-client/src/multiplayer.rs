@@ -149,6 +149,23 @@ pub enum Screen {
         retry: Option<String>,
         /// Wrapped reason lines, set by the last draw; the buttons sit below them.
         lines: std::cell::Cell<usize>,
+        /// `DisconnectionDetails.report`: the disconnect report the connection's failure
+        /// wrote; Open Report Directory opens its folder.
+        report: Option<PathBuf>,
+        /// `DisconnectionDetails.bugReportLink`: the server's bug report link; Report to
+        /// Server asks before opening it.
+        bug_report_link: Option<String>,
+        /// The screen Back returns to (`createDisconnectScreen`'s callback): the title for a
+        /// connection without `ServerData` (a world's own server), else the server list.
+        to_title: bool,
+    },
+    /// `ConfirmLinkScreen.confirmLink(parent, uri, false)`: Report to Server's question
+    /// about the server's link, over the Disconnected screen it returns to.
+    ConfirmLink {
+        url: String,
+        parent: Box<Screen>,
+        /// Yes, copy and no as last drawn (the layout follows the message's width).
+        buttons: std::cell::Cell<[(f32, f32); 3]>,
     },
 }
 mod page;
@@ -174,6 +191,10 @@ pub enum Outcome {
     /// through `Title::set_mode`, so a mod's `screen_opening` answer is heard
     /// first.
     Open(Box<Screen>),
+    /// `Blaze3D.openUri`, then back to the screen.
+    OpenUri(String, Box<Screen>),
+    /// `ConfirmLinkScreen.copyToClipboard`, then back to the screen.
+    Copy(String, Box<Screen>),
 }
 
 /// The job of [`Screen::buttons`]'s button `id`, for the controller.
@@ -182,12 +203,43 @@ pub fn button_action(id: u8) -> Option<crate::widgets::Action> {
     match id {
         46 => Some(Action::Back),
         50 => Some(Action::Done),
-        51 | 53 | 57 | 59 => Some(Action::Cancel),
+        51 | 53 | 57 | 59 | 65 => Some(Action::Cancel),
         _ => None,
     }
 }
 
+/// `DisconnectionDetails`: why a connection ended, with the report its failure wrote and the
+/// server's bug report link when there are any.
+#[derive(Clone, Debug)]
+pub struct DisconnectionDetails {
+    pub reason: Text,
+    pub report: Option<PathBuf>,
+    pub bug_report_link: Option<String>,
+}
+impl DisconnectionDetails {
+    /// `new DisconnectionDetails(reason)`: no report, no link.
+    pub fn new(reason: Text) -> Self {
+        Self {
+            reason,
+            report: None,
+            bug_report_link: None,
+        }
+    }
+}
+
 impl Screen {
+    /// `new DisconnectedScreen(parent, title, details)`: `to_title` when the parent is the title
+    /// screen (no `ServerData`), else the server list.
+    pub fn disconnected(details: DisconnectionDetails, to_title: bool) -> Self {
+        Self::Disconnected {
+            reason: details.reason,
+            retry: None,
+            lines: std::cell::Cell::new(1),
+            report: details.report,
+            bug_report_link: details.bug_report_link,
+            to_title,
+        }
+    }
     /// The id native mods see for this screen (`ScreenView.id`, the
     /// screen hooks): one per variant, a hook's contract, so it stays the
     /// same from release to release. A new variant must add one.
@@ -201,6 +253,7 @@ impl Screen {
             Self::Friend { .. } => "friends_join",
             Self::Page(form) => form.id(),
             Self::Disconnected { .. } => "disconnected",
+            Self::ConfirmLink { .. } => "confirm_link",
         }
     }
 }
@@ -788,31 +841,47 @@ impl Screen {
                     57,
                 ),
             ],
-            Self::Disconnected { retry, lines, .. } => {
-                let btn = disconnected_layout(h, lines.get(), retry.is_some()).buttons;
-                let mut v = vec![b(
-                    half(w) - 100.0,
-                    btn,
-                    200.0,
-                    &crate::lang::get_or("gui.toMenu", "Back to Server List"),
-                    true,
-                    54,
-                )];
+            Self::Disconnected {
+                retry,
+                lines,
+                report,
+                bug_report_link,
+                ..
+            } => {
+                // DisconnectedScreen.init: Report to Server for a bug report link, Open
+                // Report Directory for a report, then the way back; 24 apart.
+                let details =
+                    usize::from(bug_report_link.is_some()) + usize::from(report.is_some());
+                let mut y = disconnected_layout(h, lines.get(), retry.is_some(), details).buttons;
+                let mut v = Vec::new();
+                let mut push = |key: &str, fallback: &str, id: u8| {
+                    let label = crate::lang::get_or(key, fallback);
+                    v.push(b(half(w) - 100.0, y, 200.0, &label, true, id));
+                    y += 24.0;
+                };
+                if bug_report_link.is_some() {
+                    push("gui.report_to_server", "Report to Server", 61);
+                }
+                if report.is_some() {
+                    push("gui.open_report_dir", "Open Report Directory", 62);
+                }
+                push("gui.toMenu", "Back to Server List", 54);
                 if retry.is_some() {
-                    v.push(b(
-                        half(w) - 100.0,
-                        btn + 24.0,
-                        200.0,
-                        &crate::lang::get_or(
-                            "sunrise.multiplayer.cancel_reconnecting",
-                            "Cancel Reconnecting",
-                        ),
-                        true,
+                    push(
+                        "sunrise.multiplayer.cancel_reconnecting",
+                        "Cancel Reconnecting",
                         55,
-                    ));
+                    );
                 }
                 v
             }
+            Self::ConfirmLink { buttons, .. } => buttons
+                .get()
+                .into_iter()
+                .zip(crate::confirm_screen::link_labels(false))
+                .zip(63..)
+                .map(|(((x, y), key), id)| b(x, y, 100.0, &crate::lang::get_or(key, key), true, id))
+                .collect(),
         }
     }
     /// An EditBox and its label: the label at `label_y` (one pixel in, in
@@ -901,6 +970,17 @@ impl Screen {
                 join(&[
                     &get("disconnect.lost", "Connection Lost"),
                     &reason_plain(reason),
+                ]),
+            ),
+            // ConfirmLinkScreen: its title and the link.
+            Self::ConfirmLink { url, .. } => ScreenInfo::new(
+                "multiplayer/confirm_link",
+                join(&[
+                    &get(
+                        "chat.link.confirm",
+                        "Are you sure you want to open the following website?",
+                    ),
+                    url,
                 ]),
             ),
         }
@@ -1391,13 +1471,18 @@ impl Screen {
                 reason,
                 retry,
                 lines,
+                report,
+                bug_report_link,
+                ..
             } => {
                 // DisconnectedScreen: the reason wraps to width - 50, rendered in the language
                 // the player has now, not the one it was resolved in.
                 let reason = reason_plain(reason);
                 let wrapped = wrap(&reason, (w.ceil() - 50.0).max(1.0), atlas);
                 lines.set(wrapped.len());
-                let l = disconnected_layout(h, wrapped.len(), retry.is_some());
+                let details =
+                    usize::from(bug_report_link.is_some()) + usize::from(report.is_some());
+                let l = disconnected_layout(h, wrapped.len(), retry.is_some(), details);
                 centered(
                     batch,
                     &crate::lang::get_or("disconnect.lost", "Connection Lost"),
@@ -1409,6 +1494,15 @@ impl Screen {
                 }
                 if let Some(line) = retry {
                     centered(batch, line, l.retry, rgba(170, 170, 170, 255));
+                }
+            }
+            Self::ConfirmLink { url, buttons, .. } => {
+                let layout = crate::confirm_screen::link_layout(&atlas.font, (w, h), url, false);
+                for (line, x, y) in &layout.lines {
+                    batch.text_styled(atlas, line, *x, *y, u32::MAX, true);
+                }
+                if let [yes, copy, no] = layout.buttons[..] {
+                    buttons.set([yes, copy, no]);
                 }
             }
         }
@@ -1669,6 +1763,8 @@ impl Screen {
                 },
                 Some(57),
             ) => return Outcome::Back,
+            // DisconnectedScreen's back button: `setScreen(parent)`.
+            (Self::Disconnected { to_title: true, .. }, Some(54)) => return Outcome::Back,
             (
                 Self::Edit { .. }
                 | Self::Direct { .. }
@@ -1677,6 +1773,44 @@ impl Screen {
                 Some(51 | 53 | 54 | 57),
             ) => return Outcome::Open(Box::new(Self::list(saves))),
             (Self::Disconnected { retry, .. }, Some(55)) => *retry = None,
+            (
+                Self::Disconnected {
+                    bug_report_link: Some(url),
+                    ..
+                },
+                Some(61),
+            ) => {
+                // ConfirmLinkScreen.confirmLink(this, bugReportLink, false).
+                let url = url.clone();
+                return Outcome::Open(Box::new(Self::ConfirmLink {
+                    url,
+                    parent: Box::new(self.clone()),
+                    buttons: Default::default(),
+                }));
+            }
+            (
+                Self::Disconnected {
+                    report: Some(report),
+                    ..
+                },
+                Some(62),
+            ) => {
+                // Blaze3D.openPath(report.getParent()).
+                if let Some(dir) = report.parent()
+                    && let Err(e) = crate::desktop::open_path(dir)
+                {
+                    log::warn!("could not open {}: {e}", dir.display());
+                }
+            }
+            // ConfirmLinkScreen's callback: yes opens the link, copy copies it and answers
+            // no; each returns to the screen that asked.
+            (Self::ConfirmLink { url, parent, .. }, Some(id @ 63..=65)) => {
+                return match id {
+                    63 => Outcome::OpenUri(url.clone(), parent.clone()),
+                    64 => Outcome::Copy(url.clone(), parent.clone()),
+                    _ => Outcome::Open(parent.clone()),
+                };
+            }
             (Self::Direct { address }, Some(52)) => {
                 let address = direct_address(address);
                 remember_direct_join(saves, &address);
@@ -1974,6 +2108,18 @@ impl Screen {
         if let Self::Page(form) = self {
             return form.tab_dir(reverse, buttons, button);
         }
+        // DisconnectedScreen and ConfirmLinkScreen: Tab steps through their buttons, wrapping.
+        if matches!(self, Self::Disconnected { .. } | Self::ConfirmLink { .. }) {
+            let at = button.and_then(|id| buttons.iter().position(|&b| b == id));
+            let next = match (at, reverse) {
+                (Some(i), false) => (i + 1) % buttons.len().max(1),
+                (Some(i), true) => (i + buttons.len() - 1) % buttons.len().max(1),
+                (None, false) => 0,
+                (None, true) => buttons.len().saturating_sub(1),
+            };
+            *button = buttons.get(next).copied();
+            return;
+        }
         let (Self::Edit { focus, .. } | Self::Friend { focus, .. }) = self else {
             return;
         };
@@ -2006,6 +2152,9 @@ impl Screen {
             } => Outcome::Back,
             // ConfirmScreen.keyPressed: Escape answers no.
             Self::ConfirmDelete { list, .. } => Outcome::Open(list.clone()),
+            Self::ConfirmLink { parent, .. } => Outcome::Open(parent.clone()),
+            // DisconnectedScreen.shouldCloseOnEsc: false.
+            Self::Disconnected { .. } => Outcome::None,
             _ => Outcome::Open(Box::new(Self::list(saves))),
         }
     }
@@ -2050,11 +2199,12 @@ struct DisconnectedLayout {
 }
 /// `DisconnectedScreen.init`: a vertical layout centred on the screen. The
 /// title and message cells pad 10 on each side, the buttons 2; the message
-/// is `lines` rows of 9, so the buttons always sit below it.
-fn disconnected_layout(h: f32, lines: usize, retry: bool) -> DisconnectedLayout {
+/// is `lines` rows of 9, so the buttons always sit below it. `details`: the
+/// Report to Server and Open Report Directory buttons above the way back.
+fn disconnected_layout(h: f32, lines: usize, retry: bool, details: usize) -> DisconnectedLayout {
     let message_h = lines as f32 * 9.0 + 20.0;
     let retry_h = if retry { 13.0 } else { 0.0 };
-    let buttons = if retry { 48.0 } else { 24.0 };
+    let buttons = 24.0 * (1 + details + usize::from(retry)) as f32;
     let top = half(h - (29.0 + message_h + retry_h + buttons));
     DisconnectedLayout {
         title: top + 10.0,
@@ -2346,16 +2496,112 @@ mod tests {
             reason: Text::empty(),
             retry: None,
             lines: std::cell::Cell::new(1),
+            report: None,
+            bug_report_link: None,
+            to_title: false,
         };
         assert_eq!(at(&lost, 427.0, 253.0), [(113.0, 145.0)]);
         // Taller messages push the button down instead of under the text.
-        let l1 = disconnected_layout(253.0, 1, false);
-        let l6 = disconnected_layout(253.0, 6, false);
+        let l1 = disconnected_layout(253.0, 1, false, 0);
+        let l6 = disconnected_layout(253.0, 6, false, 0);
         assert!(l6.buttons >= l6.message + 6.0 * 9.0);
         assert!(l1.buttons >= l1.message + 9.0);
         // centeredText: `width / 2 - font.width(text) / 2`.
         assert_eq!(centered_x(427.0, 85.0), 171.0);
         assert_eq!(centered_x(320.0, 84.0), 118.0);
+    }
+
+    #[test]
+    fn disconnection_details_add_vanillas_buttons_and_report_asks_before_the_link() {
+        // DisconnectedScreen.init at 427x253 with a one-line reason: a 29-pixel title cell
+        // and message cell, then Report to Server, Open Report Directory and Back to Server
+        // List, each 20 high with 2 above and below, the column centred.
+        let saves = Path::new("unused-saves");
+        let mut lost = Screen::disconnected(
+            DisconnectionDetails {
+                reason: Text::empty(),
+                report: Some(PathBuf::from(
+                    "debug/disconnect-2026-11-21_12.00.00-client.txt",
+                )),
+                bug_report_link: Some("https://example.net/bugs".into()),
+            },
+            false,
+        );
+        let rows: Vec<(f32, f32, u8)> = lost
+            .buttons(427.0, 253.0)
+            .iter()
+            .map(|b| (b.0, b.1, b.5))
+            .collect();
+        assert_eq!(
+            rows,
+            [(113.0, 121.0, 61), (113.0, 145.0, 62), (113.0, 169.0, 54)]
+        );
+        // Report to Server: ConfirmLinkScreen over the Disconnected screen; its yes opens
+        // the link and goes back to the screen that asked.
+        let Outcome::Open(confirm) = lost.click(Some(61), 0.0, 0.0, (427.0, 253.0), saves) else {
+            panic!("Report to Server opens ConfirmLinkScreen");
+        };
+        let mut confirm = *confirm;
+        assert_eq!(confirm.id(), "confirm_link");
+        match confirm.click(Some(63), 0.0, 0.0, (427.0, 253.0), saves) {
+            Outcome::OpenUri(url, back) => {
+                assert_eq!(url, "https://example.net/bugs");
+                assert_eq!(back.id(), "disconnected");
+            }
+            _ => panic!("yes opens the link"),
+        }
+    }
+
+    #[test]
+    fn the_disconnected_screen_keeps_vanillas_keyboard_and_way_back() {
+        let saves = Path::new("unused-saves");
+        let size = (427.0, 253.0);
+        let lost = |to_title| {
+            Screen::disconnected(
+                DisconnectionDetails {
+                    reason: Text::empty(),
+                    report: None,
+                    bug_report_link: Some("https://example.net/bugs".into()),
+                },
+                to_title,
+            )
+        };
+        // Tab walks Report to Server, then Back, and wraps; Shift+Tab walks back.
+        let mut screen = lost(false);
+        let ids: Vec<u8> = screen.buttons(size.0, size.1).iter().map(|b| b.5).collect();
+        assert_eq!(ids, [61, 54]);
+        let mut focus = None;
+        let mut walk = |reverse| {
+            screen.tab_dir(reverse, &ids, &mut focus);
+            focus
+        };
+        assert_eq!(
+            [walk(false), walk(false), walk(false)],
+            [Some(61), Some(54), Some(61)]
+        );
+        assert_eq!(walk(true), Some(54));
+        // shouldCloseOnEsc is false; Back goes to the parent createDisconnectScreen chose.
+        assert!(matches!(lost(false).escape(saves), Outcome::None));
+        assert!(matches!(
+            lost(false).click(Some(54), 0.0, 0.0, size, saves),
+            Outcome::Open(list) if list.id() == "multiplayer"
+        ));
+        assert!(matches!(
+            lost(true).click(Some(54), 0.0, 0.0, size, saves),
+            Outcome::Back
+        ));
+        // ConfirmLinkScreen's No, and Escape, return to the Disconnected screen.
+        let Outcome::Open(confirm) = lost(true).click(Some(61), 0.0, 0.0, size, saves) else {
+            panic!("Report to Server opens ConfirmLinkScreen");
+        };
+        assert!(
+            matches!(confirm.escape(saves), Outcome::Open(back) if back.id() == "disconnected")
+        );
+        let mut confirm = *confirm;
+        assert!(matches!(
+            confirm.click(Some(65), 0.0, 0.0, size, saves),
+            Outcome::Open(back) if back.id() == "disconnected"
+        ));
     }
 
     #[test]
@@ -2872,6 +3118,9 @@ mod tests {
                 reason: Text::translate("mymod.kicked", &[]),
                 retry: None,
                 lines: std::cell::Cell::new(1),
+                report: None,
+                bug_report_link: None,
+                to_title: false,
             };
             assert_eq!(
                 translated.narration().title,
@@ -2881,6 +3130,9 @@ mod tests {
                 reason: Text::literal("You were kicked"),
                 retry: None,
                 lines: std::cell::Cell::new(1),
+                report: None,
+                bug_report_link: None,
+                to_title: false,
             };
             assert_eq!(plain.narration().title, "Connexion perdue. You were kicked");
         });
@@ -2913,6 +3165,9 @@ mod tests {
                 reason,
                 retry: None,
                 lines: std::cell::Cell::new(1),
+                report: None,
+                bug_report_link: None,
+                to_title: false,
             }
         });
         let ((), _missed) = crate::lang::scoped(english, || {

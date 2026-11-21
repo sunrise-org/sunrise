@@ -679,9 +679,46 @@ impl Game<'_> {
         )))
     }
 
+    /// `ClientCommonPacketListenerImpl.createDisconnectionInfo`: a configuration or play
+    /// connection that failed with `fault` keeps its report and the server's bug report link.
+    pub(in crate::game) fn disconnection_info(
+        &self,
+        reason: Text,
+        fault: &str,
+    ) -> sunrise_client::multiplayer::DisconnectionDetails {
+        // ClientCommonPacketListenerImpl.fillListenerSpecificCrashDetails: the brand a server
+        // never sent is Java's null.
+        let connection = self.remote.as_ref().map(|r| {
+            let mut details = r.session.crash_details();
+            let brand = if r.brand.is_empty() {
+                "~~NULL~~"
+            } else {
+                r.brand.as_str()
+            };
+            details.push(("Server brand".into(), brand.into()));
+            details
+        });
+        // Minecraft.gameDirectory, also with a separate player folder.
+        let game_dir = std::env::current_dir().ok();
+        disconnection_details(
+            game_dir.as_deref(),
+            reason,
+            fault,
+            connection.unwrap_or_default(),
+            self.server_links(),
+        )
+    }
     /// Disconnect and return to the multiplayer screen (DisconnectedScreen).
     pub(in crate::game) fn leave_server(&mut self, reason: Option<Text>) -> Result<()> {
-        if reason.is_none() && self.integrated.as_ref().is_some_and(|s| !s.stopped()) {
+        self.leave_server_with(reason.map(sunrise_client::multiplayer::DisconnectionDetails::new))
+    }
+    /// [`Game::leave_server`] with the whole `DisconnectionDetails`: a failed connection's
+    /// report and the server's bug report link go to the Disconnected screen's buttons.
+    pub(in crate::game) fn leave_server_with(
+        &mut self,
+        details: Option<sunrise_client::multiplayer::DisconnectionDetails>,
+    ) -> Result<()> {
+        if details.is_none() && self.integrated.as_ref().is_some_and(|s| !s.stopped()) {
             return self.begin_closing_save(false);
         }
         self.client_logging_out();
@@ -689,13 +726,14 @@ impl Game<'_> {
         // The one boundary every network session passes when it closes here: the player leaving,
         // or this client ending it with a reason (a raw disconnect closed it already, with the
         // connection's or the server's).
-        match &reason {
+        match &details {
             None => self.connection_left(sunrise_hooks::connection::Left::Disconnected),
-            Some(reason) => self.connection_ended(
-                &reason.plain(),
-                reason.translation_key(),
-                sunrise_hooks::connection::By::Client,
-            ),
+            Some(sunrise_client::multiplayer::DisconnectionDetails { reason, .. }) => self
+                .connection_ended(
+                    &reason.plain(),
+                    reason.translation_key(),
+                    sunrise_hooks::connection::By::Client,
+                ),
         }
         self.clear_waypoints();
         self.hud_disconnected();
@@ -790,17 +828,16 @@ impl Game<'_> {
             .with_user(|| self.options.player_name());
         title.last_server = self.settings.file.string("lastServer");
         title.skip_multiplayer_warning = self.settings.file.bool("skipMultiplayerWarning");
-        if single_player && reason.is_none() {
+        if single_player && details.is_none() {
             self.show_title(title);
             self.capture(false);
             return Ok(());
         }
-        title.mode = sunrise_client::title::Mode::Multiplayer(match reason {
-            Some(reason) => sunrise_client::multiplayer::Screen::Disconnected {
-                reason,
-                retry: None,
-                lines: std::cell::Cell::new(1),
-            },
+        title.mode = sunrise_client::title::Mode::Multiplayer(match details {
+            // createDisconnectScreen: a world's own server has no ServerData, so Back goes to the title.
+            Some(details) => {
+                sunrise_client::multiplayer::Screen::disconnected(details, single_player)
+            }
             None => sunrise_client::multiplayer::Screen::list(&saves),
         });
         self.show_title(title);
@@ -978,5 +1015,112 @@ impl Game<'_> {
             self.initialize_entity(Holder::Player(profile), "minecraft:player");
         }
         self.finish_remote_level();
+    }
+}
+
+/// `createDisconnectionInfo`'s three parts: the reason, the report `storeDisconnectionReport`
+/// saves in `game_dir`'s `debug/`, and `findKnownType(BUG_REPORT)` of the server's links. A report
+/// that could not be saved leaves only its own button out.
+fn disconnection_details(
+    game_dir: Option<&std::path::Path>,
+    reason: Text,
+    fault: &str,
+    connection: Vec<(String, String)>,
+    links: &[sunrise_protocol::packets::configuration::ServerLink],
+) -> sunrise_client::multiplayer::DisconnectionDetails {
+    let bug_report_link = crate::game::server_links::bug_report_link(links);
+    sunrise_client::multiplayer::DisconnectionDetails {
+        reason,
+        report: game_dir
+            .and_then(|dir| store_disconnection_report(dir, fault, connection, bug_report_link)),
+        bug_report_link: bug_report_link.map(str::to_owned),
+    }
+}
+
+/// `ClientCommonPacketListenerImpl.storeDisconnectionReport`: a network protocol error report
+/// in `game_dir`'s `debug/`, naming the server's bug report link when it sent one.
+fn store_disconnection_report(
+    game_dir: &std::path::Path,
+    fault: &str,
+    connection: Vec<(String, String)>,
+    bug_report_link: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    use sunrise_client::crash;
+    let report = crash::packet_error_report("client", fault.to_owned(), connection);
+    let file =
+        game_dir
+            .join("debug")
+            .join(crash::stamped_name("disconnect", &report.time, "client"));
+    let extra: Vec<String> = bug_report_link
+        .map(|link| format!("Server bug reporting link: {link}"))
+        .into_iter()
+        .collect();
+    match report.save_as(&file, &crash::NETWORK_PROTOCOL_ERROR, &extra) {
+        Ok(()) => Some(file),
+        Err(e) => {
+            log::warn!(
+                "could not save the disconnect report {}: {e}",
+                file.display()
+            );
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod disconnection_tests {
+    use super::*;
+    use sunrise_protocol::packets::configuration::{ServerLink, ServerLinkKind};
+
+    fn bug_link() -> Vec<ServerLink> {
+        vec![ServerLink {
+            kind: ServerLinkKind::Known(0),
+            link: "https://example.net/bugs".into(),
+        }]
+    }
+
+    #[test]
+    fn a_failed_connection_saves_its_report_beside_the_bug_link() {
+        let dir = std::env::temp_dir().join(format!("sunrise-disconnect-{}", std::process::id()));
+        let connection = vec![("Protocol".to_owned(), "play".to_owned())];
+        let details = disconnection_details(
+            Some(&dir),
+            Text::literal("Internal Exception: reset"),
+            "reset",
+            connection,
+            &bug_link(),
+        );
+        let report = details.report.expect("the report is saved");
+        assert!(report.starts_with(dir.join("debug")));
+        let text = std::fs::read_to_string(&report).unwrap();
+        assert!(text.starts_with("---- Minecraft Network Protocol Error Report ----\n"));
+        assert!(text.contains("// Server bug reporting link: https://example.net/bugs\n"));
+        assert!(text.contains("-- Connection --\nDetails:\n\tProtocol: play\n"));
+        assert!(!text.contains("log lines"));
+        assert_eq!(
+            details.bug_report_link.as_deref(),
+            Some("https://example.net/bugs")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_report_that_cannot_be_saved_keeps_the_bug_link() {
+        // debug/ can't be made under a plain file: Open Report Directory goes, Report to Server stays.
+        let file = std::env::temp_dir().join(format!("sunrise-not-a-dir-{}", std::process::id()));
+        std::fs::write(&file, b"").unwrap();
+        let details = disconnection_details(
+            Some(&file),
+            Text::literal("Internal Exception: reset"),
+            "reset",
+            Vec::new(),
+            &bug_link(),
+        );
+        assert_eq!(details.report, None);
+        assert_eq!(
+            details.bug_report_link.as_deref(),
+            Some("https://example.net/bugs")
+        );
+        std::fs::remove_file(&file).unwrap();
     }
 }

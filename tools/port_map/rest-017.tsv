@@ -45,7 +45,7 @@ DedicatedServer.setGameMode	port	crates/sunrise-client/src/game/network/lan/mod.
 DedicatedServer.setAcceptsTransfers	port	crates/sunrise-client/src/game/interface/dedicated/mod.rs::Game::set_accepts_transfers	the live handshake check of the listener and accepts-transfers in server.properties, through management
 DedicatedServer.setPauseWhenEmptySeconds	port	crates/sunrise-client/src/game/interface/dedicated/mod.rs::Game::set_pause_when_empty_seconds	live empty-server pause timer and server.properties pause-when-empty-seconds via the management protocol
 DedicatedServer.createServerLinks	inline	crates/sunrise-client/src/game/interface/dedicated/mod.rs::Game::run_dedicated	builds the bug-report server link from bug-report-link (dedicated.rs 636-646)
-DedicatedServer.parseBugReportLink	port	crates/sunrise-client/src/game/network/server_links.rs::valid_untrusted_uri	a yes or no check of the link; the caller builds the link in run_dedicated
+DedicatedServer.parseBugReportLink	port	crates/sunrise-core/src/text.rs::untrusted_http_url	a yes or no check of the link (java.net.URI syntax, http or https); the caller builds the link in run_dedicated
 DedicatedServerProperties.getDatapackConfig	inline	crates/sunrise-server-files/src/properties.rs::ServerProperties::new	splits initial-enabled-packs and initial-disabled-packs
 DedicatedServerProperties.deserializePermission	port	crates/sunrise-server-files/src/properties.rs::Reader::permission	gap: minor: numbers clamp to 0 to 4; PermissionLevel.byId is not compared
 DedicatedServerProperties.WorldDimensionData.create	port	crates/sunrise-client/src/game/interface/dedicated/mod.rs::Game::write_world_gen	gap: minor: only the preset pick by level-type is mapped; the flat-settings replacement is not compared

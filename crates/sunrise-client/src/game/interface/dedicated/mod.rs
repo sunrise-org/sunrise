@@ -1128,7 +1128,7 @@ impl Game<'_> {
             ),
             server_links: if props.bug_report_link.is_empty() {
                 Vec::new()
-            } else if super::server_links::valid_untrusted_uri(&props.bug_report_link) {
+            } else if sunrise_client::component::untrusted_http_url(&props.bug_report_link) {
                 vec![sunrise_protocol::packets::configuration::ServerLink {
                     kind: sunrise_protocol::packets::configuration::ServerLinkKind::Known(0),
                     link: props.bug_report_link.clone(),

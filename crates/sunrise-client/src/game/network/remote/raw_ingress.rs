@@ -6,6 +6,7 @@ fn local_transfer_notice() -> Event {
         reason: sunrise_client::lang::get("disconnect.transfer"),
         key: Some("disconnect.transfer".into()),
         from_server: true,
+        fault: None,
     }
 }
 
@@ -467,6 +468,7 @@ impl Game<'_> {
             reason,
             key,
             from_server,
+            fault,
         } = event
         else {
             unreachable!("listener only retains the disconnect notice");
@@ -479,6 +481,11 @@ impl Game<'_> {
             sunrise_hooks::connection::By::Connection
         };
         self.connection_ended(&reason, key.as_deref(), by);
-        self.leave_server(Some(Text::literal(reason)))
+        let reason = Text::literal(reason);
+        let details = match fault {
+            Some(fault) => self.disconnection_info(reason, &fault),
+            None => sunrise_client::multiplayer::DisconnectionDetails::new(reason),
+        };
+        self.leave_server_with(Some(details))
     }
 }

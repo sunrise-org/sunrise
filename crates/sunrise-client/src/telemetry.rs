@@ -329,6 +329,7 @@ mod tests {
                 ("Resource Packs".into(), "Ana's pack".into()),
             ],
             log: vec!["[CHAT] <Ana> hi".into()],
+            categories: Vec::new(),
         }
     }
 

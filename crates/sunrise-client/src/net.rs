@@ -163,6 +163,10 @@ pub enum Event {
         /// The reason's translation key, when it had one.
         key: Option<String>,
         from_server: bool,
+        /// The error a configuration or play connection failed with
+        /// (`ClientCommonPacketListenerImpl.createDisconnectionInfo`'s cause):
+        /// the game writes its disconnect report.
+        fault: Option<String>,
     },
 }
 
@@ -254,7 +258,11 @@ impl Event {
                 reason,
                 key,
                 from_server: _,
-            } => reason.capacity().saturating_add(key.owned_heap_bytes()),
+                fault,
+            } => reason
+                .capacity()
+                .saturating_add(key.owned_heap_bytes())
+                .saturating_add(fault.owned_heap_bytes()),
         };
         owned.saturating_add(Self::INGRESS_RECORD_OVERHEAD)
     }
@@ -283,6 +291,8 @@ pub struct Session {
     pings: PingSamples,
     /// This connection's number, new for each one ([`Session::serial`]).
     serial: u64,
+    /// Joined from the LAN list (`ServerData.Type.LAN`).
+    lan: bool,
 }
 /// The next [`Session::serial`].
 static NEXT_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -294,6 +304,27 @@ use std::path::PathBuf;
 impl Session {
     /// A number of its own for each connection, never 0: entity ids are per connection, so what
     /// is kept by id goes when it changes.
+    /// `PacketListener.fillCrashReport`'s connection details: `Protocol`, `Flow`, `Is Local`
+    /// and `Server type` (`<none>` for a world's own server, which has no `ServerData`).
+    pub fn crash_details(&self) -> Vec<(String, String)> {
+        let local = self.address == "local";
+        let protocol = if self.configuring.load(Ordering::Acquire) {
+            "configuration"
+        } else {
+            "play"
+        };
+        let server_type = match (local, self.lan) {
+            (true, _) => "<none>",
+            (false, true) => "LAN",
+            (false, false) => "OTHER",
+        };
+        vec![
+            ("Protocol".into(), protocol.into()),
+            ("Flow".into(), "CLIENTBOUND".into()),
+            ("Is Local".into(), local.to_string()),
+            ("Server type".into(), server_type.into()),
+        ]
+    }
     pub fn serial(&self) -> u64 {
         self.serial
     }
@@ -389,6 +420,7 @@ impl Session {
             recorder: Arc::new(Mutex::new(None)),
             pings: Arc::default(),
             serial: next_serial(),
+            lan: false,
         }
     }
     fn start(
@@ -453,7 +485,7 @@ impl Session {
             // The physical close is immediate. Session::disconnect retires
             // the payload epoch when main drops the listener, so a bundle
             // already in its member loop still has its handler table.
-            report_connection_end(result, &thread_writer, &send);
+            report_connection_end(result, &thread_writer, &lang, &send);
             thread_far.cancel();
         })
         .inspect_err(|error| {
@@ -462,6 +494,7 @@ impl Session {
                 reason: format!("network thread: {error}"),
                 key: None,
                 from_server: false,
+                fault: None,
             });
         })
         .ok();
@@ -482,6 +515,7 @@ impl Session {
             recorder,
             pings,
             serial: next_serial(),
+            lan,
         }
     }
     /// Validate an untrusted mod packet once, reserve its physical writer credit,
@@ -849,6 +883,9 @@ pub struct Reason {
     pub text: String,
     pub key: Option<String>,
     from_server: bool,
+    /// The error behind a configuration or play connection's
+    /// `disconnect.genericReason` ([`Reason::lost`]).
+    fault: Option<String>,
 }
 impl Reason {
     fn ended(self, from_server: bool) -> Event {
@@ -856,6 +893,7 @@ impl Reason {
             reason: self.text,
             key: self.key,
             from_server,
+            fault: self.fault,
         }
     }
     fn plain(text: impl Into<String>) -> Self {
@@ -863,6 +901,17 @@ impl Reason {
             text: text.into(),
             key: None,
             from_server: false,
+            fault: None,
+        }
+    }
+    /// A configuration or play connection that failed: `Connection.exceptionCaught` asks
+    /// `ClientCommonPacketListenerImpl.createDisconnectionInfo`, which keeps the cause for the
+    /// disconnect report. A timeout or a closed stream has none.
+    fn lost(e: sunrise_protocol::Error, lang: &Language) -> Self {
+        let fault = (!e.is_timed_out() && !e.is_end_of_stream()).then(|| e.to_string());
+        Self {
+            fault,
+            ..Self::plain(connection_lost(e, lang))
         }
     }
     /// A vanilla key's text in the session's language, with the key.
@@ -871,6 +920,7 @@ impl Reason {
             text: tr(lang, key),
             key: Some(key.to_owned()),
             from_server: false,
+            fault: None,
         }
     }
     /// A Sunrise key's text with a `%s` argument filled.
@@ -888,6 +938,7 @@ impl Reason {
                 text: json_text(&v, lang),
                 key: v["translate"].as_str().map(str::to_owned),
                 from_server: true,
+                fault: None,
             },
             Err(_) => Self::plain(reason_json),
         }
@@ -908,6 +959,7 @@ impl Reason {
             text: plain(tag, lang),
             key,
             from_server: true,
+            fault: None,
         }
     }
 }
@@ -1100,6 +1152,7 @@ fn run(
                                     ),
                                     key,
                                     from_server: false,
+                                    fault: None,
                                 }
                             })
                         });
@@ -1202,21 +1255,40 @@ fn run(
 fn report_connection_end(
     result: Result<Reason, Reason>,
     writer: &Mutex<Option<QueuedWriter>>,
+    lang: &Language,
     events: &ingress::Producer<Event>,
 ) {
-    let (why, from_server) = match result {
-        Ok(why) => (why, true),
-        Err(why) => {
-            let from_server = why.from_server;
-            (why, from_server)
-        }
-    };
-    if let Some(w) = writer.lock().unwrap().take()
+    let writer = writer.lock().unwrap().take();
+    let failure = writer.as_ref().and_then(QueuedWriter::failure);
+    let (why, from_server) = connection_end(result, failure, lang);
+    if let Some(w) = writer
         && !w.is_terminal()
     {
         w.shutdown();
     }
     let _ = events.send_terminal(why.ended(from_server));
+}
+
+/// Why the connection ended and whether the server said so. `Connection.exceptionCaught`: a write
+/// that failed first (`failure`) is the cause; the reader's end of stream or the "writer
+/// disconnected" it caused is not. A server's reason, or a failure the reader already named, stays.
+fn connection_end(
+    result: Result<Reason, Reason>,
+    failure: Option<sunrise_protocol::Error>,
+    lang: &Language,
+) -> (Reason, bool) {
+    match result {
+        Ok(why) => (why, true),
+        Err(why) => match failure {
+            Some(failure) if !why.from_server && why.fault.is_none() => {
+                (Reason::lost(failure, lang), false)
+            }
+            _ => {
+                let from_server = why.from_server;
+                (why, from_server)
+            }
+        },
+    }
 }
 
 /// `Connection.setupOutboundProtocol`, run by the ordered main phase task.
@@ -1482,9 +1554,7 @@ fn receive_play(
     let mut io = new_listener();
     let mut bundle = PlayBundle::default();
     loop {
-        let (id, payload) = reader
-            .recv()
-            .map_err(|e| Reason::plain(connection_lost(e, lang)))?;
+        let (id, payload) = reader.recv().map_err(|e| Reason::lost(e, lang))?;
         let packet = match play::Clientbound::decode_with_payload_codecs(
             id,
             &payload,
@@ -1567,7 +1637,7 @@ fn receive_play(
                 ready
                     .recv()
                     .map_err(|_| Reason::plain("Disconnected"))?
-                    .map_err(|error| Reason::plain(connection_lost(error, lang)))?;
+                    .map_err(|error| Reason::lost(error, lang))?;
                 let registries = configure(
                     reader,
                     shared_writer,
@@ -1679,7 +1749,7 @@ fn configure(
             Some(w) => p
                 .try_encode_with_payload_codecs(&payloads.local.codecs)
                 .and_then(|body| w.send(&body))
-                .map_err(|e| Reason::plain(connection_lost(e, lang))),
+                .map_err(|e| Reason::lost(e, lang)),
             None => Err(Reason::plain("Disconnected")),
         }
     };
@@ -1687,12 +1757,10 @@ fn configure(
     // named itself Sunrise by brand: a vanilla server is sent what vanilla's client sends,
     // whatever mods are installed.
     loop {
-        let (id, payload) = reader
-            .recv()
-            .map_err(|e| Reason::plain(connection_lost(e, lang)))?;
+        let (id, payload) = reader.recv().map_err(|e| Reason::lost(e, lang))?;
         let packet =
             cfg::Clientbound::decode_with_payload_codecs(id, &payload, &payloads.local.codecs)
-                .map_err(|e| Reason::plain(connection_lost(e, lang)))?;
+                .map_err(|e| Reason::lost(e, lang))?;
         if !io.accepts_packets() {
             continue;
         }
@@ -2887,6 +2955,38 @@ mod tests {
     }
 
     #[test]
+    fn only_a_failed_connection_carries_its_cause_to_the_report() {
+        // Connection.exceptionCaught: a failure other than a timeout reaches
+        // createDisconnectionInfo (the report); channelInactive, a timeout or the
+        // server's own reason end with the reason alone.
+        let lang = disconnect_language();
+        let reset = || sunrise_protocol::Error::new("Connection reset by peer");
+        let end = |result, failure| connection_end(result, failure, &lang);
+        let (why, by_server) = end(Err(Reason::lost(reset(), &lang)), None);
+        assert_eq!(why.fault.as_deref(), Some("Connection reset by peer"));
+        assert!(!by_server);
+        for quiet in [
+            sunrise_protocol::Error::timed_out(),
+            sunrise_protocol::Error::end_of_stream(),
+        ] {
+            assert_eq!(end(Err(Reason::lost(quiet, &lang)), None).0.fault, None);
+        }
+        // A write that failed first: the reader then only saw the stream end.
+        let eof = Reason::lost(sunrise_protocol::Error::end_of_stream(), &lang);
+        let (why, by_server) = end(Err(eof), Some(reset()));
+        assert_eq!(why.fault.as_deref(), Some("Connection reset by peer"));
+        assert_eq!(why.text, "Internal Exception: Connection reset by peer");
+        assert!(!by_server);
+        // The server's own reason is not a failure, whatever the writer saw after it.
+        let kicked = Reason::component(r#"{"text":"Kicked"}"#, &lang);
+        let (why, by_server) = end(Ok(kicked), Some(reset()));
+        assert_eq!(
+            (why.text.as_str(), why.fault, by_server),
+            ("Kicked", None, true)
+        );
+    }
+
+    #[test]
     fn lost_connections_read_like_vanillas_disconnect_reasons() {
         let lang = disconnect_language();
         let lost = |e| connection_lost(e, &lang);
@@ -3199,6 +3299,7 @@ mod tests {
                 recorder: Arc::new(Mutex::new(None)),
                 pings: Arc::default(),
                 serial: next_serial(),
+                lan: false,
             };
             let started = std::time::Instant::now();
             if explicit_disconnect {
@@ -3329,6 +3430,7 @@ mod tests {
             recorder: Arc::new(Mutex::new(None)),
             pings: Arc::default(),
             serial: next_serial(),
+            lan: false,
         };
         let (configuring, cookies) = (session.configuring.clone(), session.cookies.clone());
         let thread = std::thread::spawn(move || {
@@ -3345,7 +3447,7 @@ mod tests {
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
             );
-            report_connection_end(result, &writer, &send);
+            report_connection_end(result, &writer, &Language::new(), &send);
         });
         let server = Connection::local(server);
         server
@@ -3820,6 +3922,7 @@ mod tests {
             recorder: Arc::new(Mutex::new(None)),
             pings: Arc::default(),
             serial: next_serial(),
+            lan: false,
         };
         let mut server = Connection::local(server);
         let payload = |size| {
@@ -3881,6 +3984,7 @@ mod tests {
             recorder: Arc::new(Mutex::new(None)),
             pings: Arc::default(),
             serial: next_serial(),
+            lan: false,
         };
         let (thread_writer, thread_configuring, thread_recorder) = (
             session.writer.clone(),
@@ -4170,6 +4274,7 @@ mod tests {
             recorder: Arc::new(Mutex::new(None)),
             pings: Arc::default(),
             serial: next_serial(),
+            lan: false,
         };
         let recorder = TestRecorder::default();
         session.start_recording(recorder.clone(), |_| {});

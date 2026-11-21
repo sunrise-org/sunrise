@@ -1,5 +1,5 @@
-ConfirmLinkScreen.confirmMessage	port	crates/sunrise-client/src/game/network/server_links.rs::confirm_link_layout	gap: minor: no separate trusted text; the untrusted text is always used
-ConfirmLinkScreen.addAdditionalText	port	crates/sunrise-client/src/game/network/server_links.rs::confirm_link_layout	gap: minor: the red warning is always drawn, vanilla draws it only for untrusted links
+ConfirmLinkScreen.confirmMessage	port	crates/sunrise-client/src/confirm_screen.rs::link_layout	chat.link.confirmTrusted for a trusted link, chat.link.confirm otherwise
+ConfirmLinkScreen.addAdditionalText	port	crates/sunrise-client/src/confirm_screen.rs::link_layout	the red chat.link.warning for an untrusted link only
 ConfirmLinkScreen.addButtons	port	crates/sunrise-client/src/game/network/server_links.rs::Game::confirm_link_click	Yes opens the browser, Copy Link copies, No goes back; 100 wide
 ConfirmLinkScreen.confirmLinkNow	port	crates/sunrise-client/src/game/network/server_links.rs::Game::click_link	opens the prompt when Prompt on Links is on; gap: minor: the trusted flag is not passed
 ConfirmLinkScreen.confirmLink	inline	crates/sunrise-client/src/game/network/server_links.rs::Game::click_link	the button's action, folded into click_link
@@ -45,7 +45,7 @@ DirectJoinServerScreen.resize	skip:ui		layout only; Screen::Direct keeps the typ
 DirectJoinServerScreen.onSelect	port	crates/sunrise-client/src/multiplayer.rs::Screen::click	Join returns the typed address as Outcome::Connect
 DirectJoinServerScreen.removed	port	crates/sunrise-client/src/title.rs::Title::remember_direct_address	saves the address to last_server; gap: minor: the options file write is not in this fn
 DirectJoinServerScreen.extractRenderState	port	crates/sunrise-client/src/multiplayer.rs::Screen::draw	title, label and address field (Screen::Direct arm)
-DisconnectedScreen.init	port	crates/sunrise-client/src/multiplayer.rs::Screen::buttons	reason text and the disconnected buttons; gap: minor: no Report to Server or open-report-folder button
+DisconnectedScreen.init	port	crates/sunrise-client/src/multiplayer.rs::Screen::buttons	reason text, Report to Server, Open Report Directory and the way back
 DisconnectedScreen.getNarrationMessage	port	crates/sunrise-client/src/multiplayer.rs::Screen::narration	disconnect.lost and the reason, joined
 ErrorScreen.init	port	crates/sunrise-client/src/title.rs::Title::buttons	Cancel button of the error mode (Mode::Error arm)
 ErrorScreen.extractRenderState	port	crates/sunrise-client/src/title/draw.rs::Title::draw_with_items	the error title and message (Mode::Error arm)

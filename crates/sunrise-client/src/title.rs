@@ -2490,6 +2490,16 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     lan,
                     realm: false,
                 },
+                // ConfirmLinkScreen's callback: the browser or the clipboard, then the screen
+                // that asked.
+                crate::multiplayer::Outcome::OpenUri(uri, back) => {
+                    self.open_multiplayer(*back);
+                    Action::OpenUri(uri)
+                }
+                crate::multiplayer::Outcome::Copy(text, back) => {
+                    self.open_multiplayer(*back);
+                    Action::CopyText(text)
+                }
                 crate::multiplayer::Outcome::None | crate::multiplayer::Outcome::Open(_) => {
                     Action::None
                 }
@@ -3667,11 +3677,16 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             return;
         }
         self.remember_direct_address();
-        if let Mode::Multiplayer(screen) = &self.mode
-            && let crate::multiplayer::Outcome::Open(next) = screen.escape(&self.saves)
-        {
-            self.set_mode(Mode::Multiplayer(*next));
-            return;
+        if let Mode::Multiplayer(screen) = &self.mode {
+            match screen.escape(&self.saves) {
+                crate::multiplayer::Outcome::Open(next) => {
+                    self.set_mode(Mode::Multiplayer(*next));
+                    return;
+                }
+                // `shouldCloseOnEsc` false: the screen stays.
+                crate::multiplayer::Outcome::None => return,
+                _ => {}
+            }
         }
         if let Mode::Realms(screen) = &mut self.mode
             && !screen.escape()

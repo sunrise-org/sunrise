@@ -43,6 +43,9 @@ pub(crate) struct Inner {
     alive: Arc<AtomicBool>,
     retired: AtomicBool,
     terminal: Arc<AtomicBool>,
+    /// The first error a write failed with while the connection was still open
+    /// (`Connection.exceptionCaught` on the write side); a close this side asked for leaves it unset.
+    failure: Arc<std::sync::OnceLock<Error>>,
     phase: Mutex<(u64, Phase)>,
 }
 impl std::ops::Deref for QueuedWriter {
@@ -186,6 +189,8 @@ impl QueuedWriter {
         let running = alive.clone();
         let terminal = Arc::new(AtomicBool::new(false));
         let closing = terminal.clone();
+        let failure: Arc<std::sync::OnceLock<Error>> = Arc::default();
+        let failed = failure.clone();
         let droppable: Arc<std::sync::OnceLock<Arc<crate::raw_payloads::droppable::Queue>>> =
             Arc::default();
         let droppable_woken = Arc::new(AtomicBool::new(false));
@@ -235,6 +240,11 @@ impl QueuedWriter {
                         writing[2].store(0, Ordering::Relaxed);
                         writing[3].store(0, Ordering::Relaxed);
                     }
+                    if let Err(error) = result.as_ref()
+                        && running.load(Ordering::Acquire)
+                    {
+                        let _ = failed.set(error.clone());
+                    }
                     if result.is_err() || disconnect {
                         running.store(false, Ordering::Release);
                         writer.shutdown();
@@ -257,6 +267,7 @@ impl QueuedWriter {
             worker: Mutex::new(Some(worker)),
             retired: AtomicBool::new(false),
             terminal,
+            failure,
             framing,
             closer,
             alive,
@@ -298,6 +309,10 @@ impl QueuedWriter {
             }
         }));
         let _ = self.droppable.set(queue);
+    }
+    /// The error a write failed with, when the writer ended the connection.
+    pub(crate) fn failure(&self) -> Option<Error> {
+        self.failure.get().cloned()
     }
     pub(crate) fn is_terminal(&self) -> bool {
         self.terminal.load(Ordering::Acquire)

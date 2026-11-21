@@ -138,5 +138,5 @@ ServerFunctionLibrary.reload	port	crates/sunrise-client/src/game/administration/
 ServerFunctionLibrary.readLines	inline	crates/sunrise-client-render/src/datapack.rs::parse_function	splits the function text into lines
 ServerFunctionManager.executeTagFunctions	port	crates/sunrise-client/src/game/administration/functions.rs::Game::tick_functions	runs the functions of a tag
 ServerFunctionManager.execute	port	crates/sunrise-client/src/game/administration/functions.rs::Game::run_function	runs one function as the sender
-ServerLinks.findKnownType	missing		minor: no lookup by known link type; only the bug-report link is sent (dedicated.rs)
-ServerLinks.untrust	inline	crates/sunrise-client/src/game/interface/dedicated/mod.rs::Game::run_dedicated	links are built as ServerLink entries for the net config, after valid_untrusted_uri
+ServerLinks.findKnownType	port	crates/sunrise-client/src/game/network/server_links.rs::bug_report_link	the BUG_REPORT lookup the disconnect uses; the dedicated server sends only that link (dedicated.rs)
+ServerLinks.untrust	inline	crates/sunrise-client/src/game/interface/dedicated/mod.rs::Game::run_dedicated	links are built as ServerLink entries for the net config, after untrusted_http_url

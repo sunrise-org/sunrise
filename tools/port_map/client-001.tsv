@@ -26,8 +26,8 @@ ClientChunkCache.Storage.markSectionEmpty	skip:java		empty-section set update; s
 ClientChunkCache.Storage.markSectionNotEmpty	skip:java		empty-section set update; see Storage.onSectionEmptinessChanged
 ClientChunkCache.Storage.dumpChunks	skip:debug		writes a chunk list file for debugging
 ClientCommonPacketListenerImpl.onPacketError	missing		minor: Sunrise logs an undecodable packet and carries on (Event::DecodeError) instead of disconnecting with a report
-ClientCommonPacketListenerImpl.createDisconnectionInfo	skip:debug		builds the disconnect crash report and its file
-ClientCommonPacketListenerImpl.storeDisconnectionReport	skip:debug		writes the disconnect report file under debug/
+ClientCommonPacketListenerImpl.createDisconnectionInfo	port	crates/sunrise-client/src/game/network/remote/session.rs::Game::disconnection_info	a configuration or play connection that failed (Reason::lost) gets the report and the bug report link
+ClientCommonPacketListenerImpl.storeDisconnectionReport	port	crates/sunrise-client/src/game/network/remote/session.rs::store_disconnection_report	debug/disconnect-<time>-client.txt as a network protocol error report; no Connection category
 ClientCommonPacketListenerImpl.shouldHandleMessage	inline	crates/sunrise-client/src/net.rs::receive_play	minor: receive_play returns at Transfer, so nothing else is read after a transfer starts
 ClientCommonPacketListenerImpl.handleKeepAlive	port	crates/sunrise-client/src/net.rs::receive_play	gap: minor: the keep-alive reply is sent at once; vanilla defers it while the game is frozen at poll events
 ClientCommonPacketListenerImpl.handleCustomPayload	port	crates/sunrise-client/src/net.rs::receive_brand	gap: minor: reads the brand only; other custom payloads go to the game and are ignored
