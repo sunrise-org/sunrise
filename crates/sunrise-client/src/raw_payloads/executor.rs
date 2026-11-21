@@ -39,6 +39,16 @@ pub fn dispatch(incoming: Incoming, endpoint: Endpoint, main: MainQueue) {
     }
 }
 
+/// `ClientNetworkRegistry.handleModdedPayload` invokes NETWORK listeners on
+/// the caller, which is already main inside a bundle. The bundle is itself the
+/// ordered main turn; don't enqueue these roots behind work received later.
+pub fn dispatch_bundle(incoming: Incoming, endpoint: &Endpoint) -> Vec<Incoming> {
+    let work = Arc::new(std::sync::Mutex::new(Vec::new()));
+    execute(incoming, endpoint, &MainQueue::ClientBundle(work.clone()));
+    let mut pending = work.lock().unwrap();
+    std::mem::take(&mut *pending)
+}
+
 /// The pooled play receiver calls this from its existing maintenance turn.
 pub fn dispatch_pending(endpoint: &Endpoint, main: &MainQueue) {
     let Some(connection) = endpoint.transport().connection.as_ref() else {
@@ -57,6 +67,22 @@ fn execute(mut incoming: Incoming, endpoint: &Endpoint, main: &MainQueue) {
         return;
     }
     if matches!(incoming.body, Body::Work(_)) || incoming.receiver.thread == HandlerThread::Main {
+        if let MainQueue::Client(events) = main
+            && matches!(incoming.body, Body::Payload(_))
+        {
+            // This is a wire record on the dedicated client reader, not work
+            // staged by a mod. A closed reader leaves the old epoch to main:
+            // an already-admitted bundle may still have inline payloads to run.
+            use crate::net::ingress::{Refusal, Refused};
+            if let Err(Refused {
+                reason: Refusal::Pressure,
+                ..
+            }) = events.send_wait(crate::net::Event::RawPayload(Box::new(incoming)))
+            {
+                endpoint.disconnect(failure("payload main refused: Pressure"));
+            }
+            return;
+        }
         let epoch = incoming.epoch.clone();
         let prepared = match main.prepare(incoming) {
             Ok(prepared) => prepared,

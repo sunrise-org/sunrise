@@ -225,3 +225,33 @@ fn a_dropped_droppable_leaves_the_framed_stream_as_if_never_sent() {
     };
     assert_eq!(run(true), run(false));
 }
+
+#[test]
+fn closing_the_writer_seals_prepared_droppable_publication_in_its_drain() {
+    let (a, b) = Pipe::pair();
+    let (_, physical) = Connection::local(a).split();
+    let writer = QueuedWriter::new(physical).unwrap();
+    let lane = crate::raw_payloads::droppable::Queue::new(u32::MAX, None);
+    writer.attach_droppable(lane.clone());
+    let mut peer = Connection::local(b);
+    peer.reader
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    // The early reliable frame exceeds the 64 KiB pipe; it cannot drain until
+    // this test starts reading, after the cutoff and attempted publication.
+    let mut early = vec![42; 128 * 1024];
+    early[0] = 1;
+    writer.send(&early).unwrap();
+    let late = crate::raw_payloads::Prepared::Droppable(lane, Arc::default(), vec![2, 21]);
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while writer.probe[3].load(Ordering::Relaxed) == 0 {
+        assert!(std::time::Instant::now() < deadline, "writer did not start");
+        std::thread::yield_now();
+    }
+    writer.close_after_pending();
+    late.publish().unwrap();
+    let (id, bytes) = peer.recv().unwrap();
+    assert_eq!(id, 1);
+    assert_eq!(bytes, early[1..]);
+    assert!(peer.recv().unwrap_err().is_end_of_stream());
+}

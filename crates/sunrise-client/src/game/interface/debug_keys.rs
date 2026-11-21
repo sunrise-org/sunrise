@@ -251,9 +251,11 @@ impl Game<'_> {
             self.debug_charts.log_bandwidth(bytes);
             self.debug_charts.log_packets([sent, received]);
         }
+        r.session
+            .drain_debug_pings(|delay| self.debug_charts.ping.log(delay));
         if shown {
             use sunrise_protocol::packets::status::Ping;
-            let time = self.debug_millis();
+            let time = sunrise_client::net::ping_millis();
             self.send(Serverbound::PingRequest(Ping { time }));
         }
     }

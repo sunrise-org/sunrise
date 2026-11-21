@@ -1,5 +1,17 @@
 use super::*;
 
+use sunrise_protocol::packets::configuration::{ClientInformation, Transfer};
+
+/// Connection already started; its eventual packets still belong to the next listener.
+pub(super) struct RemoteOpening {
+    session: Session,
+    builtin: Arc<Builtin>,
+    lang: Arc<Language>,
+    info: ClientInformation,
+    user: (String, u128),
+    local: bool,
+}
+
 impl Game<'_> {
     pub(in crate::game) fn connect_remote_session(
         &mut self,
@@ -10,84 +22,138 @@ impl Game<'_> {
         lan: bool,
         realm: bool,
     ) -> Result<()> {
-        self.realm_session = realm;
-        self.lan_session = lan;
-        self.reset_tutorial();
-        self.perf.world_opening();
-        // A server's own biomes come over the connection; the last local
-        // world's packed table must not name its ids. The window's own
-        // server thread keeps the one it just set.
-        if local.is_none() {
-            self.world_biomes = None;
-            self.world_biomes_base = None;
-        }
-        let root = self.options.resources.clone();
+        let opening = self.open_remote_session(address, name, local, cookies, lan, true)?;
+        self.install_remote_session(opening, lan, realm)
+    }
+
+    fn open_remote_session(
+        &mut self,
+        address: &str,
+        name: &str,
+        local: Option<sunrise_protocol::connection::Pipe>,
+        cookies: Option<sunrise_client::net::Cookies>,
+        lan: bool,
+        announce: bool,
+    ) -> Result<RemoteOpening> {
+        let root = &self.options.resources;
         let item_data = Arc::clone(&self.res.core.item_data);
-        let builtin = builtin_registries(&root).ok_or("Resources are incomplete: registries.json is missing or invalid. Click \"Prepare again\" in the launcher (or run sunrise-prepare), then try again.")?;
-        let lang = Arc::new(sunrise_client::net::load_language(&root));
-        // Options.createInformation: what the server learns about this player,
-        // sent again when one of those options changes.
+        let builtin = builtin_registries(root).ok_or("Resources are incomplete: registries.json is missing or invalid. Click \"Prepare again\" in the launcher (or run sunrise-prepare), then try again.")?;
+        let lang = Arc::new(sunrise_client::net::load_language(root));
         let info = self
             .settings
             .client_information(client_view_distance(self.settings.render_distance));
-        if local.is_none() {
-            mod_api::content::crash::set_detail(
-                "Server",
-                sunrise_client::net::shown_address(address),
-            );
-        }
         // A signed-in account always plays under its own name.
         let auth = self.auth();
         let name = auth.as_ref().map_or(name, |a| a.name.as_str());
-        let user = auth.as_ref().map_or_else(
-            || {
-                (
-                    name.to_owned(),
-                    sunrise_protocol::crypto::offline_uuid(name),
-                )
-            },
-            |a| (a.name.clone(), a.uuid),
+        let user = (
+            name.to_owned(),
+            auth.as_ref()
+                .map_or_else(|| sunrise_protocol::crypto::offline_uuid(name), |a| a.uuid),
         );
-        self.server_packs_connect(local.is_none().then_some(address), user);
-        let session = match local {
-            Some(pipe) => Session::connect_local(
+        let is_local = local.is_some();
+        if announce && !is_local {
+            self.connection_starts(address, name, lan);
+        }
+        let session = match (local, cookies) {
+            (Some(pipe), _) => Session::connect_local(
                 pipe,
                 name,
                 auth.clone(),
                 info.clone(),
                 lang.clone(),
-                item_data.clone(),
+                item_data,
             ),
-            None => {
-                self.connection_starts(address, name, lan);
-                match cookies {
-                    Some(cookies) => Session::connect_transferred(
-                        address,
-                        name,
-                        auth.clone(),
-                        info.clone(),
-                        lang.clone(),
-                        cookies,
-                        item_data.clone(),
-                    ),
-                    None => {
-                        let connect = if lan {
-                            Session::connect_lan
-                        } else {
-                            Session::connect
-                        };
-                        connect(
-                            address,
-                            name,
-                            auth.clone(),
-                            info.clone(),
-                            lang.clone(),
-                            item_data.clone(),
-                        )
-                    }
-                }
+            (None, Some(cookies)) => Session::connect_transferred(
+                address,
+                name,
+                auth.clone(),
+                info.clone(),
+                lang.clone(),
+                cookies,
+                item_data,
+            ),
+            (None, None) => {
+                let connect = if lan {
+                    Session::connect_lan
+                } else {
+                    Session::connect
+                };
+                connect(
+                    address,
+                    name,
+                    auth.clone(),
+                    info.clone(),
+                    lang.clone(),
+                    item_data,
+                )
             }
         };
+        Ok(RemoteOpening {
+            session,
+            builtin,
+            lang,
+            info,
+            user,
+            local: is_local,
+        })
+    }
+
+    /// `handleTransfer`: close the old connection and start the new one now.
+    /// Keep the old listener installed for the remaining handlers of this bundle.
+    pub(super) fn start_remote_transfer(
+        &mut self,
+        transfer: Transfer,
+    ) -> Result<Option<RemoteOpening>> {
+        let Some(remote) = self.remote.as_ref() else {
+            return Ok(None);
+        };
+        remote.session.close_after_pending();
+        if remote.session.address == "local" {
+            return Ok(None);
+        }
+        let address = format!("{}:{}", transfer.host, transfer.port);
+        let name = remote.session.name.clone();
+        let cookies = remote.session.cookies.clone();
+        self.open_remote_session(&address, &name, None, Some(cookies), false, false)
+            .map(Some)
+    }
+
+    pub(super) fn install_remote_transfer(&mut self, opening: RemoteOpening) -> Result<()> {
+        self.connection_left(sunrise_hooks::connection::Left::Transferred);
+        self.leave_server(None)?;
+        self.connection_starts(&opening.session.address, &opening.session.name, false);
+        self.install_remote_session(opening, false, false)
+    }
+
+    fn install_remote_session(
+        &mut self,
+        opening: RemoteOpening,
+        lan: bool,
+        realm: bool,
+    ) -> Result<()> {
+        let RemoteOpening {
+            session,
+            builtin,
+            lang,
+            info,
+            user,
+            local,
+        } = opening;
+        self.realm_session = realm;
+        self.lan_session = lan;
+        self.reset_tutorial();
+        self.perf.world_opening();
+        if !local {
+            // A server's own biomes come over the connection, not from the last local world.
+            self.world_biomes = None;
+            self.world_biomes_base = None;
+            mod_api::content::crash::set_detail(
+                "Server",
+                sunrise_client::net::shown_address(&session.address),
+            );
+        }
+        self.server_packs_connect((!local).then_some(&session.address), user);
+        let root = self.options.resources.clone();
         let player_type = super::super::perspective::player_type(&root);
         let mut streaming = Streaming::new(
             Arc::new(NoTerrain),
@@ -331,7 +397,6 @@ impl Game<'_> {
             backlog_since: None,
             server_links: Vec::new(),
             debug_query: Default::default(),
-            transfer: None,
         });
         // The level's TickRateManager follows the server's ticking packets.
         self.clock = sunrise_client::clock::FixedStep::client();
@@ -586,7 +651,6 @@ impl Game<'_> {
             backlog_since: None,
             server_links: Vec::new(),
             debug_query: Default::default(),
-            transfer: None,
         });
         self.clock = sunrise_client::clock::FixedStep::client();
         self.adv = Default::default();

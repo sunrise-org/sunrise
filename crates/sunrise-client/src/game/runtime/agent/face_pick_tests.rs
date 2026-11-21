@@ -37,7 +37,7 @@ impl EventLoopCtl for NoLoop {
 }
 
 /// The server's side of the handshake up to play, as `client_pick`'s tests drive it.
-fn finish_login(server: &mut Connection) {
+fn finish_login(game: &mut crate::game::Game<'_>, server: &mut Connection) {
     use sunrise_protocol::packets::{Empty, configuration as cfg, login};
     server.recv().unwrap(); // Intention.
     server.recv().unwrap(); // Hello.
@@ -60,6 +60,7 @@ fn finish_login(server: &mut Connection) {
     server
         .send(&cfg::Clientbound::FinishConfiguration(Empty).encode())
         .unwrap();
+    game.acknowledge_test_configuration();
     server.recv().unwrap(); // Finish configuration.
 }
 
@@ -84,7 +85,7 @@ fn with_pig_and_server(run: impl FnOnce(&mut Game<'_>, &Mutex<Listener>, &mut Co
                 .reader
                 .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                 .unwrap();
-            finish_login(&mut server);
+            finish_login(game, &mut server);
             game.native_lifecycle
                 .begin_open(mod_api::Authority::RemoteClient);
             game.title = None;

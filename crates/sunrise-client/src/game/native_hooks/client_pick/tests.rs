@@ -54,7 +54,7 @@ fn frame_pick_is_shared_ordered_and_refuses_stale_or_invalid_output() {
                 .reader
                 .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                 .unwrap();
-            finish_login(&mut server);
+            finish_login(game, &mut server);
             game.native_lifecycle
                 .begin_open(mod_api::Authority::RemoteClient);
             game.title = None;
@@ -203,7 +203,7 @@ fn frame_pick_without_listeners_keeps_the_vanilla_result() {
     mod_platform::testing::with_mods(Vec::new().into(), || {
         with_client_game(|game| {
             let mut server = sunrise_protocol::connection::Connection::local(logged_client(game));
-            finish_login(&mut server);
+            finish_login(game, &mut server);
             game.native_lifecycle
                 .begin_open(mod_api::Authority::RemoteClient);
             game.title = None;
@@ -234,7 +234,10 @@ fn frame_pick_without_listeners_keeps_the_vanilla_result() {
     });
 }
 
-fn finish_login(server: &mut sunrise_protocol::connection::Connection) {
+fn finish_login(
+    game: &mut crate::game::Game<'_>,
+    server: &mut sunrise_protocol::connection::Connection,
+) {
     use sunrise_protocol::packets::{Empty, configuration as cfg, login};
     server.recv().unwrap();
     server.recv().unwrap();
@@ -257,6 +260,7 @@ fn finish_login(server: &mut sunrise_protocol::connection::Connection) {
     server
         .send(&cfg::Clientbound::FinishConfiguration(Empty).encode())
         .unwrap();
+    game.acknowledge_test_configuration();
     server.recv().unwrap();
 }
 
@@ -298,7 +302,7 @@ fn with_pick_game(
             .reader
             .set_read_timeout(Some(std::time::Duration::from_secs(5)))
             .unwrap();
-        finish_login(&mut server);
+        finish_login(game, &mut server);
         game.native_lifecycle
             .begin_open(mod_api::Authority::RemoteClient);
         game.title = None;

@@ -605,9 +605,6 @@ pub(super) struct Remote {
     /// the oldest of them first waited (`poll_remote`).
     backlog: VecDeque<Received>,
     backlog_since: Option<Instant>,
-    /// `ClientboundTransferPacket`'s target: when the connection ends the
-    /// game connects here, the stored cookies carried over (`TransferState`).
-    transfer: Option<String>,
     /// `ClientCommonPacketListenerImpl.serverLinks`: the links "Server
     /// Links..." in the pause menu lists (only `http`/`https` URIs kept).
     pub(super) server_links: Vec<sunrise_protocol::packets::configuration::ServerLink>,
@@ -1021,7 +1018,7 @@ impl Game<'_> {
             }
             // PingDebugMonitor.onPongReceived.
             C::PongResponse(p) => {
-                let delay = self.debug_millis() - p.time;
+                let delay = sunrise_client::net::ping_millis().wrapping_sub(p.time);
                 self.debug_charts.ping.log(delay);
             }
             C::Login(p) => self.apply_login_packet(p),
@@ -2217,6 +2214,9 @@ pub(crate) mod tests {
     mod chat_window_and_input_tests {
         include!("chat_window_and_input_tests.rs");
     }
+    mod play_bundle_tests {
+        include!("play_bundle_tests.rs");
+    }
     mod chunk_storage_tests {
         include!("chunk_storage_tests.rs");
     }
@@ -2422,6 +2422,19 @@ pub(crate) mod tests {
         sunrise_protocol::connection::ConnReader,
         sunrise_protocol::connection::ConnWriter,
     ) {
+        connect_play_test(game, |_, _| {})
+    }
+
+    fn connect_play_test(
+        game: &mut super::Game<'_>,
+        configure: impl FnOnce(
+            &mut sunrise_protocol::connection::ConnReader,
+            &mut sunrise_protocol::connection::ConnWriter,
+        ),
+    ) -> (
+        sunrise_protocol::connection::ConnReader,
+        sunrise_protocol::connection::ConnWriter,
+    ) {
         use super::super::execution_role::ExecutionRole;
         use sunrise_protocol::{
             connection::{Connection, Pipe},
@@ -2456,9 +2469,11 @@ pub(crate) mod tests {
         ));
         reader.recv().unwrap();
         reader.recv().unwrap();
+        configure(&mut reader, &mut writer);
         writer
             .send(&cfg::Clientbound::FinishConfiguration(Empty).encode())
             .unwrap();
+        game.acknowledge_test_configuration();
         let (id, body) = reader.recv().unwrap();
         assert!(matches!(
             cfg::Serverbound::decode(id, &body).unwrap(),

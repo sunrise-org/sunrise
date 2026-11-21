@@ -92,6 +92,7 @@ struct Waiting {
     body: Vec<u8>,
 }
 struct Inner {
+    accepting: bool,
     waiting: VecDeque<Waiting>,
     bytes: usize,
     send: Bucket,
@@ -128,6 +129,7 @@ impl Queue {
         let now = Instant::now();
         Arc::new(Self {
             inner: Mutex::new(Inner {
+                accepting: true,
                 waiting: VecDeque::with_capacity(SLOTS),
                 bytes: 0,
                 send: Bucket::new(send, now),
@@ -147,6 +149,9 @@ impl Queue {
     /// this one; past the watermark the oldest waiting send goes.
     pub fn push(&self, now: Instant, counters: &Arc<DropCounters>, body: Vec<u8>) {
         let mut inner = self.lock();
+        if !inner.accepting {
+            return;
+        }
         let len = body.len();
         if !inner.send.take(now, len) {
             inner.drop_stale(now);
@@ -171,6 +176,13 @@ impl Queue {
         if let Some(wake) = self.wake.get() {
             wake();
         }
+    }
+    /// Stop taking new sends, including ones prepared earlier. Keep any
+    /// published entries available to the draining writer.
+    pub(crate) fn seal(&self) -> bool {
+        let mut inner = self.lock();
+        inner.accepting = false;
+        !inner.waiting.is_empty()
     }
     /// The oldest waiting send that is not stale, for the writer thread that has room.
     pub fn pop(&self, now: Instant) -> Option<Vec<u8>> {

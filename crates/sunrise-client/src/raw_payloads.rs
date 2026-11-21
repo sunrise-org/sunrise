@@ -23,7 +23,7 @@ mod raw_channel_tests;
 pub mod staging_probe;
 #[cfg(test)]
 mod typed_schema_tests;
-pub use executor::{dispatch, dispatch_pending, mod_of};
+pub use executor::{dispatch, dispatch_bundle, dispatch_pending, mod_of};
 mod main_queue;
 pub use main_queue::MainQueue;
 #[cfg(test)]
@@ -48,6 +48,7 @@ use sunrise_protocol::{
     packets::custom_payload::{PayloadCodecs, PayloadFlow, PayloadProtocol as CodecProtocol},
     payload_negotiation::{self as negotiation, Flow, Manifest, Phase, RegistrationPhase},
 };
+pub(crate) use transport::PlayTransition;
 pub use transport::Transport;
 
 /// Logical receiving side, never inferred from application bytes.
