@@ -153,6 +153,7 @@ codegen-units = 1
 # Optimized but quick-to-link builds for iteration: cargo build --profile fast
 [profile.fast]
 inherits = "release"
-lto = false
+# Not `false`: mbx compiles opt-level 2+ incrementally only with lto "off", and an edit then rebuilt sunrise-client whole.
+lto = "off"
 codegen-units = 16
 incremental = true
