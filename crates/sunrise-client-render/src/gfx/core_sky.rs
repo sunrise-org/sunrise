@@ -155,7 +155,7 @@ impl Part {
 }
 
 /// The packs' sky disc and stars pipelines, each present when a pack replaces that shader.
-pub(super) struct CoreSky {
+pub(crate) struct CoreSky {
     disc: Option<Part>,
     stars: Option<Part>,
 }

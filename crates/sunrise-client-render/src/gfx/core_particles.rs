@@ -77,7 +77,7 @@ struct Draw {
     quads: u32,
 }
 
-pub(super) struct CoreParticles {
+pub(crate) struct CoreParticles {
     /// By shader: `None` for one that doesn't build, or can't draw into this frame (logged once).
     pipelines: Vec<(Arc<GpuShader>, Option<Pipeline>)>,
     /// The frame the pipelines draw into: its format, and whether it holds linear light.

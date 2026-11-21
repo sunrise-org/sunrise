@@ -169,8 +169,13 @@ void main() {
         }
         let maps_expected = case == 0;
         pass.groups.clear();
-        post.resize(&device, [15, 1], &std::sync::atomic::AtomicBool::new(false))
-            .unwrap();
+        post.resize(
+            &device,
+            [15, 1],
+            &std::sync::atomic::AtomicBool::new(false),
+            super::super::in_flight::poll_live,
+        )
+        .unwrap();
         let read = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: 256,

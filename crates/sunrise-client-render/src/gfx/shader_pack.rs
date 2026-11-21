@@ -403,7 +403,7 @@ impl Renderer {
             clouds: Some(pack_entities::cloud_inputs()),
             weather: Some(pack_weather::inputs()),
             lines: Some(pack_lines::inputs()),
-            hand: Some(pack_hand::inputs()),
+            hand: Some(pack_hand::adapt_hand_inputs(pack_entities::inputs())),
             ..pack_atlas::game_terrain(terrain, &self.pack_lava_layers)
         }
     }

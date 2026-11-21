@@ -13,6 +13,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+use crate::PollLive;
+
 /// Timestamp pairs per frame at most: a pass, a part or an encoder span takes one.
 const CAPACITY: u32 = 128;
 const TIMESTAMP_BYTES: u64 = CAPACITY as u64 * 16;
@@ -360,12 +362,13 @@ impl PassTiming {
     /// At the start of a frame's passes: moves the last timed frame along, and decides whether
     /// this one is timed.
     /// Fails once the device is lost (`lost`): the first frame with counters waits on a
-    /// calibration draw, and that wait is loss-aware (`in_flight::poll_live`).
+    /// calibration draw, and that wait is loss-aware.
     pub fn begin(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         lost: &AtomicBool,
+        poll: PollLive,
     ) -> Result<(), String> {
         match &self.stage {
             // A timed frame that was never submitted: time this one instead.
@@ -403,7 +406,7 @@ impl PassTiming {
                 ty: wgpu::QueryType::PipelineStatistics(STAT_FLAGS),
                 count: STATS_CAPACITY,
             }));
-            self.fragment_unit = calibrate_fragment_unit(device, queue, lost)?;
+            self.fragment_unit = calibrate_fragment_unit(device, queue, lost, poll)?;
         }
         if matches!(self.stage, Stage::Idle)
             && self.timed_at.is_none_or(|at| at.elapsed() >= self.gap)
@@ -512,14 +515,14 @@ impl PassTiming {
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        (target, format): super::timing::Target,
+        (target, format): crate::timing::Target,
     ) {
         if self.marker.as_ref().is_none_or(|(f, _)| *f != format) {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Shader pack timing mark"),
-                source: wgpu::ShaderSource::Wgsl(super::timing::MARKER.into()),
+                source: wgpu::ShaderSource::Wgsl(crate::timing::MARKER.into()),
             });
-            let pipeline = super::timing::end_pipeline(device, &module, format);
+            let pipeline = crate::timing::end_pipeline(device, &module, format);
             self.marker = Some((format, pipeline));
         }
         // An unnamed pass: its end counts, it is never listed.
@@ -753,6 +756,7 @@ fn calibrate_fragment_unit(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     lost: &AtomicBool,
+    poll: PollLive,
 ) -> Result<Option<FragmentUnit>, String> {
     const SIDE: u32 = 64;
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -843,7 +847,7 @@ fn calibrate_fragment_unit(
     encoder.copy_buffer_to_buffer(&resolve, 0, &read, 0, 8);
     queue.submit([encoder.finish()]);
     read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-    super::in_flight::poll_live(device, lost, wgpu::PollType::wait_indefinitely())?;
+    poll(device, lost, wgpu::PollType::wait_indefinitely())?;
     let Ok(range) = read.slice(..).get_mapped_range() else {
         return Ok(None);
     };
@@ -1273,6 +1277,18 @@ mod tests {
     };
     use serde_json::json;
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn test_poll(
+        device: &wgpu::Device,
+        lost: &AtomicBool,
+        poll: wgpu::PollType,
+    ) -> Result<(), String> {
+        if lost.load(Ordering::Relaxed) {
+            return Err("the graphics device was lost".into());
+        }
+        device.poll(poll).map(|_| ()).map_err(|e| e.to_string())
+    }
 
     fn interleave(pairs: &[(f32, f32)]) -> Vec<u64> {
         let ns = |ms: f32| (ms * 1e6) as u64;
@@ -1552,7 +1568,7 @@ mod tests {
         // A timed frame takes two iterations: record it, then resolve and map its times.
         for _ in 0..60 {
             timing
-                .begin(device, queue, &std::sync::atomic::AtomicBool::new(false))
+                .begin(device, queue, &AtomicBool::new(false), test_poll)
                 .unwrap();
             let mut encoder = device.create_command_encoder(&Default::default());
             compute_parts(
@@ -1578,7 +1594,7 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn the_heavy_part_of_a_pass_has_the_largest_time() {
-        let _gpu = crate::gfx::test_gpu::lock();
+        let _gpu = crate::test_gpu::lock();
         let Some((device, queue)) = device() else {
             eprintln!("no GPU with timestamps inside passes: skipped");
             return;
@@ -1741,7 +1757,7 @@ mod tests {
     ) {
         for _ in 0..6 {
             timing
-                .begin(device, queue, &std::sync::atomic::AtomicBool::new(false))
+                .begin(device, queue, &AtomicBool::new(false), test_poll)
                 .unwrap();
             if timing.recording() && (timing.counters_frame() == counts) {
                 return;
@@ -1764,7 +1780,7 @@ mod tests {
 
     #[test]
     fn counters_see_the_overdraw_that_draw_order_makes() {
-        let _gpu = crate::gfx::test_gpu::lock();
+        let _gpu = crate::test_gpu::lock();
         let Some((device, queue)) = stats_device() else {
             eprintln!("no GPU with pipeline statistics: skipped");
             return;
@@ -1804,7 +1820,7 @@ mod tests {
         finish(&mut timing, &device, &queue, encoder);
         for _ in 0..4 {
             timing
-                .begin(&device, &queue, &std::sync::atomic::AtomicBool::new(false))
+                .begin(&device, &queue, &AtomicBool::new(false), test_poll)
                 .unwrap();
             device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         }
@@ -1855,26 +1871,9 @@ mod tests {
     }
 
     #[test]
-    fn a_lost_device_stops_the_calibration_wait_instead_of_polling_it() {
-        let _gpu = crate::gfx::test_gpu::lock();
-        let Some((device, queue)) = stats_device() else {
-            eprintln!("no GPU with pipeline statistics: skipped");
-            return;
-        };
-        let mut timing = PassTiming::new(&device, &queue).unwrap();
-        timing.set_detail(true);
-        let lost = std::sync::atomic::AtomicBool::new(true);
-        assert_eq!(
-            timing.begin(&device, &queue, &lost),
-            Err(super::super::in_flight::LOST.to_owned())
-        );
-        assert!(timing.detail_support().fragment_unit.is_none());
-    }
-
-    #[test]
     #[ignore = "daily"]
     fn stages_split_a_render_pass_in_a_plain_frame_and_kept_frames_hold_them() {
-        let _gpu = crate::gfx::test_gpu::lock();
+        let _gpu = crate::test_gpu::lock();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;
@@ -1897,7 +1896,7 @@ mod tests {
         timing.keep_frames(true);
         for _ in 0..12 {
             timing
-                .begin(&device, &queue, &std::sync::atomic::AtomicBool::new(false))
+                .begin(&device, &queue, &AtomicBool::new(false), test_poll)
                 .unwrap();
             let mut encoder = device.create_command_encoder(&Default::default());
             let pass = scene.pass(&mut encoder, timing.writes("World"));

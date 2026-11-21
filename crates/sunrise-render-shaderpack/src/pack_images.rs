@@ -3,35 +3,37 @@
 //! frame when the pack asks.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::AtomicBool;
 
+use crate::PollLive;
 use sunrise_shaders::{BufferObject, CustomImage, Format, Kind};
 use wgpu::util::DeviceExt;
 
-pub(super) struct PackImage {
-    pub(super) def: CustomImage,
-    pub(super) format: wgpu::TextureFormat,
-    pub(super) dimension: wgpu::TextureViewDimension,
-    pub(super) view: Option<wgpu::TextureView>,
+pub struct PackImage {
+    pub def: CustomImage,
+    pub format: wgpu::TextureFormat,
+    pub dimension: wgpu::TextureViewDimension,
+    pub view: Option<wgpu::TextureView>,
     /// Last frame's contents, for a pass that samples and stores the image (`copied`).
-    pub(super) copy: Option<wgpu::TextureView>,
-    pub(super) copied: bool,
+    pub copy: Option<wgpu::TextureView>,
+    pub copied: bool,
     /// The contents before a compute pass that reads them so (`snapshot`), apart from `copy`,
     /// which a later pass may still sample.
-    pub(super) before: Option<wgpu::TextureView>,
-    pub(super) snapshotted: bool,
+    pub before: Option<wgpu::TextureView>,
+    pub snapshotted: bool,
     /// The render size the image was made for (relative images follow it).
     made_for: [u32; 2],
 }
 
 impl PackImage {
-    pub(super) fn reset_history(&mut self) {
+    pub fn reset_history(&mut self) {
         self.view = None;
         self.copy = None;
         self.before = None;
         self.made_for = [0; 2];
     }
 
-    pub(super) fn sample_type(&self, features: wgpu::Features) -> wgpu::TextureSampleType {
+    pub fn sample_type(&self, features: wgpu::Features) -> wgpu::TextureSampleType {
         self.format
             .sample_type(None, Some(features))
             .unwrap_or(wgpu::TextureSampleType::Float { filterable: false })
@@ -40,7 +42,7 @@ impl PackImage {
 
 /// The images `image.*` declares; `packed_float`: this device stores into `Rg11b10Ufloat`
 /// (`format`).
-pub(super) fn images(defs: Vec<CustomImage>, packed_float: bool) -> Vec<PackImage> {
+pub fn images(defs: Vec<CustomImage>, packed_float: bool) -> Vec<PackImage> {
     defs.into_iter()
         .map(|def| PackImage {
             format: format(def.format, packed_float),
@@ -75,7 +77,7 @@ fn texture_dimension(view: wgpu::TextureViewDimension) -> wgpu::TextureDimension
 /// `R11F_G11F_B10F` is itself where the device stores into it (`packed_float`): no alpha, so it
 /// reads 1 there, as Iris 1.11.7 read it with a probe pack of ours (#10490); elsewhere an
 /// `Rgba16Float` stand-in, which keeps an alpha.
-pub(super) fn format(f: Format, packed_float: bool) -> wgpu::TextureFormat {
+pub fn format(f: Format, packed_float: bool) -> wgpu::TextureFormat {
     use wgpu::TextureFormat as T;
     let pick = |r, rg, rgba| match f.channels {
         1 => r,
@@ -103,7 +105,7 @@ pub(super) fn format(f: Format, packed_float: bool) -> wgpu::TextureFormat {
 
 /// Whether this device can make `def`: its format's features, and a size in pixels within the
 /// device's limits.
-pub(super) fn makeable(
+pub fn makeable(
     device: &wgpu::Device,
     def: &CustomImage,
     packed_float: bool,
@@ -134,11 +136,7 @@ pub(super) fn makeable(
 }
 
 /// Makes the images that are missing or sized for another render size; whether it made any.
-pub(super) fn resize_images(
-    device: &wgpu::Device,
-    images: &mut [PackImage],
-    size: [u32; 2],
-) -> bool {
+pub fn resize_images(device: &wgpu::Device, images: &mut [PackImage], size: [u32; 2]) -> bool {
     let largest = device.limits().max_texture_dimension_2d;
     let mut made = false;
     for image in images {
@@ -197,10 +195,10 @@ pub(super) fn resize_images(
 }
 
 /// The most images a pack may have.
-pub(super) const IMAGES: usize = 64;
+pub const IMAGES: usize = 64;
 
 /// Copies `image` as it is before a compute pass whose loads read it so.
-pub(super) fn snapshot(encoder: &mut wgpu::CommandEncoder, image: &PackImage) {
+pub fn snapshot(encoder: &mut wgpu::CommandEncoder, image: &PackImage) {
     if let (Some(view), Some(before)) = (&image.view, &image.before) {
         encoder.copy_texture_to_texture(
             view.texture().as_image_copy(),
@@ -212,7 +210,7 @@ pub(super) fn snapshot(encoder: &mut wgpu::CommandEncoder, image: &PackImage) {
 
 /// Copies the images of `mask` (bit n: image n), which a pass samples and stores, for that pass
 /// to sample.
-pub(super) fn copy(encoder: &mut wgpu::CommandEncoder, images: &[PackImage], mask: u64) {
+pub fn copy(encoder: &mut wgpu::CommandEncoder, images: &[PackImage], mask: u64) {
     for (_, image) in images
         .iter()
         .enumerate()
@@ -230,7 +228,7 @@ pub(super) fn copy(encoder: &mut wgpu::CommandEncoder, images: &[PackImage], mas
 
 /// Clears the images the pack clears before each frame: with `clear_texture` where the device
 /// has it (`clear`), else by copying from `zeros`, a buffer of zeros made large enough.
-pub(super) fn clear(
+pub fn clear(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     images: &[PackImage],
@@ -302,16 +300,16 @@ const ZEROS: u64 = 4 << 20;
 /// zero, also after it stored into the image (observed with a probe pack). Here it is one texel
 /// of the declared format, cleared before every pass that binds it; loads and stores outside
 /// that texel are out of bounds (with the same probe pack on Vulkan, the loads read zero).
-pub(super) struct StandIn {
+pub struct StandIn {
     format: wgpu::TextureFormat,
     dimension: wgpu::TextureViewDimension,
-    pub(super) view: wgpu::TextureView,
+    pub view: wgpu::TextureView,
     zeros: wgpu::Buffer,
 }
 
 impl StandIn {
     /// Zero again, before a pass that binds it.
-    pub(super) fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
         encoder.copy_buffer_to_texture(
             wgpu::TexelCopyBufferInfo {
                 buffer: &self.zeros,
@@ -327,13 +325,13 @@ impl StandIn {
     }
 }
 
-pub(super) fn reset_stand_ins(device: &wgpu::Device, images: &mut Vec<StandIn>) {
+pub fn reset_stand_ins(device: &wgpu::Device, images: &mut Vec<StandIn>) {
     let wanted = images.iter().map(|i| (i.format, i.dimension)).collect();
     *images = stand_ins(device, wanted);
 }
 
 /// One stand-in for each format and dimension of `wanted`.
-pub(super) fn stand_ins(
+pub fn stand_ins(
     device: &wgpu::Device,
     wanted: Vec<(wgpu::TextureFormat, wgpu::TextureViewDimension)>,
 ) -> Vec<StandIn> {
@@ -386,7 +384,7 @@ pub(super) fn stand_ins(
 }
 
 /// The stand-in of this format and dimension.
-pub(super) fn stand_in(
+pub fn stand_in(
     stand_ins: &[StandIn],
     format: wgpu::TextureFormat,
     dimension: wgpu::TextureViewDimension,
@@ -397,18 +395,18 @@ pub(super) fn stand_in(
 }
 
 /// The pack's storage buffers, bound in set 4.
-pub(super) struct Buffers {
-    pub(super) layout: wgpu::BindGroupLayout,
+pub struct Buffers {
+    pub layout: wgpu::BindGroupLayout,
     objects: BTreeMap<u32, BufferObject>,
     /// The fewest bytes each one's shaders bind it as (`Post::buffer_minimums`).
     minimums: BTreeMap<u32, u64>,
-    pub(super) group: Option<wgpu::BindGroup>,
+    pub group: Option<wgpu::BindGroup>,
     buffers: Vec<wgpu::Buffer>,
     made_for: [u32; 2],
 }
 
 impl Buffers {
-    pub(super) fn reset_history(&mut self) {
+    pub fn reset_history(&mut self) {
         self.group = None;
         self.buffers.clear();
         self.made_for = [0; 2];
@@ -416,7 +414,7 @@ impl Buffers {
 
     /// The layout of `objects`, bound in `stages`; each buffer is at least its entry in
     /// `minimums` long.
-    pub(super) fn new(
+    pub fn new(
         device: &wgpu::Device,
         objects: BTreeMap<u32, BufferObject>,
         minimums: BTreeMap<u32, u64>,
@@ -451,7 +449,7 @@ impl Buffers {
 
     /// Makes the buffers (again, when one depends on the render size and it changed): their
     /// contents start zeroed and persist across frames.
-    pub(super) fn resize(&mut self, device: &wgpu::Device, size: [u32; 2]) {
+    pub fn resize(&mut self, device: &wgpu::Device, size: [u32; 2]) {
         let relative = self
             .objects
             .values()
@@ -516,7 +514,7 @@ impl Buffers {
     }
 
     /// Whether the pack declares buffer `binding`.
-    pub(super) fn has(&self, binding: u32) -> bool {
+    pub fn has(&self, binding: u32) -> bool {
         self.objects.contains_key(&binding)
     }
 }
@@ -530,14 +528,14 @@ fn buffer_size(object: &BufferObject, render: [u32; 2], least: u64) -> u64 {
 
 /// A debug readback of one of the pack's images (`SUNRISE_SHADER_PACK_DUMP=<name>`): every 60
 /// frames, how many of its texels are not zero, logged.
-pub(super) struct Dump {
+pub struct Dump {
     name: String,
     frame: u32,
     pending: Option<(wgpu::Buffer, usize, [u32; 3], u32)>,
 }
 
 impl Dump {
-    pub(super) fn new() -> Option<Self> {
+    pub fn new() -> Option<Self> {
         let name = std::env::var("SUNRISE_SHADER_PACK_DUMP").ok()?;
         Some(Self {
             name,
@@ -547,16 +545,17 @@ impl Dump {
     }
 
     /// Reads last frame's copy, once its commands ran.
-    pub(super) fn read(
+    pub fn read(
         &mut self,
         device: &wgpu::Device,
-        lost: &std::sync::atomic::AtomicBool,
+        lost: &AtomicBool,
+        poll: PollLive,
     ) -> Result<(), String> {
         let Some((buffer, texel, [w, h, d], row)) = self.pending.take() else {
             return Ok(());
         };
         buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        super::in_flight::poll_live(
+        poll(
             device,
             lost,
             wgpu::PollType::Wait {
@@ -588,7 +587,7 @@ impl Dump {
     }
 
     /// Copies the image for `read` every 60 frames.
-    pub(super) fn copy(
+    pub fn copy(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,

@@ -35,6 +35,7 @@ sunrise-polytone = { path = "../sunrise-polytone" }
 sunrise-border = { path = "../sunrise-border" }
 sunrise-protocol = { path = "../sunrise-protocol" }
 sunrise-render-core = { path = "../sunrise-render-core" }
+sunrise-render-shaderpack = { path = "../sunrise-render-shaderpack" }
 sunrise-shader-api = { path = "../sunrise-shader-api" }
 sunrise-shaders = { path = "../sunrise-shaders" }
 sunrise-system = { path = "../sunrise-system" }

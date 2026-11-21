@@ -134,7 +134,7 @@ pub(super) struct Part {
 
 /// The pack's world text pipelines over one uniform buffer: vanilla's four blocks once, then the
 /// world text's Polytone blocks, then the see-through text's.
-pub(super) struct CoreText {
+pub(crate) struct CoreText {
     pub(super) polygon_offset: Option<Part>,
     pub(super) see_through: Option<Part>,
     uniform: wgpu::Buffer,

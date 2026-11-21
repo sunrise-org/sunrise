@@ -7,6 +7,7 @@
 use super::CelestialBody;
 use std::{ops::Range, sync::Mutex};
 
+use glam::Mat4;
 use wgpu::util::DeviceExt;
 
 /// A sky vertex: a position and what it belongs to (`SKY`...).
@@ -55,7 +56,7 @@ const CELESTIAL_QUADS: usize = 4;
 const CELESTIAL_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Unorm8x4];
 
-pub(super) const ATTRIBUTES: [wgpu::VertexAttribute; 2] =
+pub const ATTRIBUTES: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Uint32];
 
 /// What `gbuffers_skybasic` reads from these vertices.
@@ -144,10 +145,37 @@ pub fn celestial_inputs() -> sunrise_shaders::GbuffersInputs {
 }
 
 /// One draw of the sky: its render stage, whether `gbuffers_skytextured` draws it, its vertices.
-pub(super) struct Part {
+pub struct Part {
     pub stage: &'static str,
     pub textured: bool,
     pub range: Range<u32>,
+}
+
+/// One vertex of a sun or moon quad: position, atlas UV, RGBA8 colour.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SunVertex {
+    pub pos: [f32; 3],
+    pub uv: [f32; 2],
+    pub color: u32,
+}
+
+/// The stars' triangles, re-exported from sunrise_render_core.
+pub fn star_triangles() -> Vec<[f32; 3]> {
+    sunrise_render_core::stars::star_triangles()
+}
+
+/// `sunPathRotation`'s turn of the sky's bodies: `tilt` degrees about the world's X axis, so a
+/// positive angle moves the noon sun toward -Z (north), as Iris does.
+pub fn tilt_matrix(tilt: f32) -> Mat4 {
+    Mat4::from_rotation_x(-tilt.to_radians())
+}
+
+/// The End during the dragon fight, whose world fog leaves out vanilla's sky: a shader pack's
+/// `gbuffers_skybasic` still draws a fan around the horizon, as our probe packs read it in
+/// Iris 1.11.7.
+pub fn end_fog_sky(title: bool, end_sky: bool, boss_world_fog: bool) -> bool {
+    !title && end_sky && boss_world_fog
 }
 
 /// A disc fan at height `y`, radius 512, as triangles (SkyRenderer's sky and void discs).
@@ -202,7 +230,7 @@ fn sunrise(out: &mut Vec<Vertex>) {
 }
 
 /// The fan a pack's `gbuffers_skybasic` draws in the End while the dragon fight's fog leaves out
-/// vanilla's sky (`super::end_fog_sky`): from (0, -16, 0) under the eye to eight rim vertices 16
+/// vanilla's sky (`end_fog_sky`): from (0, -16, 0) under the eye to eight rim vertices 16
 /// above it, every 45° from +Z, at the render distance (the `far` uniform; scaled in the vertex
 /// stage). Fitted to the `gl_Vertex` our probe packs' fragments read in Iris 1.11.7 at render
 /// distances 12 and 8: 289 of 291 samples lie within 0.05 block of these eight planes (one of
@@ -224,7 +252,33 @@ fn fan(out: &mut Vec<Vertex>) {
     }
 }
 
-pub(super) struct PackSky {
+/// What the sky's `prepare` reads from the frame.
+#[derive(Clone, Copy)]
+pub struct SkyFrame<'a> {
+    /// The sky's angle today, in degrees (`Sky::sun_angle`).
+    pub sun_angle: f32,
+    /// The sky colour (Overworld blue, or the Nether's fog).
+    pub sky_color: [f32; 3],
+    /// The fog colour the clear uses.
+    pub fog_color: [f32; 3],
+    pub sunset_color: [f32; 4],
+    /// The fog's colour, when a boss bar's fog replaces the clear's.
+    pub fog: Option<[f32; 3]>,
+    /// The stars' rotation and brightness.
+    pub stars: Option<(Mat4, f32)>,
+    /// The camera is low enough for the void disc.
+    pub dark_disc: bool,
+    /// Render distance in blocks (the End fan's radius).
+    pub detail_distance: f32,
+    /// Camera-relative sun and moon quads, each four `SunVertex`.
+    pub celestial: &'a [sunrise_render_core::Vertex],
+    /// What each quad of `celestial` is (the client's `Frame::celestial_bodies`).
+    pub celestial_bodies: &'a [CelestialBody],
+    /// Title screen, the End, a boss bar's world fog: `end_fog_sky`.
+    pub end_fog_sky: bool,
+}
+
+pub struct PackSky {
     vertices: wgpu::Buffer,
     celestial: wgpu::Buffer,
     uniform: wgpu::Buffer,
@@ -257,7 +311,7 @@ impl PackSky {
         }
         let sunset = sky.end..v.len() as u32;
         v.extend(
-            super::stars::star_triangles()
+            star_triangles()
                 .into_iter()
                 .map(|pos| Vertex { pos, kind: STAR }),
         );
@@ -342,26 +396,26 @@ impl PackSky {
     pub fn prepare(
         &self,
         queue: &wgpu::Queue,
-        frame: &super::Frame,
+        frame: &SkyFrame<'_>,
         tilt: f32,
         switches: sunrise_shaders::SkySwitches,
     ) -> Vec<Part> {
-        let turn = super::pack_uniforms::tilt_matrix(tilt);
-        let sun_angle = frame.sky.sun_angle.to_radians();
+        let turn = tilt_matrix(tilt);
+        let sun_angle = frame.sun_angle.to_radians();
         // The fan turns to the other sunrise in the afternoon (terrain.wgsl's sunrise_weight).
         let flip = if sun_angle.sin() < 0.0 { 180f32 } else { 0.0 };
         let theta = (flip + 90.0).to_radians();
         let (rotation, brightness) = frame.stars.unwrap_or_default();
-        let end_fan = super::end_fog_sky(frame);
+        let end_fan = frame.end_fog_sky;
         let [r, g, b] = match &frame.fog {
-            Some(f) if end_fan => [f.color[0], f.color[1], f.color[2]],
-            None if end_fan => frame.sky.fog_color,
-            _ => frame.sky.sky_color,
+            Some(f) if end_fan => [f[0], f[1], f[2]],
+            None if end_fan => frame.fog_color,
+            _ => frame.sky_color,
         };
         let uniform = Uniform {
             stars: (turn * rotation).to_cols_array_2d(),
             color: [r, g, b, 1.0],
-            sunrise: frame.sky.sunrise_color,
+            sunrise: frame.sunset_color,
             sun: [
                 theta.cos(),
                 theta.sin(),
@@ -408,7 +462,7 @@ impl PackSky {
         if switches.sky {
             parts.push(part("SKY", false, sky));
         }
-        if switches.sky && frame.sky.sunrise_color[3] > 0.001 {
+        if switches.sky && frame.sunset_color[3] > 0.001 {
             parts.push(part("SUNSET", false, sunset));
         }
         for (i, (_, body)) in (0u32..).zip(quads) {

@@ -10,7 +10,7 @@ pub(super) const LOST: &str = "the graphics device was lost";
 /// `Device::poll`, unless the device is lost (`lost`, set by its loss callback). wgpu has no
 /// error result for a poll that finds the device lost (it panics), so that panic is contained;
 /// the callback has set `lost` by then. Any other panic goes on.
-pub(super) fn poll_live(
+pub(crate) fn poll_live(
     device: &wgpu::Device,
     lost: &AtomicBool,
     poll: wgpu::PollType,

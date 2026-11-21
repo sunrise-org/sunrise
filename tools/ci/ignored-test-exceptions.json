@@ -368,10 +368,10 @@
     "rationale": "Opt-in measurement, not an ordinary daily correctness check: manual production-helper microbenchmark. Run by hand on an idle machine with the optimized profile and its explicitly requested inputs; all assertions remain in the test."
   },
   {
-    "package": "sunrise-client-render",
+    "package": "sunrise-render-shaderpack",
     "target": "lib",
-    "test": "gfx::pack_uniforms::initial_history_tests::core_matrix_inputs_render_provider_values",
-    "path": "crates/sunrise-client-render/src/gfx/pack_uniforms.rs",
+    "test": "pack_uniforms::initial_history_tests::core_matrix_inputs_render_provider_values",
+    "path": "crates/sunrise-render-shaderpack/src/pack_uniforms.rs",
     "reason": "requires a host GPU; run with --ignored --nocapture",
     "rationale": "Existing adapter-gated GPU lane in tools/ci/ignored-tests/gpu.txt; a real available adapter is required and the runner handles adapter availability separately from prepared-resource daily selection."
   },

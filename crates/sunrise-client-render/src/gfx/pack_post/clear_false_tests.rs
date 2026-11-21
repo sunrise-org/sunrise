@@ -1,6 +1,8 @@
 //! A buffer that isn't cleared, in passes that leave pixels alone or blend: what is under them.
 //! The expected values are Iris 1.11.7's, measured with probe packs of our own (#9009).
-use super::*;
+use super::depth_test::VERTEX;
+use super::destination_tests::Fixture;
+use std::io::{Cursor, Write};
 
 /// colortex6 is written three times a frame, the first write leaving the right half alone:
 /// there it reads the previous frame's last write, 0.125 (Iris 1.11.7), not the 0.25 written into

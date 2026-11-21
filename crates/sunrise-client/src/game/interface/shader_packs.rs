@@ -571,7 +571,7 @@ impl Game<'_> {
             has_skylight: self.world.shape.sky_light,
             has_ceiling: self.world.shape.has_ceiling,
             elytra_flying: self.player.as_ref().is_some_and(|p| p.fall_flying),
-            cloud_height: sunrise_client::gfx::pack_uniforms::cloud_height(sky),
+            cloud_height: sunrise_client::gfx::pack_uniforms::cloud_height(sky.cloud_height),
             // Vanilla's drift in float, times its 0.030000001F blocks a tick.
             cloud_time: sunrise_client::clouds::drift(
                 self.world.game_time,

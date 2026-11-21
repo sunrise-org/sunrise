@@ -4,6 +4,7 @@
 use super::destination_tests::Fixture;
 use super::*;
 use std::io::{Cursor, Write};
+use sunrise_shaders::Post;
 
 fn pack(outputs: u32) -> Post {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));

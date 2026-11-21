@@ -32,7 +32,7 @@ use std::{
 
 /// CPU copies of the meshes uploaded since capturing was turned on.
 #[derive(Default)]
-pub(super) struct Copies {
+pub(crate) struct Copies {
     sections: FxHashMap<SectionKey, SectionMesh>,
     tiles: FxHashMap<TileKey, SectionMesh>,
 }

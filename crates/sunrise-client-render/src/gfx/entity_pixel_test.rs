@@ -1131,6 +1131,7 @@ pub fn render_pack(
         &[],
         &mut |_, _, _, _| {},
         &std::sync::atomic::AtomicBool::new(false),
+        super::in_flight::poll_live,
     )
     .unwrap();
     let (color, read) = (screen.texture(), SIZE * 4);

@@ -77,8 +77,8 @@ fn picture(
             hand: false,
         },
         sunrise_shaders::GameInputs {
-            sky: Some(super::super::pack_sky::inputs()),
-            celestial: Some(super::super::pack_sky::celestial_inputs()),
+            sky: Some(crate::gfx::pack_sky::inputs()),
+            celestial: Some(crate::gfx::pack_sky::celestial_inputs()),
             ..Default::default()
         },
     );

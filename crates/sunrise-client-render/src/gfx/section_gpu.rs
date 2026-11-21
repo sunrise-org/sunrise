@@ -9,7 +9,7 @@ use glam::Vec3;
 use section_fade::{section_instance, section_visibility};
 use std::time::Instant;
 
-pub(super) struct SectionGpu {
+pub(crate) struct SectionGpu {
     /// Arena page and first vertex of its solid quads, and after them its
     /// translucent quads unless those have an arena of their own; (0, 0),
     /// unused, when that leaves it no quads in `arena`.

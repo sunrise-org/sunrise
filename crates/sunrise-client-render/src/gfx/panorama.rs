@@ -167,7 +167,7 @@ fn projection(width: u32, height: u32, yaw: f32, pitch: f32) -> Mat4 {
         * Mat4::from_rotation_y(yaw.to_radians())
 }
 
-pub(super) struct Panorama {
+pub(crate) struct Panorama {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,

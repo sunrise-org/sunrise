@@ -72,7 +72,7 @@ impl Renderer {
 }
 
 /// The terrain's acceleration structures.
-pub(in crate::gfx) struct RayScene {
+pub(crate) struct RayScene {
     /// Each section's BLAS, while it has solid quads within reach.
     blas: FxHashMap<SectionKey, wgpu::Blas>,
     /// Sections meshed again or emptied since their BLAS was built.

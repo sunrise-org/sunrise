@@ -3,8 +3,8 @@
 //! has them); the programs here are the probes', cut down. Written values are ones whose byte
 //! (× 255) is not near a half: GPUs may round those either way.
 use super::destination_tests::Fixture;
-use super::*;
 use std::io::{Cursor, Write};
+use sunrise_shaders::Post;
 
 const VERTEX: &str = "#version 120\nvarying vec2 uv;\nvoid main() { uv=gl_MultiTexCoord0.xy; gl_Position=ftransform(); }\n";
 

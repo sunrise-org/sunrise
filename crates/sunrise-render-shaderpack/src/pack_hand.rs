@@ -3,8 +3,10 @@
 //! hand's own projection as `gl_ProjectionMatrix` (5.2: `gbufferProjection` stays the world's).
 
 use glam::Mat4;
-
-use super::Vertex;
+use sunrise_render_core::{
+    EntityVertex as Vertex, TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY,
+};
+use wgpu::util::DeviceExt;
 
 /// `MC_HAND_DEPTH`'s value (1.5): the hand's depth is scaled by it through its projection, so
 /// that it sits in front of the world in the shared depth buffer.
@@ -16,9 +18,11 @@ const UNIFORM: u64 = 2 * 64;
 /// `HzDraw`'s size (pack_draw.rs).
 const SLOT: u64 = 32;
 
-/// What `gbuffers_hand` reads: the entity inputs, and the hand's projection from set 1.
-pub fn inputs() -> sunrise_shaders::GbuffersInputs {
-    let mut inputs = super::pack_entities::inputs();
+/// Adapts entity inputs for `gbuffers_hand`: overrides velocity attribute, enables item_id,
+/// and binds `HzHand` projection uniform at set 1, binding 1.
+pub fn adapt_hand_inputs(
+    mut inputs: sunrise_shaders::GbuffersInputs,
+) -> sunrise_shaders::GbuffersInputs {
     // No last frame's hand to measure from: the hand's `at_velocity` reads zero (and its set 1
     // has no previous vertices).
     for (name, value) in &mut inputs.attributes {
@@ -44,6 +48,18 @@ pub fn inputs() -> sunrise_shaders::GbuffersInputs {
 pub fn projection(hud_fov: f32, aspect: f32, far: f32) -> Mat4 {
     Mat4::from_scale(glam::Vec3::new(1.0, 1.0, HAND_DEPTH))
         * Mat4::perspective_rh_gl(hud_fov.to_radians(), aspect, 0.05, far)
+}
+
+/// Two triangles for each of `quads` quads, from vertex 0.
+pub fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
+    let indices: Vec<u32> = (0..quads)
+        .flat_map(|q| [0, 1, 2, 0, 2, 3].map(|i| q * 4 + i))
+        .collect();
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Shader pack hand indices"),
+        contents: bytemuck::cast_slice(&indices),
+        usage: wgpu::BufferUsages::INDEX,
+    })
 }
 
 /// The hand's vertices (also read at set 1 for normals and tangents), its uniform and quad
@@ -120,7 +136,7 @@ impl PackHand {
             }],
         });
         Self {
-            indices: super::pack_entities::quad_indices(device, capacity),
+            indices: quad_indices(device, capacity),
             layout,
             vertices,
             uniform,
@@ -204,7 +220,7 @@ impl PackHand {
             self.capacity = self.quads.next_power_of_two();
             (self.vertices, self.group) =
                 Self::vertex_buffer(device, &self.layout, &self.uniform, self.capacity);
-            self.indices = super::pack_entities::quad_indices(device, self.capacity);
+            self.indices = quad_indices(device, self.capacity);
         }
         queue.write_buffer(&self.vertices, 0, bytemuck::cast_slice(&self.order));
         let matrices = [projection, projection.inverse()].map(|m| m.to_cols_array());
@@ -228,13 +244,15 @@ struct Split {
 
 fn split(hand: &[Vertex], items: &[(u32, i32)]) -> Split {
     let quads = (hand.len() / 4) as u32;
-    let mut ids = vec![0; quads as usize];
-    for (start, n, id) in runs(quads, items) {
-        ids[start as usize..(start + n) as usize].fill(id);
+    let mut ids = vec![0i32; quads as usize];
+    for (start, count, id) in runs(quads, items) {
+        for q in start..start + count {
+            ids[q as usize] = id;
+        }
     }
     let kind = |q: usize| translucent_quad(&hand[q * 4..q * 4 + 4]);
-    let opaque: Vec<usize> = (0..quads as usize).filter(|&q| !kind(q)).collect();
     let clear: Vec<usize> = (0..quads as usize).filter(|&q| kind(q)).collect();
+    let opaque: Vec<usize> = (0..quads as usize).filter(|&q| !kind(q)).collect();
     let mut out = Split {
         order: Vec::with_capacity(hand.len()),
         runs: Vec::new(),
@@ -262,7 +280,7 @@ fn split(hand: &[Vertex], items: &[(u32, i32)]) -> Split {
 fn translucent_quad(quad: &[Vertex]) -> bool {
     matches!(
         quad[0].layer & 0xffff,
-        super::TRANSLUCENT_ITEM_OVERLAY | super::TRANSLUCENT_GLINT_ITEM_OVERLAY
+        TRANSLUCENT_ITEM_OVERLAY | TRANSLUCENT_GLINT_ITEM_OVERLAY
     )
 }
 
@@ -317,7 +335,7 @@ mod tests {
                 ..bytemuck::Zeroable::zeroed()
             }; 4]
         };
-        let glass = super::super::TRANSLUCENT_ITEM_OVERLAY;
+        let glass = TRANSLUCENT_ITEM_OVERLAY;
         let hand: Vec<Vertex> = [
             quad(0, 0.),
             quad(0, 1.),

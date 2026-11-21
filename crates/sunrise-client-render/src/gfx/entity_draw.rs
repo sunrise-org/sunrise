@@ -81,7 +81,7 @@ pub(super) fn entity_binding_entries() -> [wgpu::BindGroupLayoutEntry; 8] {
 
 pub(super) const ENTITY_ATTRIBUTES: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4,5=>Snorm8x4,6=>Float32x2];
 
-pub(super) struct EntityPipelineOptions<'a> {
+pub(crate) struct EntityPipelineOptions<'a> {
     pub(super) label: &'a str,
     pub(super) cull_mode: Option<wgpu::Face>,
     pub(super) depth_write: bool,

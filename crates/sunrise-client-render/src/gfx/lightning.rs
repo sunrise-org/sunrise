@@ -152,7 +152,7 @@ pub(super) fn offset(bolt: &Bolt, camera: DVec3) -> [f32; 3] {
     (DVec3::from_array(bolt.at) - camera).as_vec3().to_array()
 }
 
-pub(super) struct Renderer {
+pub(crate) struct Renderer {
     cache: Cache<wgpu::Buffer>,
     instances: Option<wgpu::Buffer>,
     capacity: usize,

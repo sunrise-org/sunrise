@@ -3,8 +3,8 @@
 //! there. #8459's probe; #8459 reports Iris 1.11.7 drawing (0, 200, 0) at every point
 //! sampled from it. Without a `final` that draws it, the pack is refused (#9165).
 use super::destination_tests::Fixture;
-use super::*;
 use std::io::{Cursor, Write};
+use sunrise_shaders::Post;
 
 const VERTEX: &str = "#version 120\nvarying vec2 uv;\nvoid main() { uv=gl_MultiTexCoord0.xy; gl_Position=ftransform(); }\n";
 

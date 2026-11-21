@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Frustum geometry and terrain instance and fade helpers for Sunrise"
 
 [dependencies]
+bytemuck = { version = "1.24", features = ["derive"] }
 glam = "0.30"
 
 [lints]

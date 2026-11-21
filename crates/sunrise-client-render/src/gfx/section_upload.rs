@@ -699,9 +699,9 @@ impl Renderer {
         let split = translucent_split(
             self.translucent_batching,
             self.flat.is_some() && self.flat_on,
-            pack.is_some_and(pack_post::PackPost::has_terrain),
+            pack.is_some_and(|p| p.has_terrain()),
             // One of Sunrise's own packs with `[shadow]` draws from the same lists (`shadow_view`).
-            pack.is_some_and(pack_post::PackPost::has_shadow) || self.native_shadow(),
+            pack.is_some_and(|p| p.has_shadow()) || self.native_shadow(),
         );
         if split == self.translucent_arena.is_some() {
             return;

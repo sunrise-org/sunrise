@@ -2,7 +2,7 @@
 //! added onto the sky, and on the float frame, in Sunrise's lifted world, the sun's disc in
 //! vanilla's colour at the scene's peak (entity.wgsl `fs_sky_sun`).
 
-pub(super) struct Celestial {
+pub(crate) struct Celestial {
     /// `fs_sky_celestial`, added onto the sky: the End sky, the moon, and the sun wherever the
     /// world isn't lifted.
     pub(super) added: wgpu::RenderPipeline,

@@ -23,8 +23,13 @@ fn rain_and_snow_leave_depth_alone_whatever_rain_depth_says() {
             let mut post = pack(&device, &queue, &adapter, program, property);
             // Retain the pipelines for another frame, then resize their targets.
             for size in [[6, 1], [6, 1], [12, 2]] {
-                post.resize(&device, size, &std::sync::atomic::AtomicBool::new(false))
-                    .unwrap();
+                post.resize(
+                    &device,
+                    size,
+                    &std::sync::atomic::AtomicBool::new(false),
+                    super::super::in_flight::poll_live,
+                )
+                .unwrap();
                 let mut encoder = device.create_command_encoder(&Default::default());
                 let targets = post.targets.as_ref().unwrap();
                 let color = &targets.color[0].as_ref().unwrap()[0];
@@ -143,7 +148,7 @@ fn pack(
         &properties,
         &macros,
         &sunrise_shaders::GameInputs {
-            weather: Some(super::super::pack_weather::inputs()),
+            weather: Some(crate::gfx::pack_weather::inputs()),
             ..Default::default()
         },
     );

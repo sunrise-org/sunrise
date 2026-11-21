@@ -2,8 +2,8 @@
 //! there ("Wrong uniform type ... Disabling that uniform") and reads 0; our probe packs (#9307)
 //! read 0 for each such declaration. Declared with its own type, it keeps its value.
 use super::destination_tests::Fixture;
-use super::*;
 use std::io::{Cursor, Write};
+use sunrise_shaders::Post;
 
 const VERTEX: &str = "#version 120\nvarying vec2 uv;\nvoid main() { uv = gl_MultiTexCoord0.xy; gl_Position = ftransform(); }\n";
 

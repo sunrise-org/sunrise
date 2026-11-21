@@ -10,7 +10,7 @@ type Ops<T> = wgpu::Operations<T>;
 type Color = wgpu::Color;
 
 /// Loaded and stored.
-pub(super) fn load<T>() -> Ops<T> {
+pub fn load<T>() -> Ops<T> {
     wgpu::Operations {
         load: wgpu::LoadOp::Load,
         store: wgpu::StoreOp::Store,
@@ -30,7 +30,7 @@ fn clear(c: [f32; 4]) -> Ops<Color> {
 }
 
 /// What the shadow pass writes and the programs read.
-pub(super) struct ShadowTargets {
+pub struct ShadowTargets {
     pub size: u32,
     /// `shadowtex0`, written by the shadow pass.
     pub depth: (wgpu::Texture, wgpu::TextureView),
@@ -60,7 +60,7 @@ pub(super) struct ShadowTargets {
 
 /// How the pack uses the shadowcolor buffers, a mask each (bit n: shadowcolor n).
 #[derive(Clone, Copy, Default)]
-pub(super) struct ShadowUse {
+pub struct ShadowUse {
     /// Used at all.
     pub colors: u16,
     /// Needs a B texture.
@@ -101,7 +101,7 @@ fn target(
 }
 
 /// The depth stand-in is initialized to no shadow on the next pack render.
-pub(super) fn stand_in(device: &wgpu::Device) -> wgpu::TextureView {
+pub fn stand_in(device: &wgpu::Device) -> wgpu::TextureView {
     device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("Shader pack shadow stand-in"),

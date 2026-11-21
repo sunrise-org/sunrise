@@ -3,10 +3,17 @@
 //! shader, each kind textured from its own copy of its sprite so that the pack's `texture`
 //! repeats it across the column as a standalone rain or snow texture would.
 
-use crate::weather::{Time, Vertex as WeatherVertex};
+pub use sunrise_render_core::{Vertex, WeatherTime as Time, WeatherVertex};
 
-use super::Vertex;
-use super::pack_post::Weather;
+/// This frame's rain and snow, when the pack draws them: their vertices, the quad indices, the
+/// quads of each kind (rain, snow), each kind's sprite, and a number that changes with them.
+pub struct Weather {
+    pub vertices: wgpu::Buffer,
+    pub indices: wgpu::Buffer,
+    pub quads: [std::ops::Range<u32>; 2],
+    pub sprites: [Option<wgpu::TextureView>; 2],
+    pub generation: u64,
+}
 
 /// What `gbuffers_weather` reads from a weather vertex: camera-relative position, the UV in
 /// repeats of the sprite, colour (with vanilla's fade) and light. Weather has no normal; the
@@ -109,7 +116,7 @@ impl PackWeather {
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        uploads: &mut super::upload::Uploads,
+        upload_buffer: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer, u64, &[u8]),
         atlas: &wgpu::Texture,
         weather: &[WeatherVertex],
         time: Time,
@@ -141,7 +148,6 @@ impl PackWeather {
                 color: v.color,
                 light: v.light,
                 normal: [0; 4],
-
                 glint_uv: [0.0, 0.0],
             }
         }));
@@ -149,7 +155,7 @@ impl PackWeather {
             self.capacity = self.scratch.len().next_power_of_two();
             self.vertices = Self::buffer(device, self.capacity);
         }
-        uploads.buffer(
+        upload_buffer(
             encoder,
             &self.vertices,
             0,
@@ -168,7 +174,7 @@ impl PackWeather {
 
 /// A texture holding the atlas's texels under `rect` (normalised x, y, width, height), as
 /// Sunrise's weather shader reads them (`weather_texel`).
-pub(super) fn copy_sprite(
+pub fn copy_sprite(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     atlas: &wgpu::Texture,
@@ -219,54 +225,4 @@ pub(super) fn copy_sprite(
         size,
     );
     texture.create_view(&Default::default())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::weather::Parameters;
-
-    /// The CPU phase matches the game's own weather columns (`Parameters::column`), which
-    /// Sunrise's weather shader is tested against.
-    #[test]
-    fn phase_matches_the_weather_columns() {
-        for i in 0..512i32 {
-            let x = i.wrapping_mul(45_238_971);
-            let z = i.wrapping_mul(-418_711).wrapping_add(i32::MIN);
-            let p = Parameters::new(x, z);
-            let bases = p.snow_base.map(f64::to_bits);
-            for ticks in [0, 511, 512, 131_071, 131_072, 1_000_003] {
-                let partial = [0.0, 0.5, 0.999][i as usize % 3];
-                for snow in [false, true] {
-                    let column = p.column(snow, ticks, x, -64, 320, z, 0, partial);
-                    let v = WeatherVertex {
-                        pos: [0.0; 3],
-                        uv: [0.0; 2],
-                        rect: [0.0; 4],
-                        animation: [
-                            p.rain_speed,
-                            p.rain_tick_offset,
-                            p.snow_drift[0],
-                            p.snow_drift[1],
-                        ],
-                        bases: [
-                            bases[0] as u32,
-                            (bases[0] >> 32) as u32,
-                            bases[1] as u32,
-                            (bases[1] >> 32) as u32,
-                        ],
-                        color: 0,
-                        light: 0,
-                        snow: u32::from(snow),
-                    };
-                    let [u, v] = phase(&v, Time::new(ticks, partial));
-                    assert_eq!(
-                        [u.to_bits(), v.to_bits()],
-                        [column.u_offset.to_bits(), column.v_offset.to_bits()],
-                        "x {x} z {z} ticks {ticks} snow {snow}"
-                    );
-                }
-            }
-        }
-    }
 }

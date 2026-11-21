@@ -3,8 +3,8 @@
 //! shaders.txt gives to `colortex0` there. Our probe packs (#9307) read the scene in `colortex0`
 //! through each in Iris 1.11.7, also in programs that don't declare `colortex0`.
 use super::destination_tests::Fixture;
-use super::*;
 use std::io::{Cursor, Write};
+use sunrise_shaders::Post;
 
 const VERTEX: &str = "#version 120\nvarying vec2 uv;\nvoid main() { uv = gl_MultiTexCoord0.xy; gl_Position = ftransform(); }\n";
 

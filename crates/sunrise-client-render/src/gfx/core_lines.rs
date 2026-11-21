@@ -28,7 +28,7 @@ pub(crate) const GLUE: Glue = Glue {
     vertex_id: "int(gl_VertexIndex)",
 };
 
-pub(super) struct CoreLines {
+pub(crate) struct CoreLines {
     lines: wgpu::RenderPipeline,
     secondary: wgpu::RenderPipeline,
     group: wgpu::BindGroup,

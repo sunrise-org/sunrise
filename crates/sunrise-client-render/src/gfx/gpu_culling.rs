@@ -91,7 +91,7 @@ use std::{
 /// One section (`gpu_culling.wgsl`'s `Section`).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub(super) struct Record {
+pub(crate) struct Record {
     /// Section x, y (from the level's bottom), z and arena page; -1: a free id.
     key: [i32; 4],
     /// The first vertex of its solid quads (a draw's base vertex, an i32: a
@@ -338,7 +338,7 @@ const TEST_READ: wgpu::BufferUsages = if cfg!(test) {
 
 /// What a frame's pass works from.
 #[derive(Clone, Copy)]
-pub(super) struct FrameInputs<'a> {
+pub(crate) struct FrameInputs<'a> {
     pub(super) camera: DVec3,
     /// The level's lowest block y and its height in sections.
     pub(super) min_y: i32,
@@ -418,7 +418,7 @@ impl<'a> FrameInputs<'a> {
 
 /// What `GpuCulling::prepare` made of a frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Prepared {
+pub(crate) enum Prepared {
     /// The pass is ready: `dispatch` it, and `draw`.
     Gpu,
     /// The frame's frustum planes would leave the test's integers (`HEADROOM`),
@@ -678,7 +678,7 @@ impl Grown {
 /// The section table as the CPU keeps it, by id, and what changed since
 /// `GpuCulling::prepare` last wrote it.
 #[derive(Default)]
-pub(super) struct Records {
+pub(crate) struct Records {
     records: Vec<Record>,
     /// Free ids below the table's end, a bit each (64 a word, lowest bit first).
     free: Vec<u64>,
@@ -851,7 +851,7 @@ impl Records {
 /// until a frame has decided them, just after GPU culling was switched on.
 /// The ends of sections that went or were handed back are skipped as they come.
 #[derive(Default)]
-pub(super) struct Fades {
+pub(crate) struct Fades {
     due: BinaryHeap<Reverse<(Instant, SectionKey)>>,
     pub fade_ms: Option<u64>,
 }
@@ -1036,7 +1036,7 @@ impl BoxTest {
 
 /// The pass, its buffers and the records it draws from: made when GPU culling
 /// is switched on, dropped when it is switched off.
-pub(super) struct GpuCulling {
+pub(crate) struct GpuCulling {
     /// `gpu_culling.wgsl`'s entry points: apply, cull, scan, scatter.
     pipelines: [wgpu::ComputePipeline; 4],
     layout: wgpu::BindGroupLayout,
@@ -3047,8 +3047,13 @@ mod tests {
             }
             let whole = gpu.records.all_dirty;
             if let Some(t) = &mut timing {
-                t.begin(device, queue, &std::sync::atomic::AtomicBool::new(false))
-                    .unwrap();
+                t.begin(
+                    device,
+                    queue,
+                    &std::sync::atomic::AtomicBool::new(false),
+                    super::super::in_flight::poll_live,
+                )
+                .unwrap();
             }
             let mut encoder = device.create_command_encoder(&Default::default());
             let input = FrameInputs::new(camera, min_y, height, radius, &frustum)
@@ -3254,8 +3259,13 @@ mod tests {
                 let mut out = Vec::new();
                 for frame in 0..12 {
                     if let Some(t) = timing {
-                        t.begin(device, queue, &std::sync::atomic::AtomicBool::new(false))
-                            .unwrap();
+                        t.begin(
+                            device,
+                            queue,
+                            &std::sync::atomic::AtomicBool::new(false),
+                            super::super::in_flight::poll_live,
+                        )
+                        .unwrap();
                     }
                     let mut encoder = device.create_command_encoder(&Default::default());
                     let input = FrameInputs::new(DVec3::new(0.5, 70.0, 0.5), -64, 24, 5, &frustum)

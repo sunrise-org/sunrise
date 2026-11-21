@@ -3,10 +3,7 @@
 
 /// Makes each storage image of `module` in group 0 declare the format its layout entry binds:
 /// a `layout(r11f_g11f_b10f)` image whose texture is the `RGBA16F` stand-in (`bindings`).
-pub(super) fn storage_formats_of(
-    module: &mut naga::Module,
-    entries: &[wgpu::BindGroupLayoutEntry],
-) {
+pub fn storage_formats_of(module: &mut naga::Module, entries: &[wgpu::BindGroupLayoutEntry]) {
     let globals: Vec<_> = module.global_variables.iter().map(|(h, _)| h).collect();
     for handle in globals {
         let var = &module.global_variables[handle];
@@ -50,7 +47,7 @@ pub(super) fn storage_formats_of(
 }
 
 /// The wgpu format of an image's format qualifier.
-pub(super) fn image_format(qualifier: &str) -> Option<wgpu::TextureFormat> {
+pub fn image_format(qualifier: &str) -> Option<wgpu::TextureFormat> {
     use wgpu::TextureFormat as T;
     Some(match qualifier {
         "rgba32f" => T::Rgba32Float,

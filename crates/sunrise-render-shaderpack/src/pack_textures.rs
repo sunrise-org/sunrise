@@ -4,26 +4,26 @@
 use sunrise_shaders::{CustomTexture, Group, Kind, Texels, Texture, TextureDim, TextureSource};
 
 /// What a custom texture is once uploaded: an image of ours, or one the game already has.
-pub(super) enum Image {
+pub enum Image {
     View(wgpu::TextureView),
     Lightmap,
     Atlas,
 }
 
-pub(super) struct PackTexture {
-    pub(super) stage: String,
-    pub(super) name: String,
-    pub(super) dimension: wgpu::TextureViewDimension,
-    pub(super) sample_type: wgpu::TextureSampleType,
-    pub(super) blur: bool,
-    pub(super) clamp: bool,
+pub struct PackTexture {
+    pub stage: String,
+    pub name: String,
+    pub dimension: wgpu::TextureViewDimension,
+    pub sample_type: wgpu::TextureSampleType,
+    pub blur: bool,
+    pub clamp: bool,
     /// Decoded from a PNG, the pack's or the game's (not a raw dump, not a generated texture).
-    pub(super) png: bool,
-    pub(super) image: Image,
+    pub png: bool,
+    pub image: Image,
 }
 
 /// Uploads `textures`, with a note for each the game can't provide.
-pub(super) fn upload(
+pub fn upload(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     textures: Vec<CustomTexture>,
@@ -94,7 +94,7 @@ pub(super) fn upload(
 }
 
 /// The stage name of `texture.<stage>.*` a program of `group` reads.
-pub(super) fn stage(group: Group) -> &'static str {
+pub fn stage(group: Group) -> &'static str {
     match group {
         Group::Gbuffers | Group::Translucent | Group::Shadow => "gbuffers",
         Group::Setup => "setup",
@@ -110,7 +110,7 @@ pub(super) fn stage(group: Group) -> &'static str {
 /// name (or another name of the same buffer, `gaux1` for `colortex4`) and dimension. A unit
 /// may hold one texture per dimension. Without one, a `customTexture` of that name and
 /// dimension, which every program reads.
-pub(super) fn find(textures: &[PackTexture], group: Group, ty: &str, name: &str) -> Option<usize> {
+pub fn find(textures: &[PackTexture], group: Group, ty: &str, name: &str) -> Option<usize> {
     let dimension = if ty.contains("1D") {
         wgpu::TextureViewDimension::D1
     } else if ty.contains("3D") {
@@ -141,7 +141,7 @@ fn key(stage: &str, name: &str) -> String {
 }
 
 /// `texture.noise`, if the pack has one.
-pub(super) fn noise(textures: &[PackTexture]) -> Option<&wgpu::TextureView> {
+pub fn noise(textures: &[PackTexture]) -> Option<&wgpu::TextureView> {
     textures
         .iter()
         .find(|t| t.stage == "noise" && t.dimension == wgpu::TextureViewDimension::D2)

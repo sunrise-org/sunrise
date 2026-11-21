@@ -10,7 +10,7 @@
 #[path = "pack_atlas/stitch.rs"]
 mod stitch;
 
-pub(super) struct PackAtlas {
+pub struct PackAtlas {
     texture: wgpu::Texture,
     pub view: wgpu::TextureView,
     /// Sprites per row.
@@ -193,7 +193,6 @@ impl PackAtlas {
     /// Every layer of `arrays` at its own size (`native`, its side before the arrays scaled it up
     /// to `sprite`), placed as vanilla's `Stitcher` places them with the padding of the Mipmap
     /// Levels option and the anisotropy bit; `None` when they don't fit the device.
-    #[allow(clippy::too_many_arguments)]
     pub fn stitched(
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
@@ -265,7 +264,6 @@ impl PackAtlas {
         ))
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn with_rects(
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
@@ -677,7 +675,7 @@ const FACE: &str = "    vec3 hz_p0 = uintBitsToFloat(hz_cp0);\n    \
 /// quad lands whole in one part. The colour's alpha can't decide it, as with `separateAo` it
 /// holds each vertex's own ambient occlusion.
 fn solid(lava: &[u16]) -> String {
-    let opaque = crate::mesher::OPAQUE_LAYER;
+    let opaque = sunrise_render_core::OPAQUE_LAYER;
     let lava: String = lava
         .iter()
         .map(|l| format!(" || hz_v_layer == {l}u"))
@@ -880,13 +878,9 @@ impl PackAtlas {
     }
 }
 
-#[cfg(test)]
-#[path = "pack_atlas/fade_test.rs"]
-mod fade_test;
-
-#[cfg(test)]
-#[path = "pack_atlas/midpoint_test.rs"]
-mod midpoint_test;
+/// `TerrainVertex` vertex attributes for `vs_terrain`: position, UV, layer, light, colour.
+pub const TERRAIN_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
+    wgpu::vertex_attr_array![0=>Float32x3,1=>Uint16x2,2=>Uint16,4=>Uint8x2,3=>Unorm8x4];
 
 #[cfg(test)]
 mod tests {
@@ -895,8 +889,8 @@ mod tests {
     /// Two arrays of 2x2 sprites, one layer split; each layer a colour of its own.
     #[test]
     fn layers_land_in_their_cells() {
-        let _gpu = crate::gfx::test_gpu::lock();
-        let instance = crate::gfx::test_gpu::instance();
+        let _gpu = crate::test_gpu::lock();
+        let instance = crate::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;
         };
@@ -969,7 +963,7 @@ mod tests {
     /// An array of `sprite`-pixel layers (`sprite` the largest of `native`), as the game builds
     /// them: each layer scaled up by whole pixels at level 0, its own pixels from the level where
     /// it has its own size. Every pixel of a layer's own image differs: (layer, x, y, 255).
-    pub(super) fn upscaled_array(
+    pub fn upscaled_array(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         native: &[u32],
@@ -1021,8 +1015,8 @@ mod tests {
     /// by 8 atlas. Each sprite has its own pixels, and its padding repeats its edge.
     #[test]
     fn stitched_sprites_keep_their_own_size_and_padding() {
-        let _gpu = crate::gfx::test_gpu::lock();
-        let instance = crate::gfx::test_gpu::instance();
+        let _gpu = crate::test_gpu::lock();
+        let instance = crate::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;
         };
@@ -1090,7 +1084,7 @@ mod tests {
     }
 
     fn material_fixture(animated: bool) {
-        let instance = crate::gfx::test_gpu::instance();
+        let instance = crate::test_gpu::instance();
         // No adapter (a CI runner without a GPU): skip, as the module's other readback tests do.
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;
@@ -1115,14 +1109,14 @@ mod tests {
             let markers = if kind == 0 {
                 [
                     [128, 126, 255, 19],
-                    crate::sprites::FLAT_NORMAL,
+                    sunrise_render_core::FLAT_NORMAL,
                     [130, 125, 254, 21],
                 ]
             } else {
                 [
                     [17, 240, 65, 255],
                     [18, 0, 66, 0],
-                    crate::sprites::NO_SPECULAR,
+                    sunrise_render_core::NO_SPECULAR,
                 ]
             };
             let pixels: Vec<_> = markers.iter().flat_map(|m| m.repeat(4)).collect();
@@ -1219,20 +1213,20 @@ mod tests {
 
     #[test]
     fn stitched_material_maps_share_colour_rectangles() {
-        let _gpu = crate::gfx::test_gpu::lock();
+        let _gpu = crate::test_gpu::lock();
         material_fixture(false);
     }
 
     #[test]
     fn animated_stitched_material_updates_only_its_rectangle() {
-        let _gpu = crate::gfx::test_gpu::lock();
+        let _gpu = crate::test_gpu::lock();
         material_fixture(true);
     }
 
     #[test]
     fn terrain_inputs_respects_separate_ao() {
-        let _gpu = crate::gfx::test_gpu::lock();
-        let instance = crate::gfx::test_gpu::instance();
+        let _gpu = crate::test_gpu::lock();
+        let instance = crate::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;
         };
@@ -1277,7 +1271,3 @@ mod tests {
         );
     }
 }
-
-#[cfg(test)]
-#[path = "pack_atlas/source_ownership_test.rs"]
-mod source_ownership_test;

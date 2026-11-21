@@ -5,6 +5,8 @@
 use super::destination_tests::Fixture;
 use super::*;
 use std::io::{Cursor, Write};
+use sunrise_render_shaderpack::pack_images;
+use sunrise_shaders::{BUFFERS, Group, Post, SHADOW_COLORS};
 
 const VERTEX: &str = "#version 120\nvarying vec2 uv;\nvoid main() { uv=gl_MultiTexCoord0.xy; gl_Position=ftransform(); }\n";
 

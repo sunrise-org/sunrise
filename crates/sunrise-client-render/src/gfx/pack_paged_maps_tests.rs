@@ -139,8 +139,13 @@ void main() {
     pass.paged = true;
     post.set_paged_maps([Some(map), None]);
     post.copied |= 1;
-    post.resize(&device, [8, 1], &std::sync::atomic::AtomicBool::new(false))
-        .unwrap();
+    post.resize(
+        &device,
+        [8, 1],
+        &std::sync::atomic::AtomicBool::new(false),
+        super::super::in_flight::poll_live,
+    )
+    .unwrap();
     let read = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: 256,

@@ -23,7 +23,7 @@ fn key(output: &EffectiveOutput) -> Key {
 /// An output whose resources or swapchain configuration failed, with the capabilities it
 /// failed on.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Rejected {
+pub(crate) struct Rejected {
     key: Key,
     caps: OutputCapabilities,
 }

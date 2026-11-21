@@ -57,6 +57,7 @@
     "sunrise-polytone": "platform",
     "sunrise-port-pack": "platform",
     "sunrise-shader-api": "platform",
+    "sunrise-render-shaderpack": "engine",
     "sunrise-shaders": "platform",
     "sunrise-theme": "platform",
     "sunrise-addresses": "sunrise",
@@ -163,6 +164,7 @@
     "sunrise-client-render -> sunrise-polytone",
     "sunrise-client-render -> sunrise-shader-api",
     "sunrise-client-render -> sunrise-shaders",
+    "sunrise-render-shaderpack -> sunrise-shaders",
     "sunrise-native-build -> sunrise-mod-package",
     "sunrise-mod-registry -> sunrise-mod-package",
     "sunrise-client -> sunrise-telemetry"

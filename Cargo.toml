@@ -32,6 +32,7 @@ members = [
     "crates/sunrise-border",
     "crates/sunrise-client-render",
     "crates/sunrise-render-core",
+    "crates/sunrise-render-shaderpack",
     "crates/sunrise-command",
     "crates/sunrise-items",
     "crates/sunrise-server-files",

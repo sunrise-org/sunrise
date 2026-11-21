@@ -3,10 +3,8 @@
 
 use glam::DVec3;
 
-use super::initial_history_tests::frame;
+use super::initial_history_tests::test_frame;
 use super::{FrameUniforms, PackInputs, Value, index, zero};
-use crate::gfx::lightning::{Bolt, Input};
-use crate::hud::HudBatch;
 
 fn bolt_position(u: &FrameUniforms) -> [f32; 4] {
     match u.values[index("lightningBoltPosition").unwrap()] {
@@ -20,36 +18,22 @@ fn bolt_position(u: &FrameUniforms) -> [f32; 4] {
 /// floats would give 10 or 11, not 10.25. Of two bolts, the last in the draw list counts.
 #[test]
 fn the_last_bolt_in_the_draw_list_reaches_the_pack_in_player_space() {
-    let hud = HudBatch::scratch([800, 450]);
-    let mut f = frame(&hud);
+    let mut f = test_frame();
     f.camera = DVec3::new(29_999_000.25, 64.5, -30.75);
     let mut u = FrameUniforms::default();
     u.update(&f, &PackInputs::default(), [800, 450]);
     assert_eq!(bolt_position(&u), [0.0; 4]);
 
-    let bolts = [
-        Bolt {
-            at: [29_999_010.5, 63.0, -20.25],
-            seed: 7,
-        },
-        Bolt {
-            at: [29_998_990.0, 70.25, -40.5],
-            seed: 8,
-        },
-    ];
-    f.lightning = Input {
-        bolts: &bolts[..1],
-        uv: [0.0; 2],
-    };
+    f.lightning_bolt = Some(DVec3::new(29_999_010.5, 63.0, -20.25));
     u.update(&f, &PackInputs::default(), [800, 450]);
     assert_eq!(bolt_position(&u), [10.25, -1.5, 10.5, 1.0]);
 
-    f.lightning.bolts = &bolts;
+    f.lightning_bolt = Some(DVec3::new(29_998_990.0, 70.25, -40.5));
     u.update(&f, &PackInputs::default(), [800, 450]);
     assert_eq!(bolt_position(&u), [-10.25, 5.75, -9.75, 1.0]);
 
     // Gone again: zeros.
-    f.lightning.bolts = &[];
+    f.lightning_bolt = None;
     u.update(&f, &PackInputs::default(), [800, 450]);
     assert_eq!(bolt_position(&u), [0.0; 4]);
 }

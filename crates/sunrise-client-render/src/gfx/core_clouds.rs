@@ -40,7 +40,7 @@ pub(crate) struct TooManyFaces {
 }
 
 /// The packs' cloud pipelines (with and without back faces culled) and their buffers.
-pub(super) struct CoreClouds {
+pub(crate) struct CoreClouds {
     fancy: wgpu::RenderPipeline,
     flat: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,

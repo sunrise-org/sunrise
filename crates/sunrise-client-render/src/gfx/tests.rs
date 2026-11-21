@@ -758,6 +758,15 @@ fn shaders_translate_to_hlsl_for_directx_12_and_glsl_for_opengl() {
         std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
         &mut files,
     );
+    // The pack's own helpers (`pack_post.wgsl`) moved to sunrise-render-shaderpack's
+    // `pack_post`.
+    wgsl_files(
+        std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../sunrise-render-shaderpack/src"
+        )),
+        &mut files,
+    );
     assert!(files.len() >= 10, "{files:?}");
     // Improved transparency's files are appended to terrain.wgsl and entity.wgsl.
     let mut sources: Vec<(std::path::PathBuf, String)> = Vec::new();

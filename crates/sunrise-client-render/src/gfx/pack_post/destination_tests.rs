@@ -2,6 +2,7 @@
 use super::*;
 use crate::{gfx::Frame, hud::HudBatch};
 use std::io::{Cursor, Write};
+use sunrise_shaders::Post;
 use wgpu::TextureFormat as T;
 
 const VERTEX: &str = "#version 120\nvarying vec2 uv;\nvoid main() { uv=gl_MultiTexCoord0.xy; gl_Position=ftransform(); }\n";
@@ -313,6 +314,7 @@ impl Fixture {
             &[],
             terrain,
             &std::sync::atomic::AtomicBool::new(false),
+            super::super::in_flight::poll_live,
         )
         .unwrap();
         encoder.copy_texture_to_buffer(
@@ -522,9 +524,6 @@ fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
     }
 }
 
-#[path = "clear_budget_tests.rs"]
-mod clear_budget_tests;
-
 /// A cleared buffer written three times a frame flips an odd number of times, so its first write
 /// goes to the texture that was "main" the frame before, which a later program wrote after that
 /// frame's clear. Where that first write discards, Iris 1.11.7 reads the clear value (a probe
@@ -592,6 +591,3 @@ fn a_cleared_buffer_starts_every_frame_cleared_on_both_textures() {
         assert!(wrong.is_empty(), "frame {frame}: {wrong:?}");
     }
 }
-
-#[path = "clear_false_tests.rs"]
-mod clear_false_tests;

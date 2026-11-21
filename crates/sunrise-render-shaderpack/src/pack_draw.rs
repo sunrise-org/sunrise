@@ -1,7 +1,7 @@
 //! The uniforms a shader pack's gbuffers programs read per draw (`HzDraw` at set 2, the
 //! translator's `DRAW_UNIFORMS`): one slot per render stage of a uniform buffer, picked with a
 //! dynamic offset at each draw.
-pub use crate::render_geometry::EntitySpan;
+pub use sunrise_render_core::EntitySpan;
 
 use sunrise_shaders::{RENDER_STAGES, render_stage};
 
@@ -9,7 +9,7 @@ use sunrise_shaders::{RENDER_STAGES, render_stage};
 /// `entityColor`.
 const SIZE: u32 = 32;
 
-pub(super) struct DrawUniforms {
+pub struct DrawUniforms {
     pub layout: wgpu::BindGroupLayout,
     group: wgpu::BindGroup,
     stride: u32,

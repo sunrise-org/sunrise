@@ -151,7 +151,7 @@ fn material(layer: u32, oit: bool) -> usize {
 }
 
 #[derive(Default)]
-pub(super) struct EntityBatch {
+pub(crate) struct EntityBatch {
     // Runs of consecutive quads of one material (first quad, quad count): a
     // model's quads share one, so whole runs are copied at once. Cleared each
     // frame, keeping their storage.

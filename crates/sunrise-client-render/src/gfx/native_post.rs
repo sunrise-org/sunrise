@@ -604,8 +604,8 @@ impl NativeFrame {
         let camera = self.shadow_camera.as_ref()?;
         Some(
             super::pack_post::ShadowView::new(
-                super::pack_uniforms::shadow_culling(frame, camera),
-                super::pack_uniforms::shadow_light(frame, camera),
+                crate::gfx::pack_uniforms::shadow_culling(frame, camera),
+                crate::gfx::pack_uniforms::shadow_light(frame, camera),
             )
             .with_depth_planes(true),
         )
@@ -1595,13 +1595,13 @@ pub fn frame_inputs(
         reflection_resolution: reflection_size(size).map(|s| s as f32),
         mods: pack.mod_params,
         light_direction: match shadow {
-            Some(s) => super::pack_uniforms::shadow_light(frame, s),
+            Some(s) => crate::gfx::pack_uniforms::shadow_light(frame, s),
             None => Vec3::Y,
         }
         .to_array(),
         has_shadow: u32::from(shadow.is_some()),
         shadow_view_proj: m(shadow.map_or(Mat4::IDENTITY, |s| {
-            super::pack_uniforms::shadow_culling(frame, s)
+            crate::gfx::pack_uniforms::shadow_culling(frame, s)
         })),
         shadow_distance: shadow.map_or(0.0, |s| s.distance),
         shadow_distortion: shadow.map_or(0.0, |s| {
@@ -1776,7 +1776,7 @@ mod tests {
             return;
         };
         let hud = crate::hud::HudBatch::scratch([4, 4]);
-        let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
+        let mut frame = crate::gfx::frame_tests::frame(&hud);
         let mut native = NativeFrame::new(
             &device,
             None,
@@ -1832,7 +1832,7 @@ mod tests {
                 unicode: false,
             },
         );
-        let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
+        let mut frame = crate::gfx::frame_tests::frame(&hud);
         let new = || {
             NativeFrame::new(
                 &device,
@@ -2688,7 +2688,7 @@ mod tests {
             return;
         };
         let hud = crate::hud::HudBatch::scratch([4, 4]);
-        let frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
+        let frame = crate::gfx::frame_tests::frame(&hud);
         let mut native = NativeFrame::new(
             &device,
             None,
