@@ -5,4 +5,5 @@ mod cli;
 #[path = "../common/mod.rs"]
 mod common;
 mod fixtures;
+mod install;
 mod native_build;
