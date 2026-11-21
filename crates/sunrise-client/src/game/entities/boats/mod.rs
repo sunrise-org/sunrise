@@ -541,6 +541,29 @@ pub(super) fn boat_wood(item: &str) -> Option<&str> {
         .or_else(|| name.strip_suffix("_raft"))
         .filter(|w| !w.ends_with("_chest"))
 }
+/// `EntityType.by`: a boat-shaped id still needs a registered entity type.
+pub(super) fn registered_boat<'a>(
+    kind: &'a str,
+    registry: &sunrise_client_core::registries::Registries,
+) -> Option<(&'a str, bool)> {
+    let boat = any_boat_wood(kind)?;
+    registry
+        .ids("minecraft:entity_type")
+        .binary_search_by(|id| id.as_str().cmp(kind))
+        .ok()?;
+    Some(boat)
+}
+
+/// The boat item and its matching vanilla entity type are both registered.
+pub(super) fn registered_boat_item<'a>(
+    id: &'a str,
+    items: &sunrise_client::items::Items,
+) -> Option<(&'a str, bool)> {
+    let boat = registered_boat(id, &items.component_registry)?;
+    items.get(id)?;
+    Some(boat)
+}
+
 pub(super) struct BoatModels {
     pub models: HashMap<String, Part>,
     pub chest_models: HashMap<String, Part>,
@@ -548,7 +571,7 @@ pub(super) struct BoatModels {
     pub water_patch: Option<Part>,
 }
 impl BoatModels {
-    /// Whether a boat of this wood (with or without a chest) can be drawn.
+    /// Whether this remote boat has a layer to draw.
     pub fn has(&self, wood: &str, chest: bool) -> bool {
         if chest {
             self.chest_models.contains_key(wood)
@@ -1831,10 +1854,8 @@ impl Game<'_> {
     /// The boat `BoatItem.use` would place for `stack` (its SUCCESS), or
     /// None when it aims at nothing (PASS) or the spot is taken (FAIL).
     pub(super) fn boat_to_place(&self, stack: &ItemStack) -> Option<Boat> {
-        let (wood, chest) = any_boat_wood(&stack.item)?;
-        if !self.boat_models.has(wood, chest) {
-            return None;
-        }
+        // BoatItem holds a registered item and its entity type, not a model.
+        let (wood, chest) = registered_boat_item(&stack.item, self.res.items())?;
         let hit = self.boat_item_hit()?;
         let mut boat = Boat::new(
             self.next_entity + 1,
@@ -2319,6 +2340,28 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boat_admission_uses_registered_entity_ids() {
+        let registry = sunrise_client_core::registries::Registries {
+            entity_types: vec![
+                "minecraft:bamboo_chest_raft".into(),
+                "minecraft:oak_boat".into(),
+                "minecraft:pig".into(),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            registered_boat("minecraft:oak_boat", &registry),
+            Some(("oak", false))
+        );
+        assert_eq!(
+            registered_boat("minecraft:bamboo_chest_raft", &registry),
+            Some(("bamboo", true))
+        );
+        assert_eq!(registered_boat("minecraft:bamboo_boat", &registry), None);
+        assert_eq!(registered_boat("minecraft:pig", &registry), None);
+    }
 
     fn boat() -> Boat {
         Boat::new(1, Arc::from("oak"), Vec3::ZERO, 0.0)

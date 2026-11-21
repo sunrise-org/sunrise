@@ -197,11 +197,6 @@ try {
         Write-Host "Added $Bin to your PATH: open a new terminal to use it."
     }
     Write-Host "Installed Sunrise $Tag in $Target."
-    if (-not (Get-ChildItem -Path $GameFiles -ErrorAction SilentlyContinue)) {
-        Write-Host "Next, prepare the game files from your own Minecraft 26.3 (it needs Java 25 and the game installed"
-        Write-Host "once by the official launcher; see docs/server.md):"
-        Write-Host "  sunrise-prepare --prepare --server-jar C:\path\to\server.jar"
-    }
     Write-Host "Then set up a server: mkdir my-server; cd my-server; sunrise-server init"
 } finally {
     Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue

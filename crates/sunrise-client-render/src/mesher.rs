@@ -1089,6 +1089,23 @@ impl MeshTables {
                 cover,
             });
         }
+        let [
+            water_still,
+            water_flow,
+            water_overlay,
+            lava_still,
+            lava_flow,
+        ] = if layers == 0 {
+            [0; 5]
+        } else {
+            [
+                layer("minecraft:block/water_still")?,
+                layer("minecraft:block/water_flow")?,
+                layer("minecraft:block/water_overlay")?,
+                layer("minecraft:block/lava_still")?,
+                layer("minecraft:block/lava_flow")?,
+            ]
+        };
         let mut tables = Self {
             solid: info.iter().map(|i| i.solid).collect(),
             full_faces: info
@@ -1097,11 +1114,11 @@ impl MeshTables {
                 .collect(),
             info,
             visibility,
-            water_still: layer("minecraft:block/water_still")?,
-            water_flow: layer("minecraft:block/water_flow")?,
-            water_overlay: layer("minecraft:block/water_overlay")?,
-            lava_still: layer("minecraft:block/lava_still")?,
-            lava_flow: layer("minecraft:block/lava_flow")?,
+            water_still,
+            water_flow,
+            water_overlay,
+            lava_still,
+            lava_flow,
             mod_fluids,
             animated_layers,
             colormaps: Vec::new(),

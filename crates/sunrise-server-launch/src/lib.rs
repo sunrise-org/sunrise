@@ -170,14 +170,28 @@ pub fn resource_candidates(config: &Config, dir: &Path, program: Option<&Path>) 
     if !config.engine.resources.is_empty() {
         return vec![dir.join(&config.engine.resources)];
     }
-    let version = GAME_VERSION;
+    let server_version = format!("{GAME_VERSION}-server");
     let mut out = vec![dir.join("resources")];
-    // A release folder or a checkout: .local/sunrise-client/<version> beside the program or above it.
+    let local = dir.join("game-files/sunrise-client");
+    out.push(local.join(&server_version));
+    let mut defaults = vec![local];
     if let Some(program) = program {
+        // An installer shares game-files across releases; a release or checkout may keep its own.
+        if let Some(install) = Install::around(program) {
+            defaults.push(install.root.join("game-files/sunrise-client"));
+        }
         for ancestor in program.ancestors().skip(1).take(4) {
-            out.push(ancestor.join(".local/sunrise-client").join(version));
+            defaults.push(ancestor.join("game-files/sunrise-client"));
+            defaults.push(ancestor.join(".local/sunrise-client"));
         }
     }
+    out.extend(
+        defaults
+            .iter()
+            .skip(1)
+            .map(|folder| folder.join(&server_version)),
+    );
+    out.extend(defaults.iter().map(|folder| folder.join(GAME_VERSION)));
     out
 }
 
@@ -195,9 +209,9 @@ pub fn resources(config: &Config, dir: &Path, program: Option<&Path>) -> Result<
                 .map(|d| format!("  {}", d.display()))
                 .collect();
             format!(
-                "no prepared game files. Sunrise reads them from your own copy of Minecraft 26.3:\n\
-                 prepare them with `sunrise-prepare --prepare --server-jar PATH` (or the launcher) and copy \
-                 the folder to resources/ here, or set engine.resources in server.toml. Looked in:\n{}",
+                "no prepared game files. Run `sunrise-server init` to prepare them, or use \
+                 `sunrise-prepare --server` and `sunrise-server import-resources DIR`. \
+                 You can also set engine.resources in server.toml. Looked in:\n{}",
                 tried.join("\n")
             )
         })
@@ -399,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn resources_prepared_without_sounds_are_found() {
+    fn server_profile_is_preferred_to_full_resources() {
         let root = std::env::temp_dir().join(format!("sunrise-server-res-{}", std::process::id()));
         let prepared = root.join(".local/sunrise-client/26.3");
         std::fs::create_dir_all(&prepared).unwrap();
@@ -409,7 +423,21 @@ mod tests {
         assert!(resources(&config, &server, Some(&program)).is_err());
         // What `sunrise-prepare` writes on every run; no asset index without `sunrise-prepare sounds`.
         std::fs::write(prepared.join("sunrise-resources.json"), "{}").unwrap();
-        assert_eq!(resources(&config, &server, Some(&program)), Ok(prepared));
+        assert_eq!(
+            resources(&config, &server, Some(&program)),
+            Ok(prepared.clone())
+        );
+        let profile = root.join("game-files/sunrise-client/26.3-server");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join("sunrise-resources.json"),
+            r#"{"profile":"server"}"#,
+        )
+        .unwrap();
+        assert_eq!(resources(&config, &server, Some(&program)), Ok(profile));
+        let mut explicit = config;
+        explicit.engine.resources = prepared.display().to_string();
+        assert_eq!(resources(&explicit, &server, Some(&program)), Ok(prepared));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

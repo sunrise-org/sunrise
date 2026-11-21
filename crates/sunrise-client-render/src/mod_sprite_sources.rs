@@ -43,23 +43,6 @@ fn is_registered(kind: &str) -> bool {
         .contains(kind)
 }
 
-/// The native mods' source types, declared but never answered: for a load that draws nothing.
-pub struct Declared;
-impl ModSources for Declared {
-    fn is_registered(&self, kind: &str) -> bool {
-        is_registered(kind)
-    }
-    fn ask(
-        &self,
-        _: &Identifier,
-        _: &str,
-        _: &Tag,
-        _: &Arc<dyn ResourceReader>,
-    ) -> Vec<SpriteSourceOutput> {
-        Vec::new()
-    }
-}
-
 /// The native mods' source types, answered on the resource loader as registrations.
 pub struct Registered;
 impl ModSources for Registered {

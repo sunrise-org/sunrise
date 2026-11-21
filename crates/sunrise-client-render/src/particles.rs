@@ -1218,13 +1218,9 @@ fn below_half_pixel(radius: f64, distance_squared: f64, pixel_focal_length: f32)
         && projected_limit * projected_limit < distance_squared
 }
 
-impl ParticleEngine {
-    pub fn new(
-        root: &ResourceSource,
-        atlas: &HashMap<String, Rect>,
-        translucent: &HashSet<String>,
-    ) -> Self {
-        let mut engine = Self {
+impl Default for ParticleEngine {
+    fn default() -> Self {
+        Self {
             particles: Vec::new(),
             groups: groups::Group::all(groups::registered()),
             group_defs: groups::registered(),
@@ -1263,7 +1259,17 @@ impl ParticleEngine {
             sounds: Vec::new(),
             made: Default::default(),
             item_sprites: HashMap::new(),
-        };
+        }
+    }
+}
+
+impl ParticleEngine {
+    pub fn new(
+        root: &ResourceSource,
+        atlas: &HashMap<String, Rect>,
+        translucent: &HashSet<String>,
+    ) -> Self {
+        let mut engine = Self::default();
         engine.reload(root, atlas, translucent);
         engine
     }

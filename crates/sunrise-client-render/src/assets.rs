@@ -333,8 +333,7 @@ impl Assets {
     ) -> Result<RenderAssets> {
         RenderAssets::load_with_parsed(root, self, true, Some(parsed))
     }
-    /// [`Assets::reload`] for a server, which draws nothing: the sprites'
-    /// layers, without the block or item models or the textures' pixels.
+    /// [`Assets::reload`] for a server, which has no sprites or baked models.
     pub fn reload_for_server(
         &self,
         root: &crate::resource_source::ResourceRoot,
@@ -366,10 +365,12 @@ impl RenderAssets {
         let mut sprites = if draws {
             crate::sprites::Sprites::with_disk_cache(root)
         } else {
-            crate::sprites::Sprites::for_server(root.source().clone())
+            crate::sprites::Sprites::default()
         };
-        for name in MATERIALS {
-            sprites.insert(&format!("minecraft:block/{name}"))?;
+        if draws {
+            for name in MATERIALS {
+                sprites.insert(&format!("minecraft:block/{name}"))?;
+            }
         }
         // A server draws no block and no item: its block models (about 24 MB
         // baked) and item model library (7 MB) stay empty.
@@ -406,35 +407,37 @@ impl RenderAssets {
             let _step = crate::spans::startup::step("core.item_library");
             parsed.into_item_library()
         };
-        // Fluids are drawn by the fluid renderer, not block models; breaking
-        // progress uses the destroy-stage overlays.
-        for name in [
-            "water_still",
-            "water_flow",
-            "water_overlay",
-            "lava_still",
-            "lava_flow",
-        ] {
-            sprites.insert_in_blocks(&format!("minecraft:block/{name}"))?;
-        }
-        for model in crate::fluid_models::resolved() {
+        if draws {
+            // Fluids are drawn by the fluid renderer, not block models; breaking
+            // progress uses the destroy-stage overlays.
             for name in [
-                Some(&model.still),
-                Some(&model.flowing),
-                model.overlay.as_ref(),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                sprites.insert_in_blocks(name)?;
+                "water_still",
+                "water_flow",
+                "water_overlay",
+                "lava_still",
+                "lava_flow",
+            ] {
+                sprites.insert_in_blocks(&format!("minecraft:block/{name}"))?;
             }
-        }
-        if crate::fluid_models::any_flat_look() {
-            sprites.insert_flat(crate::fluid_models::FLAT_SPRITE)?;
-        }
-        for stage in 0..10 {
-            sprites.insert(&format!("minecraft:block/destroy_stage_{stage}"))?;
-            sprites.insert(&format!("minecraft:block/destroy_oit_stage_{stage}"))?;
+            for model in crate::fluid_models::resolved() {
+                for name in [
+                    Some(&model.still),
+                    Some(&model.flowing),
+                    model.overlay.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    sprites.insert_in_blocks(name)?;
+                }
+            }
+            if crate::fluid_models::any_flat_look() {
+                sprites.insert_flat(crate::fluid_models::FLAT_SPRITE)?;
+            }
+            for stage in 0..10 {
+                sprites.insert(&format!("minecraft:block/destroy_stage_{stage}"))?;
+                sprites.insert(&format!("minecraft:block/destroy_oit_stage_{stage}"))?;
+            }
         }
         let fusion = if draws {
             let _step = crate::spans::startup::step("core.fusion");
@@ -502,11 +505,9 @@ impl RenderAssets {
         if draws {
             emissive = crate::native_emissive::load_optifine(root.source(), &mut sprites);
         }
-        sprites.save_disk_cache();
         if draws {
+            sprites.save_disk_cache();
             sprites.finish();
-        } else {
-            sprites.finish_without_pixels();
         }
         // `finish` grows the buffer by doubling: keep only the bytes in use.
         sprites.pixels.shrink_to_fit();
@@ -531,9 +532,17 @@ impl RenderAssets {
             pbr_size: sprites.pbr_size,
             connected,
             fusion,
-            mod_animations: crate::mod_animations::Animations::load(root.source()),
+            mod_animations: if draws {
+                crate::mod_animations::Animations::load(root.source())
+            } else {
+                Default::default()
+            },
             // A required pipeline that doesn't build fails the load: nothing of it is published.
-            mod_pipelines: crate::mod_pipelines::Pipelines::load(root.source(), generation)?,
+            mod_pipelines: if draws {
+                crate::mod_pipelines::Pipelines::load(root.source(), generation)?
+            } else {
+                Default::default()
+            },
             generation,
         })
     }

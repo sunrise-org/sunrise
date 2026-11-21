@@ -110,20 +110,29 @@ pub fn check_prepared(resources: &Path) -> Result<(), String> {
         }
         Err(e) => problems.push(e.clone()),
     }
-    for dir in PREPARED_DIRS {
-        let empty = std::fs::read_dir(resources.join(dir))
-            .map_or(true, |mut entries| entries.next().is_none());
-        if empty {
-            problems.push(format!("{dir} is missing or empty"));
+    let server_profile = manifest
+        .as_ref()
+        .is_ok_and(|manifest| manifest["profile"] == "server");
+    if !server_profile {
+        for dir in PREPARED_DIRS {
+            let empty = std::fs::read_dir(resources.join(dir))
+                .map_or(true, |mut entries| entries.next().is_none());
+            if empty {
+                problems.push(format!("{dir} is missing or empty"));
+            }
         }
     }
     if problems.is_empty() {
         return Ok(());
     }
+    let command = if server_profile {
+        "sunrise-prepare --server"
+    } else {
+        "sunrise-prepare --prepare --server-jar PATH"
+    };
     Err(format!(
         "the prepared game files in {} are incomplete or damaged:\n  {}\nPrepare them again with \
-         `sunrise-prepare --prepare --server-jar PATH` (or the launcher), or copy the whole prepared folder to \
-         the server again.",
+         `{command}`, or copy the whole prepared folder to the server again.",
         resources.display(),
         problems.join("\n  ")
     ))
@@ -426,6 +435,30 @@ mod tests {
     fn a_complete_prepared_folder_passes() {
         let root = prepared_folder("complete");
         assert_eq!(check_prepared(&root), Ok(()));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_server_profile_needs_no_client_asset_folders() {
+        let root = prepared_folder("server-profile");
+        std::fs::remove_dir_all(root.join("assets")).unwrap();
+        assert!(
+            check_prepared(&root)
+                .unwrap_err()
+                .contains("assets/minecraft/font")
+        );
+        let path = root.join("sunrise-resources.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        manifest["profile"] = "server".into();
+        std::fs::write(&path, manifest.to_string()).unwrap();
+        assert_eq!(check_prepared(&root), Ok(()));
+        std::fs::remove_file(root.join("commands.json")).unwrap();
+        assert!(
+            check_prepared(&root)
+                .unwrap_err()
+                .contains("commands.json is missing")
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 

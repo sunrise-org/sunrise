@@ -1464,11 +1464,20 @@ impl Audio {
         Self::with_device(root, "")
     }
     pub fn with_device(root: &ResourceSource, device_name: &str) -> Self {
-        Self::with_output(root, true, device_name)
+        Self::with_output(root, SoundRegistry::load(root), true, device_name)
     }
-    /// No output device: the dedicated server.
+    /// Keep the client's sound registry but open no output device.
     pub fn silent(root: &ResourceSource) -> Self {
-        Self::with_output(root, false, "")
+        Self::with_output(root, SoundRegistry::load(root), false, "")
+    }
+    /// Dedicated servers send sound events to clients without opening their sound files.
+    pub fn for_server() -> Self {
+        Self::with_output(
+            &ResourceSource::default(),
+            SoundRegistry::default(),
+            false,
+            "",
+        )
     }
     /// The output device asked for (`soundDevice`), empty for the system's default; the
     /// default plays when that one can't be opened, as in vanilla.
@@ -1485,8 +1494,12 @@ impl Audio {
         self.engine.set_loop_context(context);
         self.engine.notify_loaded();
     }
-    fn with_output(root: &ResourceSource, output: bool, target_device: &str) -> Self {
-        let registry = SoundRegistry::load(root);
+    fn with_output(
+        root: &ResourceSource,
+        registry: SoundRegistry,
+        output: bool,
+        target_device: &str,
+    ) -> Self {
         if output && registry.is_empty() {
             // The game then plays nothing on a working output (#1035, #1076).
             log::warn!(

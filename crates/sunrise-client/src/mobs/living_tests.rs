@@ -124,7 +124,7 @@ fn a_mob_bounces_off_a_bouncy_block_and_not_off_stone() {
     let registry = assets.registry;
     let facts = crate::blocks::BlockFacts::load(&root, registry).unwrap();
     let motion = crate::motion::MotionResources::load(&root, &assets).unwrap();
-    let data = super::super::MobData::load(&root, &facts);
+    let data = super::super::MobData::load(&root, facts.states.len(), true).unwrap();
     let types = super::super::MobTypes::load(&root).unwrap();
     let biomes = crate::biome::Biomes::load(&root).unwrap();
     let items = crate::items::Items::load(
@@ -250,7 +250,7 @@ fn a_ridden_horse_floats_in_deep_water() {
     let registry = assets.registry;
     let facts = crate::blocks::BlockFacts::load(&root, registry).unwrap();
     let motion = crate::motion::MotionResources::load(&root, &assets).unwrap();
-    let data = super::super::MobData::load(&root, &facts);
+    let data = super::super::MobData::load(&root, facts.states.len(), true).unwrap();
     let types = super::super::MobTypes::load(&root).unwrap();
     let biomes = crate::biome::Biomes::load(&root).unwrap();
     let items = crate::items::Items::load(
@@ -399,7 +399,7 @@ fn a_falling_mob_lands_on_a_shulker_or_a_held_happy_ghast() {
     let registry = assets.registry;
     let facts = crate::blocks::BlockFacts::load(&root, registry).unwrap();
     let motion = crate::motion::MotionResources::load(&root, &assets).unwrap();
-    let data = super::super::MobData::load(&root, &facts);
+    let data = super::super::MobData::load(&root, facts.states.len(), true).unwrap();
     let types = super::super::MobTypes::load(&root).unwrap();
     let biomes = crate::biome::Biomes::load(&root).unwrap();
     let items = crate::items::Items::load(

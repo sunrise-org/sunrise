@@ -158,6 +158,7 @@ pub(super) fn layer_color(dyeable: bool, undyed: Option<u32>, stack: Option<&Ite
 }
 
 /// Armor stand models and the humanoid layers of every equipment asset.
+#[derive(Default)]
 pub(super) struct ArmorStandAssets {
     /// Shared (`Arc`) so the GPU path (`mobs::skin`) keeps one stored copy of each.
     pub main: Option<Arc<Part>>,

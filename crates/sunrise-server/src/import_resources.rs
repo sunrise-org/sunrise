@@ -61,7 +61,7 @@ pub fn problems(source: &Path) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(&manifest) else {
         return vec![format!(
             "{} has no sunrise-resources.json: it is not a prepared folder (the launcher writes one, or \
-             `sunrise-prepare --prepare`)",
+             `sunrise-prepare --server`)",
             source.display()
         )];
     };

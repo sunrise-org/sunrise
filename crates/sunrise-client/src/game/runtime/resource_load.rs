@@ -594,7 +594,18 @@ pub(super) fn load_resources_for_mods(
     } else {
         client_reload::collect_texture_atlases()
     };
-    resolved = client_reload::stage_texture_atlases(resolved, &texture_atlases);
+    let manifest = vanilla_root.join("sunrise-resources.json");
+    let server_profile = manifest.is_file()
+        && sunrise_world::json_file::read::<serde_json::Value>(&manifest)?["profile"] == "server";
+    let stage = |root| {
+        let root = client_reload::stage_texture_atlases(root, &texture_atlases);
+        if server_profile {
+            root.with_server_profile()
+        } else {
+            root
+        }
+    };
+    resolved = stage(resolved);
     let threads = settings.sunrise.worker_threads();
     // One pool of workers for every level's streaming, the client's and the
     // server thread's (sunrise_threads::jobs), sized before any world opens.
@@ -605,11 +616,13 @@ pub(super) fn load_resources_for_mods(
     // published at once so the title screen can appear while the world bundle
     // loads; the synchronous launch instead carries it in `Loaded`.
     let mut pack_error = None;
-    // A dedicated server builds only the font (UiResources::server), as the
-    // integrated server's game does: the full atlas and panorama are 144 MB.
+    // A dedicated server has no font metrics or atlas; give its game only
+    // the shared empty UI structures.
     let load_ui = |source: &sunrise_assets::resource_source::ResourceSource| {
         let _step = startup::step("ui.load");
-        if headless {
+        if role.is_dedicated_server() {
+            UiResources::server(&sunrise_assets::resource_source::ResourceSource::default())
+        } else if headless {
             UiResources::server(source)
         } else {
             UiResources::load(source, vanilla_root).map(|ui| {
@@ -692,10 +705,9 @@ pub(super) fn load_resources_for_mods(
         pack_error = Some(failure);
         can_rollback = false;
         root = vanilla_root.to_path_buf();
-        resolved = client_reload::stage_texture_atlases(
-            sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
-            &texture_atlases,
-        );
+        resolved = stage(sunrise_assets::resource_source::ResourceRoot::directory(
+            root.clone(),
+        ));
     };
     // Every loaded game publishes scalar registry keys, including callers that
     // load a prepared root directly instead of building a mod content overlay.
@@ -767,6 +779,7 @@ pub(super) fn load_resources_for_mods(
         item_renderer,
         biomes.clone(),
         Arc::new(light),
+        !role.is_dedicated_server(),
     )?;
     pack.additional_data = additional_data.into();
     drop(pack_step);
@@ -887,7 +900,11 @@ pub(super) fn load_resources_for_mods(
                 })
             });
             let game_cpu = startup::time("handoff.game_cpu", || {
-                GameCpuResources::load(&resolved, entity_models.as_deref())
+                GameCpuResources::load(
+                    &resolved,
+                    entity_models.as_deref(),
+                    !role.is_dedicated_server(),
+                )
             });
             (game_cpu, textures.map(Step::join))
         });

@@ -1,16 +1,15 @@
-//! Facts the mob AI and renderer read from vanilla code, exported by
-//! `VanillaMobDataExporter` into `mob-data.json`: per-state pathfinding types
+//! The server's `mob-data.json` holds per-state pathfinding types
 //! (`WalkNodeEvaluator.getPathTypeFromState` with vanilla's tags bound),
-//! pathfindability, spawn-surface predicates, collision tops, each entity
-//! type's spawn placement and the client's keyframe animation definitions.
+//! pathfindability, spawn-surface predicates, collision tops and spawn
+//! placements. The client's keyframes are exported separately.
 use super::keyframes::Animation;
 use super::path::PathType;
 use crate::blocks::{BlockFacts, Fluid};
 pub use mod_api::entity::mobs::PathComputationType;
+use serde::Deserialize;
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    fs,
     path::Path,
     sync::atomic::{AtomicU8, Ordering},
 };
@@ -130,13 +129,15 @@ impl PartAnswers<'_> {
         path_bit(kind) as u8
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum Placement {
     OnGround,
     InWater,
     InLava,
     NoRestrictions,
 }
+#[derive(Default)]
 pub struct MobData {
     pub states: Vec<StateData>,
     /// What the mods' block parts made of each state, by state (see [`MobData::resolve_parts`]).
@@ -173,22 +174,46 @@ pub struct MobData {
     pub mod_spawns: HashMap<String, mod_api::SpawnPlacementRule>,
 }
 impl MobData {
-    pub fn load(root: &ResourceRoot, facts: &BlockFacts) -> Self {
+    /// Loads the shared rules, plus presentation data when the game draws.
+    pub fn load(root: &ResourceRoot, state_count: usize, draws: bool) -> crate::Result<Self> {
         let source = root.source();
         let root = root.prepared();
-        let parsed: Option<Value> = fs::read(root.join("mob-data.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok());
-        let mut data = match parsed {
-            Some(v)
-                if v["states"]
-                    .as_array()
-                    .is_some_and(|a| a.len() == facts.states.len()) =>
-            {
-                Self::from_json(&v)
-            }
-            _ => Self::fallback(facts),
+        #[derive(Deserialize)]
+        struct Rules {
+            states: Vec<(String, u16, f32)>,
+            placements: HashMap<String, SpawnRule>,
+        }
+        #[derive(Deserialize)]
+        struct SpawnRule {
+            placement: Placement,
+            heightmap: String,
+        }
+        let path = root.join("mob-data.json");
+        let rules: Rules = sunrise_world::json_file::read(&path)?;
+        if rules.states.len() != state_count {
+            return Err(format!(
+                "{}: expected {state_count} block states, found {}",
+                path.display(),
+                rules.states.len(),
+            )
+            .into());
+        }
+        let mut data = Self {
+            states: rules
+                .states
+                .into_iter()
+                .map(|(path, flags, top)| StateData {
+                    path: PathType::from_name(&path),
+                    flags,
+                    top,
+                })
+                .collect(),
+            ..Self::default()
         };
+        for (id, rule) in rules.placements {
+            data.heightmaps.insert(id.clone(), rule.heightmap);
+            data.placements.insert(id, rule.placement);
+        }
         data.biome_tags = crate::items::load_tags(
             root,
             "worldgen/biome",
@@ -198,24 +223,28 @@ impl MobData {
         data.entity_tags =
             crate::items::load_tags(root, "entity_type", &sunrise_world::loot::PackOverlay::NONE)
                 .unwrap_or_default();
-        data.villager_hats =
-            std::sync::RwLock::new(super::villager_hats::VillagerHats::load(source));
-        let random = sunrise_optifine::random_textures::RandomTextures::scan(source);
-        let blinks = sunrise_optifine::blink::Blinks::scan(source, &random);
-        let mut emissive = sunrise_optifine::emissive::Emissive::scan(source, &random);
-        emissive.pair_beside(source, blinks.files());
-        data.emissive = std::sync::RwLock::new(std::sync::Arc::new(emissive));
-        data.blinks = std::sync::RwLock::new(blinks);
-        data.random_textures = std::sync::RwLock::new(random);
-        data
+        if draws {
+            data.animations = Self::load_animations(root)?;
+            data.villager_hats =
+                std::sync::RwLock::new(super::villager_hats::VillagerHats::load(source));
+            let random = sunrise_optifine::random_textures::RandomTextures::scan(source);
+            let blinks = sunrise_optifine::blink::Blinks::scan(source, &random);
+            let mut emissive = sunrise_optifine::emissive::Emissive::scan(source, &random);
+            emissive.pair_beside(source, blinks.files());
+            data.emissive = std::sync::RwLock::new(std::sync::Arc::new(emissive));
+            data.blinks = std::sync::RwLock::new(blinks);
+            data.random_textures = std::sync::RwLock::new(random);
+        }
+        Ok(data)
     }
-    /// Only the keyframe animation definitions of `mob-data.json`.
-    pub fn load_animations(root: &Path) -> HashMap<String, Animation> {
-        fs::read(root.join("mob-data.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-            .map(|v| Self::from_json(&v).animations)
-            .unwrap_or_default()
+    /// Only the client jar's keyframe animation definitions.
+    pub fn load_animations(root: &Path) -> std::io::Result<HashMap<String, Animation>> {
+        let definitions: HashMap<String, Value> =
+            sunrise_world::json_file::read(&root.join("mob-animations.json"))?;
+        Ok(definitions
+            .into_iter()
+            .map(|(k, a)| (k, Animation::parse(&a)))
+            .collect())
     }
     fn resolved_state(&self, state: BlockStateId) -> Option<&ResolvedState> {
         self.resolved
@@ -278,61 +307,6 @@ impl MobData {
     pub fn biome_has(&self, tag: &str, biome: &str) -> bool {
         self.biome_tags.get(tag).is_some_and(|s| s.contains(biome))
     }
-    fn from_json(v: &Value) -> Self {
-        let states = v["states"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|s| StateData {
-                path: PathType::from_name(s[0].as_str().unwrap_or("BLOCKED")),
-                flags: s[1].as_u64().unwrap_or(0) as u16,
-                top: s[2].as_f64().unwrap_or(0.0) as f32,
-            })
-            .collect();
-        let placements = v["placements"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .map(|(k, p)| {
-                let placement = match p["placement"].as_str() {
-                    Some("on_ground") => Placement::OnGround,
-                    Some("in_water") => Placement::InWater,
-                    Some("in_lava") => Placement::InLava,
-                    _ => Placement::NoRestrictions,
-                };
-                (k.clone(), placement)
-            })
-            .collect();
-        let heightmaps = v["placements"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .filter_map(|(k, p)| Some((k.clone(), p["heightmap"].as_str()?.to_owned())))
-            .collect();
-        let animations = v["animations"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .map(|(k, a)| (k.clone(), Animation::parse(a)))
-            .collect();
-        Self {
-            resolved: Default::default(),
-            states,
-            placements,
-            heightmaps,
-            animations,
-            villager_hats: Default::default(),
-            cem: Default::default(),
-            random_textures: Default::default(),
-            emissive: Default::default(),
-            blinks: Default::default(),
-            biome_tags: HashMap::new(),
-            entity_tags: HashMap::new(),
-            pois: Default::default(),
-            species_placements: Default::default(),
-            mod_spawns: Default::default(),
-        }
-    }
     /// Without the export, approximate path types from the gameplay facts.
     pub fn fallback(facts: &BlockFacts) -> Self {
         let states = facts
@@ -379,21 +353,8 @@ impl MobData {
             })
             .collect();
         Self {
-            resolved: Default::default(),
             states,
-            placements: HashMap::new(),
-            heightmaps: HashMap::new(),
-            animations: HashMap::new(),
-            villager_hats: Default::default(),
-            cem: Default::default(),
-            random_textures: Default::default(),
-            emissive: Default::default(),
-            blinks: Default::default(),
-            biome_tags: HashMap::new(),
-            entity_tags: HashMap::new(),
-            pois: Default::default(),
-            species_placements: Default::default(),
-            mod_spawns: Default::default(),
+            ..Self::default()
         }
     }
     pub fn state(&self, id: BlockStateId) -> StateData {
@@ -473,3 +434,35 @@ impl MobData {
 #[cfg(test)]
 #[path = "path_type_tests.rs"]
 mod path_type_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_loads_exported_mob_rules_without_client_assets() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = ResourceRoot::directory(folder.path().to_path_buf());
+        let rules = folder.path().join("mob-data.json");
+        std::fs::write(
+            &rules,
+            r#"{
+            "states": [["WATER", 2, 0.25]],
+            "placements": {"minecraft:squid": {"placement": "in_water", "heightmap": "OCEAN_FLOOR"}}
+        }"#,
+        )
+        .unwrap();
+        let mobs = MobData::load(&root, 1, false).unwrap();
+        let state = BlockStateId(0);
+        assert_eq!(mobs.path_type(state), PathType::Water);
+        assert!(mobs.pathfindable(state, PathComputationType::Water));
+        assert_eq!(mobs.state(state).top, 0.25);
+        assert_eq!(mobs.placement("minecraft:squid"), Placement::InWater);
+        assert_eq!(mobs.heightmap("minecraft:squid"), "OCEAN_FLOOR");
+        assert!(mobs.animations.is_empty());
+        assert!(MobData::load(&root, 1, true).is_err());
+        assert!(MobData::load(&root, 2, false).is_err());
+        std::fs::remove_file(rules).unwrap();
+        assert!(MobData::load(&root, 1, false).is_err());
+    }
+}

@@ -35,8 +35,9 @@ plan are in [server.md](server.md).
   them.
 - **No Docker image is published.** You build it yourself from the repository (below). Publishing an image
   needs the project owner.
-- Nothing of Mojang's is downloaded or shipped. The server reads the game files you prepare from your own copy
-  of Minecraft 26.3.
+- The server does not need a Minecraft account or client install to prepare its game files. Setup can download
+  Mojang's free `server.jar` and Java runtime directly from Mojang, checking their SHA-1s. Neither the downloads
+  nor the prepared data are shipped with Sunrise.
 
 ## 1. Install
 
@@ -74,35 +75,20 @@ from there too.
 
 ## 2. Prepare the game files
 
-Sunrise reads Minecraft's data from your own copy of the game. You need Minecraft Java Edition 26.3, played
-once from the official launcher on this computer, a Java 25 runtime, and the 26.3 `server.jar`: it's the
-`downloads.server.url` in your launcher's `versions/26.3/26.3.json`. Then:
+Nothing to do before `init`: if it finds no prepared files after you accept the EULA, it runs
+`sunrise-prepare --server` to download the pinned `server.jar` from Mojang and prepare the server's data. If a
+release has no suitable Java installed, preparation also downloads Mojang's Java runtime. Running the server
+itself does not use Java.
 
-```sh
-sunrise-prepare --prepare --server-jar /path/to/server.jar
-```
+If the server cannot reach Mojang, download the pinned `server.jar` on another computer, copy it to the server,
+and run `sunrise-server init --server-jar /path/to/server.jar`. Provide Java 25 or newer through `JAVA_HOME` for
+an entirely offline preparation. A source checkout needs a JDK to compile the exporters; releases include the
+compiled exporters and need only a runtime.
 
-Add `--minecraft-dir PATH` if your launcher keeps the game elsewhere. The prepared files go to
-`game-files`, which updates keep.
-
-**On a headless machine** (a VPS, a home server) with no Minecraft install, the launcher's command line can
-download the game for your account and set the server up there:
-
-```sh
-sunrise-launcher install latest
-sunrise-launcher account sign-in        # shows a code: enter it at the address it prints, on any device
-sunrise-launcher prepare --download     # Mojang's files, for the signed-in account that owns Minecraft
-sunrise-launcher servers set-up
-sunrise-launcher servers create --name "My server" --accept-eula
-sunrise-launcher servers run "My server" -- start
-```
-
-Or prepare on your own computer instead, with the launcher or `sunrise-prepare`, and copy the prepared `26.3` folder to the server with `sunrise-server import-resources DIR` (it checks the
-folder and its version first), or by hand: into
-`~/.local/share/sunrise/game-files/sunrise-client/26.3`, or into `resources/` in the server folder, or anywhere
-`[engine] resources` in `server.toml` names. A folder copied this way needs release v2026.10.17.07 or
-newer: older ones don't keep `registries.json` and `commands.json` with the prepared files, and the
-server then stops with "registries.json not found next to the resources". Prepare again with a newer release.
+Or prepare on another computer with `sunrise-prepare --server` and copy its `game-files/sunrise-client/26.3-server`
+folder to the server. Use `sunrise-server import-resources DIR` to install that copy, or
+`sunrise-server init --resources DIR` to use it in place. Existing full prepared folders still work; they include
+client files, which are downloaded only by the launcher for a signed-in account that owns Minecraft.
 
 ## 3. First run
 
@@ -120,8 +106,8 @@ sunrise-server init
 4. whether to use a whitelist (yes by default, as in vanilla) and who to add;
 5. whether to make the first player an operator.
 
-It then tells you where it found the game and its files. Every question has a flag, so it also runs from a
-script:
+It then tells you where it found the game and its files, or prepares the files if they are missing. Every
+question has a flag, so it also runs from a script:
 
 ```sh
 sunrise-server init --eula --world survival --seed 12345 --port 25565 --whitelist --player Alex --op Alex --yes

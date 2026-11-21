@@ -106,8 +106,6 @@ struct StillKey {
 #[derive(Default)]
 pub struct Sprites {
     source: ResourceSource,
-    /// Whether this load draws nothing (a server's): the mods' sprite sources are not run for it.
-    serving: bool,
     /// Edge length of every array layer and the layers' current frames, set
     /// by [`Sprites::finish`].
     pub size: u32,
@@ -252,15 +250,6 @@ impl Sprites {
             ..Self::default()
         }
     }
-    /// The sprites of a load that draws nothing (a server's): the mods' sprite sources are
-    /// declared but not run for it, and no decoded textures are kept.
-    pub fn for_server(source: ResourceSource) -> Self {
-        Self {
-            source,
-            serving: true,
-            ..Self::default()
-        }
-    }
     /// Sprites that reuse textures decoded by an earlier launch, kept in a
     /// cache file in `root`. A texture's decoded form stands for the sprite lists this load's
     /// atlas sources gave, mods' included, and no other.
@@ -287,17 +276,8 @@ impl Sprites {
         }
     }
     fn materials(&self) -> &crate::atlas_sources::Materials {
-        self.materials.get_or_init(|| {
-            if self.serving {
-                let listing = crate::atlas_sources::Listing::build(
-                    &self.source,
-                    &crate::mod_sprite_sources::Declared,
-                );
-                crate::atlas_sources::Materials::over(Arc::new(listing), &self.source)
-            } else {
-                crate::atlas_sources::Materials::new(&self.source)
-            }
-        })
+        self.materials
+            .get_or_init(|| crate::atlas_sources::Materials::new(&self.source))
     }
     /// Every sprite a mod's sprite source made in the blocks atlas, by pixels or by naming a
     /// texture, added though no model names it: the mod that made it looks it up after the
@@ -341,14 +321,6 @@ impl Sprites {
     /// textures are scaled up by whole pixels, so UVs stay per layer.
     #[sunrise_mod_api_macros::replaceable]
     pub fn finish(&mut self) {
-        self.lay_out(true);
-    }
-    /// [`Sprites::finish`] for a server, which draws nothing: the layers'
-    /// size, but neither their pixels nor the animations' frames.
-    pub fn finish_without_pixels(&mut self) {
-        self.lay_out(false);
-    }
-    fn lay_out(&mut self, pixels: bool) {
         // Prefetched textures nothing inserted.
         self.ready = Default::default();
         let layers = self.native.len().max(1) as u64;
@@ -356,19 +328,10 @@ impl Sprites {
         self.minimum_size = self.native.iter().map(|n| n.0).min().unwrap_or(SPRITE_SIZE);
         let budget = TEXTURE_BUDGET.load(std::sync::atomic::Ordering::Relaxed);
         let size = side_within(largest, layers, budget);
-        if pixels {
-            log::info!(
-                "Sunrise: block sprites: {layers} layers at {size} px (largest {largest} px, budget {} MiB)",
-                budget >> 20
-            );
-        }
-        if !pixels {
-            self.pixels = Vec::new();
-            self.animations = Vec::new();
-            self.pbr = Vec::new();
-            self.size = size;
-            return;
-        }
+        log::info!(
+            "Sunrise: block sprites: {layers} layers at {size} px (largest {largest} px, budget {} MiB)",
+            budget >> 20
+        );
         let mut resized = Vec::with_capacity(self.native.len());
         self.pixels.clear();
         for (from, frames, initial) in &self.native {

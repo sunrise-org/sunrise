@@ -64,19 +64,19 @@ impl GameCpuResources {
     pub(super) fn load(
         resources: &sunrise_assets::resource_source::ResourceRoot,
         document: Option<&sunrise_client::mobs::EntityModelDocument>,
+        draws: bool,
     ) -> Result<Self> {
         let root = resources.prepared();
         let owned_document;
-        let document = match document {
-            Some(document) => Some(document),
-            None => match sunrise_client::mobs::EntityModelDocument::load(root) {
-                Ok(document) => {
-                    owned_document = document;
-                    Some(&owned_document)
-                }
-                Err(_) => None,
-            },
+        let document = if !draws {
+            None
+        } else if let Some(document) = document {
+            Some(document)
+        } else {
+            owned_document = sunrise_client::mobs::EntityModelDocument::load(root).ok();
+            owned_document.as_ref()
         };
+        let visuals = draws.then(|| resources.source());
         let model = |key| document.and_then(|document| document.model(key));
         let (
             painting_variants,
@@ -91,13 +91,17 @@ impl GameCpuResources {
                 paintings::PaintingVariants::load(root)
             });
             let frames = named_scope(scope, "game_cpu.frames", move || {
-                frames::bake_frames(resources.source())
+                visuals.map(frames::bake_frames).unwrap_or_default()
             });
             let armor_stand_assets = named_scope(scope, "game_cpu.armor_stands", move || {
-                armor_stands::ArmorStandAssets::load(resources.source(), document)
+                visuals
+                    .map(|source| armor_stands::ArmorStandAssets::load(source, document))
+                    .unwrap_or_default()
             });
             let waypoint_styles = named_scope(scope, "game_cpu.waypoints", move || {
-                sunrise_client::locator_bar::WaypointStyles::load(resources.source())
+                visuals
+                    .map(sunrise_client::locator_bar::WaypointStyles::load)
+                    .unwrap_or_default()
             });
             let boat_models = named_scope(scope, "game_cpu.boats", move || {
                 boats::BoatModels::load(document)
@@ -107,9 +111,11 @@ impl GameCpuResources {
             });
             let creative_screen = named_scope(scope, "game_cpu.creative", move || {
                 let mut creative = Creative::load(root).map_err(|error| error.to_string())?;
-                let tab_modifiers =
-                    sunrise_client::polytone_creative_tabs::TabModifier::read_all(root);
-                creative.set_pack_modifiers(tab_modifiers);
+                if draws {
+                    let tab_modifiers =
+                        sunrise_client::polytone_creative_tabs::TabModifier::read_all(root);
+                    creative.set_pack_modifiers(tab_modifiers);
+                }
                 Ok::<_, String>(creative)
             });
             (

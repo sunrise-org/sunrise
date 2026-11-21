@@ -152,7 +152,12 @@ fn declared_waterlogged_blocks_keep_their_class_and_gain_liquid_defaults() {
     assert_eq!(block_flags[dry_plant.0 as usize], (false, false));
 
     let facts = BlockFacts::load(&root, &registry).unwrap();
-    let mobs = MobData::load(&ResourceRoot::directory(root.clone()), &facts);
+    let mobs = MobData::load(
+        &ResourceRoot::directory(root.clone()),
+        facts.states.len(),
+        false,
+    )
+    .unwrap();
     assert_eq!(mobs.path_type(plant), PathType::Water);
     assert_eq!(mobs.path_type(dry_plant), PathType::Open);
     assert!(mobs.pathfindable(plant, PathComputationType::Water));

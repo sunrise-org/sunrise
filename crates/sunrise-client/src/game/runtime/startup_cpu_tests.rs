@@ -68,11 +68,26 @@ fn worker_prepares_owned_models_and_inventory_before_handoff() {
     }]}"#,
     )
     .unwrap();
+    let server = GameCpuResources::load(
+        &sunrise_assets::resource_source::ResourceRoot::directory(root.clone())
+            .with_server_profile(),
+        None,
+        false,
+    )
+    .unwrap();
+    assert!(server.crystal_model.is_none());
+    assert!(server.armor_stand_assets.main.is_none());
+    assert!(server.entity_models.leash_knot.is_none());
+    assert_eq!(
+        server.creative_screen.catalog().tabs()[0].id,
+        "minecraft:building_blocks"
+    );
     let worker_root = root.clone();
     let prepared = std::thread::spawn(move || {
         GameCpuResources::load(
             &sunrise_assets::resource_source::ResourceRoot::directory(worker_root),
             None,
+            true,
         )
         .map_err(|error| error.to_string())
     })
@@ -106,7 +121,8 @@ fn worker_prepares_owned_models_and_inventory_before_handoff() {
     assert!(
         GameCpuResources::load(
             &sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
-            None
+            None,
+            true,
         )
         .is_err()
     );

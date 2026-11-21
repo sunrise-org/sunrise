@@ -1178,8 +1178,7 @@ impl Game<'_> {
     }
     /// `BoatDispenseItemBehavior`.
     fn dispense_boat(&mut self, pos: Pos, facing: Direction, stack: ItemStack) -> Dispensed {
-        let Some((wood, chest)) =
-            super::boats::any_boat_wood(&stack.item).map(|(w, c)| (w.to_owned(), c))
+        let Some((wood, chest)) = super::boats::registered_boat_item(&stack.item, self.res.items())
         else {
             return (self.dispense_default_in_level(pos, facing, stack), CLICK);
         };
@@ -1201,13 +1200,10 @@ impl Game<'_> {
         } else {
             return (self.dispense_default_in_level(pos, facing, stack), CLICK);
         };
-        if !self.boat_models.has(&wood, chest) {
-            return (self.dispense_default_in_level(pos, facing, stack), CLICK);
-        }
         self.next_entity += 1;
         let mut boat = super::boats::Boat::new(
             self.next_entity,
-            wood.as_str().into(),
+            wood.into(),
             Vec3::new(x, y + y_offset, z),
             y_rot(facing),
         );

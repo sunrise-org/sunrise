@@ -99,6 +99,23 @@ jobs:
       # Every build and test in this job runs at the runner's size, not the host's (tools/ci/cargo_jobs.py).
       - name: Cap build parallelism to the runner
         run: python3 tools/ci/cargo_jobs.py --job-mib 3072 --cap
+      - name: Prepare and verify the dedicated server profile from Mojang's pinned jar
+        if: matrix.shard == 'daily-rows'
+        run: |
+          # Only pinned downloads persist, by SHA-1 inside this repository's private cache.
+          mkdir -p "$DYNA_CI_KEEP/mojang-server" .local
+          ln -s "$DYNA_CI_KEEP/mojang-server" .local/server-downloads
+          version=$(python3 -c 'import json; print(json.load(open("research-lock.json"))["minecraft"]["version"])')
+          profile="$PWD/game-files/sunrise-client/${version}-server"
+          cargo build --release --locked -p sunrise-prepare
+          preparer="${CARGO_TARGET_DIR:-target}/release/sunrise-prepare"
+          python3 tools/ci/preparation_step.py resource-export "$RUNNER_TEMP/server-prepare.log" \
+            "$preparer" --server --output "$profile"
+          "$preparer" --server --check --output "$profile" > "$RUNNER_TEMP/server-check.log" 2>&1 || {
+            echo '::error::sunrise-prepare --server --check refused the prepared server profile'; exit 1;
+          }
+          python3 tools/prepare_output.py check --server "$profile"
+          echo "SUNRISE_TEST_SERVER_PROFILE=$profile" >> "$GITHUB_ENV"
       # Missing data fails the leg.
       - name: Prepare checkout-keyed vanilla data
         id: data

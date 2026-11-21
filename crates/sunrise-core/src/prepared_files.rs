@@ -44,6 +44,42 @@ const VERSION: u32 = 2;
 const HEADER: usize = 40;
 const ENTRY: usize = 24;
 
+/// The resources a server profile prepares, excluding logs and scratch files.
+pub fn server_resource(name: &str) -> bool {
+    name.starts_with("data/")
+        || name.starts_with("worldgen/")
+        || name.starts_with("biome-parameters/")
+        || matches!(
+            name,
+            "assets/minecraft/lang/en_us.json"
+                | "assets/minecraft/lang/deprecated.json"
+                | "sunrise-resources.json"
+                | "sunrise-prepare.json"
+                | "attributes.json"
+                | "block-behaviours.json"
+                | "block-tags.json"
+                | "cached-collision.nbt"
+                | "command-registries.json"
+                | "commands.json"
+                | "creative-inventory.json"
+                | "damage-catalog.json"
+                | "damage-tags.json"
+                | "damage-types.json"
+                | "datafix-tables.json"
+                | "entity-types.json"
+                | "facts.json"
+                | "gameplay-facts.json"
+                | "items.json"
+                | "landing-definitions.json"
+                | "mob-data.json"
+                | "movement-properties.nbt"
+                | "occlusion.nbt"
+                | "player-float-ids.json"
+                | "registries.json"
+                | "render-definitions.json"
+        )
+}
+
 /// Whether `name` (from the root) is a file this holds: under its folders,
 /// and not a sound (hundreds of MB, read one at a time while playing).
 fn holds_file(name: &str) -> bool {

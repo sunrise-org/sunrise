@@ -199,9 +199,4 @@ case ":$PATH:" in
   *":$BIN:"*) ;;
   *) echo "Add $BIN to your PATH, for example: echo 'export PATH=\"$BIN:\$PATH\"' >> ~/.profile" ;;
 esac
-if [ -z "$(ls -A "$DIR/game-files/sunrise-client" 2>/dev/null)" ]; then
-  echo "Next, prepare the game files from your own Minecraft 26.3 (it needs Java 25 and the game installed once"
-  echo "by the official launcher; see docs/server.md):"
-  echo "  sunrise-prepare --prepare --server-jar /path/to/server.jar"
-fi
 echo "Then set up a server: mkdir my-server && cd my-server && sunrise-server init"

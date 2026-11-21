@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use sunrise_core::prepared_files::server_resource;
 
 /// File identity/change stamps for resource-cache keys, following symlinks.
 pub(crate) fn metadata_fingerprint(metadata: &fs::Metadata) -> io::Result<u64> {
@@ -56,6 +57,7 @@ fn copy_resource_bytes(
 
 enum Storage {
     Directory(PathBuf),
+    ServerProfile(ResourceSource),
     Archive(Zip),
     Prefix {
         source: ResourceSource,
@@ -67,6 +69,19 @@ enum Storage {
         BTreeMap<String, Vec<Resource>>,
         Arc<[(String, ResourceSource)]>,
     ),
+}
+
+fn check_server_resource(name: &str) -> io::Result<()> {
+    if server_resource(name) {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!(
+            "the server tried to read {name}, which a server's game files don't include.\n  \
+         This is a Sunrise bug: please report it with this line at https://github.com/sunrise-org/sunrise/issues"
+        ),
+    ))
 }
 
 /// A winning resource keeps its source alive; merged resources keep only their
@@ -118,6 +133,7 @@ impl std::fmt::Debug for ResourceSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let kind = match self.0.as_ref() {
             Storage::Directory(_) => "Directory",
+            Storage::ServerProfile(_) => "ServerProfile",
             Storage::Archive(_) => "Archive",
             Storage::Prefix { .. } => "Prefix",
             Storage::Index(..) => "Index",
@@ -153,6 +169,14 @@ impl ResourceRoot {
             data_changes: ResourceSource::default(),
             mod_layers: Arc::from([]),
         }))
+    }
+    /// Guard the resolved generation's prepared reads, including reads through overlays.
+    /// Call after composing the packs so a missing path cannot be hidden by an index.
+    pub fn with_server_profile(mut self) -> Self {
+        let root = Arc::make_mut(&mut self.0);
+        root.source = root.source.clone().restricted_to_server();
+        root.data = root.data.clone().restricted_to_server();
+        self
     }
     /// Passive server data is independent of the client's selected asset packs.
     pub fn with_data(mut self, data: ResourceSource, data_changes: ResourceSource) -> Self {
@@ -342,6 +366,7 @@ impl ResourceSource {
     /// file. Empty where there is none.
     pub fn stack(&self, name: &str) -> Vec<Resource> {
         match self.0.as_ref() {
+            Storage::ServerProfile(source) if server_resource(name) => source.stack(name),
             Storage::Index(files, layers, _) => match layers.get(name) {
                 Some(layers) => layers.clone(),
                 None => files.get(name).cloned().into_iter().collect(),
@@ -360,6 +385,12 @@ impl ResourceSource {
     /// A source of the same files, `files` added over them, in the same generation: it keeps
     /// the layers and shares what [`ResourceSource::cached`] holds.
     pub fn extended(&self, files: BTreeMap<String, Resource>) -> Self {
+        if let Storage::ServerProfile(source) = self.0.as_ref() {
+            return Self(
+                Arc::new(Storage::ServerProfile(source.extended(files))),
+                self.1.clone(),
+            );
+        }
         let mut index: BTreeMap<_, _> = self
             .list("")
             .into_iter()
@@ -390,6 +421,9 @@ impl ResourceSource {
     }
     pub fn directory(root: PathBuf) -> Self {
         Self::from(Storage::Directory(root))
+    }
+    pub fn restricted_to_server(self) -> Self {
+        Self::from(Storage::ServerProfile(self))
     }
     pub fn archive(path: &Path) -> io::Result<Self> {
         Ok(Self::opened_archive(Zip::open(path)?))
@@ -427,6 +461,10 @@ impl ResourceSource {
         }
         match self.0.as_ref() {
             Storage::Directory(root) => sunrise_core::prepared_files::read(&root.join(name)),
+            Storage::ServerProfile(source) => {
+                check_server_resource(name)?;
+                source.read(name)
+            }
             Storage::Archive(archive) => archive.read(name),
             Storage::Prefix { source, prefix } => source.read(&format!("{prefix}{name}")),
             Storage::Index(files, ..) => files
@@ -443,6 +481,9 @@ impl ResourceSource {
         }
         match self.0.as_ref() {
             Storage::Directory(root) => root.join(name).is_file().then(|| root.clone()),
+            Storage::ServerProfile(source) => server_resource(name)
+                .then(|| source.folder_of(name))
+                .flatten(),
             Storage::Archive(_) => None,
             Storage::Prefix { source, prefix } => source.folder_of(&format!("{prefix}{name}")),
             Storage::Index(files, ..) => match &files.get(name)?.0 {
@@ -465,6 +506,10 @@ impl ResourceSource {
             ));
         }
         match self.0.as_ref() {
+            Storage::ServerProfile(source) => {
+                check_server_resource(name)?;
+                source.copy_to(name, out, budget)
+            }
             Storage::Archive(archive) => archive.copy_to(name, out, budget).map(|_| ()),
             Storage::Prefix { source, prefix } => {
                 source.copy_to(&format!("{prefix}{name}"), out, budget)
@@ -500,6 +545,10 @@ impl ResourceSource {
             Storage::Directory(root) => {
                 sunrise_core::prepared_files::read_head(&root.join(name), max)
             }
+            Storage::ServerProfile(source) => {
+                check_server_resource(name)?;
+                source.read_head(name, max)
+            }
             Storage::Archive(archive) => archive.read_head(name, max),
             Storage::Prefix { source, prefix } => source.read_head(&format!("{prefix}{name}"), max),
             Storage::Index(files, ..) => match &files
@@ -528,6 +577,7 @@ impl ResourceSource {
                     path.is_file()
                 }
             }
+            Storage::ServerProfile(source) => server_resource(name) && source.contains(name),
             Storage::Archive(archive) => archive.contains(name),
             Storage::Prefix { source, prefix } => source.contains(&format!("{prefix}{name}")),
             Storage::Index(files, ..) => files.contains_key(name),
@@ -545,6 +595,10 @@ impl ResourceSource {
         let bytes = match self.0.as_ref() {
             Storage::Directory(root) => {
                 sunrise_core::prepared_files::read_head(&root.join(name), max.saturating_add(1))?
+            }
+            Storage::ServerProfile(source) => {
+                check_server_resource(name)?;
+                return source.read_limited(name, max);
             }
             Storage::Archive(archive) => return archive.read_limited(name, max),
             Storage::Prefix { source, prefix } => {
@@ -592,6 +646,11 @@ impl ResourceSource {
                 out.sort();
                 out
             }
+            Storage::ServerProfile(source) => source
+                .list(prefix)
+                .into_iter()
+                .filter(|name| server_resource(name))
+                .collect(),
             Storage::Archive(archive) => archive
                 .names()
                 .filter(|name| name.starts_with(prefix) && stays_inside(name))
@@ -674,6 +733,9 @@ impl ResourceSource {
             Storage::Directory(root) => {
                 metadata_fingerprint(&fs::metadata(root.join(name)).ok()?).ok()
             }
+            Storage::ServerProfile(source) => server_resource(name)
+                .then(|| source.file_fingerprint(name, archives))
+                .flatten(),
             Storage::Archive(archive) => {
                 let key = Arc::as_ptr(&self.0) as usize;
                 let fingerprint = match archives.get(&key) {
@@ -711,6 +773,35 @@ mod tests {
         io::Write,
         sync::atomic::{AtomicU64, Ordering},
     };
+
+    #[test]
+    fn server_profile_refuses_an_asset_even_when_it_exists() {
+        const CLIENT: &str = "assets/minecraft/textures/block/stone.png";
+        const LANGUAGE: &str = "assets/minecraft/lang/en_us.json";
+        let source = ResourceSource::indexed(BTreeMap::from([
+            (CLIENT.into(), Resource::bytes(vec![1, 2, 3])),
+            (LANGUAGE.into(), Resource::bytes(b"{}".to_vec())),
+        ]));
+        assert!(source.read(CLIENT).is_ok());
+        let server = source.restricted_to_server();
+        assert_eq!(server.list("assets/"), [LANGUAGE]);
+        assert_eq!(server.read(LANGUAGE).unwrap(), b"{}");
+        let path = server.subdirectory("assets/minecraft").unwrap();
+        for refusal in [
+            server.read(CLIENT),
+            server.read_head(CLIENT, 1),
+            path.read_limited("textures/block/stone.png", 8),
+        ] {
+            let error = refusal.unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert!(error.to_string().contains(CLIENT));
+            assert!(error.to_string().contains("This is a Sunrise bug"));
+        }
+        assert_eq!(
+            server.read("facts.json").unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
 
     struct Fixture(PathBuf);
 

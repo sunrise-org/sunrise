@@ -10861,6 +10861,7 @@ impl<'a> Game<'a> {
                     pack.source.clone(),
                 ),
                 None,
+                !options.execution_role.is_dedicated_server(),
             )
         })?;
         let world = Game::world_for_mods(res.facts().air, 0);
@@ -10874,11 +10875,15 @@ impl<'a> Game<'a> {
         let slow_frame_ms = options
             .spikes
             .unwrap_or(sunrise_client::client_perf::SLOW_FRAME_MS);
-        let mut particles = sunrise_client::particles::ParticleEngine::new(
-            &pack.source,
-            &gui.atlas.sprites,
-            &gui.atlas.translucent,
-        );
+        let mut particles = if options.execution_role.is_dedicated_server() {
+            sunrise_client::particles::ParticleEngine::default()
+        } else {
+            sunrise_client::particles::ParticleEngine::new(
+                &pack.source,
+                &gui.atlas.sprites,
+                &gui.atlas.translucent,
+            )
+        };
         particles.set_block_state_source(|| {
             api_values::block_state::current()
                 .ok()
@@ -11740,7 +11745,9 @@ pub(crate) fn run_with(
     )?;
     let gui = loaded.gui.ok_or("missing menu bundle")?;
     options.resources = loaded.root.clone();
-    let audio = if !options.execution_role.is_client() || options.headless {
+    let audio = if options.execution_role.is_dedicated_server() {
+        Audio::for_server()
+    } else if !options.execution_role.is_client() || options.headless {
         Audio::silent(&loaded.pack.source)
     } else {
         Audio::with_device(&loaded.pack.source, &early_settings.sound_device)

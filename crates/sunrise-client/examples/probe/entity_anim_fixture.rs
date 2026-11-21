@@ -309,7 +309,7 @@ pub fn main() -> sunrise_client::Result<()> {
     let args: Vec<String> = crate::args().skip(1).collect();
     let root = PathBuf::from(&args[0]);
     let types = MobTypes::load(&root)?;
-    let animations = MobData::load_animations(&root);
+    let animations = MobData::load_animations(&root)?;
     let mut out = String::new();
     let crystal = sunrise_client::mobs::load_model(&root, "minecraft:end_crystal#main");
     for line in fs::read_to_string(&args[1])?.lines() {
