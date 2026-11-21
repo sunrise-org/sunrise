@@ -4,10 +4,6 @@
 //! and the game applies once it exists (`start_game`).
 use mod_api::__private::game::*;
 
-mod runtime_sprites;
-#[cfg(test)]
-pub(in crate::game) use runtime_sprites::fixture_png;
-pub(in crate::game) use runtime_sprites::{collect_runtime_sprites, stage_runtime_sprites};
 mod texture_atlases;
 pub(in crate::game) use texture_atlases::{collect_texture_atlases, stage_texture_atlases};
 
@@ -33,7 +29,16 @@ pub(super) struct StartupClientHost;
 impl Host for StartupClientHost {}
 mod_api::impl_host_areas!(StartupClientHost);
 impl ClientHost for StartupClientHost {}
-mod_api::impl_client_host_areas!(StartupClientHost);
+mod_api::impl_client_host_areas!(StartupClientHost, except(audio));
+// A startup reload opens no audio stream.
+impl mod_api::prelude::AudioClientHost for StartupClientHost {
+    fn open_audio_stream(
+        &self,
+        _: &mod_api::StreamSpec,
+    ) -> Result<mod_api::AudioStreamRef, mod_api::AudioRefusal> {
+        Err(mod_api::AudioRefusal::Unavailable)
+    }
+}
 
 impl Game<'_> {
     /// Registers a later reload's client listeners through the game

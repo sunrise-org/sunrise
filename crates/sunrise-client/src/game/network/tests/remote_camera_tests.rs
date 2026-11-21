@@ -44,7 +44,7 @@ fn tnt(id: u32) -> PrimedTnt {
         velocity: Vec3::ZERO,
         fuse: 80,
         ticks: 0,
-        on_ground: false,
+        ground: Default::default(),
         fall_distance: 0.0,
         stuck: Vec3::ZERO,
         in_water: false,

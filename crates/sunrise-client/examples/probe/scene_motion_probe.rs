@@ -321,6 +321,7 @@ pub fn main() -> Result<()> {
             .unwrap_or_default();
         for op in f["ops"].as_array().unwrap() {
             let mut world = MotionWorld {
+                side: sunrise_client::motion::dry_side(),
                 entities: &entities,
                 player: &mut player,
                 scene: &mut scene,

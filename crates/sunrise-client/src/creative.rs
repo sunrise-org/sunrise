@@ -229,6 +229,9 @@ struct Shown {
 #[derive(Default)]
 pub struct Names {
     map: HashMap<String, String>,
+    item_names: HashMap<String, serde_json::Value>,
+    /// The block registry, which says whether an item is a block's (`Item.Properties.useBlockDescriptionPrefix`).
+    blocks: Option<&'static sunrise_world::registry::BlockRegistry>,
 }
 impl Names {
     pub fn load(root: &sunrise_assets::resource_source::ResourceSource) -> Self {
@@ -247,7 +250,41 @@ impl Names {
         {
             map.extend(read(&namespace));
         }
-        Self { map }
+        Self {
+            map,
+            item_names: HashMap::new(),
+            blocks: None,
+        }
+    }
+    /// Keep each item's default `minecraft:item_name` component from the items' prototypes:
+    /// `Item.getDescriptionId` is its translation key, so the key is the item's own, never
+    /// guessed from the language.
+    pub fn with_item_names(
+        mut self,
+        prototypes: &std::collections::BTreeMap<
+            String,
+            std::collections::BTreeMap<String, serde_json::Value>,
+        >,
+        blocks: &'static sunrise_world::registry::BlockRegistry,
+    ) -> Self {
+        self.blocks = Some(blocks);
+        self.item_names = prototypes
+            .iter()
+            .filter_map(|(id, components)| {
+                Some((id.clone(), components.get("minecraft:item_name")?.clone()))
+            })
+            .collect();
+        self
+    }
+    /// Whether `id` is the item of a block of the same id, which takes its block's `block.*`
+    /// description id (a mod block item, whose prototype carries no `item_name`).
+    pub fn is_block_item(&self, id: &str) -> bool {
+        self.blocks
+            .is_some_and(|blocks| blocks.default_state(id).is_some())
+    }
+    /// An item's default `minecraft:item_name` component, as its prototype has it.
+    pub fn item_name(&self, id: &str) -> Option<&serde_json::Value> {
+        self.item_names.get(id)
     }
     pub fn item(&self, id: &str) -> String {
         let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
@@ -302,6 +339,10 @@ pub fn item_group_key(id: &str) -> Option<&'static str> {
         "inventory" => "itemGroup.inventory",
         _ => return None,
     })
+}
+/// A mod tab's own `itemGroup.<mod>.<name>` key, for its id `<mod>:<name>`.
+pub fn mod_item_group_key(id: &str) -> String {
+    format!("itemGroup.{}", id.replace(':', "."))
 }
 impl Creative {
     pub const WIDTH: f32 = 195.0;
@@ -413,7 +454,7 @@ impl Creative {
                 .and_then(|s| crate::item_data::parse_stack(s).ok().flatten());
             headers.push(Tab {
                 id: recipe.id.clone(),
-                title: tab["title"].as_str().unwrap_or("").to_owned(),
+                title: recipe.title.clone(),
                 icon: icon.map_or_else(|| "minecraft:stone".to_owned(), |s| s.item.to_string()),
                 items: Vec::new(),
                 top: tab["row"] == "TOP",
@@ -1429,10 +1470,10 @@ mod tests {
         use sunrise_protocol::registry::{Builtin, Dynamic};
         let raw = serde_json::json!({
             "schema":4, "item_features":{}, "potion_features":{}, "tabs":[
-                {"id":"minecraft:ingredients", "type":"CATEGORY", "build":[
+                {"id":"minecraft:ingredients", "title":"Ingredients", "type":"CATEGORY", "build":[
                     {"kind":"enchantments","all_levels":false,"visibility":"PARENT_AND_SEARCH_TABS"}
                 ]},
-                {"id":"minecraft:search", "type":"SEARCH", "build":[], "search_metadata":[
+                {"id":"minecraft:search", "title":"Search Items", "type":"SEARCH", "build":[], "search_metadata":[
                     {"stack":r#"{components:{"minecraft:stored_enchantments":{"minecraft:sharpness":5}},count:1,id:"minecraft:enchanted_book"}"#, "lines":["Enchanted Book","Sharpness V"]}
                 ]}
             ]
@@ -1485,8 +1526,8 @@ mod tests {
         let visible = r#"{id:"minecraft:enchanted_book",count:1,components:{"minecraft:lore":["Ink under moonlight"]}}"#;
         let hidden = r#"{id:"minecraft:enchanted_book",count:1,components:{"minecraft:lore":["Ink under moonlight"],"minecraft:tooltip_display":{hidden_components:["minecraft:lore"]}}}"#;
         let creative = fixture(serde_json::json!([
-            {"id":"minecraft:ingredients", "type":"CATEGORY", "build":[row(visible), row(hidden)]},
-            {"id":"minecraft:search", "type":"SEARCH", "build":[]}
+            {"id":"minecraft:ingredients", "title":"Ingredients", "type":"CATEGORY", "build":[row(visible), row(hidden)]},
+            {"id":"minecraft:search", "title":"Search Items", "type":"SEARCH", "build":[]}
         ]));
         assert_eq!(creative.search_items().len(), 2);
         assert_eq!(
@@ -1507,8 +1548,8 @@ mod tests {
             r#","minecraft:tooltip_display":{hidden_components:["minecraft:written_book_content"]}"#,
         );
         let creative = fixture(serde_json::json!([
-            {"id":"minecraft:ingredients", "type":"CATEGORY", "build":[row(&visible), row(&hidden)]},
-            {"id":"minecraft:search", "type":"SEARCH", "build":[]}
+            {"id":"minecraft:ingredients", "title":"Ingredients", "type":"CATEGORY", "build":[row(&visible), row(&hidden)]},
+            {"id":"minecraft:search", "title":"Search Items", "type":"SEARCH", "build":[]}
         ]));
         assert_eq!(creative.search_items().len(), 2);
         let language = lang::Language::of("en_us", [("book.byAuthor".into(), "by %1$s".into())]);
@@ -1534,12 +1575,12 @@ mod tests {
             )
         };
         let mut creative = fixture(serde_json::json!([
-            {"id":"minecraft:ingredients", "type":"CATEGORY", "build":[
+            {"id":"minecraft:ingredients", "title":"Ingredients", "type":"CATEGORY", "build":[
                 row(stack("")),
                 row(stack(r#""minecraft:attribute_modifiers""#)),
                 row(stack(r#""minecraft:painting/variant""#))
             ]},
-            {"id":"minecraft:search", "type":"SEARCH", "build":[]}
+            {"id":"minecraft:search", "title":"Search Items", "type":"SEARCH", "build":[]}
         ]));
         creative.holders = Arc::new(Holders {
             paintings: vec![Painting {
@@ -1558,6 +1599,7 @@ mod tests {
                 ("attribute.modifier.plus.0".into(), "+%s %s".into()),
                 ("painting.dimensions".into(), "%s by %s".into()),
             ]),
+            ..Default::default()
         };
         let local = creative.localized_lines(&|key| names.get(key).map(str::to_owned));
         let search = |term| creative.search_results_in(term, &names, &local, false);
@@ -1573,8 +1615,8 @@ mod tests {
         let tool = r#"{id:"minecraft:wooden_pickaxe",count:1,components:{"minecraft:enchantments":{"test:veins":2},"minecraft:unbreakable":{}}}"#;
         let mut creative = Creative::from_json(&serde_json::json!({
             "schema":4, "item_features":{}, "potion_features":{}, "tabs":[
-                {"id":"minecraft:ingredients", "type":"CATEGORY", "build":[row(tool)]},
-                {"id":"minecraft:search", "type":"SEARCH", "build":[], "search_metadata":[
+                {"id":"minecraft:ingredients", "title":"Ingredients", "type":"CATEGORY", "build":[row(tool)]},
+                {"id":"minecraft:search", "title":"Search Items", "type":"SEARCH", "build":[], "search_metadata":[
                     {"stack":tool, "lines":["Wooden Pickaxe", "Stale Vein Finder II"]}
                 ]}
             ]
@@ -1883,7 +1925,8 @@ mod tests {
         c.select(2);
         assert!(c.tab().inventory);
         assert!(!c.can_scroll(&Names {
-            map: HashMap::new()
+            map: HashMap::new(),
+            ..Default::default()
         }));
     }
 
@@ -2192,6 +2235,7 @@ mod tests {
         c.set_saved_hotbars(vec![stack("diamond_sword", 1), stack("air", 0), hint]);
         let names = Names {
             map: HashMap::new(),
+            ..Default::default()
         };
         assert_eq!(c.shown(&names, 0), Some(stack("diamond_sword", 1)));
         assert_eq!(c.shown(&names, 1), None);
@@ -2240,6 +2284,7 @@ mod tests {
         let c = creative(0);
         let names = Names {
             map: HashMap::new(),
+            ..Default::default()
         };
         let q = |s: &str| c.search_results(s, &names);
         assert_eq!(q(""), [0, 1, 2]);
@@ -2270,6 +2315,7 @@ mod tests {
                 ("item.minecraft.anvil".to_owned(), "铁砧".to_owned()),
                 ("item.minecraft.wooden_hoe".to_owned(), "木锄".to_owned()),
             ]),
+            ..Default::default()
         };
         let tr = |k: &str| names.get(k).map(str::to_owned);
         let local = c.localized_lines(&tr);
@@ -2303,6 +2349,7 @@ mod tests {
         let mut c = creative(90);
         let names = Names {
             map: HashMap::new(),
+            ..Default::default()
         };
         c.select(1);
         // Pressing the track holds the scrollbar without moving it.
@@ -2372,6 +2419,7 @@ mod tests {
         let mut c = creative(90);
         let names = Names {
             map: HashMap::new(),
+            ..Default::default()
         };
         c.select(1);
         let rows = (93usize.div_ceil(9) - 5) as f32;
@@ -2455,6 +2503,7 @@ mod tests {
         assert!(!c.tab().search);
         let names = Names {
             map: HashMap::new(),
+            ..Default::default()
         };
         assert!(c.items(&names).is_empty());
         assert!(c.tab_headers().is_empty());

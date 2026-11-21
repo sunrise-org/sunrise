@@ -36,6 +36,7 @@ impl Game<'_> {
         // player's open container goes with it, so a chest's lid (its opener
         // count) falls instead of staying up for a player who is gone.
         self.guest_close_menus_and_tell(conn);
+        let spawn_level = self.world_spawn_level();
         let Some(host) = self.lan.as_mut() else {
             return;
         };
@@ -47,14 +48,14 @@ impl Game<'_> {
             play.level_up_sound = Default::default();
         }
         // PlayerList.respawn: a server's player comes back in its respawn
-        // point's level: the Overworld, where the world spawn and beds are,
+        // point's level: the world spawn's, the Overworld for a bed,
         // or another one's anchor or forced point, which its block resolves
         // once the level has loaded around it.
         let server = self.options.dedicated.is_some();
         let own = host.hub.guests[i]
             .respawn_elsewhere
             .as_ref()
-            .map(RespawnConfig::from_saved);
+            .and_then(RespawnConfig::from_saved);
         let elsewhere = own.filter(|_| server);
         // In the window's world a guest has no level of its own to wait in:
         // its bed is resolved at once when its chunk is there, else it
@@ -67,7 +68,15 @@ impl Game<'_> {
                 f64::from(c.pos[2]) + 0.5,
             ]
         });
-        let level = elsewhere.map_or(crate::game::Dim::Overworld, |c| c.dim);
+        // An Overworld point of its own (`spawn`, or the bed above) is there; without any
+        // point, the world spawn's level (findRespawnDimension).
+        let level = match elsewhere {
+            Some(c) => c.dim,
+            None if host.hub.guests[i].spawn.is_some() || in_frame_bed.is_some() => {
+                crate::game::Dim::Overworld
+            }
+            None => spawn_level,
+        };
         let spawn = elsewhere.map_or(spawn, |c| {
             [
                 f64::from(c.pos[0]) + 0.5,
@@ -162,6 +171,7 @@ impl Game<'_> {
             // independently of the personal destination passed to Hub::respawn.
             spawn: world,
             spawn_angle: self.level.world_spawn_angle,
+            spawn_dimension: crate::game::Dim::of_world_spawn(&self.level).id(),
             sea_level: self.end.locator().map_or(63, |terrain| terrain.sea_level()),
             difficulty: i32::from(self.ui.difficulty),
             difficulty_locked: self.level.difficulty_locked,

@@ -1,8 +1,7 @@
 //! Datapack registries a native mod declares: a registry
 //! of the mod's own, whose entries are JSON files in data packs. The mod
 //! declares a flat record schema once at startup; the game decodes every
-//! entry against it, so a decoder never runs mod code and a native and a wasm
-//! mod see the same bounds. See `docs/design/mod-api/mod-datapack-registries.md`.
+//! entry against it without running mod code. See `docs/design/mod-api/mod-datapack-registries.md`.
 use serde_json::Value;
 use sunrise_core::identifier::Identifier;
 

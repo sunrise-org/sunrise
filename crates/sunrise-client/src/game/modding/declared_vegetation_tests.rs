@@ -63,12 +63,14 @@ impl Hooks for Garden {
         {
             let mut block = mod_api::Block::new(id, template);
             block.properties.vegetation = true;
-            event.blocks.push(block);
+            event.register(block).unwrap();
         }
-        event.blocks.push(mod_api::Block::new(
-            "garden:ordinary_glass",
-            "minecraft:glass",
-        ));
+        event
+            .register(mod_api::Block::new(
+                "garden:ordinary_glass",
+                "minecraft:glass",
+            ))
+            .unwrap();
     }
 }
 

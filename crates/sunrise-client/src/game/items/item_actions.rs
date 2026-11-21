@@ -160,6 +160,10 @@ impl Game<'_> {
             {
                 return Ok(self.interaction_consumed(answer));
             }
+            if matches!(entity, commands::Target::General(_)) {
+                // A plain Entity has no default interaction. A pass stays on this row.
+                return Ok(false);
+            }
         }
         // `AbstractNautilus.interact` keeps a clicked nautilus
         // (`setPersistenceRequired`), used or not, before its own handling runs.

@@ -1,7 +1,6 @@
 use super::*;
-use sunrise_core::{geometry::Direction, position::BlockPos};
-use sunrise_world::level::LevelAccess;
-use sunrise_world::level::Ticks;
+use sunrise_core::{connection_kind::ConnectionKind, geometry::Direction, position::BlockPos};
+use sunrise_world::level::{BlockId, LevelAccess, PlacementContext, Ticks};
 
 use crate::game::mod_api_host::{FireOddsLevel, PredictedLevel};
 use std::{cell::RefCell, collections::HashSet};
@@ -28,8 +27,8 @@ impl PredictionBase for crate::game::GameLevel<'_> {
     }
 }
 
-/// The client's world for a guess at what a click does: reads go to the
-/// world, writes stay here and are dropped.
+/// Scratch state for client prediction or a server placement preview: reads
+/// go to the world, writes stay here and are dropped.
 pub(super) struct DryLevel<'w> {
     base: &'w dyn PredictionBase,
     pub(super) changed: sunrise_world::level::PreviewBlocks,
@@ -66,6 +65,20 @@ impl<'w> DryLevel<'w> {
 }
 
 impl crate::game::Game<'_> {
+    /// Ask for the candidate state without spending the level random or scheduling live ticks.
+    pub(in crate::game) fn preview_state_for_placement(
+        &mut self,
+        block: BlockId,
+        context: &PlacementContext,
+    ) -> Option<BlockStateId> {
+        self.with_placement_preview_level(|behaviours, level, ticks| {
+            let mut dry = DryLevel::new(level);
+            dry.random = (*level.world.random).clone();
+            dry.reads = Some(ticks);
+            behaviours.state_for_resolved_placement(&mut dry, ticks, block, context)
+        })
+    }
+
     /// Trace the optional initial write and state-level callback off the live world.
     /// Both steps use the same scratch level so the callback sees the write's shape updates.
     pub(in crate::game) fn preview_set_placed_by(
@@ -272,6 +285,97 @@ impl sunrise_world::level::LevelAccess for DryLevel<'_> {
     fn within_world_border(&self, pos: BlockPos) -> bool {
         self.base.within_world_border(pos)
     }
+    fn redstone_experiments(&self) -> bool {
+        self.base.redstone_experiments()
+    }
+    fn block_entity_signal(&self, pos: BlockPos, state: BlockStateId, direction: Direction) -> i32 {
+        self.base.block_entity_signal(pos, state, direction)
+    }
+    fn has_signal_hook(&self) -> bool {
+        self.asks_mods && self.base.has_signal_hook()
+    }
+    fn adjust_signal_source(&self, state: BlockStateId, vanilla: bool) -> bool {
+        if self.asks_mods {
+            self.base.adjust_signal_source(state, vanilla)
+        } else {
+            vanilla
+        }
+    }
+    fn adjust_signal(
+        &self,
+        pos: BlockPos,
+        state: BlockStateId,
+        direction: Direction,
+        direct: bool,
+        vanilla: i32,
+    ) -> i32 {
+        if self.asks_mods {
+            self.base
+                .adjust_signal(pos, state, direction, direct, vanilla)
+        } else {
+            vanilla
+        }
+    }
+    fn has_weak_power_hook(&self) -> bool {
+        self.asks_mods && self.base.has_weak_power_hook()
+    }
+    fn adjust_should_check_weak_power(
+        &self,
+        pos: BlockPos,
+        state: BlockStateId,
+        direction: Direction,
+        vanilla: bool,
+    ) -> bool {
+        self.base
+            .adjust_should_check_weak_power(pos, state, direction, vanilla)
+    }
+    fn has_redstone_wire_connection_hook(&self) -> bool {
+        self.asks_mods && self.base.has_redstone_wire_connection_hook()
+    }
+    fn adjust_should_redstone_wire_connect_to(
+        &self,
+        pos: BlockPos,
+        state: BlockStateId,
+        direction: Option<Direction>,
+        vanilla: bool,
+    ) -> bool {
+        self.base
+            .adjust_should_redstone_wire_connect_to(pos, state, direction, vanilla)
+    }
+    fn has_connection_hook(&self) -> bool {
+        self.asks_mods && self.base.has_connection_hook()
+    }
+    fn adjust_can_be_connected_to(
+        &self,
+        kind: ConnectionKind,
+        pos: BlockPos,
+        state: BlockStateId,
+        connector: BlockStateId,
+        direction: Direction,
+        face_solid: bool,
+        vanilla: bool,
+    ) -> bool {
+        self.base
+            .adjust_can_be_connected_to(kind, pos, state, connector, direction, face_solid, vanilla)
+    }
+    fn adjust_connects_to(
+        &self,
+        kind: ConnectionKind,
+        pos: BlockPos,
+        state: BlockStateId,
+        neighbour: BlockStateId,
+        direction: Direction,
+        face_solid: bool,
+        vanilla: bool,
+    ) -> bool {
+        self.base
+            .adjust_connects_to(kind, pos, state, neighbour, direction, face_solid, vanilla)
+    }
+    fn fence_gate_in_wall(&self, state: BlockStateId) -> Option<bool> {
+        self.asks_mods
+            .then(|| self.base.fence_gate_in_wall(state))
+            .flatten()
+    }
     fn random(&mut self) -> &mut sunrise_core::random::LegacyRandom {
         &mut self.random
     }
@@ -364,17 +468,6 @@ impl sunrise_world::level::LevelAccess for DryLevel<'_> {
                 ground_pos,
                 may,
             )
-    }
-    fn placement_context(
-        &self,
-        item: &str,
-        context: &sunrise_world::level::PlacementContext,
-    ) -> Option<Option<sunrise_world::level::PlacementContext>> {
-        if self.asks_mods {
-            self.base.placement_context(item, context)
-        } else {
-            None
-        }
     }
     fn must_survive(&self, item: &str) -> Option<bool> {
         if self.asks_mods {

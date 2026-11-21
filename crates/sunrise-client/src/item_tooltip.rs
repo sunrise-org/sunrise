@@ -698,12 +698,12 @@ pub fn bees_line(
 
 /// `TypedEntityData.addToTooltip` for a spawn egg: in Peaceful, the red
 /// "Disabled in Peaceful" under an egg whose entity type is not allowed there
-/// (`EntityType.isAllowedInPeaceful`). The type is the one in the egg's
-/// `entity_data` component, else the egg's own (`zombie_spawn_egg`).
+/// (`EntityType.isAllowedInPeaceful`). The type comes from the stack's
+/// effective `entity_data` component.
 /// `allowed_in_peaceful` answers for an entity type id; one it does not know
 /// is allowed.
 pub fn spawn_egg_peaceful_line(
-    stack: &ItemStack,
+    kind: Option<&str>,
     peaceful: bool,
     display: &TooltipDisplay,
     allowed_in_peaceful: &dyn Fn(&str) -> bool,
@@ -712,31 +712,7 @@ pub fn spawn_egg_peaceful_line(
     if !peaceful || !display.shows("minecraft:entity_data") {
         return None;
     }
-    // `TypedEntityData.addToTooltip` hangs on the `entity_data` component, whatever the item;
-    // a spawn egg without the component has its own mob as the default.
-    let id = match stack
-        .data()
-        .and_then(|d| d.other("minecraft:entity_data"))
-        .and_then(|data| data.get("id"))
-    {
-        Some(Tag::String(id)) => {
-            let id = id.to_string_lossy();
-            if id.contains(':') {
-                id
-            } else {
-                format!("minecraft:{id}")
-            }
-        }
-        _ if stack.item.ends_with("_spawn_egg") => format!(
-            "minecraft:{}",
-            stack
-                .item
-                .trim_start_matches("minecraft:")
-                .trim_end_matches("_spawn_egg")
-        ),
-        _ => return None,
-    };
-    (!allowed_in_peaceful(&id)).then(|| {
+    (!allowed_in_peaceful(kind?)).then(|| {
         translate("item.spawn_egg.peaceful").unwrap_or_else(|| "item.spawn_egg.peaceful".into())
     })
 }
@@ -2937,35 +2913,15 @@ mod tests {
         let lang =
             |k: &str| (k == "item.spawn_egg.peaceful").then(|| "Disabled in Peaceful".to_owned());
         let monsters = |id: &str| !matches!(id, "minecraft:zombie" | "minecraft:creeper");
-        let line = |s: &ItemStack, peaceful| {
-            spawn_egg_peaceful_line(s, peaceful, &tooltip_display(s), &monsters, &lang)
-        };
-        let zombie = ItemStack::new("minecraft:zombie_spawn_egg", 1);
-        assert_eq!(line(&zombie, true).as_deref(), Some("Disabled in Peaceful"));
-        // Not in Peaceful, or an egg of a mob that is allowed there, or no egg.
-        assert_eq!(line(&zombie, false), None);
-        assert_eq!(
-            line(&ItemStack::new("minecraft:pig_spawn_egg", 1), true),
-            None
-        );
-        assert_eq!(line(&ItemStack::new("minecraft:stone", 1), true), None);
-        // The entity data's type wins over the egg's own.
-        let mut pig = ItemStack::new("minecraft:pig_spawn_egg", 1);
-        pig.data_mut().set_other(
-            "minecraft:entity_data",
-            Some(Tag::compound([(
-                "id",
-                Tag::String("minecraft:creeper".into()),
-            )])),
-        );
-        assert_eq!(line(&pig, true).as_deref(), Some("Disabled in Peaceful"));
-        // Any item with the component, and an id without its namespace.
-        let mut stand = ItemStack::new("minecraft:armor_stand", 1);
-        stand.data_mut().set_other(
-            "minecraft:entity_data",
-            Some(Tag::compound([("id", Tag::String("zombie".into()))])),
-        );
-        assert_eq!(line(&stand, true).as_deref(), Some("Disabled in Peaceful"));
+        let stack = ItemStack::new("minecraft:zombie_spawn_egg", 1);
+        let display = tooltip_display(&stack);
+        let line =
+            |kind, peaceful| spawn_egg_peaceful_line(kind, peaceful, &display, &monsters, &lang);
+        let zombie = Some("minecraft:zombie");
+        assert_eq!(line(zombie, true).as_deref(), Some("Disabled in Peaceful"));
+        assert_eq!(line(zombie, false), None);
+        assert_eq!(line(Some("minecraft:pig"), true), None);
+        assert_eq!(line(None, true), None);
     }
 
     /// An appender that adds its own name, so the order of the lines shows.

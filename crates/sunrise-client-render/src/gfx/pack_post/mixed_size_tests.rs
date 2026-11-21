@@ -3,8 +3,8 @@
 //! the same size (our probe pack: `0.25 0.25` and `320 180` at 1280×720). The programs here are
 //! original and cut down.
 use super::destination_tests::Fixture;
-use super::*;
 use std::io::{Cursor, Write};
+use sunrise_shaders::Post;
 
 const VERTEX: &str = "#version 120\nvarying vec2 uv;\nvoid main() { uv=gl_MultiTexCoord0.xy; gl_Position=ftransform(); }\n";
 

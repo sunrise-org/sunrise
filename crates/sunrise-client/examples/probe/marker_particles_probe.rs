@@ -180,6 +180,7 @@ pub fn main() -> Result<()> {
                 gateway_particles: &|_, _| 0,
                 thundering: false,
                 ultrawarm: false,
+                block_parts: None,
             };
             engine.clear();
             engine.sounds.clear();
@@ -230,6 +231,7 @@ pub fn main() -> Result<()> {
                 gateway_particles: &|_, _| 0,
                 thundering: false,
                 ultrawarm: false,
+                block_parts: None,
             };
             let pos = [0, 64, 0];
             // Every particle the level is asked for: the engine records them
@@ -302,6 +304,7 @@ pub fn main() -> Result<()> {
             gateway_particles: &|_, _| 0,
             thundering: false,
             ultrawarm: false,
+            block_parts: None,
         };
         engine.seed_randoms(1057, 0, 0);
         engine.requested = Some(Vec::new());

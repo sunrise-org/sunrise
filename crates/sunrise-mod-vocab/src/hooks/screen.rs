@@ -10,13 +10,15 @@ pub trait Hooks {
     /// position): blocks that share a menu type branch on it. One part owns a
     /// screen and alone hears its four hooks: a mod menu type takes one part
     /// answering them, and a vanilla one takes one per mod, asked only for
-    /// that mod's blocks; a second is refused at load. A mod menu type
+    /// that mod's own or served (`served_by`) blocks; a second is refused at
+    /// load. A serving native host may also own screens for menu types in its
+    /// served packages' namespaces. A mod menu type
     /// with no answer has no screen, and its window closes again. The server
     /// asks it too, whatever opened the menu: a slot it hides takes no
     /// shift-click there. A recipe-book menu's registered screen opens only
     /// for its block's menu.
     #[hook(
-        version = 2,
+        version = 3,
         side = "both",
         contract = "replace",
         out = "screen",

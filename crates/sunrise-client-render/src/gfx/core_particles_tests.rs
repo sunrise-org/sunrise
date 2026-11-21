@@ -1,7 +1,7 @@
 use super::*;
 use crate::particles::polytone_gpu::GLUE;
 use glam::Mat4;
-use sunrise_polytone::gpu_particle::{GPU_PARTICLE_GLSL, GPU_PARTICLE_INCLUDE};
+use sunrise_polytone::gpu_particle::{GPU_PARTICLE_GLSL, GPU_PARTICLE_INCLUDE, HeightmapArea};
 
 const INCLUDES: [(&str, &str); 2] = [
     (
@@ -114,7 +114,8 @@ fn lightmap(device: &wgpu::Device, queue: &wgpu::Queue, value: u8) -> wgpu::Text
 }
 
 /// One frame of `particles`: the renderer's verdict on `shaders` for a frame of `linear`
-/// light, then `batches` prepared.
+/// light, each asking room for its quads in `batches` (one when it has none), then `batches`
+/// prepared.
 fn frame(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -125,12 +126,23 @@ fn frame(
 ) {
     let lightmap = lightmap(device, queue, 200);
     let sampler = device.create_sampler(&Default::default());
+    let requests: Vec<ShaderRequest> = shaders
+        .iter()
+        .map(|shader| {
+            let mut batched = batches.iter().filter(|b| Arc::ptr_eq(&b.shader, shader));
+            let quads = batched.clone().map(|b| b.vertices.len() / 4).sum();
+            ShaderRequest {
+                shader: shader.clone(),
+                quads: if batched.next().is_some() { quads } else { 1 },
+            }
+        })
+        .collect();
     particles.decide(
         device,
         queue,
         (FORMAT, linear),
         (&lightmap, &sampler),
-        shaders,
+        &requests,
     );
     let view = super::super::View {
         view: Mat4::IDENTITY,
@@ -400,8 +412,8 @@ fn a_custom_shader_samples_its_texture_the_heightmap_and_the_lightmap() {
     let shader = custom(VSH, fsh, &include, texture, RenderType::Opaque, &[]);
     assert!(shader.samples_heightmap);
     let mut particles = CoreParticles::new(&device, &queue, (FORMAT, false));
-    let size = HEIGHTMAP_SIZE as usize;
-    particles.set_heightmap(&queue, &vec![0x0164; size * size]);
+    let surface = heights(0x0164);
+    assert!(particles.set_heightmap(&queue, &surface));
     let batches = vec![batch(shader.clone(), 0.5, 1)];
     frame(
         &device,
@@ -413,10 +425,42 @@ fn a_custom_shader_samples_its_texture_the_heightmap_and_the_lightmap() {
     );
     let middle = at(&draw(&device, &queue, &particles), 32, 32);
     assert_eq!(middle[..3], [64, 0x64, 200], "{middle:?}");
+    // The same snapshot again is not uploaded again; a new one of the same area is.
+    assert!(!particles.set_heightmap(&queue, &surface.clone()));
+    assert!(particles.set_heightmap(&queue, &heights(0x0120)));
+    let batches = vec![batch(shader.clone(), 0.5, 1)];
+    let shaders = std::slice::from_ref(&shader);
+    frame(&device, &queue, &mut particles, false, shaders, batches);
+    let middle = at(&draw(&device, &queue, &particles), 32, 32);
+    assert_eq!(middle[1], 0x20, "{middle:?}");
+    // A renderer made since (its texture unfilled) uploads the snapshot the last one held,
+    // and none of a size its texture doesn't have.
+    let mut replaced = CoreParticles::new(&device, &queue, (FORMAT, false));
+    assert!(replaced.set_heightmap(&queue, &surface));
+    let small = HeightmapArea {
+        origin: [0, 0],
+        size: 4,
+        min_y: 0,
+    };
+    let small = Surface::new(small, vec![1u16; 16].into()).unwrap();
+    assert!(!replaced.set_heightmap(&queue, &small));
+}
+
+/// A heightmap of [`HEIGHTMAP_SIZE`] columns a side, every column `height`.
+fn heights(height: u16) -> Surface {
+    let size = HEIGHTMAP_SIZE as usize;
+    let area = HeightmapArea {
+        origin: [-64, -64],
+        size: HEIGHTMAP_SIZE,
+        min_y: -64,
+    };
+    Surface::new(area, vec![height; size * size].into()).unwrap()
 }
 
 /// A shader spreads an `area`'s copies by the quad they are (`gl_VertexIndex >> 2`): the
 /// copies of one record come one quad after the other, so three of them land in three places.
+/// Each type counts its own vertices from 0: the second type's copies land where they would
+/// alone, not shifted by the first type's quad.
 #[test]
 #[ignore = "daily"]
 fn a_shader_spreads_a_records_copies() {
@@ -426,25 +470,33 @@ fn a_shader_spreads_a_records_copies() {
     };
     let spread = VSH.replace(
         "vec3 at = Position + Origin + vec3(side * Params.x, 0.0);",
-        "float copy = float((gl_VertexIndex >> 2) % 3) - 1.0;\n\
+        "float copy = float(gl_VertexIndex >> 2) - 1.0;\n\
          vec3 at = Position + Origin + vec3(side * Params.x + vec2(copy, 0.0), 0.0);",
     );
-    let shader = custom(
-        &spread,
-        FSH,
-        &include,
-        None,
-        RenderType::Opaque,
-        &["Brightness"],
-    );
+    let spreading = || {
+        custom(
+            &spread,
+            FSH,
+            &include,
+            None,
+            RenderType::Opaque,
+            &["Brightness"],
+        )
+    };
+    let (first, second) = (spreading(), spreading());
     let mut particles = CoreParticles::new(&device, &queue, (FORMAT, false));
-    let batches = vec![batch(shader.clone(), 0.25, 3)];
+    // The first type's one record a block up, out of the second's row.
+    let mut above = batch(first.clone(), 0.25, 1);
+    for vertex in &mut above.vertices {
+        vertex.position = [0.0, 1.0, 0.0];
+    }
+    let batches = vec![above, batch(second.clone(), 0.25, 3)];
     frame(
         &device,
         &queue,
         &mut particles,
         false,
-        std::slice::from_ref(&shader),
+        &[first, second],
         batches,
     );
     let pixels = draw(&device, &queue, &particles);
@@ -458,4 +510,194 @@ fn a_shader_spreads_a_records_copies() {
             "between the copies at {x}"
         );
     }
+}
+
+/// The frame's budget is shared in the types' order: a type is drawn with its shader only when
+/// all of its quads fit in what the types before it left, so a second type when the first
+/// filled the budget keeps its quads (refused before they are built), its batch isn't drawn,
+/// and with the room back it is drawn again.
+#[test]
+#[ignore = "daily"]
+fn a_type_the_frame_has_no_room_left_for_keeps_its_quads() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let (filling, late) = (shader(&["Brightness"]), shader(&["Brightness"]));
+    let mut particles = CoreParticles::new(&device, &queue, (FORMAT, false));
+    particles.budget = 2;
+    let batches = vec![batch(filling.clone(), 0.5, 2), batch(late.clone(), 0.5, 1)];
+    let shaders = [filling.clone(), late.clone()];
+    frame(&device, &queue, &mut particles, false, &shaders, batches);
+    assert!(filling.drawn(), "its two quads fill the budget");
+    assert!(late.refused(), "no room left: its quads");
+    assert_eq!(particles.draws.len(), 1);
+    assert_eq!(particles.draws[0].quads, 2);
+    // Alone, the late type fits; a type over the whole budget never does.
+    let batches = vec![batch(late.clone(), 0.5, 1)];
+    frame(
+        &device,
+        &queue,
+        &mut particles,
+        false,
+        std::slice::from_ref(&late),
+        batches,
+    );
+    assert!(late.drawn());
+    let batches = vec![batch(filling.clone(), 0.5, 3)];
+    frame(
+        &device,
+        &queue,
+        &mut particles,
+        false,
+        std::slice::from_ref(&filling),
+        batches,
+    );
+    assert!(filling.refused() && !particles.drawing());
+}
+
+/// A renderer on a device of its own, for the engine's frame: its verdicts and room for quads.
+struct OnDevice<'a> {
+    device: &'a wgpu::Device,
+    queue: &'a wgpu::Queue,
+    particles: &'a mut CoreParticles,
+    lightmap: wgpu::TextureView,
+    sampler: wgpu::Sampler,
+}
+
+impl GpuParticleRenderer for OnDevice<'_> {
+    fn decide_polytone_shaders(&mut self, requests: &[ShaderRequest]) {
+        let lightmap = (&self.lightmap, &self.sampler);
+        self.particles
+            .decide(self.device, self.queue, (FORMAT, false), lightmap, requests);
+    }
+
+    fn polytone_fallback_quads(&self) -> usize {
+        fallback_quads(self.device.limits().max_buffer_size)
+    }
+
+    fn set_polytone_heightmap(&mut self, surface: &Surface) {
+        self.particles.set_heightmap(self.queue, surface);
+    }
+
+    fn set_polytone_batches(&mut self, batches: Vec<ShaderBatch>) {
+        self.particles.batches = batches;
+    }
+}
+
+/// A block registry of air alone, for a pack's particles.
+fn air() -> &'static sunrise_world::registry::BlockRegistry {
+    use sunrise_core::nbt::Tag;
+    let air = || Tag::List(vec![Tag::String("minecraft:air".into())]);
+    Box::leak(Box::new(
+        sunrise_world::registry::BlockRegistry::from_nbt(&Tag::compound([
+            ("DataVersion", Tag::Int(sunrise_world::DATA_VERSION)),
+            ("states", air()),
+            ("defaults", Tag::compound([("minecraft:air", Tag::Int(0))])),
+        ]))
+        .unwrap(),
+    ))
+}
+
+/// On a device whose buffers hold 128 KiB, a GPU type of one record with 1024 copies and no
+/// shader of its own fits neither path: it draws nothing, so the frame's quads, extracted on
+/// the CPU and uploaded into an entity buffer sized as the renderer sizes it, fit the device. A
+/// one-quad type beside it still draws.
+#[test]
+#[ignore = "daily"]
+fn the_quads_drawn_on_the_cpu_fit_the_device() {
+    use crate::particles::polytone::Registry;
+    use crate::particles::{ParticleEngine, ParticleOptions};
+    use sunrise_assets::resource_source::{Resource, ResourceSource};
+    let _gpu = crate::gfx::test_gpu::lock();
+    let Some(adapter) = crate::gfx::test_gpu::adapter() else {
+        return;
+    };
+    let limits = wgpu::Limits {
+        max_buffer_size: 1 << 17,
+        ..wgpu::Limits::default()
+    };
+    let descriptor = wgpu::DeviceDescriptor {
+        required_limits: limits,
+        ..Default::default()
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(&descriptor))
+        .expect("a device with smaller buffers");
+    let max = device.limits().max_buffer_size;
+    assert_eq!(max, 1 << 17);
+    let types = [("big", 1024), ("small", 1)].map(|(name, count)| {
+        let json = serde_json::json!({
+            "type": "gpu", "texture": "test:textures/particle/rain.png",
+            "render_type": "translucent", "area": {"size": [8, 8, 8], "count": count},
+            "initializer": {"lifetime": "40", "size": "0.5"}
+        });
+        (
+            format!("assets/test/polytone/custom_particles/{name}.json"),
+            Resource::bytes(json.to_string().into_bytes()),
+        )
+    });
+    let pack = ResourceSource::indexed(types.into_iter().collect());
+    let rect = crate::hud::Rect {
+        u0: 0.0,
+        v0: 0.0,
+        u1: 1.0,
+        v1: 1.0,
+        w: 16,
+        h: 16,
+    };
+    let atlas = std::collections::HashMap::from([("test:particle/rain".to_owned(), rect)]);
+    let mut engine = ParticleEngine::new(&pack, &atlas, &Default::default());
+    let registry = Registry::read(&pack, Default::default(), air());
+    engine.set_polytone(Some(Arc::new(registry)));
+    let at = [0.5, 64.0, 0.5];
+    engine.camera = at;
+    for name in ["test:big", "test:small"] {
+        engine.add(&ParticleOptions::named(name), at, [0.0; 3]);
+    }
+    assert_eq!(engine.polytone_gpu_records(), 2);
+    let mut particles = CoreParticles::new(&device, &queue, (FORMAT, false));
+    let mut renderer = OnDevice {
+        device: &device,
+        queue: &queue,
+        particles: &mut particles,
+        lightmap: lightmap(&device, &queue, 200),
+        sampler: device.create_sampler(&Default::default()),
+    };
+    assert!(
+        renderer.polytone_fallback_quads() < 1024,
+        "the big type can't fit"
+    );
+    let camera = glam::DVec3::new(0.5, 66.0, 0.5);
+    let source = crate::particles::polytone_gpu::HeightmapSource {
+        size: 4,
+        min_y: 0,
+        top: &|_, _| 0,
+    };
+    engine.polytone_gpu_decide(Some(&mut renderer), camera, &source);
+    let mut out = Vec::new();
+    engine.render(camera, glam::Quat::IDENTITY, 0.0, &|_| 0xF0, &mut out);
+    assert_eq!(out.len(), 4, "the small type's quad");
+    // The entity buffer as `draw_frame` grows it, and the upload.
+    let vertices = super::super::draw_frame::entity_buffer_vertices(out.len() as u64, max);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: vertices * std::mem::size_of::<crate::mesher::Vertex>() as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&out));
+    queue.submit([]);
+    assert!(pollster::block_on(scope.pop()).is_none());
+}
+
+/// The entity buffer grows to a power of two, but never past what the device's buffers hold
+/// unless the frame's vertices need it.
+#[test]
+fn the_entity_buffer_grows_within_the_device() {
+    let vertex = std::mem::size_of::<crate::mesher::Vertex>() as u64;
+    let grow = super::super::draw_frame::entity_buffer_vertices;
+    assert_eq!(grow(5, 1 << 30), 8);
+    assert_eq!(grow(1000, 1000 * vertex), 1000, "not 1024");
+    assert_eq!(grow(1100, 1000 * vertex), 1100, "the frame's own");
 }

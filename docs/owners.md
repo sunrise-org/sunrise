@@ -31,7 +31,6 @@ formats, so going back to a vanilla server works too.
 | `enforce-whitelist` | `[server] enforce_whitelist` | `false` |
 | `view-distance` | `[server] view_distance` | `10` |
 | `simulation-distance` | `[server] simulation_distance` | `10` |
-| `sunrise-max-view-distance` | `[server] max_view_distance` | `0` (off) |
 | `sunrise-admin-feedback-to-ops` | `[server] admin_feedback_to_ops` | `true` |
 | `level-name` | `[world] name` | `"world"` |
 | `level-seed` | `[world] seed` | `""` (random on first start) |

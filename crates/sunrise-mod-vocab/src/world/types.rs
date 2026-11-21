@@ -2,14 +2,14 @@
 use crate::*;
 
 /// A saved fluid name retained for the lifetime of the process.
-// no wire: decoding validates the u64 slot with UnresolvedFluid::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+// no wire: decoding validates the u64 slot with UnresolvedFluid::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: only trusted engine boundaries create handles
 pub struct UnresolvedFluid(pub(crate) u64);
 
 /// A dimension (`minecraft:the_nether`), as the game's table numbers it: a `LevelRef`'s identity.
 /// A key stays the same dimension until the game exits; `key.id(host)` gives the name.
-// no wire: decoding validates the u32 slot with DimensionKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+// no wire: decoding validates the u32 slot with DimensionKey::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: its field is private, so only the game's table creates a key
 pub struct DimensionKey(pub(crate) u32);
@@ -30,21 +30,21 @@ pub enum GameRuleError {
 }
 
 /// A boolean game rule declared by a mod.
-// no wire: decoding validates the u32 slot with BoolGameRuleKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+// no wire: decoding validates the u32 slot with BoolGameRuleKey::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: only the registration table creates keys
 pub struct BoolGameRuleKey(pub(crate) u32);
 
 /// An integer game rule declared by a mod with
 /// [`Registrar::game_rule_int`](GameRulesRegistrar::game_rule_int).
-// no wire: decoding validates the u32 slot with IntGameRuleKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+// no wire: decoding validates the u32 slot with IntGameRuleKey::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: only the registration table creates keys
 pub struct IntGameRuleKey(pub(crate) u32);
 
 /// A load-owned fluid identity requested through [`Registrar::fluid_key`](FluidsRegistrar::fluid_key) or resolved through
 /// [`DataLoadContext::fluid_key`].
-// no wire: decoding validates the u32 slot with FluidKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+// no wire: decoding validates the u32 slot with FluidKey::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: only the registration table creates keys
 pub struct FluidKey(pub(crate) u32);
@@ -499,19 +499,19 @@ pub enum LightLayer {
     Sky,
 }
 
-/// The feature flags a world enables (`FeatureFlagSet`, `LevelReader.enabledFeatures`), each
-/// as its id (`minecraft:vanilla`, `minecraft:redstone_experiments`), shared with the world.
-/// A world that names none enables `minecraft:vanilla` alone, as vanilla's default does.
+/// The effective feature flags a world enables (`FeatureFlagSet`, `LevelReader.enabledFeatures`),
+/// each as its id (`minecraft:vanilla`, `minecraft:redstone_experiments`), shared with the world.
 /// Getting and reading it allocates nothing.
-// no wire: encodes the effective iter() list, which synthesizes minecraft:vanilla for empty backing storage; a structural derive would encode zero flags.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
-pub struct FeatureFlags(pub(crate) Arc<[String]>);
+pub struct FeatureFlags {
+    flags: Arc<[String]>,
+}
 
 impl FeatureFlags {
-    /// The flags of a world's `enabled_features` list; an empty list is vanilla's default.
-    pub fn new(ids: Arc<[String]>) -> Self {
-        Self(ids)
+    /// Wrap the world's effective flag ids as-is. An empty set contains no flags.
+    pub fn new(flags: Arc<[String]>) -> Self {
+        Self { flags }
     }
     /// `FeatureFlagSet.contains`: whether the flag `flag` (`minecraft:redstone_experiments`, or
     /// `redstone_experiments`) is enabled.
@@ -522,23 +522,20 @@ impl FeatureFlags {
     }
     /// The enabled flag ids.
     pub fn iter(&self) -> impl Iterator<Item = &str> {
-        let ids = &self.0;
-        ids.iter()
-            .map(String::as_str)
-            .chain(ids.is_empty().then_some("minecraft:vanilla"))
+        self.flags.iter().map(String::as_str)
     }
 }
 
-/// The flags as their ids, the form they cross into a wasm mod as.
+/// Copy the world's effective flag ids into an owned list.
 impl From<&FeatureFlags> for Vec<String> {
     fn from(flags: &FeatureFlags) -> Self {
-        flags.0.to_vec()
+        flags.flags.to_vec()
     }
 }
 
 impl From<Vec<String>> for FeatureFlags {
     fn from(ids: Vec<String>) -> Self {
-        Self(ids.into())
+        Self::new(ids.into())
     }
 }
 
@@ -1009,9 +1006,8 @@ pub enum SpawnLight {
 
 /// A mod entity type's spawn rule, declared with
 /// [`Registrar::declare_spawn_placement`](SpawnPlacementsRegistrar::declare_spawn_placement):
-/// the arguments of NeoForge's `RegisterSpawnPlacementsEvent.register` as data, so one
-/// rule serves native and wasm mods. Every field must hold for a spawn to pass; a trial
-/// spawner ignores `light`, as for vanilla types.
+/// the arguments of NeoForge's `RegisterSpawnPlacementsEvent.register` as data. Every field
+/// must hold for a spawn to pass; a trial spawner ignores `light`, as for vanilla types.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: a mod builds it with a literal; the game reads it
 #[derive(sunrise_mod_api_macros::Wire)]
@@ -1095,13 +1091,15 @@ pub struct ClipHit {
 }
 
 /// The world's respawn data (`LevelData.RespawnData`): where a player without a spawn point of
-/// their own appears, and facing which way. Sunrise keeps it in the Overworld.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// their own appears, and facing which way.
+#[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct RespawnData {
-    /// The spawn block.
-    pub pos: [i32; 3],
+    /// The spawn block in the level `/setworldspawn` ran in (`RespawnData.globalPos`). Players
+    /// go to the Overworld instead while the world has no such level
+    /// (`MinecraftServer.findRespawnDimension`).
+    pub position: GlobalPos,
     /// The yaw in degrees, -180 to 180 (`Mth.wrapDegrees`).
     pub yaw: f32,
     /// The pitch in degrees, -90 to 90.
@@ -1369,6 +1367,16 @@ impl TriState {
 /// }
 /// ```
 pub trait LevelHost {
+    /// The block-state facts service, as `host.block_states()` gives it on a game host: the
+    /// same tables and the same answers, so a part can ask a neighbour's `weathering_age`
+    /// inside `random_tick`. Read-only and allocation-free per read. A level view with no
+    /// tables answers every fact with `None` (or `BlockStateError::Unavailable`).
+    ///
+    /// Computed from this level view's tables.
+    #[sunrise_mod_api_macros::computed_in_mod]
+    fn block_states(&self) -> crate::BlockStates<'_> {
+        crate::BlockStates::unavailable()
+    }
     /// `BlockState.isFaceSturdy`, through the same engine read as `LevelRef::block_face_sturdy`.
     /// `canSupportRigidBlock` is `(pos, Up, Rigid)`. `canSupportCenter` is `(pos, face, Center)`
     /// except that vanilla also refuses `Down` on blocks tagged `minecraft:unstable_bottom_center`.
@@ -1389,15 +1397,11 @@ pub trait LevelHost {
     /// no skylight always returns false. Returns None without a light view. Never loads chunks;
     /// available only on the owning game thread, never in worker-thread hook bodies.
     ///
-    /// Vanilla's light storage includes padding above and below build height. Sky light is full
-    /// above the highest stored section and in columns with no stored sections. A missing
-    /// section below a stored one repeats that next section's bottom row. Unloaded border
-    /// sections can retain the last light on a server; they have no full sky on a client.
-    ///
-    /// **Known gap ([#2761](https://github.com/sunrise-org/sunrise/issues/2761)):** In skylit
-    /// dimensions, Sunrise reads the resident column's allocated sections, with full sky above
-    /// them and in every missing column, and darkness below them, instead of tracking vanilla's
-    /// padding and unloaded border.
+    /// Stored light can include padding above and below build height, and layers an unloaded
+    /// column retains beside a loaded one. Missing sky light uses the bottom row of the nearest
+    /// stored sky layer above it, or 15 if there is none. The engine does not yet compute new light
+    /// in padding sections (#3494) or refresh unloaded borders when a block edit changes whether
+    /// a section is empty (#3495).
     fn can_see_sky(&self, _pos: [i32; 3]) -> Option<bool> {
         None
     }
@@ -1434,17 +1438,28 @@ pub trait LevelHost {
     ) -> Result<crate::AttachmentBatch, crate::PartStateError> {
         Err(crate::PartStateError::Stale)
     }
-    /// Read a block entity's saved data without identity metadata from this level.
-    /// Stale generations and handles from another level or world return None.
-    fn block_entity_data(&self, _entity: crate::BlockEntityRef) -> Option<crate::Compound> {
-        None
-    }
+    /// Read this level's copy of a block entity's saved data without identity or position
+    /// metadata. This never loads chunks or opens loot containers.
+    /// Returns `None` when no saved data is available, the handle is stale, or it names
+    /// another level or world. A view with no block entities returns `None` explicitly.
+    fn block_entity_data(&self, entity: crate::BlockEntityRef) -> Option<crate::Compound>;
 
     /// Read an owned block state through the level's engine read.
     /// Out-of-height or unloaded engine reads retain vanilla's air as `Some(air)`.
     /// Returns `None` when the owning state index is unavailable or refuses the state;
     /// this never substitutes an air state for a failed conversion.
     fn block_state(&self, _pos: [i32; 3]) -> Option<BlockState> {
+        None
+    }
+    /// Read a state's contextual friction in this view, as `LevelRef::friction` does.
+    /// The queried state need not occupy `pos`. None if the view cannot answer, the
+    /// state is unknown or recursion was refused.
+    fn friction(
+        &self,
+        _pos: [i32; 3],
+        _state: BlockState,
+        _entity: Option<(u32, &str)>,
+    ) -> Option<f32> {
         None
     }
     /// The block `state` is a state of (`BlockState.getBlock()`): `mymod:shaft`. None for an
@@ -1477,8 +1492,8 @@ pub trait LevelHost {
     fn block_in_tag(&self, _block: BlockKey, _tag: &str) -> Option<bool> {
         unimplemented!("LevelHost::block_in_tag")
     }
-    /// The merged-tag service for this level's owning-thread context.
-    /// Not on wasm: a frame resource; its methods are the imports.
+    /// The merged-tag service for this level's owning-thread context: a frame resource, whose
+    /// methods are the imports.
     fn tags(&self) -> &dyn Tags {
         unimplemented!("LevelHost::tags")
     }
@@ -1506,8 +1521,8 @@ pub trait LevelHost {
         unimplemented!("LevelHost::state_with_property")
     }
     /// The stored light of one layer at `pos` (`BlockAndLightGetter.getBrightness`), 0 to 15.
-    /// It reads the game's own light query: above the build height the sky is 15 and below it 0,
-    /// and a chunk that isn't loaded reads as full sky and no block light. It never loads a chunk.
+    /// It reads published light, including stored padding and retained border layers (see
+    /// [`Self::can_see_sky`]). Missing block light is zero. It never loads a chunk.
     fn brightness(&self, _layer: LightLayer, _pos: [i32; 3]) -> i32 {
         unimplemented!("LevelHost::brightness")
     }
@@ -1714,7 +1729,8 @@ pub trait LevelWriteHost: LevelTicksHost + LevelRandomHost {
         unimplemented!("LevelWriteHost::play_sound")
     }
     /// `ServerLevel.sendParticles` through `native_send_particles`.
-    /// Item particles require `options.item_stack`; invalid stacks return false.
+    /// Item particles require `options.item_stack`; invalid stacks return false, and so does an
+    /// item crumb whose colour has a component outside 0 to 1.
     fn send_particles(
         &mut self,
         _options: &ParticleOptions,

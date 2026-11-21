@@ -1,1 +1,0 @@
-The borrowed per-craft LoopContext with the engine's stack-aware default remainder for each input cell; given only to a crafting kind's remaining_items callback.

@@ -215,6 +215,9 @@ impl Game<'_> {
     /// corner. Displays and markers have zero-sized physical boxes; interactions use
     /// their saved dimensions. End crystals have their 2 x 2 box. None for the dragon; a dragon part's is its own. API 379.
     pub(super) fn entity_bounding_box(&self, entity: EntityRef) -> Option<[[f64; 3]; 2]> {
+        if let Some(row) = self.native_client_general(entity) {
+            return Some(corners(row.bounds()));
+        }
         let t = self.native_entity_read_target(entity)?;
         if let Some(p) = self.native_client_player(t) {
             return Some(corners(p.bounds()));
@@ -276,27 +279,29 @@ impl Game<'_> {
         let [yaw, pitch] = self.entity_rotation(entity)?;
         Some(turned_view_vector(yaw, pitch, -90.0))
     }
-    /// `Entity.mainSupportingBlockPos` of an entity on the ground: the player's own, kept
-    /// as it moved, or the one `Entity.checkSupportingBlock` finds under the box of any
-    /// other that stands.
+    /// `Entity.mainSupportingBlockPos`, retained by bodies with a shared ground state.
+    /// Families that have not moved onto that state still use their existing support read.
     fn native_supporting_block(&self, entity: EntityRef, t: Target) -> Option<BlockPos> {
-        if t == Target::Player
-            && let Some(player) = &self.player
-        {
-            return player.ground.supporting_block;
+        match t {
+            Target::Player => return self.player.as_ref()?.ground.supporting_block,
+            Target::Guest(_) => {
+                return self
+                    .native_target_guest(t)?
+                    .motion
+                    .as_ref()?
+                    .ground
+                    .supporting_block;
+            }
+            _ => {}
+        }
+        let handle = self.native_walk_entity(entity.id())?;
+        if let Some(ground) = with_entity!(self, handle, e => e.ground_state()) {
+            return ground.supporting_block;
         }
         if !self.entity_on_ground(entity)? {
             return None;
         }
-        let (position, bounds) = match self.native_target_guest(t) {
-            Some(g) => (
-                Vec3::new(g.position[0], g.position[1], g.position[2]),
-                g.bounds(),
-            ),
-            None => {
-                with_entity!(self, self.native_walk_entity(entity.id())?, e => (e.position(), e.bounds()))
-            }
-        };
+        let (position, bounds) = with_entity!(self, handle, e => (e.position(), e.bounds()));
         self.supporting_block(position, bounds)
     }
     /// The block the entity stands on (`Entity.getOnPos`). API 379.

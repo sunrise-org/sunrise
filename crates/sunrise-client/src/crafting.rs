@@ -20,6 +20,7 @@ mod cooking;
 mod ingredient;
 pub mod mod_kinds;
 pub mod native_hooks;
+mod priorities;
 #[cfg(test)]
 mod registration_tests;
 mod remainders;
@@ -97,6 +98,7 @@ impl Template {
         if !v.is_object() && !v.is_string() {
             return None;
         }
+        sunrise_world::item_defaults::validate_stack(v).ok()?;
         let components = v.get("components").map(json_tag);
         let (damage, extra) = crate::item_data::decode_components(components.as_ref());
         Some(Self {
@@ -1264,7 +1266,7 @@ pub struct Recipes {
     pub crafting: Vec<(String, Recipe)>,
     pub cooking: Vec<Cooking>,
     /// Every effective recipe's file, by recipe type (`minecraft:smelting`,
-    /// `mymod:crusher`), in file order: data packs merged, load conditions held.
+    /// `mymod:crusher`), in priority order: data packs merged, load conditions held.
     pub by_type: HashMap<String, std::sync::Arc<[crate::crafting::RecipeSnapshot]>>,
     /// `category` and `group` of each crafting recipe, by file name.
     pub meta: HashMap<String, (String, String)>,
@@ -1520,7 +1522,9 @@ impl ResolvedSources {
         context: &sunrise_world::native_load_context::LoadContext,
     ) -> Result<Self> {
         let context = context.with_fluid_tags(sunrise_items::items::fluid_tag_list(root, overlay)?);
-        let (sources, refused) = sunrise_items::recipe_sources::sources_collecting(root, overlay)?;
+        let (mut sources, refused) =
+            sunrise_items::recipe_sources::sources_collecting(root, overlay)?;
+        Self::order_by_priority(&mut sources, root, overlay)?;
         let mut resolved = Self::resolve_collecting(sources, &context)?;
         resolved.failures.extend(refused);
         Ok(resolved)
@@ -1546,18 +1550,20 @@ impl ResolvedSources {
     /// types; a mod's recipe types are its own to read).
     /// An unregistered ingredient kind in a known recipe type refuses the
     /// whole load, naming its file and kind.
+    /// The recipes keep vanilla's resource-file registration order.
     pub fn resolve(
-        sources: Vec<(String, Value)>,
+        mut sources: Vec<(String, Value)>,
         context: &sunrise_world::native_load_context::LoadContext,
     ) -> Result<Self> {
+        sources.sort_by_cached_key(|(name, _)| registration_key(name));
         Self::resolve_collecting(sources, context)?.checked()
     }
+    /// `resolve` for `sources` already in their final order.
     fn resolve_collecting(
         mut sources: Vec<(String, Value)>,
         context: &sunrise_world::native_load_context::LoadContext,
     ) -> Result<Self> {
-        // Every consumer keeps vanilla's resource-file registration order.
-        sources.sort_by_cached_key(|(name, _)| registration_key(name));
+        sources.retain(|(name, value)| Ingredient::validate_persistence(value, name));
         let listened = mod_api::__private::listened(mod_api::HookId::Ingredient);
         let recipes = sources
             .into_iter()
@@ -1689,6 +1695,8 @@ impl Recipes {
         sources: Vec<(String, Value)>,
         context: &sunrise_world::native_load_context::LoadContext,
     ) -> Result<Self> {
+        let mut sources = sources;
+        ResolvedSources::order_by_priority(&mut sources, root, overlay)?;
         Self::from_resolved(
             root,
             items,
@@ -2470,8 +2478,8 @@ mod tests {
         let load = crate::test_resources::server_load();
         let conditions = sunrise_world::conditions::LoadConditions::new([]);
         let overlay = PackOverlay {
-            files: &[],
             conditions: &conditions,
+            ..PackOverlay::default()
         };
         let recipes = Recipes::load(root.path(), &items, &overlay, &load).unwrap();
         assert!(recipes.crafting.is_empty() && recipes.by_type.is_empty());

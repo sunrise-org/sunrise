@@ -1,6 +1,5 @@
-//! One living entity's draw in the frame's mob pass (`LivingEntityRenderer.submit` and the
-//! layers, hooks, outline and beam around it), moved out of `mob_geometry_inner`: the pass
-//! works out the frame once (`LivingFrame`) and asks this for each mob in turn.
+//! One living entity's draw (`LivingEntityRenderer.submit` and the layers, hooks, outline
+//! and beam around it). The ordered entity pass shares one `LivingFrame` across its mob runs.
 use super::*;
 
 /// What the mob pass works out once a frame for every living entity it draws.
@@ -121,7 +120,8 @@ impl Game<'_> {
         };
         // A mod's renderer for the type (`register_entity_renderers`) draws in place of its
         // model and vanilla layers; the mods' layers and post hooks still follow.
-        let modded = self.mod_living_renderer_geometry(mob, alpha as f32, camera, packed, out);
+        let modded =
+            self.mod_living_renderer_geometry(mob, alpha as f32, camera, packed, true, out);
         if mob.species() == Species::SulfurCube && !mob.is_invisible() && !modded {
             self.sulfur_cube_body_geometry(
                 mob,

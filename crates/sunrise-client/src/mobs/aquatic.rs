@@ -18,7 +18,6 @@ use crate::particles::ParticleType;
 use std::f32::consts::PI;
 use sunrise_core::geometry::trig::Mth;
 use sunrise_core::{geometry::Vec3, random::RandomSource};
-use sunrise_world::move_gate::MoveGate;
 
 // Squid animation slots in AnimState.v.
 const TENTACLE_MOVEMENT: usize = 0;
@@ -598,49 +597,28 @@ fn squid_step(m: &mut Mob, client: bool) {
         v[X_BODY_ROT] += (-90.0 - v[X_BODY_ROT]) * 0.02;
     }
 }
-/// Species travel overrides. Returns true when handled.
-pub fn travel(
+/// Water travel for axolotls, fish and dolphins.
+pub(super) fn travel_in_water(
     m: &mut Mob,
     w: &MobWorld,
     level: &mut DamageLevel<'_>,
     input: Vec3,
     events: &mut Vec<MobEvent>,
-) -> bool {
-    use Species as S;
-    match m.species() {
-        // Squid.travel: move by the current velocity only.
-        S::Squid | S::GlowSquid => {
-            m.do_move(w, level, events, &mut MoveGate::new());
-            true
+    pause: bool,
+) -> Result<(), super::living::TravelTrample> {
+    let speed = match m.species() {
+        Species::Axolotl | Species::Dolphin => m.ai.speed,
+        _ => 0.01,
+    };
+    m.move_relative(speed, input);
+    m.travel_move(w, level, events, pause, |m, _, _, _| {
+        m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
+        // Axolotl.travelInWater has no fish sinking or generic water gravity.
+        if m.species() != Species::Axolotl && m.ai.target.is_none() {
+            // `Vec3.add(0.0, -0.005, 0.0)`: adding 0.0 turns a -0.0 into 0.0.
+            m.velocity = Vec3::new(m.velocity.x + 0.0, m.velocity.y - 0.005, m.velocity.z + 0.0);
         }
-        // Axolotl.travelInWater: no fish sinking or generic water gravity.
-        S::Axolotl if m.fluids.in_water => {
-            m.move_relative(m.ai.speed, input);
-            m.do_move(w, level, events, &mut MoveGate::new());
-            m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
-            true
-        }
-        // AbstractFish.travelInWater / Dolphin.travelInWater.
-        S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish | S::Tadpole | S::Dolphin
-            if m.fluids.in_water =>
-        {
-            let speed = if m.species() == S::Dolphin {
-                m.ai.speed
-            } else {
-                0.01
-            };
-            m.move_relative(speed, input);
-            m.do_move(w, level, events, &mut MoveGate::new());
-            m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
-            if m.ai.target.is_none() {
-                // `Vec3.add(0.0, -0.005, 0.0)`: adding 0.0 turns a -0.0 into 0.0.
-                m.velocity =
-                    Vec3::new(m.velocity.x + 0.0, m.velocity.y - 0.005, m.velocity.z + 0.0);
-            }
-            true
-        }
-        _ => false,
-    }
+    })
 }
 /// FishMoveControl.tick (fish use it instead of the default move control).
 pub fn fish_move_control(m: &mut Mob) {
@@ -1308,6 +1286,7 @@ mod pufferfish_sting_tests {
                 );
                 let others = [target.seen(None, &crate::items::Items::empty())];
                 let world = MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     goal_host: None,
                     others: &others,
                     ..w.clone()
@@ -1464,6 +1443,7 @@ mod pufferfish_sting_tests {
                     let pig = make_mob(2, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
                     let seen = [pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1492,6 +1472,7 @@ mod pufferfish_sting_tests {
                     let far_pig = make_mob(5, "minecraft:pig", Vec3::new(5.0, 64.0, 5.0));
                     let seen_far = [far_pig.seen(None, &crate::items::Items::empty())];
                     let world_far = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &seen_far,
                         ..w.clone()
@@ -1515,6 +1496,7 @@ mod pufferfish_sting_tests {
                     invuln_pig.invulnerable_flag = true;
                     let seen = [invuln_pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1548,6 +1530,7 @@ mod pufferfish_sting_tests {
                     cooldown_pig.last_hurt = 3.0; // Pufferfish deals 1 + 2 = 3.0 <= 3.0
                     let seen = [cooldown_pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1582,6 +1565,7 @@ mod pufferfish_sting_tests {
                     let pig = make_mob(2, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
                     let seen = [pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1620,6 +1604,7 @@ mod pufferfish_sting_tests {
                     // World Tick 1 continued: Pig ticks later in the same level tick
                     let fish_seen = [mobs[0].seen(None, &crate::items::Items::empty())];
                     let world_for_pig = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &fish_seen,
                         ..w.clone()
@@ -1650,6 +1635,7 @@ mod pufferfish_sting_tests {
                     noai_pig.no_ai = true;
                     let seen = [noai_pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1662,6 +1648,7 @@ mod pufferfish_sting_tests {
                     assert_eq!(mobs[1].extra.effects[0].duration, 120);
                     let fish_seen = [mobs[0].seen(None, &crate::items::Items::empty())];
                     let world_for_pig = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &fish_seen,
                         ..w.clone()
@@ -1688,6 +1675,7 @@ mod pufferfish_sting_tests {
                         pig_b.seen(None, &crate::items::Items::empty()),
                     ];
                     let world = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &seen,
                         ..w.clone()

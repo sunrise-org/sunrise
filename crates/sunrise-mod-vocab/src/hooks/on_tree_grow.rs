@@ -29,8 +29,6 @@ pub trait Hooks {
   between the feature's, in call order, and the same seed gives the same world.
 - **Answers.** A state the game's registry does not have is refused: the game logs the mods whose parts answered and
   keeps the feature's own answer. A refusal never panics.
-- **Wasm.** A wasm part answers the same way. Its calls run one at a time for its mod's group, so a wasm part
-  serialises the workers that ask it.
 - **Cost.** With no part subscribed, a call costs one subscription check. A lookup reads this thread's handle on
   the published tables and takes no lock."#]
     #[hook(

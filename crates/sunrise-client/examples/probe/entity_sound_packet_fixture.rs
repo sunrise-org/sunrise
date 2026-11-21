@@ -24,6 +24,8 @@ pub fn main() {
                 .unwrap()
                 .then(|| c["entity"].as_i64().unwrap() as u32),
             except_entity: None,
+            seed: 0,
+            particles_before: 0,
         };
         let (packet, range) = captured_sound_packet(
             &sound,

@@ -1,5 +1,4 @@
-//! Saved chunks for far readers: far terrain's sampling threads and a
-//! player's far ring (`lan::far`).
+//! Saved chunks for far terrain's sampling threads.
 //!
 //! A far read stays out of the gameplay region cache: the far view spans
 //! more region files than the cache keeps open, and would push the ones the

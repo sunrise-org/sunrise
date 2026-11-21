@@ -14,12 +14,11 @@ use sunrise_client::{
     blocks::BlockFacts,
     items::Items,
     mobs::{
-        MobTypes,
+        MobType, MobTypes,
         data::MobData,
         spawn_rules::{self, Reason, SpawnLevel},
         spawn_selection::{
-            self, Heightmap, MobType as SelectionMobType, NaturalLevel, SpawnCost, StructureAt,
-            StructureSpawns, spawn_aabb,
+            self, Heightmap, NaturalLevel, SpawnCost, StructureAt, StructureSpawns, spawn_aabb,
         },
     },
 };
@@ -131,7 +130,7 @@ impl NaturalLevel for Column<'_> {
     fn has_ceiling(&self) -> bool {
         false
     }
-    fn mob_type(&self, _entity: &str) -> Option<SelectionMobType> {
+    fn mob_type(&self, _entity: &str) -> Option<&MobType> {
         None
     }
     fn biome_spawns(
@@ -324,8 +323,7 @@ pub fn main() -> sunrise_client::Result<()> {
         let s = kind.species;
         let ok = spawn_rules::is_spawn_position_ok(c["type"], s, &level, x0, y, z0);
         let rules = spawn_rules::check_spawn_rules(
-            c["type"],
-            s,
+            kind,
             &level,
             reason(&get("reason", "natural")),
             &mut random,

@@ -86,7 +86,7 @@ every OS), the dedicated loop answers `server-status` with TPS, MSPT (average, P
 clock `/tick query` uses), players (name, UUID, address, ping, position), loaded chunks and uptime. It answers
 `console <line>` with the command's output. `server-mods` reads the canonical `LoadedMods` package
 inventory on this same server thread and answers `{"mods":[{"id":"example","version":"1"}]}`.
-It includes native, wasm and content packages installed in that inventory, in inventory order; an empty
+It includes native and content packages installed in that inventory, in inventory order; an empty
 inventory is `{"mods":[]}`. The supervisor's `GET /api/v1/mods` uses this query, never a build-record fallback.
 
 **A proxy moving a player between two servers** uses more requests on this endpoint (`lan/arrivals.rs`,
@@ -323,8 +323,8 @@ velocity that is not finite numbers (a rotation past what a float holds too). A 
 (`RootVehicle`) puts the player back on it at the vehicle's own place, so a request that names a position for such a
 record is refused. The border, the blocks and the chunks are not checked,
 as a vanilla server does not check the place its player file names. The player is teleported to the position (the
-client confirms a new teleport id), so an anticheat never sees the arrival as a move, however far it is from the
-export.
+client confirms a new teleport id), so the arrival is a teleport, never judged as a move (vanilla's speed and
+collision checks), however far it is from the export.
 
 **The view follows the imported position.** `recentered` says whether the import moved the player to another chunk
 than the one its view was built around (only possible with the `position` part, and only once the player has been sent
@@ -466,11 +466,13 @@ comes out of the headless-engine work.
 **One-command install** (`packaging/server/`):
 
 - Linux and macOS:
-  `curl -fsSL https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.sh | sh`
+  `curl -fsSL https://raw.githubusercontent.com/sunrise-org/sunrise/main/packaging/server/install.sh | sh`
   The script picks the release archive for the OS and architecture (on Linux x86_64 the server archive,
   on macOS arm64 the game's), downloads it from GitHub Releases, and checks it against the release's signed
-  `SHA256SUMS` when OpenSSL 3 is installed, else against the SHA-256 GitHub publishes for each asset
-  (docs/security.md). It never asks for sudo. Options: `--version vX.Y.Z`, `--dir` (default
+  `SHA256SUMS` with `sunrise-verify`, which it downloads and accepts only with the SHA-256 pinned in the script;
+  it refuses the install on any failure (docs/security.md, "The first install"). It installs the Nightly unless
+  told otherwise. It never asks for sudo. Options: `--version` (a release's tag: a stable one such as `26.3-0.1.0`
+  puts the server on that stable line), `--dir` (default
   `~/.local/share/sunrise`), `--bin` (default `~/.local/bin`), and `--archive FILE` to install an archive
   already on the machine (a build of your own; no download and no checksum).
   A Linux release from before the server archive installs the full game, which links ALSA's and udev's
@@ -479,10 +481,10 @@ comes out of the headless-engine work.
   any that are missing, `init` warns, and `run` stops at once with what to install, rather than restarting
   a game that can't load.
 - Windows:
-  `irm https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.ps1 | iex`
-  The script does the same into `%LOCALAPPDATA%\Sunrise` (`-Version`, `-Dir`), with junctions instead of
-  links (no admin rights), and adds `bin` to the user's PATH. It finds OpenSSL 3 on the PATH or in Git for
-  Windows to check the signature.
+  `irm https://raw.githubusercontent.com/sunrise-org/sunrise/main/packaging/server/install.ps1 | iex`
+  The script does the same into `%LOCALAPPDATA%\Sunrise` (`-Version <tag>`, such as `-Version 26.3-0.1.0` for a
+  stable line, and `-Dir`), with junctions instead of links (no admin rights), and adds `bin` to the user's PATH. It
+  checks the signature with the pinned `sunrise-verify` the same way.
 - **Layout.** Each release goes to `<dir>/releases/<tag>` and `<dir>/current` points at the one in use, so an
   update or a rollback is one link. `<bin>/sunrise-server` and `<bin>/sunrise-prepare` are two-line launchers
   that run `current`. The prepared game files live in `<dir>/game-files/sunrise-client` and each release's
@@ -531,16 +533,6 @@ The owner edits only `server.toml`. The supervisor writes `server.properties` fr
 start, so the engine stays exactly vanilla. The file is short: typed sections for what owners change, and
 a `[properties]` table that passes any other vanilla key through unchanged.
 
-For Unix wasm compilation, add `"wasm.compile_timeout_secs" = "120"` under
-`[properties]` to allow 120 seconds per uncached module. The engine reads this
-runtime setting from the dedicated game directory's `server.properties`; edit the
-TOML when using the supervisor. Zero or non-numeric values publish a refusal naming
-the setting and value, excluding the affected package's code and content. Unix cache
-trust/write failures and compiler failures refuse compilation rather than drop the
-deadline; restore a private writable `.sunrise-cache/wasm` and working executable.
-Removing the key restores the available-thread default; see the
-[wasm compilation settings](modding/src/how-to/wasm-mods.md#compilation-time-setting)
-for the exact formula and platform limitations.
 
 ```toml
 # Sunrise server settings (docs/server.md). The server writes them into server.properties before
@@ -627,7 +619,7 @@ sunrise-server import <server.properties>
 sunrise-server config [--json]           config set KEY=VALUE... [--json]
 sunrise-server service install|uninstall|print [--system]
 sunrise-server panel                     the panel's address and a one-time login link
-sunrise-server update [--check [--json]] [--version vX.Y.Z] [--timeout S]     rollback [--timeout S]
+sunrise-server update [--check [--json]] [--version TAG] [--timeout S]     rollback [--timeout S]
 sunrise-server update --archive FILE --version NAME     an archive you have (your own build)
 sunrise-server mcp                       MCP server on stdio (section 8)
 sunrise-server import-resources <dir>    copy game files prepared elsewhere into place (checked first)
@@ -715,11 +707,14 @@ runtime or new dependency. Server-sent events can replace the polling later if a
   newer release a minute after it starts and then every 6 hours, and only says so, in its log, in `status`
   and in the panel (`SUNRISE_NO_UPDATE_CHECK=1` turns the check off). `update --check` asks GitHub once.
   `update`:
-  1. downloads the current Nightly's archive for this computer (the only build Sunrise ships since 2026-10-28;
-     GitHub's latest release while there is none; on Linux the server build; `--version` picks another: a
-     `vX.Y.Z` release, or a `nightly-<date>` of the last 7 days) and checks it against its SHA256SUMS, whose Ed25519
+  1. downloads the newest build of the server's channel for this computer: on a stable release (`26.3-0.1.0`), the
+     newest published stable release of its line (the same Minecraft version and Sunrise major, `26.3-0.x`: never
+     a Nightly, whose mod API may differ, nor the next major, which a server moves to with `--version`); on any
+     other build, the current Nightly (GitHub's latest release while there is none). On Linux it takes the server
+     build. `--version` picks another: a stable release's tag, a `vX.Y.Z` release, or a `nightly-<date>` of the
+     last 7 days; a Dev build (`dev-<date>-<commit>`) is refused. It checks the archive against its SHA256SUMS, whose Ed25519
      signature must check with a key built into `sunrise-server` (docs/release-flow.md, "Signed checksums"),
-     signed for the Nightly channel: an unsigned or tampered build is refused. A Nightly installs as
+     signed for the Nightly's own version or the stable release's tag: an unsigned or tampered build is refused. A Nightly installs as
      `nightly-<date>-<commit>`, newer than every `vX.Y.Z`; another build of the same day is an update too;
   2. unpacks it into `<dir>/releases/<tag>`, beside the others, with its game files linked to
      `<dir>/game-files` as the installers do;

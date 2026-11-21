@@ -1,5 +1,9 @@
 # Design: mod datapack registries
 
+> Historical: this design predates the removal of WebAssembly mods.
+> See [`DatapackRegistriesRegistrar`](../../../crates/sunrise-mod-vocab/src/parts/datapack_registries.rs) for the current native API.
+> The current registrar declares a schema and the game decodes entries. The proposed mod decoder callback, guest failure cases and dual-target stage are historical.
+
 Provisional contract for [#811](https://github.com/arismoko/horizon/issues/811), not an implemented API. Ari's side posts the decision on the issue. This note files no issues or PRs.
 
 ## Decision: decoder and generation ownership

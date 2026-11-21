@@ -48,9 +48,10 @@ fn subscriber_tick_benchmark() {
     let mut host = FakeHost::new();
     dispatch_client_tick_pre(&mut host); // Warm the dispatch outside the timed loop.
     let iterations = 1_000_000;
+    // The empty event has no fields to reset; decode it once outside the timed loop.
+    let mut event: ClientTickPreEvent = wire::Reader::new(&[]).take().unwrap();
     let start = Instant::now();
     for _ in 0..iterations {
-        let mut event = ClientTickPreEvent {};
         for entry in black_box(&before) {
             let _guard = mod_api::__private::enter(entry.id, "client_tick_pre");
             entry.hooks.client_tick_pre(&mut host, &mut event);

@@ -1,5 +1,5 @@
 //! Real server/client Game owners, world publication and negotiated client registry limits.
-use super::native_entity_refs::tests::{with_client_game, with_game};
+use super::native_entity_refs::tests::{run_fresh_cases, with_client_game, with_game};
 use mod_api::{
     DatapackField, DatapackFieldKind, DatapackRegistrySync, Hooks, ModEntry, Registrar,
     RegistrationContext,
@@ -51,9 +51,35 @@ fn id(value: &str) -> mod_api::Identifier {
     mod_api::Identifier::parse(value).unwrap()
 }
 
+// Feed the same server-built snapshot to both Host implementations.
+fn check_rejected_sync_tags(game: &super::Game<'_>) {
+    for (registry, name) in [
+        ("minecraft:enchantment", "minecraft:sharpness"),
+        ("minecraft:entity_type", "minecraft:zombie"),
+    ] {
+        let entry = host(game).registry_entry(registry, name).unwrap();
+        assert_eq!(
+            host(game).registry_entry_in_tag(&entry, "registry_entry_test:bound"),
+            Some(true)
+        );
+        assert_eq!(
+            host(game).registry_entry_in_tag(&entry, "registry_entry_test:rejected"),
+            Some(false)
+        );
+    }
+}
+
 #[test]
 #[ignore = "daily"]
 fn generic_entries_follow_real_server_tables_and_atomic_reload() {
+    // The lazy wire cache is process-wide; another world must not replace this world's snapshot.
+    if run_fresh_cases(
+        "game::native_registry_entries_tests::generic_entries_follow_real_server_tables_and_atomic_reload",
+        "SUNRISE_REGISTRY_ENTRIES_RELOAD_CHILD",
+        &["reload"],
+    ) {
+        return;
+    }
     let _publication = sunrise_client::datapack_net::isolate_server_publication();
     let scratch = tempfile::tempdir().unwrap();
     let pack = scratch.path().join("datapacks/entries");
@@ -97,11 +123,32 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
         &pack.join("data/registry_entry_test/tags/worldgen/structure/towns.json"),
         r#"{"values":["minecraft:village_plains"]}"#,
     );
+    write(
+        &pack.join("data/registry_entry_test/tags/mob_effect/rejected.json"),
+        r#"{"values":["minecraft:speed","registry_entry_test:missing"]}"#,
+    );
+    for (kind, member) in [
+        ("enchantment", "minecraft:sharpness"),
+        ("entity_type", "minecraft:zombie"),
+    ] {
+        for (tag, values) in [
+            ("bound", vec![member]),
+            ("rejected", vec![member, "#registry_entry_test:missing"]),
+        ] {
+            write(
+                &pack.join(format!("data/registry_entry_test/tags/{kind}/{tag}.json")),
+                serde_json::json!({"values":values}).to_string(),
+            );
+        }
+    }
     mod_platform::testing::with_mods(
         vec![ModEntry::new("registry_entry_test", Box::new(RegistryMod))].into(),
         || {
+            let mut wire = None;
             with_game(|game| {
                 game.load_world(request(scratch.path())).unwrap();
+                check_rejected_sync_tags(game);
+                wire = game.registry_sync();
                 let step = host(game)
                     .registry_entry("minecraft:game_event", "minecraft:step")
                     .unwrap();
@@ -111,6 +158,13 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                 );
                 assert_eq!(
                     host(game).registry_entry_in_tag(&step, "registry_entry_test:absent"),
+                    Some(false)
+                );
+                let speed = host(game)
+                    .registry_entry("minecraft:mob_effect", "minecraft:speed")
+                    .unwrap();
+                assert_eq!(
+                    host(game).registry_entry_in_tag(&speed, "registry_entry_test:rejected"),
                     Some(false)
                 );
                 assert_eq!(
@@ -263,6 +317,15 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                         .registry_entry("minecraft:worldgen/noise", "registry_entry_test:late"),
                     None
                 );
+            });
+            with_client_game(|game| {
+                let (client, _server) = sunrise_protocol::connection::Pipe::pair();
+                game.connect_local(client, "Generic registries").unwrap();
+                let wire = wire.unwrap();
+                let mut received = wire.dynamic.clone();
+                received.add_tags(&wire.tags);
+                game.remote.as_mut().unwrap().registries = Arc::new(received);
+                check_rejected_sync_tags(game);
             });
         },
     );

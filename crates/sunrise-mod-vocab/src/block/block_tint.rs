@@ -210,7 +210,6 @@ pub enum VanillaTint {
 /// One layer of a block's tint list: one of vanilla's sources or a mod's own.
 #[derive(Clone)]
 // exhaustive: mods build one; the game evaluates both kinds
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum TintLayer {
     /// A vanilla source, evaluated by the game as for its own blocks.
     Vanilla(VanillaTint),
@@ -252,7 +251,6 @@ pub trait BlockTintSources {
 /// The game's [`BlockTintSources`]: the registrations in order.
 #[derive(Default)]
 // exhaustive: its field is private; the game builds it
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct BlockTintRegistry {
     registrations: Vec<(Vec<TintLayer>, Vec<String>)>,
 }

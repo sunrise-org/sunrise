@@ -36,7 +36,7 @@ ChiseledBookShelfBlockEntity.canTakeItem	port	crates/sunrise-client/src/game/mac
 ChiseledBookShelfBlockEntity.applyImplicitComponents	port	crates/sunrise-client/src/block_entity_item.rs::place	Items as container component
 ChiseledBookShelfBlockEntity.collectImplicitComponents	port	crates/sunrise-client/src/block_entity_item.rs::collect	Items as container component
 CommandBlockEntity.onModeSwitch	port	crates/sunrise-client/src/game/administration/command_blocks.rs::Game::apply_command_block	mode switch; the AUTO schedule follows the setAutomatic step
-CommandBlockEntity.isConditional	port	crates/sunrise-client/src/game/administration/command_blocks.rs::conditional
+CommandBlockEntity.isConditional	port	crates/sunrise-gameplay/src/command_blocks.rs::conditional
 CommandBlockEntity.applyImplicitComponents	port	crates/sunrise-client/src/block_entity_item.rs::place	custom name component
 CommandBlockEntity.collectImplicitComponents	port	crates/sunrise-client/src/block_entity_item.rs::collect	custom name component
 CommandBlockEntity.removeComponentsFromTag	port	crates/sunrise-client/src/block_entity_item.rs::pick	CustomName, conditionMet and powered left out of the item data

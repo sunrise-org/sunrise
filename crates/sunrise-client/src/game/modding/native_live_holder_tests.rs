@@ -267,8 +267,8 @@ impl Hooks for TickPaths {
     fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut BlocksEvent<'_>) {
         for id in [BOTH_BLOCK, BARE_BLOCK] {
             event
-                .blocks
-                .push(mod_api::Block::new(id, "minecraft:stone"));
+                .register(mod_api::Block::new(id, "minecraft:stone"))
+                .unwrap();
         }
     }
 }

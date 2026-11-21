@@ -402,14 +402,14 @@ impl Game<'_> {
     /// `BlockAttachedEntity.hurtServer`: `kill` (the `entity_die` event), then
     /// `Cushion.dropItem`.
     pub(super) fn break_cushion(&mut self, index: usize, by_player: bool) {
-        self.break_cushion_by(index, by_player.then_some(super::commands::Target::Player))
+        self.break_cushion_by(index, by_player.then_some(super::commands::Target::Player));
     }
     pub(super) fn break_cushion_by(
         &mut self,
         index: usize,
         source: Option<super::commands::Target>,
-    ) {
-        self.remove_cushion(index, source, true);
+    ) -> bool {
+        self.remove_cushion(index, source, true)
     }
     /// `BlockAttachedEntity.tick` on lost support: `discard()` and then
     /// `dropItem(level, null)`, which posts no game event.
@@ -423,13 +423,15 @@ impl Game<'_> {
         index: usize,
         source: Option<super::commands::Target>,
         killed: bool,
-    ) {
-        let c = self.cushions.remove(index);
-        let p = c.position;
-        self.world.modified.insert((c.pos[0] >> 4, c.pos[2] >> 4));
-        if self.riding == Some(c.id) {
-            self.dismount_removed_vehicle(p.y);
+    ) -> bool {
+        let id = self.cushions[index].id;
+        if self.target_removed(&super::commands::Target::Cushion(id)) {
+            return false;
         }
+        let Some(c) = self.take_removed_cushion(id) else {
+            return false;
+        };
+        let p = c.position;
         if killed {
             // BlockAttachedEntity.kill, before dropItem.
             self.entity_killed_event_by([p.x, p.y, p.z], source);
@@ -449,10 +451,11 @@ impl Game<'_> {
             .bool_at(sunrise_client::gamerules::vanilla::ENTITY_DROPS)
             || self.infinite_materials(source.as_ref())
         {
-            return;
+            return true;
         }
         let stack = c.item_stack_with_data();
         self.spawn_item(stack, [p.x, p.y, p.z], [0.0; 3], 10);
+        true
     }
     /// `Player.hasInfiniteMaterials` of a hurt's cause: the mode of the body in
     /// place, or of the guest the blast names.
@@ -469,15 +472,13 @@ impl Game<'_> {
     }
 
     /// `Entity.kill` of a cushion (`/kill`): gone with no drop, its rider let go.
-    pub(super) fn kill_cushion(&mut self, id: u32) {
-        let Some(i) = self.cushions.iter().position(|c| c.id == id) else {
-            return;
-        };
-        let c = self.cushions.remove(i);
-        self.world.modified.insert((c.pos[0] >> 4, c.pos[2] >> 4));
-        if self.riding == Some(c.id) {
-            self.dismount_removed_vehicle(c.position.y);
-        }
+    pub(super) fn take_removed_cushion(&mut self, id: u32) -> Option<Cushion> {
+        self.with_destroying_vehicle(super::commands::Target::Cushion(id), |game| {
+            let i = game.cushions.iter().position(|c| c.id == id)?;
+            let c = game.cushions.remove(i);
+            game.world.modified.insert((c.pos[0] >> 4, c.pos[2] >> 4));
+            Some(c)
+        })?
     }
 
     /// `Cushion.showBreakingParticles`: ten of the matching wool block.

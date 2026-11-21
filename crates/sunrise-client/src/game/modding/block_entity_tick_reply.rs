@@ -81,9 +81,11 @@ impl Game<'_> {
             revision,
             self.items(),
             "block_entity_tick",
-            if self.block_entity_tick_key.as_ref().is_none_or(|key| {
-                !key.unbalanced && key.failure_generation == self.wasm_dispatch_failures.get()
-            }) {
+            if self
+                .block_entity_tick_key
+                .as_ref()
+                .is_none_or(|key| !key.unbalanced)
+            {
                 Ok(())
             } else {
                 Err(BlockEntitySnapshotError::InvalidRevision)

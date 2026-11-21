@@ -2,8 +2,7 @@
 
 /// The game's instance directory, captured before registration begins.
 ///
-/// This is a path value, not filesystem authority. Wasm receives the same data
-/// as native mods, including the host's encoding; it gains no filesystem access.
+/// This is a path value, not filesystem authority. It preserves the host's encoding.
 /// Never interpret Unix bytes as UTF-8 or discard unpaired Windows surrogates.
 #[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
 #[non_exhaustive]
@@ -35,7 +34,7 @@ impl InstanceDirectory {
     }
 
     /// The host path this value names, byte for byte; `None` when it was made on another kind of
-    /// host or this target has no host paths (wasm).
+    /// host or this target supports neither encoding.
     pub fn to_path_buf(&self) -> Option<std::path::PathBuf> {
         match self {
             #[cfg(unix)]

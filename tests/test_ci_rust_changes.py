@@ -61,7 +61,7 @@ class RustChangesTests(unittest.TestCase):
             # Generated references that Rust tests compare with their generator's output.
             "docs/api/server-reference.md", "docs/sunrise-ctl-commands.md",
             # Embedded with include_str!.
-            "docs/modpacks/atm10-mods.csv", "crates/sunrise-mod-api-gen/coverage-notes.md",
+            "docs/modpacks/atm10-mods.csv",
             # A page a Rust test requires to be absent: adding it fails that test.
             "docs/modding/src/reference/hook-notes.md",
             # A workspace crate's sources under docs/.
@@ -306,11 +306,40 @@ class RustChangesTests(unittest.TestCase):
             for data in [b"", b"M\0docs/setup.md", b"M\0", b"X\0docs/setup.md\0"]:
                 listing.write_bytes(data)
                 with self.subTest(data=data):
-                    self.assertEqual(rust_changes.pr_entries(sha, sha, listing), unknown)
+                    self.assertEqual(rust_changes.pr_entries(sha, sha, listing, 1), unknown)
             listing.write_bytes(b"M\0docs/setup.md\0")
-            self.assertEqual(rust_changes.pr_entries("", sha, listing), unknown)
-            self.assertEqual(rust_changes.pr_entries(sha, sha, listing), [("M", "docs/setup.md")])
+            self.assertEqual(rust_changes.pr_entries("", sha, listing, 1), unknown)
+            self.assertEqual(rust_changes.pr_entries(sha, sha, listing, 1), [("M", "docs/setup.md")])
             self.assertEqual(selections(unknown), {"rust_required": True, "tooling_required": True})
+
+    def test_a_listing_that_lost_a_record_or_repeats_or_misnames_one_selects_everything(self):
+        unknown = [("?", UNKNOWN_CHANGE)]
+        sha = "a" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            listing = Path(directory, "list")
+            listing.write_bytes(b"M\0docs/a.md\0")
+            # pr_files.py printed two entries: the listing lost its last record.
+            self.assertEqual(rust_changes.pr_entries(sha, sha, listing, 2), unknown)
+            for data in [b"M\0docs/a.md\0D\0docs/a.md\0", b"M\0docs/../src/lib.rs\0", b"M\0./src/lib.rs\0"]:
+                listing.write_bytes(data)
+                with self.subTest(data=data):
+                    self.assertEqual(rust_changes.pr_entries(sha, sha, listing, data.count(b"\0") // 2), unknown)
+
+    def test_an_empty_diff_endpoint_means_everything_changed(self):
+        self.assertEqual(changed_entries("", "a" * 40), [("?", UNKNOWN_CHANGE)])
+        self.assertEqual(changed_entries("a" * 40, ""), [("?", UNKNOWN_CHANGE)])
+
+    def test_a_path_attribute_split_over_lines_is_an_include(self):
+        # `#[` and `path` on different lines, and the value continued with an escaped newline.
+        source = '#[\n    path = "../docs/gen\\\n        erated.txt"\n]\nmod generated;\n'
+        with fixture_repository({"src/lib.rs": source, "docs/generated.txt": "", "docs/other.md": ""}):
+            self.assertTrue(selections([("M", "docs/generated.txt")])["rust_required"])
+            self.assertFalse(selections([("M", "docs/other.md")])["rust_required"])
+
+    def test_out_dir_after_another_piece_is_not_a_build_output_path(self):
+        with fixture_repository({"src/lib.rs": 'const C: &str = include_str!(concat!(env!("A"), env!("OUT_DIR"), "/../docs/x.md"));',
+                                 "docs/x.md": ""}):
+            self.assertTrue(selections([("M", "docs/x.md")])["rust_required"])
 
     def test_pr_file_producer_changes_require_formatting(self):
         self.assertTrue(selections([("M", "tools/ci/pr_files.py")])["rust_required"])

@@ -722,8 +722,20 @@ impl BlockEntities {
         self.map.get(pos)
     }
     pub fn get_mut(&mut self, pos: &Pos) -> Option<&mut BlockEntity> {
+        self.get_mut_if(pos, |_| true)
+    }
+    /// Wake and borrow a resident row only when the read-only predicate accepts it.
+    pub fn get_mut_if(
+        &mut self,
+        pos: &Pos,
+        accepts: impl FnOnce(&BlockEntity) -> bool,
+    ) -> Option<&mut BlockEntity> {
+        let entity = self.map.get_mut(pos)?;
+        if !accepts(entity) {
+            return None;
+        }
         self.asleep.remove(pos);
-        self.map.get_mut(pos)
+        Some(entity)
     }
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&Pos, &mut BlockEntity)> {
         self.asleep.clear();

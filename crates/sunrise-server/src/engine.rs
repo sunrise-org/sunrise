@@ -145,6 +145,7 @@ pub fn spawn(
     dir: &Path,
     low_memory: bool,
     parallel_tick: bool,
+    droppable: (u32, u32),
     transfers: Option<&str>,
 ) -> std::io::Result<Child> {
     command(
@@ -153,6 +154,7 @@ pub fn spawn(
         dir,
         low_memory,
         parallel_tick,
+        droppable,
         transfers,
     )?
     .spawn()
@@ -165,6 +167,7 @@ fn command(
     dir: &Path,
     low_memory: bool,
     parallel_tick: bool,
+    droppable: (u32, u32),
     transfers: Option<&str>,
 ) -> std::io::Result<Command> {
     let mut command = sunrise_server_launch::command_with_transfers(
@@ -175,6 +178,17 @@ fn command(
     if parallel_tick {
         command.env("SUNRISE_PARALLEL_TICK", "1");
     }
+    // `[engine] droppable_clientbound` and `droppable_serverbound`: the game's byte budgets for
+    // `Droppable` mod payloads, always passed so the file is the one source.
+    command
+        .env(
+            "SUNRISE_DROPPABLE_CLIENTBOUND_BYTES_PER_SECOND",
+            droppable.0.to_string(),
+        )
+        .env(
+            "SUNRISE_DROPPABLE_SERVERBOUND_BYTES_PER_SECOND",
+            droppable.1.to_string(),
+        );
     Ok(command)
 }
 
@@ -296,6 +310,7 @@ mod tests {
                 &dir,
                 low_memory,
                 false,
+                (0, 0),
                 None,
             )
             .unwrap();
@@ -318,6 +333,7 @@ mod tests {
                 &dir,
                 false,
                 parallel_tick,
+                (0, 0),
                 None,
             )
             .unwrap();
@@ -331,6 +347,35 @@ mod tests {
     }
 
     #[test]
+    fn the_droppable_budgets_always_reach_the_game() {
+        let dir = std::env::temp_dir();
+        let command = command(
+            Path::new("sunrise-client"),
+            &dir,
+            &dir,
+            false,
+            false,
+            (1000, 0),
+            None,
+        )
+        .unwrap();
+        let env = |name: &str| {
+            command
+                .get_envs()
+                .find(|(k, _)| *k == name)
+                .and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))
+        };
+        assert_eq!(
+            env("SUNRISE_DROPPABLE_CLIENTBOUND_BYTES_PER_SECOND").as_deref(),
+            Some("1000")
+        );
+        assert_eq!(
+            env("SUNRISE_DROPPABLE_SERVERBOUND_BYTES_PER_SECOND").as_deref(),
+            Some("0")
+        );
+    }
+
+    #[test]
     fn transfers_reach_the_game_only_when_they_are_on() {
         let args = |transfers: Option<&str>| {
             let dir = std::env::temp_dir();
@@ -340,6 +385,7 @@ mod tests {
                 &dir,
                 false,
                 false,
+                (0, 0),
                 transfers,
             )
             .unwrap();
@@ -494,6 +540,7 @@ mod tests {
                 &server,
                 false,
                 false,
+                (0, 0),
                 None,
             ) {
                 Err(e) if e.raw_os_error() == Some(26) && tries < 50 => {

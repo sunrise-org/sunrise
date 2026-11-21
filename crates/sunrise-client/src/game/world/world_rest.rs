@@ -25,13 +25,12 @@ pub(super) fn load_world_rest(
         "sunrise-content".into(),
         resource_root.data_changes().clone(),
     );
-    let files = sunrise_client::datapack::DataStore::load(&[&content])
-        .files
-        .into_iter()
-        .collect::<Vec<_>>();
+    let store = sunrise_client::datapack::DataStore::load(&[&content]);
+    let files = store.files.into_iter().collect::<Vec<_>>();
     let overlay = &sunrise_world::loot::PackOverlay {
         conditions,
         files: &files,
+        priority_layers: &store.priority_layers,
     };
     progress.set(6);
     // Independent tables load together, within the worker budget the settings
@@ -312,7 +311,7 @@ pub(super) fn load_world_rest(
         ambient,
         nether_environment,
         end_environment,
-        behaviours: behaviours?,
+        behaviours: Arc::new(behaviours?),
         mob_types,
         mob_data,
         player_type,

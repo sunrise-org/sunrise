@@ -14,8 +14,6 @@ pub trait Hooks {
     /// on a later server tick after a successful write, possibly after WorldSaved.
     /// Live state may have advanced beyond the saved snapshot; a process exit
     /// before completions are drained can prevent notification delivery.
-    ///
-    /// Not on wasm: it gives a path in the game's file system, which a wasm mod has none of; a wasm mod keeps a player's data in attachments.
     #[hook(
         side = "server",
         contract = "listen",

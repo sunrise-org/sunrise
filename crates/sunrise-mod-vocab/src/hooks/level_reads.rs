@@ -29,11 +29,12 @@ parked server levels and the current client level, without loading chunks or swa
     fn level_reads_note1();
     #[notes = r#"## Respawn data, maps, ticks, sky and sight
 
-`LevelRef::respawn_data(host)` is the world spawn and the way a player appearing there faces
-(`LevelData.getRespawnData`), and `set_respawn_data(host, pos, yaw, pitch)` is `/setworldspawn`'s
-own write: the yaw wraps and the pitch clamps as `RespawnData.of` does, a player whose respawn
-point was the old world spawn follows it, and `spawn_change` fires. Sunrise keeps one world spawn,
-in the Overworld, so only the Overworld's handle writes it.
+`LevelRef::respawn_data(host)` is the world spawn, the level it is in and the way a player
+appearing there faces (`LevelData.getRespawnData`), and `set_respawn_data(host, pos, yaw, pitch)`
+is `/setworldspawn`'s own write in the handle's level: the yaw wraps and the pitch clamps as
+`RespawnData.of` does, a player whose respawn point was the old world spawn follows it, and
+`spawn_change` fires. The world has one world spawn, so any level's handle reads the same one,
+and writing through a level moves it there.
 
 `map_data(host, id)` is a map's saved data (`MapItemSavedData`): centre, scale, dimension, the
 locked, tracking and unlimited flags and its 128 by 128 colour ids, from memory or from its
@@ -126,7 +127,7 @@ chunks; a world without structures, a structure this level cannot generate, an o
 world's 30,000,000-block edge and a radius out of range give `None`.
 
 `ChunkRef::watchers(host)` is `ChunkMap.getPlayers(pos, false)`: the players the chunk was sent to
-and is inside the view of, from their `chunk_watch` until they move away from it. Sunrise's
-far-ring columns past the view distance are not watched, and fake players watch nothing."#]
+and is inside the view of, from their `chunk_watch` until they move away from it. Fake players
+watch nothing."#]
     fn level_reads_note5();
 }

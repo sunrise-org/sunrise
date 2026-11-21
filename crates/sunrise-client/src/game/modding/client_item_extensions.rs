@@ -60,17 +60,13 @@ impl ClientItemExtensionsRegistrar for Registration<'_> {
                 .ok_or_else(|| format!("armour model {name}: no registering provider"))?;
             let id = mod_api::Identifier::parse(name)
                 .map_err(|why| format!("armour model {name}: {why}"))?;
-            if id.namespace() != owner {
+            if id.namespace() == "minecraft"
+                || !mod_api::__private::owns_namespace(owner, id.namespace())
+            {
                 return Err(format!("armour model {name}: expected namespace {owner}"));
             }
             if self.state.models.iter().any(|model| model.name == name) {
                 return Err(format!("duplicate armour model {name}"));
-            }
-            use mod_api::wire::Wire;
-            let mut writer = mod_api::wire::Writer::new();
-            model.put(&mut writer);
-            if let Some(error) = writer.error() {
-                return Err(format!("armour model {name}: {error}"));
             }
             let part =
                 bake_model("root", model).map_err(|why| format!("armour model {name}: {why}"))?;
@@ -152,57 +148,69 @@ impl ClientItemExtensionsRegistrar for Registration<'_> {
     }
 }
 
-// ModelPart's shared Wire preflight bounds recursive depth before entering here.
+// Bounds the recursive bake and subsequent clones and traversal of the baked tree.
+const MAX_ARMOR_MODEL_DEPTH: usize = 32;
+
 // All unknown geometry is validated once while baking, never during a frame.
 fn bake_model(name: &str, model: &ModelPart) -> std::result::Result<Part, &'static str> {
-    let pose = [
-        model.x,
-        model.y,
-        model.z,
-        model.x_rot,
-        model.y_rot,
-        model.z_rot,
-        model.x_scale,
-        model.y_scale,
-        model.z_scale,
-    ];
-    if !pose.iter().all(|x| x.is_finite()) {
-        return Err("non-finite model pose");
-    }
-    let mut polygons = Vec::new();
-    for polygon in &model.polygons {
-        if !polygon.normal.iter().all(|x| x.is_finite())
-            || !polygon
-                .vertices
-                .iter()
-                .all(|v| v.pos.iter().chain([&v.u, &v.v]).all(|x| x.is_finite()))
-        {
-            return Err("non-finite model geometry");
+    fn bake(
+        name: &str,
+        model: &ModelPart,
+        depth: usize,
+    ) -> std::result::Result<Part, &'static str> {
+        if depth == 0 {
+            return Err("model has too many nested parts");
         }
-        if !model.skip_draw && model.visible {
-            polygons.push(Polygon {
-                normal: polygon.normal,
-                vertices: polygon
+        let pose = [
+            model.x,
+            model.y,
+            model.z,
+            model.x_rot,
+            model.y_rot,
+            model.z_rot,
+            model.x_scale,
+            model.y_scale,
+            model.z_scale,
+        ];
+        if !pose.iter().all(|x| x.is_finite()) {
+            return Err("non-finite model pose");
+        }
+        let mut polygons = Vec::new();
+        for polygon in &model.polygons {
+            if !polygon.normal.iter().all(|x| x.is_finite())
+                || !polygon
                     .vertices
-                    .map(|v| [v.pos[0], v.pos[1], v.pos[2], v.u, v.v]),
-                cull_back: false,
-            });
+                    .iter()
+                    .all(|v| v.pos.iter().chain([&v.u, &v.v]).all(|x| x.is_finite()))
+            {
+                return Err("non-finite model geometry");
+            }
+            if !model.skip_draw && model.visible {
+                polygons.push(Polygon {
+                    normal: polygon.normal,
+                    vertices: polygon
+                        .vertices
+                        .map(|v| [v.pos[0], v.pos[1], v.pos[2], v.u, v.v]),
+                    cull_back: false,
+                });
+            }
         }
+        let children = if model.visible {
+            model
+                .children()
+                .map(|(name, child)| bake(name, child, depth - 1))
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
+        Ok(Part {
+            name: name.to_owned(),
+            pose,
+            polygons,
+            children,
+        })
     }
-    let children = if model.visible {
-        model
-            .children()
-            .map(|(name, child)| bake_model(name, child))
-            .collect::<std::result::Result<Vec<_>, _>>()?
-    } else {
-        Vec::new()
-    };
-    Ok(Part {
-        name: name.to_owned(),
-        pose,
-        polygons,
-        children,
-    })
+    bake(name, model, MAX_ARMOR_MODEL_DEPTH)
 }
 
 impl Game<'_> {
@@ -351,87 +359,99 @@ fn dispatch_equipment<'a>(
         part: Some("ClientItemExtensions"),
     });
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let dye = provider.default_dye_color(host, stack);
-        let layer_type = match piece.kind {
-            "humanoid_baby" => EquipmentLayerType::HumanoidBaby,
-            "humanoid_leggings" => EquipmentLayerType::HumanoidLeggings,
-            _ => EquipmentLayerType::Humanoid,
-        };
-        piece.resolved_materials(
-            trim,
-            |index, layer| {
-                let original_ref = state
-                    .texture_keys
-                    .get(&layer.texture)
-                    .map_or(ArmorTextureRef::__new(0, 0), |&index| {
-                        ArmorTextureRef::__new(state.generation, index)
-                    });
-                let snapshot = EquipmentLayer::__new(
-                    original_ref,
-                    layer.dyeable,
-                    layer.color_when_undyed,
-                    layer.use_player_texture,
-                );
-                let color =
-                    provider.armor_layer_tint_color(host, stack, &snapshot, index as u32, dye);
-                if color == 0 {
-                    return None;
-                }
-                let default = texture(&layer.texture);
-                let default_ref = default
-                    .and_then(|b| state.texture_keys.get(b.name))
-                    .map_or(ArmorTextureRef::__new(0, 0), |&index| {
-                        ArmorTextureRef::__new(state.generation, index)
-                    });
-                let selected =
-                    provider.armor_texture(host, stack, layer_type, &snapshot, default_ref);
-                let mut selected_texture_final = selected != default_ref;
-                let binding = if selected == default_ref {
-                    default
-                } else {
-                    let (generation, index) = selected.__parts();
-                    let name = (generation == state.generation)
-                        .then(|| state.textures.get(index as usize))
-                        .flatten();
-                    if let Some(name) = name {
-                        bind(name)
-                    } else {
-                        report_stale();
-                        selected_texture_final = false;
+        mod_api::__private::contain_refusal(part.attached.mod_id(), || {
+            let dye = provider.default_dye_color(host, stack);
+            let layer_type = match piece.kind {
+                "humanoid_baby" => EquipmentLayerType::HumanoidBaby,
+                "humanoid_leggings" => EquipmentLayerType::HumanoidLeggings,
+                _ => EquipmentLayerType::Humanoid,
+            };
+            piece.resolved_materials(
+                trim,
+                |index, layer| {
+                    let original_ref = state
+                        .texture_keys
+                        .get(&layer.texture)
+                        .map_or(ArmorTextureRef::__new(0, 0), |&index| {
+                            ArmorTextureRef::__new(state.generation, index)
+                        });
+                    let snapshot = EquipmentLayer::__new(
+                        original_ref,
+                        layer.dyeable,
+                        layer.color_when_undyed,
+                        layer.use_player_texture,
+                    );
+                    let color =
+                        provider.armor_layer_tint_color(host, stack, &snapshot, index as u32, dye);
+                    if color == 0 {
+                        return None;
+                    }
+                    let default = texture(&layer.texture);
+                    let default_ref = default
+                        .and_then(|b| state.texture_keys.get(b.name))
+                        .map_or(ArmorTextureRef::__new(0, 0), |&index| {
+                            ArmorTextureRef::__new(state.generation, index)
+                        });
+                    let selected =
+                        provider.armor_texture(host, stack, layer_type, &snapshot, default_ref);
+                    let mut selected_texture_final = selected != default_ref;
+                    let binding = if selected == default_ref {
                         default
-                    }
-                }?;
-                let selected =
-                    provider.armor_layer_model(host, stack, layer_type, &snapshot, index as u32);
-                let model = if selected == ArmorModelRef::VANILLA {
-                    None
-                } else {
-                    let (generation, index) = selected.__parts();
-                    let model = (generation == state.generation)
-                        .then(|| state.models.get(index as usize))
-                        .flatten();
-                    if let Some(model) = model {
-                        Some(&model.slots[piece.slot.index()])
                     } else {
-                        report_stale();
+                        let (generation, index) = selected.__parts();
+                        let name = (generation == state.generation)
+                            .then(|| state.textures.get(index as usize))
+                            .flatten();
+                        if let Some(name) = name {
+                            bind(name)
+                        } else {
+                            report_stale();
+                            selected_texture_final = false;
+                            default
+                        }
+                    }?;
+                    let selected = provider.armor_layer_model(
+                        host,
+                        stack,
+                        layer_type,
+                        &snapshot,
+                        index as u32,
+                    );
+                    let model = if selected == ArmorModelRef::VANILLA {
                         None
-                    }
-                };
-                let color = (color & 0xFF00_FF00)
-                    | ((color & 0x00FF_0000) >> 16)
-                    | ((color & 0x0000_00FF) << 16);
-                Some(ResolvedEquipmentLayer {
-                    binding,
-                    color,
-                    model,
-                    final_texture: selected_texture_final,
-                })
-            },
-            emissive,
-        )
+                    } else {
+                        let (generation, index) = selected.__parts();
+                        let model = (generation == state.generation)
+                            .then(|| state.models.get(index as usize))
+                            .flatten();
+                        if let Some(model) = model {
+                            Some(&model.slots[piece.slot.index()])
+                        } else {
+                            report_stale();
+                            None
+                        }
+                    };
+                    let color = (color & 0xFF00_FF00)
+                        | ((color & 0x00FF_0000) >> 16)
+                        | ((color & 0x0000_00FF) << 16);
+                    Some(ResolvedEquipmentLayer {
+                        binding,
+                        color,
+                        model,
+                        final_texture: selected_texture_final,
+                    })
+                },
+                emissive,
+            )
+        })
     }));
     match result {
-        Ok(materials) => materials,
+        Ok(Ok(materials)) => materials,
+        Ok(Err(refusal)) => {
+            refusal.report();
+            refused(&format!("callback refused: {refusal}"));
+            Vec::new()
+        }
         Err(_) => {
             refused("callback failed");
             Vec::new()
@@ -475,6 +495,18 @@ mod tests {
             PartPose::ZERO,
         )
     }
+    #[test]
+    fn an_armour_model_tree_too_deep_to_bake_is_refused() {
+        let mut model = tree(0.0);
+        for _ in 0..MAX_ARMOR_MODEL_DEPTH {
+            model = ModelPart::new(Vec::new(), vec![("child".into(), model)], PartPose::ZERO);
+        }
+        assert_eq!(
+            bake_model("root", &model).err(),
+            Some("model has too many nested parts")
+        );
+    }
+
     struct TwoShapes {
         models: [ArmorModelRef; 2],
         textures: [ArmorTextureRef; 2],
@@ -904,5 +936,150 @@ mod tests {
                 }
             },
         );
+    }
+
+    /// Asks the Host for a level in its tint callback.
+    struct Gated(Arc<std::sync::atomic::AtomicUsize>);
+    impl ClientItemExtensions for Gated {
+        fn armor_layer_tint_color(
+            &self,
+            host: &dyn ClientHost,
+            _: &mod_api::ItemStack,
+            _: &EquipmentLayer,
+            _: u32,
+            _: u32,
+        ) -> u32 {
+            let _ = host.level("minecraft:overworld");
+            self.0.fetch_add(1, Ordering::Relaxed);
+            0xFFFF_FFFF
+        }
+    }
+
+    /// Armour is drawn in frames, after the thread reached World. Fired in Setup and in Reloading
+    /// anyway, a callback's world read comes back as the catch arm's `PhaseRefusal` (the piece is
+    /// refused, vanilla draws), never the no-scope panic or the `callback failed` arm; in World
+    /// the same callback is answered.
+    #[test]
+    #[ignore = "daily"]
+    fn client_item_extensions_outside_the_world_are_refused_not_a_panic() {
+        use mod_api::__private::{ModPhase, PhaseOwner};
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            mod_platform::testing::with_mods(
+                vec![mod_api::ModEntry::new("gated", Box::new(Empty))].into(),
+                || {
+                    let item = mod_api::__private::item_key("minecraft:iron_chestplate").unwrap();
+                    let layers = [EquipmentAssetLayer {
+                        texture: "original".into(),
+                        dyeable: false,
+                        use_player_texture: false,
+                        color_when_undyed: None,
+                    }];
+                    let piece = EquipmentPiece {
+                        asset: "minecraft:iron".into(),
+                        slot: ArmorSlot::Chest,
+                        kind: "humanoid",
+                        layers: &layers,
+                        overlay: 0,
+                    };
+                    let binding = Binding {
+                        name: "original",
+                        uv: [0.0, 0.0, 1.0, 1.0],
+                    };
+                    let answered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                    for phase in [Some(false), Some(true), None] {
+                        let mut registry = Registration {
+                            state: Default::default(),
+                            sprite_exists: &|_| true,
+                            refused: None,
+                        };
+                        {
+                            let _owner = owner("gated");
+                            registry.register_texture("original").unwrap();
+                            registry
+                                .client_item_extensions(item, Arc::new(Gated(answered.clone())))
+                                .unwrap();
+                        }
+                        let part = &registry.state.items[&item];
+                        let setup =
+                            PhaseOwner::scope(phase.map_or(ModPhase::World, |_| ModPhase::Setup));
+                        let _reload = (phase == Some(true)).then(|| setup.reloading().unwrap());
+                        let out = dispatch_equipment(
+                            &*game,
+                            &registry.state,
+                            part,
+                            &mod_api::ItemStack::of(item),
+                            &piece,
+                            EquipmentBindings {
+                                trim: None,
+                                default: &mut |_| Some(binding),
+                                binding: &|_| Some(binding),
+                                emissive: &mut |_| None,
+                            },
+                        );
+                        if phase.is_some() {
+                            assert!(out.is_empty(), "a refused piece draws as vanilla");
+                            assert!(part.failed.load(Ordering::Relaxed));
+                            assert_eq!(answered.load(Ordering::Relaxed), 0, "the read was refused");
+                        } else {
+                            assert_eq!(out.len(), 1, "in World the callback is answered");
+                            assert_eq!(answered.load(Ordering::Relaxed), 1);
+                        }
+                    }
+                },
+            );
+        });
+    }
+
+    #[test]
+    fn served_by_armor_model_delegates_to_serving_host_only() {
+        let packages = vec![
+            mod_api::PackageInfo::new(
+                "host".into(),
+                "1".into(),
+                mod_api::PackageKind::Code,
+                mod_api::Side::Both,
+                vec!["host".into()],
+                vec![],
+            ),
+            mod_api::PackageInfo::new(
+                "other".into(),
+                "1".into(),
+                mod_api::PackageKind::Code,
+                mod_api::Side::Both,
+                vec!["other".into()],
+                vec![],
+            ),
+            mod_api::PackageInfo::new(
+                "runes".into(),
+                "1".into(),
+                mod_api::PackageKind::Content,
+                mod_api::Side::Both,
+                vec!["runes".into()],
+                vec![],
+            )
+            .with_served_by(Some("host".into())),
+        ];
+        mod_platform::__private::with_test_package_inventory(packages, || {
+            let mut registry = Registration {
+                state: Default::default(),
+                sprite_exists: &|_| true,
+                refused: None,
+            };
+            {
+                let _owner = owner("host");
+                registry.register_model("runes:helm", &tree(0.0)).unwrap();
+                assert!(
+                    registry
+                        .register_model("minecraft:helm", &tree(0.0))
+                        .is_err()
+                );
+            }
+            {
+                let _owner = owner("other");
+                assert!(registry.register_model("runes:other", &tree(0.0)).is_err());
+            }
+            assert_eq!(registry.state.models.len(), 1);
+            assert_eq!(registry.state.models[0].name, "runes:helm");
+        });
     }
 }

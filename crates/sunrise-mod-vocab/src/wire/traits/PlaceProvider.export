@@ -1,1 +1,0 @@
-A mod's own places ([`ItemPlace::Mod`]), registered with [`Registrar::place_provider`](crate::ItemsRegistrar::place_provider): NeoForge's own `ItemAccess`s.

@@ -228,6 +228,14 @@ fn decorations(c: &Value, atlas: &HudAtlas) -> Vec<GuiDraw> {
     } else {
         0
     };
+    let mut heights = hud_layout::StatusBarHeights::default();
+    let vehicle = hud_layout::vehicle_health(
+        w,
+        h,
+        vehicle_hearts,
+        float("vehicleHealth", 0.0),
+        &mut heights,
+    );
     if survival {
         let millis = 1_000_000_000i64;
         let mut hud = HealthHud {
@@ -265,16 +273,10 @@ fn decorations(c: &Value, atlas: &HudAtlas) -> Vec<GuiDraw> {
             under_water: c["underWater"].as_bool().unwrap_or(false),
             vehicle_hearts,
         };
-        draws.extend(hud.layout(&inputs, w, h));
+        let rows = hud.layout(&inputs, w, h, &mut heights);
+        draws.extend(rows.layers().into_iter().flatten().cloned());
     }
-    if vehicle_hearts > 0 {
-        draws.extend(hud_layout::vehicle_health(
-            w,
-            h,
-            vehicle_hearts,
-            float("vehicleHealth", 0.0),
-        ));
-    }
+    draws.extend(vehicle);
     let width = |s: &str| HudBatch::text_width(atlas, s) as i32;
     let level = if survival { int("xpLevel", 0) } else { 0 };
     draws.extend(hud_layout::experience(

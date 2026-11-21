@@ -36,8 +36,8 @@ fn stateful_creation_uses_actual_state_and_preserves_existing_entity() {
         }
         fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut BlocksEvent<'_>) {
             event
-                .blocks
-                .push(mod_api::Block::new(BLOCK, "minecraft:white_banner"));
+                .register(mod_api::Block::new(BLOCK, "minecraft:white_banner"))
+                .unwrap();
         }
     }
     #[mod_api::sunrise_part]

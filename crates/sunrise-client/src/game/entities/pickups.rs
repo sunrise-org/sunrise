@@ -186,7 +186,7 @@ mod tests {
             velocity: sunrise_core::geometry::Vec3::new(0.0, 0.0, 0.0),
             value: 1,
             age: 0,
-            on_ground: false,
+            ground: Default::default(),
             count: 1,
             ticks: 0,
             health: 5,

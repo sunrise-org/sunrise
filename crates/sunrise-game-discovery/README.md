@@ -12,4 +12,4 @@ Optional source headers:
 
 There are no game feature names, platform dependencies, or unsafe operations in this crate. Native-hook, LAN action, host, hook-fire and goal-view generation remain in their existing generators.
 
-`folder_modules` supplies the wire-loopback test target with sorted, absolute-path module declarations from a flat folder, refusing directories and `mod.rs` by name. The wasm guest fixture follows that convention in `crates/sunrise-mod-wasm/tests/fixture/build.rs`, without adding a build dependency: its source folder also contains `lib.rs`, scanner-only `points.rs` and the math checker's nested `strict_math_vectors.rs`, which are not independent modules. All other Rust files are discovered automatically; the native benchmark uses the same generator. Keep guest registrations in individual files, not directories or `mod.rs`.
+`folder_modules` declares modules in sorted filename order from a flat folder of Rust tests and refuses directories and `mod.rs` by name.

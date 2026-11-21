@@ -703,7 +703,7 @@ impl Goal for HoldGroundAttack {
 }
 
 /// The saved fields (`PatrollingMonster` and `Raider.addAdditionalSaveData`).
-pub fn write_nbt(m: &Mob, map: &mut sunrise_core::nbt::Compound) {
+pub fn write_nbt(m: &Mob, map: &mut crate::entity_nbt::EntityTagWriter) {
     let Some(s) = state(m) else { return };
     match s.patrol_target {
         Some(p) => {
@@ -788,6 +788,7 @@ mod tests {
         assert!(
             with_test_world(&seen, |w, _| {
                 let indexed = MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     others_grid: Some(&grid),
                     ..w.clone()
                 };

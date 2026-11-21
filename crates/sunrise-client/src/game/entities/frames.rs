@@ -816,6 +816,7 @@ impl Game<'_> {
                             has_item: f.item.is_some(),
                             has_map: map.is_some(),
                         }),
+                        attachments: None,
                     }
                     .into();
                 let light = self.world.light(f.pos[0], f.pos[1], f.pos[2]);
@@ -831,6 +832,7 @@ impl Game<'_> {
                     &entity,
                     f.kind(),
                     at - camera,
+                    Some(at),
                     f.pos,
                     packed,
                     out,

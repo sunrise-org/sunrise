@@ -6,20 +6,24 @@ pub trait Hooks {
     /// `Some(Some(context))` rewrites the target and click, `Some(None)` refuses
     /// placement, and `None` keeps the item's vanilla rewrite (including
     /// scaffolding's column walk). The placing item cannot be changed.
-    /// Non-finite click or view values are refused. The rewritten target must
-    /// be inside the level's bounds; its replaceability is not rechecked, as
-    /// vanilla checks the original context before rewriting. This does not bypass
-    /// survival or obstruction checks; see `must_survive` for the former.
-    /// Dispatch is by `item` id. This event has no stack: the decision is from
-    /// the item and level, not held-stack components.
+    /// The actual pre-use `stack` supplies the item key and components. `placer`
+    /// supplies the player's handle and eyes on this side, or is absent for a
+    /// dispenser. A player's original destination may be occupied: a part can
+    /// redirect the placement even when vanilla would refuse it there. A
+    /// dispenser still needs a replaceable front cell before asking the part.
+    /// With no answer, vanilla checks the original destination before its own
+    /// rewrite. A part's rewritten destination must be loaded, in bounds, and
+    /// replaceable with the supplied context. Non-finite click or view values
+    /// are refused. Survival and obstruction still apply at the final position.
     #[hook(
         side = "both",
         contract = "replace",
         scope = "item",
-        key = "item",
+        key = "stack",
         out = "answer",
         target = "sunrise_client::game::native_hooks::placement_context::GameLevel<'_>::native_placement_context",
-        neoforge = "none (vanilla BlockItem.updatePlacementContext)"
+        neoforge = "none (vanilla BlockItem.updatePlacementContext)",
+        version = 2
     )]
     fn placement_context();
 }

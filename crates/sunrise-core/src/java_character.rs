@@ -9,6 +9,41 @@ pub fn is_letter_or_digit(unit: u16) -> bool {
     index != 0 && unit <= LETTER_OR_DIGIT[index - 1].1
 }
 
+/// `Character.isWhitespace(char)`: the space, the line and paragraph separators and the other space
+/// separators except the no-break ones (U+00A0, U+2007, U+202F), and the controls U+0009–U+000D and
+/// U+001C–U+001F. Not Rust's `char::is_whitespace`, which takes U+0085 and the no-break spaces but not
+/// U+001C–U+001F.
+pub fn is_whitespace(unit: u16) -> bool {
+    matches!(
+        unit,
+        0x0009..=0x000D
+            | 0x001C..=0x0020
+            | 0x1680
+            | 0x2000..=0x2006
+            | 0x2008..=0x200A
+            | 0x2028
+            | 0x2029
+            | 0x205F
+            | 0x3000
+    )
+}
+
+/// `Character.isSpaceChar(char)`: the Unicode space, line and paragraph separators (Zs, Zl, Zp), the
+/// no-break spaces included.
+pub fn is_space_char(unit: u16) -> bool {
+    matches!(
+        unit,
+        0x0020 | 0x00A0 | 0x1680 | 0x2000..=0x200A | 0x2028 | 0x2029 | 0x202F | 0x205F | 0x3000
+    )
+}
+
+/// `StringUtil.isBlank`: every char of the text is `Character.isWhitespace` or `Character.isSpaceChar`
+/// (the empty text too). Rust's `trim().is_empty()` differs: it takes U+0085 and leaves U+001C–U+001F.
+pub fn is_blank(text: &str) -> bool {
+    text.encode_utf16()
+        .all(|unit| is_whitespace(unit) || is_space_char(unit))
+}
+
 /// The Java char's digit value for a radix in 2..=36, or none when it is not a digit there.
 pub fn digit(unit: u16, radix: u32) -> Option<u32> {
     if !(2..=36).contains(&radix) {
@@ -489,18 +524,20 @@ mod tests {
         assert!(is_letter_or_digit(0x0661));
         assert!(!is_letter_or_digit(0x00B2));
         assert!(!is_letter_or_digit(0xD800));
+        // U+0085 passes the anvil's name filter and is neither; Rust's trim takes it.
+        assert!(!is_blank("\u{85}"));
+        assert!(is_blank("\u{1F} \u{A0}\u{3000}"));
+        assert!(is_blank(""));
     }
 
-    /// Compares every unit and radix with `tools/JavaCharacterTables.java dump`, which asks the JDK.
-    #[test]
-    #[ignore = "daily"]
-    fn matches_java_character() {
+    /// `tools/JavaCharacterTables.java MODE`'s output: the JDK's answers.
+    fn java_dump(mode: &str) -> String {
         let dump = Command::new("java")
             .arg(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/../../tools/JavaCharacterTables.java"
             ))
-            .arg("dump")
+            .arg(mode)
             .output()
             .expect("java starts");
         assert!(
@@ -508,14 +545,29 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&dump.stderr)
         );
-        let dump = String::from_utf8(dump.stdout).expect("utf-8 dump");
+        String::from_utf8(dump.stdout).expect("utf-8 dump")
+    }
+
+    /// Compares every unit and radix with `tools/JavaCharacterTables.java dump` and every unit with its
+    /// `spaces`, which ask the JDK.
+    #[test]
+    #[ignore = "daily"]
+    fn matches_java_character() {
         let mut java = HashMap::new();
-        for line in dump.lines() {
+        for line in java_dump("dump").lines() {
             let mut fields = line.split(' ');
             let unit: u16 = fields.next().unwrap().parse().unwrap();
             let letter_or_digit = fields.next().unwrap() == "true";
             let digits: Vec<i32> = fields.map(|value| value.parse().unwrap()).collect();
             java.insert(unit, (letter_or_digit, digits));
+        }
+        let mut spaces = HashMap::new();
+        for line in java_dump("spaces").lines() {
+            let mut fields = line.split(' ');
+            let unit: u16 = fields.next().unwrap().parse().unwrap();
+            let whitespace = fields.next().unwrap() == "true";
+            let space_char = fields.next().unwrap() == "true";
+            spaces.insert(unit, (whitespace, space_char));
         }
         let radices = (0..=37).chain([u32::MAX]).collect::<Vec<_>>();
         for unit in 0..=u16::MAX {
@@ -525,6 +577,9 @@ mod tests {
                 letter_or_digit,
                 "unit {unit:#06x}"
             );
+            let (whitespace, space_char) = spaces.get(&unit).copied().unwrap_or_default();
+            assert_eq!(is_whitespace(unit), whitespace, "unit {unit:#06x}");
+            assert_eq!(is_space_char(unit), space_char, "unit {unit:#06x}");
             for (index, &radix) in radices.iter().enumerate() {
                 let expected = digits
                     .get(index)

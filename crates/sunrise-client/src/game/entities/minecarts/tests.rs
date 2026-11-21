@@ -110,8 +110,8 @@ fn cart_index_finds_what_a_scan_finds() {
     }
     assert!(index.carts.is_some(), "the index was used");
 }
-/// The cart index hands a cart every mob a scan finds in its box, and
-/// knows whether a mob rides it, however the mob list changed since.
+/// The cart grid and passenger query agree with the mob list after moves,
+/// boarding, insertions and removals.
 #[test]
 #[ignore = "daily"]
 fn cart_index_finds_the_mobs_a_scan_finds() {
@@ -152,12 +152,18 @@ fn cart_index_finds_the_mobs_a_scan_finds() {
                     .filter(|&j| area.intersects(game.mobs[j as usize].bounds()))
                     .collect();
                 let ridden = game.mobs.iter().any(|m| m.extra.mount == Some(c.id));
-                let mounted = index.mobs_near(&game.mobs, c.id, area, &mut near);
-                assert_eq!(mounted, Some(ridden), "{what}: cart {}", c.id);
+                assert_eq!(
+                    game.has_seated_passengers(c.id),
+                    ridden,
+                    "{what}: cart {}",
+                    c.id
+                );
+                assert!(index.mobs_near(&game.mobs, area, &mut near));
                 near.retain(|&j| area.intersects(game.mobs[j as usize].bounds()));
                 assert_eq!(near, scan, "{what}: cart {}", c.id);
             }
         };
+        game.vehicles_ticking(true);
         check(game, "as placed");
         game.mobs[10].position = carts[3].position;
         game.mobs[11].extra.mount = Some(carts[4].id);

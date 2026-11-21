@@ -4,7 +4,18 @@ use super::*;
 #[ignore = "daily"]
 fn a_remote_non_grid_menu_can_request_a_recipe_check_only_in_an_eligible_screen() {
     let name = "check_fixture:non_grid";
-    let menus = [(name.into(), 9, 0, Vec::new(), None, None)];
+    let menus = [(
+        name.into(),
+        "test".into(),
+        9,
+        0,
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        true,
+        None,
+    )];
     sunrise_client::containers::with_mod_menu_types(menus, || {
         crate::game::native_entity_refs::tests::with_client_game(|game| {
             let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();

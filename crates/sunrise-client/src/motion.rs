@@ -31,7 +31,7 @@ use sunrise_world::{
     entity_move::{self, CollisionFlags, EntityMoveWorld, MovementHistory, MoverType},
     entity_obstruction::EntityIdentity,
     ground_support::{GroundState, find_supporting_block},
-    living_air::{self, LivingAirWorld},
+    living_air::LivingAirWorld,
     living_fall::ImpulseContext,
     living_motion::{self, LivingMotionWorld},
     move_gate::MoveGate,
@@ -49,8 +49,11 @@ use sunrise_world::{
     world_movement::MovementRequest,
     worldgen::tags::TagDefinitions,
 };
+mod body_restitution;
 mod exclusions;
 mod restitution;
+pub use body_restitution::{BodyCollision, BodyContact, BodyMotion, BodyMove, BodyRestitution};
+pub mod section_writes;
 
 /// A living entity jumped (`LivingEvent.LivingJumpEvent`); `velocity` is its motion right after
 /// the jump.
@@ -117,19 +120,22 @@ pub(crate) fn pushing_flow<W: sunrise_world::fluid_flow::FluidFlowWorld>(
 
 mod auto_jump;
 pub(crate) mod environment;
-use environment::fly_into_wall_damage;
 mod fluids;
 pub mod ladder;
 pub mod surface;
+mod travel;
 pub use fluids::{
     BubbleColumn, FluidResources, FluidTags, LAVA, PlayerFluids, RiddenBoat, WATER,
     bubble_column_at, bubble_column_push, bubble_column_push_over, bubble_column_surfaces,
 };
 pub(crate) use surface::ModBlockFactors;
+#[cfg(any(test, feature = "test-dry-side"))]
+pub use surface::dry_side;
 pub use surface::{
-    block_friction, native_block_jump_factor, native_block_speed_factor, native_friction,
-    native_is_ladder,
+    FrictionLevel, SideLevel, block_friction, native_block_jump_factor, native_block_speed_factor,
+    native_is_ladder, read_friction,
 };
+pub use travel::ServerTravel;
 
 pub struct MotionResources {
     pub attributes: Arc<Catalog>,
@@ -265,6 +271,9 @@ pub enum MotionEvent {
     /// `LivingEntity.handleDamageEvent`: the hurt sound the player hears.
     HurtSound(&'static str),
     Fall(crate::landing::FallEvent),
+    /// `ServerPlayer.resetFallDistance`: where the fall ended, even if the
+    /// block or fluid effects move the player again before this turn ends.
+    FallDistanceReset(Vec3),
     Recorded {
         mover: MoverType,
         movement: Vec3,
@@ -396,6 +405,8 @@ pub struct PlayerMotion {
     pub collision: CollisionFlags,
     pub history: MovementHistory,
     pub fall_distance: f64,
+    /// The packet phase needs the first reset of a tracked server-player fall.
+    pub record_fall_reset: bool,
     /// The block fallOn currently running, consumed by its damage call.
     pub(crate) block_landing: Option<(BlockStateId, BlockPos, f64)>,
     pub stuck_multiplier: Vec3,
@@ -540,7 +551,9 @@ pub struct PlayerMotion {
     /// it travels on the server: `isLocalInstanceAuthoritative` is false, so
     /// its moves check no fall damage.
     pub server_copy: bool,
-    /// A tick played again (`replayed_tick`), whose native callbacks must not escape.
+    /// A tick played again (`replayed_tick`): the notifications of what it did (`living_jump`,
+    /// `living_fall`, `player_flyable_fall`) don't fire. What its movement asks (block parts'
+    /// answers, the movement value hooks) still answers, as on any tick.
     pub(crate) replaying: bool,
     /// The span of `events` a wall hit on the server's copy pushed (sound and
     /// damage): `server_travel` keeps them while it drops the simulated moves.
@@ -570,6 +583,14 @@ pub struct PlayerMotion {
     pub collision_exclusions: sunrise_world::collision_exclusions::CollisionExclusions,
 }
 impl PlayerMotion {
+    pub fn reset_fall_distance(&mut self) {
+        if std::mem::take(&mut self.record_fall_reset) {
+            self.events
+                .push(MotionEvent::FallDistanceReset(self.position));
+        }
+        self.fall_distance = 0.0;
+    }
+
     /// `ServerGamePacketListenerImpl.handleMovePlayer`: the movement the client
     /// sent is the server copy's own delta movement. A glide's wall hit reads it
     /// as the speed the glide had (`LivingEntity.handleFallFlyingCollisions`'s
@@ -989,6 +1010,8 @@ pub struct MotionWorld<'p, 'w, 'r> {
     /// What the motion value hooks are given: the side that owns this player's
     /// tick builds it (server, or the client for its own prediction and replay).
     pub loop_context: &'w LoopContext,
+    /// The side's level data beyond blocks: weather, features, tags and block entities.
+    pub side: &'w dyn SideLevel,
     /// The native damage hooks the hits of this player's tick run (the game's).
     pub damage_hooks: &'w crate::health::DamageHooks,
     /// The cached block parser table, when available to level hooks.
@@ -998,13 +1021,17 @@ enum TickInput {
     Living([f32; 3]),
     PreparedLocal { direction: [f32; 2], jumping: bool },
 }
+fn player_collision_identity(player: &PlayerMotion) -> EntityIdentity {
+    EntityIdentity(u64::from(player.entity_id as u32))
+}
+
 /// The context `player` moves through: a player at its height holding `held`, as
 /// `CollisionContext.of(player)`. It names the player by its entity id, so a block's parts are
 /// asked about the same entity as when the server checks this move inside `as_mover`.
 fn player_context<'a>(player: &PlayerMotion, held: Option<&'a str>) -> CollisionContext<'a> {
     CollisionContext::for_entity(
         CollisionEntity {
-            identity: EntityIdentity(u64::from(player.entity_id as u32)),
+            identity: player_collision_identity(player),
             kind: sunrise_world::collision_context::EntityContextKind::Player,
             y: player.position.y,
             descending: player.shift_key_down,
@@ -1075,9 +1102,6 @@ impl MotionWorld<'_, '_, '_> {
         let climbable = found?;
         self.player.on_climbable = climbable;
         Ok(climbable)
-    }
-    pub fn travel_in_air(&mut self, gate: &mut MoveGate, input: Vec3) -> Result<()> {
-        living_air::travel_in_air(self, gate, input)
     }
     /// Dry, standing movement phases of LivingEntity.aiStep, including powder
     /// snow's block-inside effects and server freezing (thawing, the frost
@@ -1275,7 +1299,9 @@ impl MotionWorld<'_, '_, '_> {
         })
     }
     /// A client's tick played again: the client's own keys, and the sprinting it said it had
-    /// (its ServerboundPlayerCommandPacket comes before the tick's move). Mods' callbacks don't fire.
+    /// (its ServerboundPlayerCommandPacket comes before the tick's move). It tells the mods nothing
+    /// of what it did (`living_jump`, `living_fall`, `player_flyable_fall`: `replaying`), but
+    /// their answers to what the movement asks (a bounce's restitution, a block's friction) count.
     pub fn replayed_tick(&mut self, keys: crate::sprint::Keys, sprinting: bool) -> Result<()> {
         self.player.replaying = true;
         let result = self.local_tick(keys, |player, _| {
@@ -1399,58 +1425,6 @@ impl MotionWorld<'_, '_, '_> {
             .state(self.block(on))
             .is_some_and(|s| self.resources.soul_speed_blocks.contains(&s.name)))
     }
-    /// Player.travel: swim steering, then LivingEntity.travel (fluids first,
-    /// then gliding, then air), keeping 0.6 of the vertical speed while flying.
-    fn player_travel(&mut self, input: Vec3) -> Result<()> {
-        // The player's one physical move this tick goes through the move gate
-        // (#2414): whichever travel branch runs, `move_self` arms the gate it
-        // receives here.
-        let mut gate = MoveGate::new();
-        if self.player.swimming {
-            let look_y =
-                sunrise_world::view_direction::view_vector(self.player.pitch, self.player.yaw).y;
-            let near_surface = BlockPos::containing(Vec3::new(
-                self.player.position.x,
-                self.player.position.y + 1.0 - 0.1,
-                self.player.position.z,
-            ));
-            if look_y <= 0.0
-                || self.player.jumping
-                || self.fluid_at(near_surface).kind() != sunrise_world::fluid::FluidKind::Empty
-            {
-                let blend = if look_y < -0.2 { 0.085 } else { 0.06 };
-                self.player.velocity.y += (look_y - self.player.velocity.y) * blend;
-            }
-        }
-        let flying_y = self.player.flying.then_some(self.player.velocity.y);
-        self.living_travel(&mut gate, input)?;
-        if let Some(y) = flying_y {
-            self.player.velocity.y = y * 0.6;
-        }
-        Ok(())
-    }
-    /// `LivingEntity.travel`: in a fluid (`isAffectedByFluids`: not while
-    /// flying), gliding, or in the air.
-    fn living_travel(&mut self, gate: &mut MoveGate, input: Vec3) -> Result<()> {
-        if !self.player.flying
-            && (self.player.fluids.was_touching_water || self.player.is_in_lava())
-        {
-            sunrise_world::living_fluid::travel_in_fluid(self, gate, input)?;
-            Ok(())
-        } else if self.player.fall_flying {
-            // LivingEntity.travelFallFlying: on a climbable the glide ends and
-            // the player moves like in the air.
-            if self.climbable()? {
-                self.travel_in_air(gate, input)?;
-                self.player.fall_flying = false;
-                Ok(())
-            } else {
-                self.travel_fall_flying(gate)
-            }
-        } else {
-            self.travel_in_air(gate, input)
-        }
-    }
     /// `Entity.rideTick` for a rider this client moves (`LocalPlayer`): its
     /// deltaMovement starts at zero, then `LivingEntity.aiStep` travels it as
     /// it does any entity it simulates (`Player.travel` for a passenger is
@@ -1473,11 +1447,10 @@ impl MotionWorld<'_, '_, '_> {
     }
     /// ServerPlayer's own travel: the server simulates a player too
     /// (`MoveSimulationType.AUTHORITATIVE_SIDE_AND_SERVER`), with no input
-    /// (it never sets xxa/zza). Only the delta movement it leaves stays: it
-    /// is what a hurt sends the player (`ServerEntity.sendChanges`), and
-    /// what the next knockback starts from; the client's next move places
-    /// the player.
-    pub fn server_travel(&mut self) -> Result<()> {
+    /// (it never sets xxa/zza). Normally only the delta movement stays, for
+    /// knockback and later move validation. When `living_travel` changes the
+    /// travel, the connection's move validator owns the position correction.
+    pub fn server_travel(&mut self) -> Result<ServerTravel> {
         let p = &mut *self.player;
         let (position, ground, collision) = (p.position, p.ground, p.collision);
         let (history, fall_distance, steps) = (p.history.clone(), p.fall_distance, p.steps);
@@ -2007,77 +1980,11 @@ impl MotionWorld<'_, '_, '_> {
             .cause_food_exhaustion(if self.player.sprinting { 0.2 } else { 0.05 });
         Ok(())
     }
-    /// LivingEntity.travelFallFlying with updateFallFlyingMovement.
-    fn travel_fall_flying(&mut self, gate: &mut MoveGate) -> Result<()> {
-        let v = self.player.velocity;
-        let move_h = (v.x * v.x + v.z * v.z).sqrt();
-        let gravity = living_motion::effective_gravity(self)?;
-        self.player.velocity = fall_flying_movement(v, self.player.pitch, self.player.yaw, gravity);
-        let movement = self.player.velocity;
-        self.move_self(gate, movement)?;
-        // LivingEntity.handleFallFlyingCollisions: the fall-damage sound plays
-        // on both sides (a glider's own travel is client-side, and the sound
-        // must reach its own ears, #8906), only the server hurts, and it
-        // compares the horizontal speed before `updateFallFlyingMovement`
-        // with the delta `Entity.move` leaves (the collided axes zeroed).
-        if self.player.collision.horizontal {
-            let v = self.player.velocity;
-            let after_h = (v.x * v.x + v.z * v.z).sqrt();
-            let dmg = fly_into_wall_damage(move_h, after_h);
-            if dmg > 0.0 {
-                let first = self.player.events.len();
-                // getFallDamageSound((int) dmg)
-                let sound = if dmg as i32 > 4 {
-                    crate::landing::SceneSound::BigFall
-                } else {
-                    crate::landing::SceneSound::SmallFall
-                };
-                self.player
-                    .events
-                    .push(MotionEvent::Fall(crate::landing::FallEvent::Sound {
-                        sound,
-                        position: None,
-                        volume: 1.0,
-                        pitch: 1.0,
-                    }));
-                // Only the server hurts; the sound is shared.
-                if !self.player.client_side {
-                    let id = self
-                        .resources
-                        .health
-                        .damage
-                        .id("minecraft:fly_into_wall")
-                        .ok_or("missing fly_into_wall damage type")?;
-                    let rules = self.scene.health_rules;
-                    self.player.hurt(
-                        &mut crate::health::DamageLevel::of(
-                            self.scene,
-                            self.assets.registry,
-                            self.tag_items,
-                            self.block_registries,
-                            self.damage_hooks,
-                        ),
-                        self.health,
-                        rules,
-                        id,
-                        dmg,
-                    )?;
-                    if self.player.server_copy {
-                        self.player.wall_hit_events = Some(first..self.player.events.len());
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-    /// `Entity.move(MoverType.SHULKER_BOX, SHULKER or PISTON, movement)`: a
-    /// shulker box's or a shulker's lid, or a piston, pushed the player. An
-    /// ordinary move (a piston's limited by `limitPistonMovement`): the
-    /// collision scan steps and reads the ground flag, and the move's end writes
-    /// the ground and collision state (`Entity.setOnGroundWithMovement`), so a
-    /// push lifting the body off the ground or sideways leaves it airborne until
-    /// the next tick's own move lands it again.
-    pub fn block_push(&mut self, mover: MoverType, movement: Vec3) -> Result<()> {
+    /// One ordinary `Entity.move(mover, movement)`, outside travel. The collision
+    /// scan reads the ground flag to step, and the move's end updates the ground
+    /// and collision state (`Entity.setOnGroundWithMovement`). A piston's move
+    /// uses its per-tick budget (`limitPistonMovement`).
+    pub fn move_with_cause(&mut self, mover: MoverType, movement: Vec3) -> Result<()> {
         let gate = crate::move_gate::armed(
             self.loop_context,
             self.player.entity_id as u32,
@@ -2222,7 +2129,11 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         self.player.position
     }
     fn set_position(&mut self, p: Vec3) -> Result<()> {
+        let from = self.player.position;
         self.player.position = p;
+        if from != p {
+            section_writes::position_written(self.player, from);
+        }
         Ok(())
     }
     fn record_movement(&mut self, mover: MoverType, movement: Vec3) -> Result<()> {
@@ -2278,7 +2189,7 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
             &mut self.movement_collisions(),
             &self.player.collision_exclusions,
             MovementRequest {
-                entity: EntityIdentity(0),
+                entity: player_collision_identity(self.player),
                 context: self.context(),
                 bounds: self.player.bounds(),
                 movement,
@@ -2324,23 +2235,9 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         horizontal: bool,
         movement: Vec3,
     ) -> Result<()> {
-        let position = self.player.position;
-        let bounds = self.player.bounds();
-        let held = self.player.main_hand.clone();
-        let context = player_context(self.player, held.as_deref());
-        let mut collisions = SceneCollisions {
-            world: self.scene,
-            binding: self.collision_binding,
-            subject: Some(self.player.powder_snow_subject()),
-        };
-        self.player.ground.set_with_movement(
-            below,
-            horizontal,
-            bounds,
-            Some(movement),
-            |bounds| find_supporting_block(&mut collisions, context, position, bounds, 1_000_000),
-        )?;
-        Ok(())
+        self.player.ground.on_ground = below;
+        self.player.ground.horizontal_collision = horizontal;
+        self.check_supporting_block(below, movement)
     }
     /// `LocalPlayer.isHorizontalCollisionMinor`: the move that hit a wall was
     /// within 8 degrees of the direction the input asked for.
@@ -2367,30 +2264,7 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         state: BlockStateId,
         position: BlockPos,
     ) -> Result<()> {
-        // LivingEntity.aiStep: Slow Falling and Levitation reset the fall
-        // distance every tick, so landing under either does not hurt.
-        if self.player.status.slow_falling || self.player.status.levitation.is_some() {
-            self.player.fall_distance = 0.0;
-        }
-        // LivingEntity.checkFallDamage: a landing runs onChangedBlock.
-        if grounded && self.player.fall_distance > 0.0 {
-            self.player.location_effects.landed = true;
-        }
-        if self.player.spawn_extra_particles_on_fall && grounded && self.player.fall_distance > 0.0
-        {
-            self.player.events.push(MotionEvent::SmashLanding {
-                state,
-                position,
-                fall_distance: self.player.fall_distance,
-            });
-            self.player.spawn_extra_particles_on_fall = false;
-        }
-        self.player.events.push(MotionEvent::Landing {
-            dy,
-            grounded,
-            state,
-            position,
-        });
+        self.before_fall_check(dy, grounded, state, position);
         sunrise_world::living_landing::check_living_fall_damage(self, dy, grounded, state, position)
     }
     fn removed(&mut self) -> Result<bool> {
@@ -2399,9 +2273,17 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
     fn can_simulate(&mut self) -> Result<bool> {
         Ok(true)
     }
-    fn restitute(&mut self, state: BlockStateId, x: bool, z: bool, resolved: Vec3) -> Result<()> {
+    fn restitute(
+        &mut self,
+        state: BlockStateId,
+        position: BlockPos,
+        x: bool,
+        z: bool,
+        resolved: Vec3,
+    ) -> Result<()> {
         let input = RestitutionInput {
             block: state,
+            effect_position: position,
             collided_x: x,
             collided_z: z,
             vertical_collision: self.player.collision.vertical,
@@ -2440,6 +2322,79 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
 }
 // The player's footsteps and swim sounds. Flapping and the step game event
 // are not bound here (the sculk listeners track the player's steps themselves).
+impl MotionWorld<'_, '_, '_> {
+    /// `Entity.checkSupportingBlock`: also called by `doCheckFallDamage`,
+    /// independently of (and without changing) the movement flags.
+    pub fn check_supporting_block(&mut self, on_ground: bool, movement: Vec3) -> Result<()> {
+        let position = self.player.position;
+        let bounds = self.player.bounds();
+        let held = self.player.main_hand.clone();
+        let context = player_context(self.player, held.as_deref());
+        let mut collisions = SceneCollisions {
+            world: self.scene,
+            binding: self.collision_binding,
+            subject: Some(self.player.powder_snow_subject()),
+        };
+        self.player
+            .ground
+            .check_support(on_ground, bounds, Some(movement), |bounds| {
+                find_supporting_block(&mut collisions, context, position, bounds, 1_000_000)
+            })?;
+        Ok(())
+    }
+
+    pub fn check_guest_fall_damage(
+        &mut self,
+        dy: f64,
+        grounded: bool,
+        state: BlockStateId,
+        position: BlockPos,
+    ) -> Result<Option<sunrise_world::block_landing::FarmlandTrample>> {
+        self.before_fall_check(dy, grounded, state, position);
+        sunrise_world::living_landing::check_living_fall_damage_until(
+            self,
+            dy,
+            grounded,
+            state,
+            position,
+            |world, state, position, distance| world.block_fall(state, position, distance, true),
+        )
+    }
+
+    fn before_fall_check(
+        &mut self,
+        dy: f64,
+        grounded: bool,
+        state: BlockStateId,
+        position: BlockPos,
+    ) {
+        // LivingEntity.aiStep: Slow Falling and Levitation reset the fall
+        // distance every tick, so landing under either does not hurt.
+        if self.player.status.slow_falling || self.player.status.levitation.is_some() {
+            self.player.fall_distance = 0.0;
+        }
+        // LivingEntity.checkFallDamage: a landing runs onChangedBlock.
+        if grounded && self.player.fall_distance > 0.0 {
+            self.player.location_effects.landed = true;
+        }
+        if self.player.spawn_extra_particles_on_fall && grounded && self.player.fall_distance > 0.0
+        {
+            self.player.events.push(MotionEvent::SmashLanding {
+                state,
+                position,
+                fall_distance: self.player.fall_distance,
+            });
+            self.player.spawn_extra_particles_on_fall = false;
+        }
+        self.player.events.push(MotionEvent::Landing {
+            dy,
+            grounded,
+            state,
+            position,
+        });
+    }
+}
+
 impl MovementEmissionWorld for MotionWorld<'_, '_, '_> {
     type Error = Box<dyn std::error::Error>;
     type State = BlockStateId;
@@ -2636,8 +2591,8 @@ impl RestitutionWorld for MotionWorld<'_, '_, '_> {
     fn block_suppresses_bounce(&mut self, state: BlockStateId) -> Result<bool> {
         Ok(self.resources.blocks.get(state)?.suppresses_bounce)
     }
-    fn block_bounce_restitution(&mut self, state: BlockStateId) -> Result<f32> {
-        self.part_bounce_restitution(state)
+    fn block_bounce_restitution(&mut self, state: BlockStateId, position: BlockPos) -> Result<f32> {
+        self.part_bounce_restitution(state, position)
     }
     fn air_drag(&mut self) -> Result<f32> {
         living_motion::air_drag(self)
@@ -2906,30 +2861,34 @@ pub fn block_jump_factor_at(
         |blocks, location| movement_support::block_jump_factor(blocks, location),
     )
 }
-/// `Entity.getOnPosLegacy` with the world's bound fence and wall tags.
-pub(crate) fn legacy_block_support_at(
+/// `Entity.getOnPos(float)` with the world's bound fence and wall tags.
+pub(crate) fn block_support_at(
     world: &World,
-    properties: &BoundMovementProperties,
+    properties: Option<&BoundMovementProperties>,
     position: Vec3,
     supporting_block: Option<BlockPos>,
+    offset: f32,
 ) -> BlockPos {
-    movement_support::support_position(
-        &mut RegistryMovementWorld {
-            properties,
-            edits: &NoFactorEdits,
-            world: &mut WorldBlocks(world),
-        },
-        position,
-        supporting_block,
-        movement_support::LEGACY_SUPPORT_OFFSET,
-    )
-    .unwrap_or_else(|_| {
-        BlockPos::new(
-            position.x.floor() as i32,
-            (position.y - f64::from(movement_support::LEGACY_SUPPORT_OFFSET)).floor() as i32,
-            position.z.floor() as i32,
+    if let Some(properties) = properties
+        && let Ok(pos) = movement_support::support_position(
+            &mut RegistryMovementWorld {
+                properties,
+                edits: &NoFactorEdits,
+                world: &mut WorldBlocks(world),
+            },
+            position,
+            supporting_block,
+            offset,
         )
-    })
+    {
+        return pos;
+    }
+    // Standalone fixtures may not have bound fence/wall tags.
+    let y = (position.y - f64::from(offset)).floor() as i32;
+    supporting_block.map_or_else(
+        || BlockPos::new(position.x.floor() as i32, y, position.z.floor() as i32),
+        |support| BlockPos::new(support.x, y, support.z),
+    )
 }
 
 /// The player's `Entity.checkInsideBlocks` moments on the shared walk: the
@@ -3165,6 +3124,7 @@ mod tests {
         assert!(fly_into_wall_damage(0.01, 0.0) < 0.0);
     }
 
+    use super::environment::fly_into_wall_damage;
     use super::*;
 
     /// `LocalPlayer.isHorizontalCollisionMinor`: sliding along a wall at a
@@ -3391,6 +3351,7 @@ mod tests {
         install();
         let _recording = record_jumps();
         MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             // The player fires on either side; a client one stays off the menu test's server count.
@@ -3431,6 +3392,7 @@ mod tests {
             Vec3::new(10.5, 100.8, 11.5),
         )];
         MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -3463,6 +3425,7 @@ mod tests {
         let mut player = PlayerMotion::new(resources, Vec3::new(12.0, 84.0, 12.0)).unwrap();
         let mut tick = |player: &mut PlayerMotion, keys| {
             MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -3549,6 +3512,7 @@ mod tests {
         let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 6.0, 20.5)).unwrap();
         for _ in 0..30 {
             MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -3570,6 +3534,7 @@ mod tests {
         scene.moving_pistons.clear();
         for _ in 0..10 {
             MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -3603,6 +3568,7 @@ mod tests {
         scene.set(20, 4, 20, cauldron).unwrap();
         let mut tick = |player: &mut PlayerMotion| {
             MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -3650,6 +3616,7 @@ mod tests {
         scene.set(20, 4, 20, water).unwrap();
         let mut tick = |player: &mut PlayerMotion| {
             MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -3704,6 +3671,7 @@ mod tests {
             let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
             player.fire_ticks = fire;
             MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -3773,6 +3741,7 @@ mod tests {
                     original: Some(delta),
                 });
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -3837,6 +3806,7 @@ mod tests {
                     original: Some(delta),
                 });
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -3894,6 +3864,7 @@ mod tests {
         };
         let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -3913,6 +3884,7 @@ mod tests {
         player.events.clear();
         let from = player.position;
         MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -3931,6 +3903,7 @@ mod tests {
         // Two blocks away, nothing.
         let mut away = PlayerMotion::new(resources, Vec3::new(22.5, 4.0, 20.5)).unwrap();
         MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -3970,6 +3943,7 @@ mod tests {
         player.client_side = true;
         let tick = |player: &mut PlayerMotion, scene: &mut World| {
             MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -4048,6 +4022,7 @@ mod tests {
             scene.random.set_seed(seed);
             player.events.clear();
             MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -4083,6 +4058,7 @@ mod tests {
         player.events.clear();
         scene.random.set_seed(1);
         MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -4101,6 +4077,7 @@ mod tests {
         player.client_side = true;
         player.events.clear();
         MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -4130,6 +4107,7 @@ mod tests {
         let mut player = PlayerMotion::new(resources, at).unwrap();
         let mut travel = |player: &mut PlayerMotion| {
             MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -4205,6 +4183,7 @@ mod tests {
         player.pitch = 0.0;
         player.carry_client_movement(Vec3::new(1.2, 0.0, 0.0));
         MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -4259,6 +4238,7 @@ mod tests {
             sunrise_world::native_load_context::LoopSide::Client,
         );
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: &loop_context,
@@ -4311,6 +4291,7 @@ mod tests {
         player.client_side = true;
         player.ground.on_ground = true;
         let mut world = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -4325,7 +4306,7 @@ mod tests {
         };
         for _ in 0..2 {
             world
-                .block_push(MoverType::Piston, Vec3::new(0.0, 0.0, 0.3))
+                .move_with_cause(MoverType::Piston, Vec3::new(0.0, 0.0, 0.3))
                 .unwrap();
         }
         assert!(!player.ground.on_ground);
@@ -4351,6 +4332,7 @@ mod tests {
             player.spectator = true;
             player.flying_speed = crate::mouse::spectator_flying_speed(player.flying_speed, steps);
             MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -4409,6 +4391,7 @@ mod tests {
             let mut trajectory = Vec::new();
             for _ in 0..4 {
                 MotionWorld {
+                    side: crate::motion::dry_side(),
                     tag_items: None,
                     block_registries: None,
                     loop_context: crate::test_resources::server_loop_context(),
@@ -4768,6 +4751,7 @@ mod tests {
             player.yaw = yaw;
             player.velocity = Vec3::new(0.4, -0.3, 1.1);
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -4806,6 +4790,7 @@ mod tests {
             player.velocity = Vec3::new(0.0, dy, 0.6);
             player.fall_distance = 30.0;
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -4858,6 +4843,7 @@ mod tests {
             let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 20.0, 20.5)).unwrap();
             player.fall_distance = 30.0;
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -4896,6 +4882,7 @@ mod tests {
             let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 20.0, 20.5)).unwrap();
             player.spectator = spectator;
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -4929,6 +4916,7 @@ mod tests {
             player.client_side = client_side;
             player.fall_distance = 30.0;
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -4983,6 +4971,7 @@ mod tests {
             player.fall_distance = 30.0;
             player.status.slow_falling = slow_falling;
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -5022,6 +5011,7 @@ mod tests {
         player.auto_spin_attack_ticks = 2;
         player.auto_spin_attack_dmg = 8.0;
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -5065,6 +5055,7 @@ mod tests {
         let mut scene = World::test_scene(assets, render, 2).unwrap();
         let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 10.0, 20.5)).unwrap();
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -5117,6 +5108,7 @@ mod tests {
         player.set_pose(crate::pose::Pose::Swimming).unwrap();
         assert_eq!(player.dimensions.eye_height, 0.4);
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -5154,6 +5146,7 @@ mod tests {
             let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.0, 20.69)).unwrap();
             player.yaw = yaw;
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -5191,6 +5184,7 @@ mod tests {
             let mut player = PlayerMotion::new(resources, Vec3::new(20.5, y, 20.5)).unwrap();
             player.fall_distance = 3.0;
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -5227,6 +5221,7 @@ mod tests {
         player.swimming = true;
         player.set_pose(crate::pose::Pose::Swimming).unwrap();
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -5244,8 +5239,8 @@ mod tests {
         assert!(!w.player.swimming);
         assert_eq!(w.player.pose, crate::pose::Pose::Standing);
     }
-    /// The movement prediction plays a tick again on a copy: what the copy
-    /// does (sprinting edits the speed attribute) stays in the copy.
+    /// A mod's simulation of a player's tick (`native_simulate_player_move`) plays it on a
+    /// copy: what the copy does (sprinting edits the speed attribute) stays in the copy.
     #[test]
     #[ignore = "daily"]
     fn a_copied_player_moves_on_its_own() {
@@ -5298,6 +5293,7 @@ mod tests {
         }
         let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -5346,6 +5342,7 @@ mod tests {
             player.velocity = Vec3::new(0.0, 0.0, 1.0);
             player.spin_targets = target.map(|b| (7, b)).into_iter().collect();
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -5383,6 +5380,7 @@ mod tests {
         let mut scene = World::test_scene(assets, render, 2).unwrap();
         let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.2, 20.5)).unwrap();
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -5432,6 +5430,7 @@ mod tests {
         let mut scene = World::test_scene(assets, render, 2).unwrap();
         let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.2, 20.5)).unwrap();
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -5501,6 +5500,7 @@ mod tests {
             }
         }
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -5754,6 +5754,7 @@ mod tests {
         }
         let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -5830,6 +5831,7 @@ mod tests {
             player.fire_ticks = 160;
             player.fall_distance = 8.0;
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -5882,6 +5884,7 @@ mod tests {
         scene.set(20, 5, 20, water).unwrap();
         let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -5925,6 +5928,7 @@ mod tests {
         scene.set(20, 5, 20, water).unwrap();
         let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -6010,6 +6014,7 @@ mod tests {
             let mut player = PlayerMotion::new(resources, Vec3::new(21.0, 4.0, 20.5)).unwrap();
             player.ground.on_ground = true;
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -6066,6 +6071,7 @@ mod tests {
             let mut player = PlayerMotion::new(resources, Vec3::new(x, 4.0, 20.5)).unwrap();
             player.ground.on_ground = true;
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -6103,6 +6109,7 @@ mod tests {
             let mut count = 0;
             for _ in 0..ticks {
                 MotionWorld {
+                    side: crate::motion::dry_side(),
                     tag_items: None,
                     block_registries: None,
                     loop_context: crate::test_resources::server_loop_context(),
@@ -6174,6 +6181,7 @@ mod tests {
             }
             let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -6224,6 +6232,7 @@ mod tests {
         let mut scene = World::test_scene(assets, render, 3).unwrap();
         let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -6281,6 +6290,7 @@ mod tests {
         let mut scene = World::test_scene(assets, render, 3).unwrap();
         let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -6332,6 +6342,7 @@ mod tests {
         let mut scene = World::test_scene(assets, render, 3).unwrap();
         let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -6381,6 +6392,7 @@ mod tests {
         player.flying = true;
         player.flying_speed = 0.0;
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -6433,6 +6445,7 @@ mod tests {
         let mut scene = World::test_scene(assets, render, 3).unwrap();
         let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 10.0, 20.5)).unwrap();
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -6495,6 +6508,7 @@ mod tests {
         player.glider = true;
         player.fall_flying = true;
         let mut w = MotionWorld {
+            side: crate::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),
@@ -6537,6 +6551,7 @@ mod tests {
             let mut player = PlayerMotion::new(resources, at).unwrap();
             player.client_side = client_side;
             MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -6596,6 +6611,7 @@ mod tests {
         let mut run = |player: &mut PlayerMotion, ticks: usize| {
             for _ in 0..ticks {
                 MotionWorld {
+                    side: crate::motion::dry_side(),
                     tag_items: None,
                     block_registries: None,
                     loop_context: crate::test_resources::server_loop_context(),
@@ -6660,6 +6676,7 @@ mod tests {
             player.flying = flying;
             player.shift_key_down = sneaking;
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),
@@ -6701,6 +6718,7 @@ mod tests {
             (player.glider, player.fall_flying) = (gliding, gliding);
             player.velocity = Vec3::new(0.1, 0.0, 0.0);
             let mut w = MotionWorld {
+                side: crate::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),

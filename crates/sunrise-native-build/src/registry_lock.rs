@@ -1,5 +1,6 @@
 //! The trust boundary for a mod-owned registry lock. Never resolve missing pins online.
 use std::collections::BTreeMap;
+use sunrise_mod_package::native_route::game_registry_pin_conflicts;
 
 const CRATES_IO: &str = sunrise_addresses::CARGO_CRATES_IO_SOURCE;
 
@@ -109,6 +110,26 @@ impl RegistryLock {
             }
         }
         Ok(())
+    }
+
+    /// Returns the registry pins in `resolved` that moved a version this lock already supplies.
+    /// SDK-local identities are a separate source, checked by `check_pins`.
+    pub(super) fn moved_pins<'game, 'resolved>(
+        &'game self,
+        resolved: &'resolved Self,
+    ) -> impl Iterator<Item = (&'game Identity, &'resolved Identity)> {
+        resolved.packages.keys().filter_map(move |id| {
+            (!self.packages.contains_key(id))
+                .then(|| {
+                    self.packages.keys().find(|game| {
+                        game.name == id.name
+                            && game.source == id.source
+                            && game_registry_pin_conflicts(&game.version, &id.version)
+                    })
+                })
+                .flatten()
+                .map(|game| (game, id))
+        })
     }
 
     /// Withholds the registry identity of each crate the SDK builds from its own source (`names`,
@@ -221,6 +242,16 @@ mod tests {
         let mut allowed = game.clone();
         allowed.extend(pins).unwrap();
         allowed
+    }
+
+    #[test]
+    fn separate_zero_zero_patch_versions_do_not_move_game_pins() {
+        let game = parsed(&[package("early-crate", "0.0.1", 'a', &[])]);
+        let resolved = parsed(&[
+            package("early-crate", "0.0.1", 'a', &[]),
+            package("early-crate", "0.0.2", 'b', &[]),
+        ]);
+        assert!(game.moved_pins(&resolved).next().is_none());
     }
 
     #[test]

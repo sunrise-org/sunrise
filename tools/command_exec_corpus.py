@@ -7303,6 +7303,41 @@ def loaded_dead_mob():
     return ops + setup(f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
                        f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} air',
                        f'/forceload remove {x0} {z0}')
+def dying_selector_candidates():
+    """`@e` and `@n` keep only `Entity.isAlive`: a pig `/damage` killed, and an armor stand loaded with no health,
+    stay in the level until `tickDeath` removes them, yet neither is selected. The dying pig is nearer the origin than
+    the living one, so `@n` shows which one it took."""
+    x0, y0, z0 = 4288, 260, 4288
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': [[x0 >> 4, z0 >> 4]]},
+           cmd(f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} stone', False)]
+    dying, living, stand = (f'000010c0-0000-0000-0000-{n:012x}' for n in (1, 2, 3))
+    ops += [
+        cmd(f'/summon pig {x0 + 4}.5 {y0} {z0 + 4}.5 {{UUID:[I;4288,0,0,1],NoAI:1b}}', expect_result=1),
+        cmd(f'/summon pig {x0 + 10}.5 {y0} {z0 + 4}.5 {{UUID:[I;4288,0,0,2],NoAI:1b}}', expect_result=1),
+        cmd(f'/summon armor_stand {x0 + 2}.5 {y0} {z0 + 4}.5 {{UUID:[I;4288,0,0,3],Health:0.0f}}', expect_result=1),
+        cmd(f'/damage {dying} 100'),
+    ]
+    origin = f'x={x0 + 3}.5,y={y0},z={z0 + 4}.5,distance=..12'
+
+    def reads(*bodies):
+        for uuid in bodies:
+            ops.append(cmd(f'/data get entity {uuid} Health'))
+        ops.append(cmd(f'/execute if entity @e[type=!item,{origin}]'))
+        ops.append(cmd(f'/execute if entity @e[type=pig,{origin}]'))
+        ops.append(cmd(f'/execute if entity @e[type=armor_stand,{origin}]'))
+        ops.append(cmd(f'/data get entity @n[type=pig,{origin}] UUID'))
+        ops.append(cmd(f'/data get entity @n[type=!item,{origin}] UUID'))
+        ops.append(cmd(f'/data get entity @e[type=!item,{origin},sort=nearest,limit=1] UUID'))
+
+    # The stand is read only before it ticks: how long its body then stays (`tickDeath`) is not this group's.
+    reads(dying, living, stand)
+    ops.append({'op': 'tick', 'n': 1})
+    reads(dying, living)
+    ops.append({'op': 'tick', 'n': 20})
+    reads(dying, living)
+    return ops + setup(f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
+                       f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} air',
+                       f'/forceload remove {x0} {z0}')
 def falling_block_fall_float():
     """#13701: `Entity.checkFallDamage` adds each step down narrowed to a float (`fallDistance -= (float)ya`);
     a falling block never runs `baseTick`, so it is never in water and every step counts."""
@@ -7451,6 +7486,15 @@ def zombie_villager_summoned_data():
         else:
             ops.append(cmd(f'/execute if data entity {uuid} VillagerData{{profession:"minecraft:none"}}'))
             ops.append(cmd(f'/data get entity {uuid} VillagerData'))
+    # Compare the whole compound: IsBaby and ConversionPlayer collide in the
+    # Java map, so a path query would miss the inherited field's insertion order.
+    # Load an existing longer Strength effect: the cure does not replace it or
+    # instantiate attack_damage, leaving no identity-hash attribute order to compare.
+    ops += [cmd(f'/summon zombie_villager {x0 + 12}.5 {y0} {z0 + 4}.5 '
+                '{UUID:[I;13262,0,4,1],NoAI:1b,ConversionTime:2000,ConversionPlayer:[I;1,2,3,4],'
+                'active_effects:[{id:"minecraft:strength",duration:4000,show_icon:1b}],'
+                'VillagerData:{type:"minecraft:taiga",profession:"minecraft:cleric",level:2}}', expect_result=1),
+            cmd('/data get entity 000033ce-0000-0000-0000-000400000001')]
     return ops + setup('/tick unfreeze', f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
                        f'/forceload remove {x0} {z0}')
 
@@ -8501,6 +8545,7 @@ def groups():
         ('beacon levels load', beacon_levels_load()),
         ('zombie villager summoned data', zombie_villager_summoned_data()),
         ('loaded dead mob', loaded_dead_mob()),
+        ('dying selector candidates', dying_selector_candidates()),
         ('falling block fall float', falling_block_fall_float()),
         ('explosion infested blocks', explosion_infested_blocks()),
         ('jigsaw default joint', jigsaw_default_joint()),

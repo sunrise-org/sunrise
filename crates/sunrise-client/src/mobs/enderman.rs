@@ -299,12 +299,14 @@ pub fn on_damage(m: &mut Mob, source: &Damage) -> bool {
     }
     true
 }
-pub fn after_hurt(m: &mut Mob, source: &Damage) {
-    // A thrown potion's hit (`indirect_magic` with the potion as the direct
-    // entity, `Mob::damage_by`) and a projectile it dodges leave
-    // `Enderman.hurtServer` before the random chance:
-    // `repeatedlyTryToTeleport` replaces it.
-    if !dodges(m, source) && source.kind != super::DamageKind::IndirectMagic {
+pub fn after_hurt(m: &mut Mob, source: &Damage, explicit_direct: bool) {
+    // The built-in potion factory supplies a position and leaves the direct
+    // entity to `damage_by` to handle. A sourced command or a hit with no
+    // source at all is not inferred to be a potion based on its type alone.
+    let infer_potion = source.kind == super::DamageKind::IndirectMagic
+        && !explicit_direct
+        && source.from.is_some();
+    if !dodges(m, source) && !infer_potion {
         teleport_chance(m, source);
     }
 }
@@ -618,6 +620,21 @@ mod tests {
         Mob::new(1, Arc::new(kind), Vec3::ZERO, 0.0)
     }
 
+    #[test]
+    fn explicit_indirect_magic_is_not_assumed_to_be_a_thrown_potion() {
+        let mut m = enderman();
+        m.random = sunrise_core::random::LegacyRandom::new(1);
+        let positioned = Damage::indirect_magic(None, [0.0; 3]);
+        after_hurt(&mut m, &positioned, false);
+        assert_eq!(m.extra.counter2, 0, "the built-in potion path handles this");
+        after_hurt(&mut m, &positioned, true);
+        assert_eq!(m.extra.counter2, 1, "an explicit hit at a position rolls");
+        m.extra.counter2 = 0;
+        m.random = sunrise_core::random::LegacyRandom::new(1);
+        after_hurt(&mut m, &Damage::of(DamageKind::IndirectMagic), false);
+        assert_eq!(m.extra.counter2, 1, "a hit without a source also rolls");
+    }
+
     /// Enderman.hurtServer: a projectile makes a free enderman teleport away
     /// unhurt, but one that rides something (`isPassenger`) takes the hit.
     #[test]
@@ -733,6 +750,7 @@ mod tests {
             assert_eq!(free.position, Vec3::new(20.5, 0.0, 0.5), "no border");
 
             let w = MobWorld {
+                side: sunrise_client::motion::dry_side(),
                 goal_host: None,
                 border: Some(&border),
                 ..w.clone()

@@ -25,17 +25,18 @@
 //! | `out` | the event field a cancel, collect or replace hook writes; not for `"listen"` |
 //! | `scope`, `key` | a Part method: the kind of Part (`"block"`, `"block_entity"`, `"item"`, `"menu"`, `"fluid"`, `"entity"`) and the hook argument naming what it is attached to |
 //! | `answered_by` | `"mod"`: a global replace hook whose output also names the mod that answered, or a global collect hook whose output is `Vec<Answered<T>>`: each mod pushes `T`s into its own empty batch and dispatch names that mod on each entry |
-//! | `isolate` | `true` on a global cancel hook: its dispatch runs every listener inside `catch_unwind` — one that unwinds keeps the **requested** outputs (its writes roll back), is skipped by this hook for the session, and no later listener runs on that invocation (#2414 ruling) |
+//! | `isolate` | `true` on a global cancel hook: its dispatch runs every listener inside `catch_unwind` — one that unwinds keeps the **requested** outputs (its writes roll back), is skipped by this hook for the session, and no later listener runs on that invocation (#2414 ruling). On a global collect hook with `answered_by = "mod"` a listener that unwinds loses only its own batch and is skipped by this hook for the session; the other listeners still answer |
+//! | `output_validator` | a path on an `isolate` cancel hook: `fn(&accepted, ..., &proposed, ...) -> Result<(), &'static str>` takes the scalar/vector outputs in declaration order for each set and checks a listener's proposal against the preceding accepted one. A refusal rolls back all outputs including cancellation, logs the mod and field once per tick, and lets later listeners run. An accepted cancellation cannot be cleared. |
 //! | `host`, `context` | `"read"` or `"level"`; `"registration"`, `"data_load"`, `"loop"` or `"worldgen"` |
 //! | `neoforge`, `fabric`, `paper` | the counterpart's name, or a list of them, for the rustdoc and the gap lists |
 //! | `cancellable` | whether the NeoForge counterpart event is cancellable (documentation, not the contract) |
-//! | `version` | the contract version an injection's `hook_version` names; left out when it is 1 |
+//! | `version` | the hook's contract version; left out when it is 1 |
 //! | `target` | the game function that fires it; left out when it is `Game::native_<name>` in `native_hooks/<area>.rs` |
 //!
 //! Every hook needs `///` lines: they are the rustdoc of its trait method, and a hook without them
 //! is refused. `HookId` values are process-local dispatch indexes, not persistent API identities.
-//! Wasm subscriptions cross as names; native mods compile for the selected revision. Existing
-//! split hooks retain their generated order through each file's `// catalog-order: N` comment.
+//! Native mods compile for the selected revision. Existing split hooks retain their generated order
+//! through each file's `// catalog-order: N` comment.
 //! These frozen ordinals only keep the split's output byte-identical; they provide no cross-build
 //! compatibility. New hooks omit the comment and follow in file-name order. No shared list is
 //! edited: the generator discovers the files directly.

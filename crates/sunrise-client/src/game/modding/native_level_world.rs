@@ -37,6 +37,26 @@ fn weather_flags((rain, thunder): (f32, f32)) -> (bool, bool) {
     (rain > 0.2, thunder > 0.9)
 }
 
+/// `Level.isRainingAt` over `world`, the column of the level in dimension `dim`.
+pub(super) fn rain_at(
+    world: &World,
+    facts: &sunrise_client::blocks::BlockFacts,
+    biomes: &sunrise_client::biome::Biomes,
+    behaviours: &sunrise_world::level::Behaviours,
+    dim: Dim,
+    pos: BlockPos,
+) -> bool {
+    let view = RainView {
+        world,
+        facts,
+        biomes,
+        dimension: dim.level(),
+        raining: weather_flags(weather_for_world(world, dim == Dim::End)).0,
+        random: LegacyRandom::new(0),
+    };
+    behaviours.is_raining_at(&view, pos)
+}
+
 /// A read-only view of one level's column for `Level.isRainingAt`, so a level parked
 /// while the server ticks another answers like the one in place.
 struct RainView<'a> {
@@ -94,11 +114,13 @@ impl LevelAccess for RainView<'_> {
 impl Game<'_> {
     /// `Level.getSkyDarken`: the same dimension, time and weather calculation used by gameplay.
     pub(super) fn sky_darken_in(&self, world: &World, dimension: Dim) -> i32 {
-        // A client of a server has the environment its server's type made for a mod's level.
+        // A client of a server has the environment its server's type made for the level it is
+        // in; a parked level keeps the client's own for its dimension.
         let environment = match self
             .remote
             .as_ref()
-            .and_then(|r| r.level_environment.as_ref())
+            .and_then(|r| r.level_environment.as_deref())
+            .filter(|_| dimension == self.dim)
         {
             Some(own) => own,
             None => match dimension {
@@ -129,12 +151,13 @@ impl Game<'_> {
         Some(self.sky_darken_in(world, Dim::from_id(level.dimension_id())))
     }
 
-    /// The enabled feature flags as this side knows them: a client's are the server's, sent at
-    /// join; a server's are its world's `enabled_features`.
-    pub(super) fn enabled_feature_ids(&self) -> &Arc<[String]> {
+    /// The effective flags are set by the server's world or received by the client at join.
+    pub(in crate::game) fn enabled_feature_ids(&self) -> &Arc<[String]> {
         self.remote
             .as_ref()
-            .map_or(&self.level.enabled_features, |remote| &remote.features)
+            .map_or(self.level.enabled_features.as_arc(), |remote| {
+                &remote.features
+            })
     }
     /// Dimension shape of a loaded server level, including parked levels.
     pub(super) fn level_dimension_shape(&self, level: LevelRef) -> Option<LevelDimensionShape> {
@@ -357,19 +380,15 @@ impl Game<'_> {
         if !world.is_loaded_at(pos[0], pos[1], pos[2]) {
             return None;
         }
-        let view = RainView {
+        self.level_is_raining(level)?;
+        Some(rain_at(
             world,
-            facts: self.res.facts(),
-            biomes: world_biomes!(self),
-            dimension: Dim::from_id(level.dimension_id()).level(),
-            raining: self.level_is_raining(level)?,
-            random: LegacyRandom::new(0),
-        };
-        Some(
-            self.res
-                .behaviours()
-                .is_raining_at(&view, BlockPos::new(pos[0], pos[1], pos[2])),
-        )
+            self.res.facts(),
+            world_biomes!(self),
+            self.res.behaviours(),
+            Dim::from_id(level.dimension_id()),
+            BlockPos::new(pos[0], pos[1], pos[2]),
+        ))
     }
     /// `LevelReader.enabledFeatures` of the level a handle names. Every level of a world shares
     /// the world's flags. None for a stale handle and on a client.
@@ -393,9 +412,7 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::native_entity_refs::tests::with_game;
-    use mod_api::{
-        FeatureFlags, GameRuleChangedEvent, GameRuleValue, Hooks, LevelHost, ModEntry, ServerHost,
-    };
+    use mod_api::{GameRuleChangedEvent, GameRuleValue, Hooks, LevelHost, ModEntry, ServerHost};
     use mod_platform::testing::with_mods;
     use std::sync::{Arc, Mutex};
     use sunrise_client::chunk::Chunk;
@@ -489,6 +506,22 @@ mod tests {
                 assert!(!host.is_raining_at(snowy));
                 assert!(!host.is_raining_at(unloaded));
             });
+            // The side a motion tick is lent answers the same, so a friction part sees it.
+            let side = game_side!(game);
+            for (pos, rains) in [
+                (plains, true),
+                (roofed, false),
+                (desert, false),
+                (snowy, false),
+                (unloaded, false),
+            ] {
+                let at = sunrise_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+                assert_eq!(
+                    sunrise_client::motion::SideLevel::is_raining_at(&side, &game.world, at),
+                    rains,
+                    "{pos:?}"
+                );
+            }
 
             game.world.weather.rain_level = (0.0, 0.0);
             assert_eq!(game.level_is_raining_at(level, plains), Some(false));
@@ -514,10 +547,6 @@ mod tests {
             let flags = game.level_enabled_features(level).unwrap();
             assert!(flags.contains("minecraft:redstone_experiments"));
             assert_eq!(flags.iter().count(), 2);
-            assert_eq!(
-                FeatureFlags::new(Arc::default()).iter().collect::<Vec<_>>(),
-                ["minecraft:vanilla"]
-            );
             let ids: Vec<String> = flags.iter().map(str::to_owned).collect();
             game.with_level(|_, host, _| {
                 assert_eq!(host.enabled_features().iter().collect::<Vec<_>>(), ids);

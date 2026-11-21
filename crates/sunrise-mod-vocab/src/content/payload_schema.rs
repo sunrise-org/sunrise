@@ -6,7 +6,7 @@
 //! the walk it was entered, so the walk ends and the result does not depend on Rust names.
 //! The fingerprint is part of a typed declaration's negotiated version (see
 //! [`typed_payload_version`]), so two peers with the same id and another schema are told apart
-//! at admission. It is the same on native and wasm targets.
+//! at admission. It does not depend on the build target.
 use super::payload_codec::PayloadCodec;
 
 const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;

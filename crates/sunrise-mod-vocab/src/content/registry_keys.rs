@@ -9,7 +9,6 @@ use crate::{
 use std::sync::Arc;
 
 impl BlockKey {
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
         let known =
             crate::parts::registration_membership(crate::parts::RegistrationKeyKind::Block, slot)
@@ -19,7 +18,6 @@ impl BlockKey {
 }
 
 impl FluidKey {
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
         let known =
             crate::parts::registration_membership(crate::parts::RegistrationKeyKind::Fluid, slot)
@@ -35,7 +33,6 @@ impl FluidKey {
 }
 
 impl ItemKey {
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
         let known =
             crate::parts::registration_membership(crate::parts::RegistrationKeyKind::Item, slot)
@@ -68,7 +65,7 @@ pub fn resolve_items<'a>(
             mod_id,
             id: id.to_owned(),
         })?;
-    let _ = resolved_items().set(names);
+    let _ = resolved_items().set(share_names(names));
     Ok(())
 }
 
@@ -111,6 +108,129 @@ fn share_blocks(
     blocks: sunrise_mod_runtime::block_definitions::Blocks,
 ) -> Arc<sunrise_mod_runtime::block_definitions::Blocks> {
     Arc::new(blocks)
+}
+
+/// Retain one copy of equal key tables across test installations, as [`share_blocks`] does for
+/// definitions: equality is full, never a hash alone. The comparisons run outside the lock, so
+/// parallel installs queue only for the snapshot and the push; two that race may both push an
+/// equal table, which costs a copy and nothing else.
+#[cfg(any(test, feature = "testing"))]
+pub(crate) fn share_names(
+    names: sunrise_mod_runtime::registry_keys::Names,
+) -> sunrise_mod_runtime::registry_keys::Names {
+    use sunrise_mod_runtime::registry_keys::{Names, Table};
+    #[cfg(any(test, feature = "testing"))]
+    static SHARED: std::sync::Mutex<Vec<Arc<Table>>> = std::sync::Mutex::new(Vec::new());
+    let shared = SHARED
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    if let Some(equal) = shared.iter().find(|shared| ***shared == *names.0) {
+        return Names(equal.clone());
+    }
+    SHARED
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .push(names.0.clone());
+    names
+}
+#[cfg(not(any(test, feature = "testing")))]
+fn share_names(
+    names: sunrise_mod_runtime::registry_keys::Names,
+) -> sunrise_mod_runtime::registry_keys::Names {
+    names
+}
+
+/// [`share_names`] for every table a finished registration holds.
+#[cfg(any(test, feature = "testing"))]
+pub(crate) fn share_requests(
+    mut requests: sunrise_mod_runtime::registry_keys::Requests,
+) -> sunrise_mod_runtime::registry_keys::Requests {
+    for names in [
+        &mut requests.game_rules,
+        &mut requests.blocks,
+        &mut requests.fluids,
+        &mut requests.items,
+        &mut requests.effects,
+        &mut requests.particles,
+        &mut requests.block_entity_types,
+        &mut requests.entity_types,
+        &mut requests.game_events,
+    ] {
+        *names = share_names(std::mem::take(names));
+    }
+    requests
+}
+
+#[cfg(test)]
+mod share_tests {
+    use super::{share_names, share_requests};
+    use std::sync::Arc;
+    use sunrise_mod_runtime::registry_keys::{Names, Requests};
+
+    fn build(mod_id: &'static str, ids: &[&str]) -> Names {
+        let mut names = Names::default();
+        for id in ids {
+            names.request(mod_id, id).unwrap();
+        }
+        names
+    }
+
+    #[test]
+    fn equal_tables_are_held_once_and_a_changed_one_leaves_the_others() {
+        let first = share_names(build("mod", &["share_a:a", "share_a:b"]));
+        let mut second = share_names(build("mod", &["share_a:a", "share_a:b"]));
+        assert!(Arc::ptr_eq(&first.0, &second.0));
+        // A table that differs in the requesting mod is not equal, however alike its ids.
+        let mut other = build("mod", &["share_a:a", "share_a:b"]);
+        other.request("another", "share_a:a").unwrap();
+        assert!(!Arc::ptr_eq(&first.0, &share_names(other).0));
+        // Writing through one handle copies; the shared table is unchanged.
+        second.request("mod", "share_a:c").unwrap();
+        assert_eq!(first.entries.len(), 2);
+        assert_eq!(second.entries.len(), 3);
+    }
+
+    #[test]
+    fn equal_registrations_share_every_table() {
+        let requests = || {
+            let mut requests = Requests::default();
+            for (index, names) in [
+                &mut requests.game_rules,
+                &mut requests.blocks,
+                &mut requests.fluids,
+                &mut requests.items,
+                &mut requests.effects,
+                &mut requests.particles,
+                &mut requests.block_entity_types,
+                &mut requests.entity_types,
+                &mut requests.game_events,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                *names = build("mod", &[format!("share_b:table_{index}").as_str()]);
+            }
+            requests
+        };
+        let (first, second) = (share_requests(requests()), share_requests(requests()));
+        let tables = |requests: &Requests| {
+            [
+                requests.game_rules.0.clone(),
+                requests.blocks.0.clone(),
+                requests.fluids.0.clone(),
+                requests.items.0.clone(),
+                requests.effects.0.clone(),
+                requests.particles.0.clone(),
+                requests.block_entity_types.0.clone(),
+                requests.entity_types.0.clone(),
+                requests.game_events.0.clone(),
+            ]
+        };
+        for (first, second) in tables(&first).iter().zip(tables(&second).iter()) {
+            assert!(Arc::ptr_eq(first, second));
+        }
+    }
 }
 
 /// Publish completed identities and immutable definitions together before constructing mesh tables.
@@ -210,7 +330,6 @@ fn ordered_id(
     table.read().ok()?.as_ref()?.id(slot).map(str::to_owned)
 }
 
-#[cfg(any(not(target_arch = "wasm32"), test))]
 fn ordered_slot_is_live(
     table: &std::sync::RwLock<Option<sunrise_mod_runtime::registry_keys::Names>>,
     slot: u32,
@@ -222,14 +341,14 @@ fn ordered_slot_is_live(
         .unwrap_or(false)
 }
 
-/// Complete the built-in entity-type registry in `ids`' registration order.
+/// Complete the entity-type registry in the order supplied by the game.
 pub fn resolve_entity_types<'a>(ids: impl IntoIterator<Item = &'a str>) -> Result<(), Vec<String>> {
     let names = crate::parts::requested_keys()
         .entity_types
         .complete(ids, |mod_id, id| {
             format!("mod {mod_id} requested unknown entity type {id}")
         })?;
-    let _ = resolved_entity_types().set(names);
+    let _ = resolved_entity_types().set(share_names(names));
     Ok(())
 }
 
@@ -280,7 +399,7 @@ pub fn resolved_entity_type_key_parts(parts: &[&str]) -> Option<EntityTypeKey> {
     })
 }
 
-/// Every built-in entity-type key in registry order.
+/// Every entity-type key in registry order, with native general types last.
 pub fn entity_type_keys() -> Vec<EntityTypeKey> {
     resolved_entity_types()
         .get()
@@ -305,7 +424,6 @@ pub fn enchantment_keys() -> Vec<EnchantmentKey> {
 
 impl EntityTypeKey {
     /// Validate an incoming slot against the built-in registry, not a world's mapping.
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
         crate::parts::registration_membership(crate::parts::RegistrationKeyKind::EntityType, slot)
             .unwrap_or_else(|| {
@@ -320,7 +438,6 @@ impl EntityTypeKey {
 
 impl MenuKey {
     /// Validate an incoming slot against the built-in registry, not a world's mapping.
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
         ordered_slot_is_live(resolved_menus(), slot)
             .then_some(Self(slot))
@@ -330,7 +447,6 @@ impl MenuKey {
 
 impl EnchantmentKey {
     /// Validate an incoming slot against the loaded registry, not a world's mapping.
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
         ordered_slot_is_live(&ENCHANTMENTS, slot)
             .then_some(Self(slot))
@@ -360,7 +476,6 @@ pub fn enchantment_key_id(key: EnchantmentKey) -> Option<String> {
 }
 
 impl EffectKey {
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
         let known =
             crate::parts::registration_membership(crate::parts::RegistrationKeyKind::Effect, slot)
@@ -378,7 +493,6 @@ impl EffectKey {
 }
 
 impl BlockEntityTypeKey {
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
         let known = crate::parts::registration_membership(
             crate::parts::RegistrationKeyKind::BlockEntityType,
@@ -405,7 +519,6 @@ impl DimensionKey {
     /// `minecraft:the_end`.
     pub const END: Self = Self(2);
 
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
         let key = Self(slot);
         dimension_id(key).ok_or("unknown DimensionKey slot")?;
@@ -473,21 +586,22 @@ pub fn resolve_fluids(ids: &[&str], world_fluids: &[&str]) -> Result<(), Vec<Unk
             .request("sunrise", id)
             .expect("registry owns valid ids");
     }
-    for (slot, entry) in names.entries.iter().enumerate() {
-        names
+    let table = &mut *names;
+    for (slot, entry) in table.entries.iter().enumerate() {
+        table
             .utf16_slots
             .insert(entry.id.encode_utf16().collect(), slot as u32);
         if let Some(path) = entry.id.strip_prefix("minecraft:") {
-            names
+            table
                 .utf16_slots
                 .insert(path.encode_utf16().collect(), slot as u32);
         }
     }
-    names.world_fluids = world_fluids
+    table.world_fluids = world_fluids
         .iter()
-        .map(|name| names.slots.get(*name).copied())
+        .map(|name| table.slots.get(*name).copied())
         .collect();
-    let _ = crate::parts::resolved_fluids().set(names);
+    let _ = crate::parts::resolved_fluids().set(share_names(names));
     Ok(())
 }
 
@@ -535,7 +649,7 @@ pub fn resolve_block_entity_types<'a, T>(
         ids,
         resolve,
     )?;
-    let _ = crate::parts::resolved_block_entity_types().set(names);
+    let _ = crate::parts::resolved_block_entity_types().set(share_names(names));
     Ok(())
 }
 
@@ -633,7 +747,6 @@ pub fn effect_key_by_index(index: usize) -> Option<EffectKey> {
 }
 
 impl crate::BoolGameRuleKey {
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
         let known = crate::parts::registration_membership(
             crate::parts::RegistrationKeyKind::GameRule,
@@ -645,7 +758,6 @@ impl crate::BoolGameRuleKey {
 }
 
 impl crate::IntGameRuleKey {
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
         let known = crate::parts::registration_membership(
             crate::parts::RegistrationKeyKind::GameRule,
@@ -664,7 +776,7 @@ pub fn resolve_game_events<'a>(ids: impl IntoIterator<Item = &'a str>) -> Result
             format!("mod {mod_id} requested unknown game event {id}")
         })?;
     if let Some(installed) = crate::parts::installed() {
-        let _ = installed.resolved_game_events.set(names);
+        let _ = installed.resolved_game_events.set(share_names(names));
     }
     Ok(())
 }
@@ -686,7 +798,6 @@ pub fn game_event_key_id(key: crate::GameEventKey) -> Option<String> {
     )
 }
 impl crate::GameEventKey {
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
         crate::parts::registration_membership(crate::parts::RegistrationKeyKind::GameEvent, slot)
             .unwrap_or_else(|| {

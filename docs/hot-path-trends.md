@@ -25,10 +25,15 @@ is divided by the workload's operations.
 | `chunk.load` | inflate, read the NBT, decode the chunk | a chunk |
 | `mod.hook.no_listener` | the entity tick hook fired with no mod installed | a call |
 | `mod.hook.native_listener` | the same with one native mod listening | a call |
+| `mod.hook.fanout.entity_tick.*` | the tick hook with a separately registered native mod per listener | a dispatch to all listeners |
+| `mod.hook.fanout.server_started.*` | `server_started` (once per successful server startup in play), with the same listeners | a dispatch to all listeners |
 | `mod.attachment.read`, `.write` | a typed attachment on 128 mobs, from inside the tick | a read or a write |
 
 The two sizes of the tick workloads show a cost that grows faster than the count: the cost per mob or hopper at
-2,048 against 128.
+2,048 against 128. In the fan-out workloads the last part of the name is the number of listeners. Each
+listener increments its own thread-local counter. The benchmark checks that each listener's total matches the
+number of dispatches and uses the sum of the observed counts as its checksum. Even the rare event is repeated
+to measure dispatch; world and mod setup, counter allocation, and verification are outside the measured region.
 
 Three metrics per workload:
 
@@ -49,9 +54,8 @@ A series also starts again, with no step flagged, when the CPU model, the Rust v
 changes: counts taken on either side of such a change are not compared. Whether instruction counts are the same on
 two CPU models is not verified; the runs that measured the noise were on one.
 
-Not measured yet: chunk meshing, the render frame, packet encoding and handling, a wasm listener and the wasm
-boundary, a point or replaced function call, registry and tag lookups. Allocated bytes are not recorded, only the
-number of allocator calls.
+Not measured yet: chunk meshing, the render frame, packet encoding and handling, a replaced function call,
+and registry and tag lookups. Allocated bytes are not recorded, only the number of allocator calls.
 
 Most of a run is building the release executable. A follow-up is to measure an executable that main's own builds
 already produce, so that a run costs only the measuring and can follow every merge.
@@ -64,7 +68,7 @@ It needs the prepared resources ([docs/parity-workflow.md](parity-workflow.md)) 
 cargo build --release -p sunrise-hot-paths-game
 python3 tools/hot_paths.py measure --game target/release/sunrise-hot-paths-game \
     --resources .local/sunrise-client/26.3 --out hot-paths.json
-python3 tools/hot_paths.py measure ... --only server.tick.mobs      # some workloads only
+python3 tools/hot_paths.py measure ... --only mod.hook.fanout      # fan-out workloads only
 ```
 
 In CI, dispatch the workflow with a commit to measure that commit on a runner: the result is the run's `hot-paths`

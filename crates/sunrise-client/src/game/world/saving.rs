@@ -34,6 +34,9 @@ impl Game<'_> {
     /// Save the level's chunk tickets: `/forceload`'s in vanilla's `chunk_tickets.dat`, the
     /// mods' in Sunrise's own `mod_chunk_tickets.dat`.
     pub(super) fn save_chunk_tickets(&self) -> Result<()> {
+        if self.startup_ticket_restore_pending {
+            return Ok(());
+        }
         self.save
             .save_chunk_tickets(self.streaming.commanded(), self.tickets.portal_tickets())?;
         self.save

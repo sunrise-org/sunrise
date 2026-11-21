@@ -1,2 +1,1 @@
 sunrise-client game::native_command_completion_tests::a_providers_answer_reaches_the_player_without_passing_through_the_completion_listener lib daily resources
-sunrise-client game::native_server::wasm_provider_tests::a_compiled_guests_suggestion_provider_answers_like_the_native_one lib daily wasm-fixture

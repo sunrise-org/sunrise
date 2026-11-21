@@ -60,13 +60,34 @@ A remote client, stale handle or parked level returns `None`, never a partial
 client-side list. Outside a scoped hook query, an unavailable lookup member makes the query return `None`.
 Inside a scoped hook query, unavailable members are omitted.
 
-The walk follows the level's entity lookup admission order, not spatial order.
-Removal and re-admission moves an entity to the end. Chunk entities join section
-by section, each in stored admission order. Entities that move sections retain
-their admission place rather than moving to that section's end. Zero runtime IDs
-use stable storage join order; unregistered entity kinds have no authoritative
-lookup handle and are omitted. Cache the returned list
-when you need several passes in one hook rather than repeating the host query.
+The walk preserves lookup admission order across storage families, including
+removal and re-admission at the end. An entity spawned during play, such as a
+fired arrow or primed TNT, joins the lookup as it spawns, as vanilla's
+`addFreshEntity` adds it, even when the engine gives it its id later. A chunk's
+entities join in the order the chunk was stored: vanilla's `storeChunkSections`
+order, section by section from section 0 upward and then the negative sections,
+whatever storage family holds each entity. Each section keeps its entities in
+the order they entered it: an entity that crosses into another section goes to
+the end of that section, as vanilla's `onMove` puts it there, while its place in
+the lookup stays the same. Each crossing is recorded as the entity moves, in
+the order the moves happen: an entity that steps out of a section and back is
+at the end of it again, and a passenger enters after its vehicle. A vehicle
+comes before its passengers.
+
+Section entry order does not depend on a listener of `entity_entering_section`:
+the engine records each server crossing whether or not a mod hears it.
+
+Some differences remain. Vanilla notes a section change at every position write;
+here minecarts, boats, projectiles, dropped items, primed TNT, falling blocks,
+fireworks, experience orbs and the other server entities that report after their
+own update count several moves within one tick as one crossing, from where the
+entity was to where it ended (mobs and players are told per write). A block
+piston's push is recorded only while a mod listens to `entity_entering_section`.
+Entities that the engine keeps outside the residency families, such as lingering
+potion clouds, lightning bolts and eyes of ender, are not lookup members at all.
+The call allocates buffers for the result and sorts admission keys; it does not
+allocate an object per entity. Cache the result when doing several passes in one
+hook rather than repeatedly crossing the host boundary.
 
 ## Checking a spawn
 
@@ -229,8 +250,20 @@ Every mod is asked about every key, so a mod ignores keys it does not own. See [
 `LevelRef::spawn_entity(host, kind, pos, &spawn)` spawns one entity of `kind` at `pos` and returns its handle, or `None` with nothing spawned. `EntitySpawn::new(body)` starts the spawn at rest, unturned and with no owner; set its `velocity` (blocks per tick, `Entity.setDeltaMovement`, set before it joins), `rotation` (`[yaw, pitch]`) and `owner` (the entity that fired it) as needed. Its `SpawnBody` names the family, and the call goes the way that family's own spawns go:
 
 - `SpawnBody::Thrown { item }`: a thrown item projectile (vanilla's snowball, egg, ender pearl, experience bottle, wind charge, splash or lingering potion, or a content mod's thrown type) through `Projectile.spawnProjectile`, the route a thrown snowball takes. Its owner is set before it joins (`Projectile.setOwner`: hit credit, saved as `Owner`, and the shot keeps clear of its owner until it has left the owner's box), `projectile_launch` fires, and it carries one of `item`. With no `rotation` it faces along its velocity, as `Projectile.shoot` leaves it. Its owner is a player, a mob, a boat or a minecart: the shot needs the owner's collision identity to keep clear of it, so any other owner refuses the spawn.
-- `SpawnBody::Living { reason }`: a mob (vanilla's or a content living type) through `EntityType.spawn`, the route `/summon` takes: made as any of its type is, Parts, attachments and `entity_constructing` included, then `finalize_spawn` and `finalizeSpawn` run with `reason`, and it joins the level (`entity_join_level`), not persistent. With no `rotation` it takes `EntityType.spawn`'s yaw. A mob takes no owner. `kind` resolves as `/summon`'s does (`cow` is `minecraft:cow`). The ender dragon takes its own creation, facing `rotation`'s yaw; it has no velocity or pitch here, so a dragon given either is refused.
+- `SpawnBody::Living { reason }`: a mob (vanilla's or a content living type) through `EntityType.spawn`, the route `/summon` takes: made as any of its type is, Parts, attachments and `entity_constructing` included, then `finalize_spawn` and `finalizeSpawn` run with `reason`, and it joins the level (`entity_join_level`), not persistent. With no `rotation` it takes `EntityType.spawn`'s yaw. Both calls refuse a type that is disallowed in Peaceful when the level is Peaceful, before the mob is built or any spawn hooks run. A mob takes no owner. `kind` resolves as `/summon`'s does (`cow` is `minecraft:cow`). The ender dragon takes its own creation, facing `rotation`'s yaw; it has no velocity or pitch here, so a dragon given either is refused.
 - `SpawnBody::General`: a row of a general type a mod declared (`declare_general_entity`), with a fresh UUID and the type's declared payload version, through the insertion `/summon` and chunk loading share. It is admitted as one record (no `entities_load`: no save was read) and joins as a fresh spawn. Its owner is kept on the row and saved as `Owner`. Its state is its attachments: write them on the returned handle inside the same transaction, and `entity_join_level` and the row's first tracking see them.
+
+A general row can move to another position in its level through `EntityRef::teleport_to`. A row teleported on its own dismounts; a teleported vehicle takes its riders with it. Removing the vehicle dismounts its riders and leaves them in the level. `EntityRef::set_rotation` turns a general row without moving or dismounting it; the new angles reach clients through ordinary tracking.
+
+In `declare_general_entity`, pass `pickable` after `summonable`. Pass `false` for
+vanilla's plain `Entity.isPickable` default. With `true`, the crosshair can hit
+the declared box once the row is shown. The ordinary use and attack packets name
+that row, and the existing `entity_interact` and `attack_entity` hooks receive
+its id and declared kind. Without a listener's response, use on the row passes
+and the row declines damage. This does not make the box solid or give it a
+middle-click item. The next argument declares how the row reacts to pistons:
+pass `None` for `PushReaction::PushPull`, or `Some(PushReaction::IgnoreEntity)`
+to leave the row in place. The declared reaction is readable on either side.
 
 `EntityRef::owner(host)` reads the owner back (`TraceableEntity.getOwner`) for a projectile or a general row (`ProjectileRef::owner` answers the same for a projectile): a general type's own tick uses it to skip its shooter and to name the attacker of the damage it deals. A spawn is refused for a kind of another family than its body, a position, velocity or rotation that isn't finite, a position outside `Level.isInSpawnableBounds` or in an unloaded chunk, an owner that is stale, in another level, or without a collision identity for a thrown spawn, a level not in place, a client, or a mod that cancelled the spawn or kept the entity out.
 Inside a transaction the join waits for the root commit, so a spawn a mod then keeps out still returns a handle, which reads stale from the commit on. The level's spawn limits, flags and spawn rules don't apply, as they don't to `/summon`; nor does a general type's `summonable`, which is `/summon`'s alone. Items, experience and block drops have their own calls (`spawn_item`, `award_experience`, `pop_resource`), and any other entity `summon`.

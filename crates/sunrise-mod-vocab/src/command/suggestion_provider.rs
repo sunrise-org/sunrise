@@ -8,8 +8,6 @@
 //! keeps the ones that match the typed text, so every mod completes the same way.
 
 use super::command_argument::{CommandSender, CommandSuggestion};
-use crate::wire::{Reader, Wire, WireError, Writer};
-use std::sync::Arc;
 
 /// One argument the engine parsed before the one being completed: its name from the command's
 /// usage and the text the player wrote for it.
@@ -104,8 +102,6 @@ pub trait SuggestionProvider: Send + Sync + 'static {
     /// The candidates for `request`: the text typed, the arguments before it and the sender.
     fn suggest(&self, request: &SuggestionRequest) -> SuggestionReply;
 }
-
-crate::wire::wire_handlers::handler!(dyn SuggestionProvider, "SuggestionProvider");
 
 #[cfg(test)]
 mod tests {

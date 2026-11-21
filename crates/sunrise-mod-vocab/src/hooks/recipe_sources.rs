@@ -10,7 +10,6 @@ pub trait Hooks {
     /// No answer preserves vanilla placement. The engine takes ingredients and writes
     /// changed containers back, firing `container_changed`; this hook only names sources.
     /// Asked once per recipe-book placement/apply or server transfer check, not per tick.
-    /// Native and wasm listeners receive the same arguments and append to the same output.
     #[hook(
         side = "server",
         contract = "collect",

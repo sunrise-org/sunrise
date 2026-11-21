@@ -44,8 +44,7 @@ Keep map tiles, waypoints, seeds and exports out of settings and config files:
   Its contents are copied, deleted and backed up with the save. Without a current world it refuses calls with
   `ConfigFileError::NoWorld`; a client has no world-folder service.
 
-Both use the same `ConfigFiles`, `ConfigPath`, `ConfigEntry` and `ConfigFileError` types as config files, on native
-and wasm. Bulk paths are relative to your implicit mod root: `tiles/overworld/0.bin`, not
+Both use the same `ConfigFiles`, `ConfigPath`, `ConfigEntry` and `ConfigFileError` types as config files. Bulk paths are relative to your implicit mod root: `tiles/overworld/0.bin`, not
 `<mod id>/tiles/overworld/0.bin`. The game never scans bulk data as settings or config.
 
 `read`, `write` and `stat` operate on checked `/`-separated paths; traversal (`..`), backslashes and symbolic links

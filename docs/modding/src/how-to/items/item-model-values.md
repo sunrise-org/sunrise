@@ -30,7 +30,7 @@ sources the mod owns; unanswered callbacks retain their existing defaults.
 | `event.stack.get(&descriptor)` | Typed component value. |
 | `event.bundle_selected` | Runtime bundle selection, separate from the stack's components. |
 
-A native or wasm listener sees the same owned values. Snapshot construction occurs
+The listener receives owned values. Snapshot construction occurs
 only after the subscription check, so a model resolution with no listeners does
 not allocate or encode a snapshot. An empty or unresolved resolver view does not
 dispatch an invalid stack; its property or tint retains the unanswered default.

@@ -69,5 +69,11 @@ button events. `ClientHost::mapping(name)` reads the mapping's logical held stat
 frame: whether the mapping is held, and a hash of the key it is bound to. The hash changes when the binding
 does, so read the label with `mapping` only then. It allocates nothing.
 
+`ClientHost::mapping_physical_down(name)` reads the other state: whether the key or mouse button the mapping is
+bound to is physically down, following the player's binding and ignoring the toggle option, the conflict
+context and any `set_mapping_down` write. A mod that let go of mappings while its own control was in use hands
+back what the player still holds with `set_mapping_down(key, mapping_physical_down(key) == Ok(Some(true)))`.
+`ClientHost::is_key_down` takes mouse button names (`key.mouse.left`) as well as key names.
+
 The game has no bare swing to add: in 26.3 a swing sends nothing of its own, and the attack mapping
 produces the swing and its packet.

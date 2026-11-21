@@ -499,6 +499,7 @@ fn freezing_cramming_and_a_mod_hurt_each_teleport_inside_the_hurt() {
                     .map(|o| o.seen(None, &crate::items::Items::empty()))
                     .collect();
                 let crowded = MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     others: &seen,
                     max_entity_cramming: 3,
                     // The crowd is read from `others`, not the world's empty index.
@@ -577,6 +578,7 @@ fn two_hurts_in_a_tick_each_teleport_inside_their_own_hurt() {
                 .map(|o| o.seen(None, &crate::items::Items::empty()))
                 .collect();
             let crowded = MobWorld {
+                side: sunrise_client::motion::dry_side(),
                 others: &seen,
                 max_entity_cramming: 3,
                 others_grid: None,
@@ -717,6 +719,7 @@ fn a_cactus_hurt_and_a_crammed_shulker_teleport_inside_the_hurt() {
                         .map(|o| o.seen(None, &crate::items::Items::empty()))
                         .collect();
                     let crowded = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         others: &seen,
                         max_entity_cramming: 3,
                         others_grid: None,

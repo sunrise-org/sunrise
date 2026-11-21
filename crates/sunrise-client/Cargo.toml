@@ -20,7 +20,6 @@ sunrise-guest-stack = { path = "../sunrise-guest-stack" }
 sunrise-hooks = { path = "../sunrise-hooks" }
 sunrise-mod-runtime = { path = "../sunrise-mod-runtime" }
 mod_api = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab" }
-sunrise-engine-slots = { path = "../sunrise-engine-slots" }
 sunrise-mod-api-macros = { path = "../sunrise-mod-api-macros" }
 sunrise-client-lib = { path = "../sunrise-client-lib", default-features = false }
 sunrise-gameplay = { path = "../sunrise-gameplay" }
@@ -37,7 +36,6 @@ sunrise-optifine = { path = "../sunrise-optifine" }
 # The server thread ahead of the workers (MinecraftServer.spin's Thread.setPriority).
 sunrise-threads = { path = "../sunrise-threads" }
 sunrise-perf-format = { path = "../sunrise-perf-format" }
-sunrise-hdr = { path = "../sunrise-hdr" }
 sunrise-world = { path = "../sunrise-world" }
 sunrise-protocol = { path = "../sunrise-protocol" }
 # server.properties, eula.txt and the user lists, shared with sunrise-server.
@@ -52,7 +50,7 @@ sunrise-shader-api = { path = "../sunrise-shader-api" }
 sunrise-friends = { path = "../sunrise-friends", optional = true }
 # The narrator (GameNarrator): text-to-speech of chat, system messages and screens.
 sunrise-narrator = { path = "../sunrise-narrator" }
-# Sunrise mods: sandboxed WebAssembly components, off unless installed and turned on (docs/modding/src/how-to/content-mods.md).
+# Sunrise mods: native code and content packages (docs/modding/src/how-to/content-mods.md).
 # Their runtime is the `mods` feature.
 sunrise-mod-package = { path = "../sunrise-mod-package", default-features = false, features = ["index", "runtime-process"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "wgsl", "naga-ir"] }
@@ -77,8 +75,8 @@ toml = "1.1"
 # hlsl-out: the gfx.rs tests translate every shader as wgpu's DirectX 12 backend does. A normal feature,
 # not a dev-dependency's, so builds, tests and examples share one build of naga, wgpu and this crate.
 naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out"] }
-miniz_oxide = "0.8"
 ab_glyph = "0.2.32"
+indexmap = "2"
 log = "0.4"
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
@@ -96,7 +94,6 @@ gilrs = { version = "0.11", optional = true }
 sunrise-dualsense = { path = "../sunrise-dualsense", optional = true }
 # HTTPS to the Minecraft services (online-mode session join).
 ureq = { version = "2", default-features = false, features = ["tls"] }
-unicode-bidi = "0.3.18"
 # `LevelStorageAccess.estimateDiskSpace`: usable disk space, without unsafe code on Windows.
 fs4 = { version = "1.1.0", default-features = false, features = ["sync"] }
 # Mod file roots are descriptor-bound: no symlink race can leave a mod's area.
@@ -153,8 +150,6 @@ alloc-count = ["sunrise-threads/alloc-count"]
 # mimalloc with a tag on each block: `sunrise-ctl memory` lists the live heap by startup step and
 # thread (`heap_by_tag_mb`). For measuring only: each block costs 16 bytes more.
 alloc-census = ["sunrise-threads/alloc-census"]
-# Compatibility with earlier experiment commands: main already uses mimalloc.
-windows-mimalloc = []
 # Opt-in Windows heap experiment; see docs/windows-allocators.md.
 windows-segment-heap = []
 
@@ -168,9 +163,7 @@ workspace = true
 [dev-dependencies]
 sunrise-hooks = { path = "../sunrise-hooks", features = ["test-support"] }
 sunrise-client-core = { path = "../sunrise-client-core", features = ["test-language-publication"] }
-sunrise-client-lib = { path = "../sunrise-client-lib", default-features = false, features = ["test-payload-probe", "test-publication-scope", "test-residency-observer"] }
-sunrise-mod-wasm = { path = "../sunrise-mod-wasm", features = ["runtime-fixture", "listener-fixture", "test-copy-probe"] }
-wat = "1.261"
+sunrise-client-lib = { path = "../sunrise-client-lib", default-features = false, features = ["test-menu-validity", "test-payload-probe", "test-publication-scope", "test-residency-observer", "test-dry-side"] }
 tempfile = "3"
 sunrise-mod-runtime = { path = "../sunrise-mod-runtime", features = ["test-work-count"] }
 sunrise-threads = { path = "../sunrise-threads", features = ["test-allocation-count", "test-game-dir"] }

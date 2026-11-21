@@ -31,7 +31,7 @@ pub struct FileToIdConverter {
     prefix: String,
     extension: String,
 }
-/// The converter as its directory and extension, the form it crosses a wasm mod's boundary in.
+/// The converter as its directory and extension.
 impl From<&FileToIdConverter> for (String, String) {
     fn from(converter: &FileToIdConverter) -> Self {
         (converter.directory.clone(), converter.extension.clone())

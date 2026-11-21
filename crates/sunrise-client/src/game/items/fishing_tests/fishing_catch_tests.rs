@@ -102,7 +102,7 @@ fn run(mode: Option<u8>) -> (Vec<(String, u32)>, usize, i32, u32, i64, bool) {
                 needs_sync: false,
                 tick_count: 0,
                 life: 0,
-                on_ground: false,
+                ground: Default::default(),
                 nibble: 1,
                 time_until_lured: 0,
                 time_until_hooked: 0,

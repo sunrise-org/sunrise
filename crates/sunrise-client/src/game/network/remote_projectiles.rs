@@ -2,214 +2,25 @@
 //! end crystals on a server's client (`ClientPacketListener.handleAddEntity`
 //! and `handleSetEntityData`): the server simulates them, the client draws
 //! them where it says and interpolates their moves.
-use super::{FallStep, FallingBlock, Game, fireworks::fireworks_of};
+use super::{FallingBlock, Game, fireworks::fireworks_of};
 use crate::game::native_ticks::{TickRound, places_of, slot_place};
 use sunrise_client::items::ItemStack;
 use sunrise_client::join_seq::{JoinList, RestoreOrder};
-use sunrise_client::projectiles::{Hit, Projectile, ProjectileKind, ProjectileWorld};
-use sunrise_client::{
-    collisions::SceneCollisions,
-    particles::{ParticleOptions, ParticleType},
-};
+use sunrise_client::particles::{ParticleOptions, ParticleType};
+use sunrise_client::projectiles::{Projectile, ProjectileKind};
 use sunrise_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
 use sunrise_protocol::entity_data::Value;
 use sunrise_world::registry::BlockStateId;
 
-/// An `AreaEffectCloud` a server tracks: what its client tick reads.
-pub(super) struct RemoteCloud {
-    id: u32,
-    pub(super) at: [f64; 3],
-    pub(super) radius: f32,
-    waiting: bool,
-    particle: ParticleOptions,
-}
-
-/// `AreaEffectCloud.DEFAULT_PARTICLE`: a white entity effect.
-fn default_cloud_particle() -> ParticleOptions {
-    ParticleOptions::colored(ParticleType::EntityEffect, [1.0; 4])
-}
-
-/// `AreaEffectCloud.clientTick`: while waiting, now and then two particles
-/// near the middle; then about one per square block of the disc, drifting
-/// (an entity effect stays still).
-pub(super) fn cloud_client_tick(
-    particles: &mut sunrise_client::particles::ParticleEngine,
-    at: [f64; 3],
-    radius: f32,
-    waiting: bool,
-    particle: &ParticleOptions,
-) {
-    if waiting && particles.random().next_boolean() {
-        return;
-    }
-    let (count, spread) = if waiting {
-        (2, 0.2)
-    } else {
-        (
-            (std::f32::consts::PI * radius * radius).ceil() as i32,
-            radius,
-        )
-    };
-    for _ in 0..count {
-        let r = particles.random();
-        let angle = r.next_float() * std::f32::consts::TAU;
-        let distance = r.next_float().sqrt() * spread;
-        let at = [
-            at[0] + f64::from(angle.cos() * distance),
-            at[1],
-            at[2] + f64::from(angle.sin() * distance),
-        ];
-        let (options, velocity) = if particle.ty == ParticleType::EntityEffect {
-            let default = waiting && r.next_boolean();
-            let options = if default {
-                default_cloud_particle()
-            } else {
-                particle.clone()
-            };
-            (options, [0.0; 3])
-        } else if waiting {
-            (particle.clone(), [0.0; 3])
-        } else {
-            let v = [
-                (0.5 - r.next_double()) * 0.15,
-                f64::from(0.01f32),
-                (0.5 - r.next_double()) * 0.15,
-            ];
-            (particle.clone(), v)
-        };
-        // `addAlwaysVisibleParticle`.
-        particles.add_with(&options, at, velocity, false, true);
-    }
-}
-
-/// The projectile a type id names, as Sunrise models it.
-fn projectile_kind(kind: &str) -> Option<ProjectileKind> {
-    Some(match kind {
-        "minecraft:arrow" | "minecraft:spectral_arrow" => ProjectileKind::Arrow {
-            base_damage: 2.0,
-            critical: false,
-            effect: None,
-        },
-        "minecraft:snowball" => ProjectileKind::Snowball,
-        "minecraft:egg" => ProjectileKind::Egg,
-        "minecraft:ender_pearl" => ProjectileKind::EnderPearl,
-        "minecraft:small_fireball" => ProjectileKind::SmallFireball,
-        "minecraft:fireball" => ProjectileKind::LargeFireball { power: 1 },
-        "minecraft:dragon_fireball" => ProjectileKind::DragonFireball,
-        "minecraft:llama_spit" => ProjectileKind::LlamaSpit,
-        "minecraft:wind_charge" => ProjectileKind::WindCharge,
-        "minecraft:breeze_wind_charge" => ProjectileKind::BreezeWindCharge,
-        // Homing state stays on the server; the client interpolates its positions.
-        "minecraft:shulker_bullet" => ProjectileKind::ShulkerBullet {
-            target: Some(sunrise_client::mobs::Who::Player),
-            dir: None,
-            steps: 0,
-            delta: [0.0; 3],
-            seed: 0,
-        },
-        "minecraft:wither_skull" => ProjectileKind::WitherSkull { dangerous: false },
-        _ => ProjectileKind::Thrown(sunrise_client::projectiles::thrown_type(kind)?),
-    })
-}
-
-/// `ShulkerBullet.tick` on a server's client: only the server steers it, so
-/// the client moves it by its motion and applies the effects of the blocks it
-/// went through (`applyEffectsFromBlocks`): a bubble column pushes it. The
-/// surface's particles are the server's to send (`sendBubbleColumnParticles`).
-fn remote_bullet_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
-    p.set_old_pos_and_rot();
-    p.age += 1;
-    let from = p.position;
-    p.position = p.position.add_vector(p.velocity);
-    p.bubble_columns_along(w, from);
-    p.bubble_surfaces.clear();
-}
-
-/// A server's client ticks a projectile itself: it flies on between the
-/// tracker's updates (10 to 20 ticks apart) with its own gravity and drag,
-/// and a block stops it there; only the server decides what it hits.
-/// The tridents' type, as the tick hooks name it.
-const TRIDENT: &str = "minecraft:trident";
-
-/// One projectile's tick on a client: an arrow flies on through the scene (its events kept for
-/// after the family), a shulker bullet and the others through the world view.
-fn remote_projectile_step(
-    p: &mut Projectile,
-    arrow_scene: &sunrise_client::arrows::ArrowScene<'_, '_>,
-    world: &impl ProjectileWorld,
-    arrow_events: &mut Vec<(Vec3, sunrise_client::arrows::ArrowEvent)>,
-) {
-    match p.kind {
-        ProjectileKind::Arrow { .. } => {
-            let _ = sunrise_client::arrows::tick_client(p, arrow_scene);
-            if let Some(a) = p.arrow.as_mut() {
-                arrow_events.extend(
-                    std::mem::take(&mut a.events)
-                        .into_iter()
-                        .map(|event| (p.position, event)),
-                );
-            }
-        }
-        ProjectileKind::ShulkerBullet { .. } => remote_bullet_tick(p, world),
-        _ => remote_projectile_tick(p, world),
-    }
-}
-
-pub(super) fn remote_projectile_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
-    if !matches!(p.tick_remote(w).1, Hit::None) {
-        p.velocity = Vec3::ZERO;
-    }
-}
-
-/// `Entity.getRandomX(0.5)` / `getRandomY` / `getRandomZ(0.5)` for a shulker
-/// bullet (`EntityType.SHULKER_BULLET` is 0.3125 x 0.3125).
-fn shulker_bullet_trail_at(at: Vec3, random: &mut impl RandomSource) -> [f64; 3] {
-    const SIZE: f64 = 0.3125;
-    [
-        at.x + SIZE * (2.0 * random.next_double() - 1.0) * 0.5,
-        at.y + SIZE * random.next_double(),
-        at.z + SIZE * (2.0 * random.next_double() - 1.0) * 0.5,
-    ]
-}
-
-/// `ClientPacketListener.handleSetEntityData`'s `Fireball.DATA_ITEM_STACK`:
-/// the item the guest draws the fireball as, through `Fireball.setItem`;
-/// a kind that is no `Fireball` has none.
-pub(super) fn remote_projectile_item(
-    projectiles: &mut sunrise_client::join_seq::JoinList<Projectile, false>,
-    id: u32,
-    stack: ItemStack,
-) {
-    if let Some(i) = projectiles
-        .iter()
-        .position(|p| p.id == id && p.kind.is_item_fireball())
-    {
-        projectiles.update(i, |p| p.set_item(stack));
-    }
-}
-
-/// `ClientPacketListener.handleProjectilePowerPacket`: the power a hurting
-/// projectile (`AbstractHurtingProjectile`) accelerates by, found by id;
-/// anything else is ignored.
-pub(super) fn remote_projectile_power(
-    projectiles: &mut sunrise_client::join_seq::JoinList<Projectile, false>,
-    id: i32,
-    power: f64,
-) {
-    if let Some(i) = projectiles.iter().position(|p| p.id == id as u32)
-        && matches!(
-            projectiles[i].kind,
-            ProjectileKind::SmallFireball
-                | ProjectileKind::LargeFireball { .. }
-                | ProjectileKind::DragonFireball
-                | ProjectileKind::WitherSkull { .. }
-                | ProjectileKind::WindCharge
-                | ProjectileKind::BreezeWindCharge
-        )
-    {
-        projectiles.update(i, |p| p.acceleration = power);
-    }
-}
+pub(super) use sunrise_client_gameplay::remote::projectiles::{
+    RemoteCloud, TRIDENT, cloud_client_tick, default_cloud_particle, projectile_kind,
+    remote_projectile_item, remote_projectile_power, remote_projectile_step,
+    shulker_bullet_trail_at,
+};
+#[cfg(test)]
+pub(super) use sunrise_client_gameplay::remote::projectiles::{
+    remote_bullet_tick, remote_projectile_tick,
+};
 
 /// `AbstractHurtingProjectile.getTrailParticle`: smoke for every one of them
 /// but the wind charges (no trail) and the dragon's fireball (its own).
@@ -412,7 +223,7 @@ impl Game<'_> {
                 velocity,
                 fuse: 80,
                 ticks: 0,
-                on_ground: false,
+                ground: Default::default(),
                 fall_distance: 0.0,
                 stuck: Vec3::ZERO,
                 in_water: false,
@@ -438,7 +249,9 @@ impl Game<'_> {
                 portal: Default::default(),
                 drop_item: false,
                 fall_distance: 0.0,
-                on_ground: false,
+                ground: Default::default(),
+                fire_ticks: 0,
+                sync_velocity: false,
                 stuck: Vec3::ZERO,
                 damage: Default::default(),
                 saved: None,
@@ -764,9 +577,10 @@ impl Game<'_> {
             Some(self.border.geometry()),
             Some(&self.res.motion().blocks),
         );
+        let side = game_side!(self);
         self.tnts.retain_mut(|t| {
             // A fluid lookup that fails leaves it where its move put it.
-            let _ = t.tick(
+            let _ = t.tick_among(
                 world,
                 collision,
                 assets,
@@ -775,6 +589,8 @@ impl Game<'_> {
                 &self.loop_context,
                 border,
                 blocks,
+                Some(&side),
+                &[],
             );
             t.fuse > 0
         });
@@ -786,18 +602,12 @@ impl Game<'_> {
         for p in smoking {
             self.particles.add(&smoke, [p.x, p.y + 0.5, p.z], [0.0; 3]);
         }
-        // FallingBlockEntity.tick runs on a client too: the block falls by
-        // itself between the server's updates (every 20 ticks), then waits
-        // where it lands for the server to place it and remove it.
+        // Clients simulate motion and drag; only the server places/removes the landing block.
         let mut falling = self.falling.lift();
         #[cfg(test)]
         nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::Falling);
         falling.for_each_mut(|f| {
-            if let Ok(FallStep::Landed(_)) = self.fall_step(f, false, &[]) {
-                // Block.updateEntityMovementAfterFallOn, then getAirDrag 0.98F.
-                let drag = f64::from(0.98_f32);
-                f.velocity = Vec3::new(f.velocity.x * drag, 0.0, f.velocity.z * drag);
-            }
+            let _ = self.fall_step(f, false, &[]);
         });
         self.falling.restore(
             falling,
@@ -865,7 +675,7 @@ impl Game<'_> {
             });
             for t in &mut tridents {
                 if !round.canceled(t.id) {
-                    t.remote_tick(&world, self.remote_eye(t.owner));
+                    super::trident::remote_tick(t, &world, self.remote_eye(t.owner));
                 }
             }
         }
@@ -901,14 +711,7 @@ impl Game<'_> {
         #[cfg(test)]
         nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::RemoteRocket);
         for r in &mut rockets {
-            r.remote_step(
-                &mut SceneCollisions {
-                    world: &self.world,
-                    binding: self.collision,
-                    subject: None,
-                },
-                &self.loop_context,
-            );
+            r.remote_step(self.body_motion(&game_side!(self)));
             if let Some(target) = r.attached_to {
                 if me == Some(target) {
                     continue;
@@ -1132,7 +935,7 @@ impl Game<'_> {
             };
             for t in &mut tridents {
                 if !round.canceled(t.id) {
-                    t.remote_tick(&world, self.remote_eye(t.owner));
+                    super::trident::remote_tick(t, &world, self.remote_eye(t.owner));
                 }
             }
         }
@@ -1162,7 +965,7 @@ impl Game<'_> {
                     border: Some(self.border.bounds()),
                 };
                 let eye = self.remote_eye(tridents[i].owner);
-                tridents[i].remote_tick(&world, eye);
+                super::trident::remote_tick(&mut tridents[i], &world, eye);
             }
             let changed;
             (projectiles, tridents, changed) =
@@ -1213,6 +1016,7 @@ impl Game<'_> {
 mod tests {
     use super::*;
     use sunrise_client::mobs::Who;
+    use sunrise_client::projectiles::ProjectileWorld;
     use sunrise_core::geometry::Aabb;
 
     /// A world with nothing in it: the client tick of a projectile only
@@ -1466,6 +1270,33 @@ mod nested_spawn_tests {
             .unwrap();
         spawn(game, "minecraft:falling_block", sand.0 as i32, id);
     }
+    #[test]
+    #[ignore = "daily"]
+    fn client_falling_block_keeps_collision_bounce_through_drag() {
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            use std::sync::Arc;
+            let slime = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:slime_block")
+                .unwrap();
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+            game.world.set(4, 63, 4, slime).unwrap();
+            falling(game, 48);
+            game.falling.update(0, |f| {
+                f.position = Vec3::new(4.5, 64.25, 4.5);
+                f.velocity = Vec3::new(0.0, -0.96, 0.0);
+            });
+            game.tick_remote_projectiles(|_, p| p);
+            let f = &game.falling[0];
+            assert_eq!(f.position.y.to_bits(), 64.0_f64.to_bits());
+            assert_eq!(f.velocity.y.to_bits(), 0.7878808308504466_f64.to_bits());
+            assert!(f.ground.on_ground);
+        });
+    }
     fn projectile(game: &mut Game<'_>, id: u32) {
         spawn(game, "minecraft:shulker_bullet", 0, id);
     }
@@ -1626,6 +1457,34 @@ mod entity_tick_tests {
     type Event = (bool, &'static str, Vec<u32>, Vec<String>, Vec<[f64; 3]>);
     type Heard = Arc<Mutex<Vec<Event>>>;
 
+    /// A server's `AddEntity` of an arrow, through the packet path that tracks it: a listener's
+    /// handle for a client entity resolves only for one the server told this client of.
+    fn add_arrow(game: &mut crate::game::Game<'_>, id: i32, position: [f64; 3]) {
+        let kind = game
+            .remote
+            .as_ref()
+            .unwrap()
+            .builtin
+            .get("minecraft:entity_type")
+            .unwrap()
+            .id("minecraft:arrow")
+            .unwrap();
+        game.handle_packet(sunrise_protocol::packets::play::Clientbound::AddEntity(
+            sunrise_protocol::packets::play::AddEntity {
+                id,
+                uuid: id as u128,
+                kind,
+                position,
+                velocity: [1.0, 0.0, 0.0],
+                pitch: 0,
+                yaw: 0,
+                head_yaw: 0,
+                data: 0,
+            },
+        ))
+        .unwrap();
+    }
+
     struct Listener(Heard);
 
     impl Listener {
@@ -1729,22 +1588,9 @@ mod entity_tick_tests {
                 game.block_ticks
                     .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
                     .unwrap();
+                let _server = crate::game::native_client_session::tests::logged_client(game);
                 for (id, z) in [(71, 3.5), (72, 5.5)] {
-                    assert!(game.spawn_remote_projectile(
-                        "minecraft:arrow",
-                        &sunrise_protocol::packets::play::AddEntity {
-                            id,
-                            uuid: u128::from(id as u32),
-                            kind: 0,
-                            position: [3.5, 80.0, z],
-                            velocity: [1.0, 0.0, 0.0],
-                            pitch: 0,
-                            yaw: 0,
-                            head_yaw: 0,
-                            data: 0
-                        },
-                        (0.0, 0.0),
-                    ));
+                    add_arrow(game, id, [3.5, 80.0, z]);
                 }
                 game.tick_remote_projectiles(|_, at| at);
                 positions.extend(
@@ -1797,21 +1643,8 @@ mod entity_tick_tests {
                 game.block_ticks
                     .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
                     .unwrap();
-                assert!(game.spawn_remote_projectile(
-                    "minecraft:arrow",
-                    &sunrise_protocol::packets::play::AddEntity {
-                        id: 71,
-                        uuid: 71,
-                        kind: 0,
-                        position: [3.5, 80.0, 3.5],
-                        velocity: [1.0, 0.0, 0.0],
-                        pitch: 0,
-                        yaw: 0,
-                        head_yaw: 0,
-                        data: 0
-                    },
-                    (0.0, 0.0),
-                ));
+                let _server = crate::game::native_client_session::tests::logged_client(game);
+                add_arrow(game, 71, [3.5, 80.0, 3.5]);
                 game.tick_remote_projectiles(|_, at| at);
                 let arrow = game.creatures.projectiles.iter().find(|p| p.id == 71);
                 let p = arrow.unwrap().position;

@@ -1,7 +1,6 @@
 use super::*;
 
 /// Server-level helpers for native mods.
-#[allow(dead_code)]
 impl GameLevel<'_> {
     /// Play a sound event for nearby players in this server level. The return
     /// value means queued, not heard. A `minecraft:` event must be registered:

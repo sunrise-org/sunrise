@@ -179,9 +179,6 @@ class WorkflowTests(unittest.TestCase):
         jobs = workflow["jobs"]
         for name in ("runtime-leases",):
             self.assertEqual(jobs[name]["if"], "inputs.commit != '' || github.event_name == 'workflow_dispatch'")
-        # The wasm std member's Linux/Windows comparison is a platform leg too: the daily run and dispatches only.
-        names = yaml.safe_load((ROOT / ".github/workflows/wasm-std-names.yml").read_text())
-        self.assertEqual(set(names[True]), {"workflow_call", "workflow_dispatch"})
 
     def test_other_pull_request_workflows_skip_what_compiles_for_forks(self):
         for workflow, jobs in (("cargo-sunrise-mod-build.yml", ("build",)), ("modding-book.yml", ("book",))):

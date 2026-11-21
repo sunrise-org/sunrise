@@ -94,9 +94,10 @@ pub(super) fn tick_until_consumption(
     w: &super::MobWorld,
     level: &mut super::DamageLevel<'_>,
     events: &mut Vec<super::MobEvent>,
+    trample: &mut Option<super::ai::MobTrample>,
 ) -> super::ai::TickProgress {
     before_tick(m, w.game_time);
-    let progress = super::ai::tick_until_consumption(m, w, level, events);
+    let progress = super::ai::tick_until_consumption(m, w, level, events, trample);
     if matches!(progress, super::ai::TickProgress::Complete(_)) {
         after_tick(m, w.game_time);
     }

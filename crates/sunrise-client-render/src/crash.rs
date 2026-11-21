@@ -53,7 +53,7 @@ fn attributed(message: String) -> String {
     if let Some(scoped) = mod_api::content::crash::current_converted_call()
         && scoped.runtime == call.id
     {
-        // `export` and `site` come from the runtime, and for wasm from module bytes: a name
+        // `export` and `site` come from the converted package runtime: a name
         // with a newline could forge another line of this report, so keep each on one line.
         let _ = write!(
             out,
@@ -69,16 +69,28 @@ fn attributed(message: String) -> String {
 /// Runs `f`, and returns a panic in it as an error with the panic's message instead of letting
 /// it end the game. For work that is not the game's own and whose failure the caller recovers
 /// from, such as handing a shader pack's programs to the GPU driver's compiler: the panic goes
-/// to the log with its stack, and no crash report is made for it.
+/// to the log with its stack, and no crash report is made for it. A mod's Host call refused by
+/// the load phase comes back as an error that names it.
 pub fn contain<T>(f: impl FnOnce() -> T) -> Result<T, String> {
     CONTAINED.with(|c| c.set(c.get() + 1));
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        mod_api::__private::contain_refusal(
+            mod_api::content::crash::current_native_mod().unwrap_or("unknown"),
+            f,
+        )
+    }));
     CONTAINED.with(|c| c.set(c.get() - 1));
-    result.map_err(|payload| {
-        CAUGHT
+    match result {
+        Ok(Ok(value)) => Ok(value),
+        // A mod's Host call the load phase does not admit: named, not a panic, and no crash report.
+        Ok(Err(refusal)) => {
+            refusal.report();
+            Err(refusal.to_string())
+        }
+        Err(payload) => Err(CAUGHT
             .with(|c| c.borrow_mut().take())
-            .unwrap_or_else(|| payload_text(&*payload))
-    })
+            .unwrap_or_else(|| payload_text(&*payload))),
+    }
 }
 
 /// For the hook: a panic inside `contain` is logged with its stack and kept for `contain` to
@@ -378,9 +390,7 @@ fn mod_lines(headers: bool) -> Vec<(String, String)> {
         .collect();
     // A thread that doesn't start drops `send`: every line then reads as an error.
     let _ = sunrise_guest_stack::spawn("Crash report lines".into(), move || {
-        let failures = sunrise_mod_runtime::dispatch_failures::dispatch_failure_counter();
         for (owner, line) in asked {
-            let before = failures.get();
             let answer = contain(|| {
                 let _mod = enter_native_mod(ModCall {
                     id: owner,
@@ -389,11 +399,7 @@ fn mod_lines(headers: bool) -> Vec<(String, String)> {
                 });
                 line.value()
             });
-            // A wasm line that traps answers `None` through its proxy; the failed call tells.
-            if send
-                .send(answer.ok().filter(|_| failures.get() == before))
-                .is_err()
-            {
+            if send.send(answer.ok()).is_err() {
                 break;
             }
         }
@@ -540,7 +546,7 @@ fn deliver(home: &Path, report: Report) -> Option<PathBuf> {
         return None;
     }
     // The panic is on stderr already: the stack goes to the log only.
-    crate::logging::write_only(
+    crate::logging::write_current(
         log::Level::Error,
         &format!(
             "Sunrise crashed: {}\n{}",
@@ -552,6 +558,7 @@ fn deliver(home: &Path, report: Report) -> Option<PathBuf> {
                 .collect::<Vec<_>>()
                 .join("\n")
         ),
+        false,
     );
     crate::logging::flush();
     for hook in REPORT_HOOKS
@@ -606,30 +613,6 @@ pub fn report_watchdog(
             log: crate::logging::recent_lines(),
         },
     )
-}
-
-/// The report for a game that went over the player's RAM limit (`ram_limit`), written by the
-/// watcher thread: it says nothing about where the memory went, so it carries no stack. The player
-/// chose this limit, and the game keeps running, over its limit, until the report is written.
-pub fn report_memory_limit(home: &Path, side: &'static str, message: String) {
-    if REPORTED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let report = Report {
-        time: Local::now(),
-        headers: mod_headers(),
-        description: "RAM limit reached".into(),
-        error: message,
-        stack: String::new(),
-        thread: thread_name(side),
-        side,
-        details: system_details(side),
-        log: crate::logging::recent_lines(),
-    };
-    match report.save(home) {
-        Ok(path) => eprintln!("{SAVED_LINE}{}", path.display()),
-        Err(e) => eprintln!("Sunrise: could not save a crash report: {e}"),
-    }
 }
 
 fn payload_text(payload: &(dyn std::any::Any + Send)) -> String {

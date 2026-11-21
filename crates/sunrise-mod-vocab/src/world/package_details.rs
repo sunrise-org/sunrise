@@ -1,21 +1,10 @@
 //! What a package's manifest says about it beyond its identity, read by other mods.
 use std::collections::BTreeMap;
 
-/// How a code package runs.
-#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum PackageRuntime {
-    /// Native code, built against the game build it was made for and loaded beside it, not
-    /// compiled into the game.
-    Native,
-    /// A `mod.wasm` run by the wasm runtime.
-    Wasm,
-}
-
 /// Dispatch ordering requested by a manifest dependency.
 ///
 /// This changes listener/content ordering only. `None` never removes a code
-/// library's Cargo or wasm link requirements.
+/// library's Cargo link requirements.
 #[derive(
     sunrise_mod_api_macros::Wire,
     Clone,
@@ -43,7 +32,7 @@ pub enum DependencyOrder {
 #[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DependencyKind {
-    /// A required dependency; code packages also require a physical API library.
+    /// A required dependency. Between code packages it also requires a physical API library.
     Required,
     /// An optional dependency, checked when present.
     Optional,
@@ -155,8 +144,6 @@ pub struct PackageDetails {
     pub issues: Option<String>,
     /// The icon's path inside the package.
     pub icon_path: Option<String>,
-    /// How its code runs; `None` for a content package.
-    pub runtime: Option<PackageRuntime>,
     /// The manifest's `[properties]` table.
     pub properties: BTreeMap<String, PropertyValue>,
 }

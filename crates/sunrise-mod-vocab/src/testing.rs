@@ -5,7 +5,7 @@
 //! ```
 //! use mod_api::testing::FakeHost;
 //! use mod_api::prelude::ItemsHost;
-//! use mod_api::{HostTransaction, ITEMS, ItemResource, ItemStack, ServerHost, move_resources};
+//! use mod_api::{HostTransaction, ITEMS, ItemResource, ItemStack, ServerHost, resource_util::move_resources};
 //!
 //! let mut host = FakeHost::new();
 //! let level = host.level.level();
@@ -20,7 +20,7 @@
 //! let from = level.capability(server, &ITEMS, [0, 64, 0], None).unwrap();
 //! let into = level.capability(server, &ITEMS, [1, 64, 0], None).unwrap();
 //! let moved = server.transaction(|host, tx| {
-//!     move_resources(host, &from, &into, |_: &ItemResource| true, 3, tx)
+//!     move_resources(host, &from, &into, |_: &ItemResource| true, 3, Some(tx))
 //! });
 //! assert_eq!(moved.ok(), Some(3));
 //! let into = host.level.block_entity_at([1, 64, 0]).unwrap().items.as_ref().unwrap();
@@ -549,13 +549,18 @@ impl crate::prelude::ItemsBackend for FakeHost {
         let items = self.level.standing(at.level, at.pos)?.items.as_ref()?;
         items.slots.get(slot)?.clone()
     }
-    fn container_capacity(&self, at: BlockSide, slot: usize, stack: &ItemStack) -> u32 {
+    fn container_capacity(&self, at: BlockSide, slot: usize, stack: Option<&ItemStack>) -> u32 {
         let items = self
             .level
             .standing(at.level, at.pos)
             .and_then(|standing| standing.items.as_ref());
         items.map_or(0, |items| {
-            items.capacity(slot, self.max_stack(&crate::ItemResource::of(stack)))
+            items.capacity(
+                slot,
+                stack.map_or(u32::MAX, |stack| {
+                    self.max_stack(&crate::ItemResource::of(stack))
+                }),
+            )
         })
     }
     fn entity_container_size(&self, _: u32) -> Option<usize> {
@@ -583,7 +588,7 @@ impl crate::prelude::FluidsEnergyBackend for FakeHost {
         let standing = self.level.standing(at.level, at.pos)?;
         standing.tanks.get(tank)?.held.clone()
     }
-    fn fluid_tank_capacity(&self, at: BlockSide, tank: usize, _: &FluidStack) -> u32 {
+    fn fluid_tank_capacity(&self, at: BlockSide, tank: usize, _: Option<&FluidStack>) -> u32 {
         let standing = self.level.standing(at.level, at.pos);
         standing
             .and_then(|standing| standing.tanks.get(tank))

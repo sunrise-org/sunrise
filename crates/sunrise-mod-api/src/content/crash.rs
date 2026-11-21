@@ -124,21 +124,6 @@ pub(crate) fn ensure_installed() -> Result<(), &'static str> {
         mod_vocab::dispatch_scope::install(mod_vocab::dispatch_scope::Backend {
             unresolved_fluids: crate::fluid_state::ACCESS,
             registration: &crate::parts::REGISTRATION_ACCESS,
-            validate_attachment_use: |namespace, name, sync| {
-                #[cfg(target_arch = "wasm32")]
-                {
-                    crate::AttachmentDeclarations::validate_attachment_type(
-                        &crate::wire::guest::Guest,
-                        namespace,
-                        name,
-                        sync,
-                    )
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    mod_vocab::__private::validate_attachment_use(namespace, name, sync)
-                }
-            },
             diagnostics: &crate::parts::DIAGNOSTICS,
             enter: enter_native,
             leave: leave_native,
@@ -152,6 +137,8 @@ pub(crate) fn ensure_installed() -> Result<(), &'static str> {
             phase_state: crate::load_state::phase_snapshot,
             set_phase: crate::load_state::set_phase,
             packages: crate::load_state::current_packages,
+            namespace_authority: crate::load_state::current_namespace_authority,
+            owns_namespace: crate::load_state::owns_namespace,
             registration_data: crate::load_state::registration_data,
         })
     })

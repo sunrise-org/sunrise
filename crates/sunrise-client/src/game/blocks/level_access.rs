@@ -699,45 +699,6 @@ impl LevelAccess for GameLevel<'_> {
                 .native_state_for_placement(self.dimension, state, context, fluid, answer);
         }
     }
-    fn placement_context(
-        &self,
-        item: &str,
-        context: &PlacementContext,
-    ) -> Option<Option<PlacementContext>> {
-        let mut answer = None;
-        self.native_placement_context(item, context, &mut answer);
-        answer.map(|answer| {
-            answer.and_then(|snapshot| {
-                if !snapshot.hit.iter().all(|n| n.is_finite())
-                    || !snapshot.yaw.is_finite()
-                    || !snapshot.pitch.is_finite()
-                {
-                    log::warn!("placement_context: refused {item}: nonfinite hit or rotation");
-                    return None;
-                }
-                if snapshot.item.and_then(mod_api::__private::item_key_id) != Some(item) {
-                    log::warn!("placement_context: refused {item}: replacement changed the item");
-                    return None;
-                }
-                Some(PlacementContext {
-                    pos: snapshot.pos,
-                    hit_pos: snapshot.hit_pos,
-                    face: snapshot.face,
-                    hit: sunrise_core::geometry::Vec3::new(
-                        snapshot.hit[0],
-                        snapshot.hit[1],
-                        snapshot.hit[2],
-                    ),
-                    inside: snapshot.inside,
-                    yaw: snapshot.yaw,
-                    pitch: snapshot.pitch,
-                    sneaking: snapshot.sneaking,
-                    item: context.item.clone(),
-                    replace_clicked: snapshot.replace_clicked,
-                })
-            })
-        })
-    }
     fn must_survive(&self, item: &str) -> Option<bool> {
         let mut answer = None;
         self.native_must_survive(item, &mut answer);
@@ -1310,7 +1271,9 @@ impl LevelAccess for GameLevel<'_> {
         };
         let name = &block.name;
         let tag = Tag::Compound(nbt);
-        if let Some((key, entity)) = sunrise_client::save::decode_block_entity_for_block(&tag, name)
+        let previous = self.world.block_entities.get(&(pos.x, pos.y, pos.z));
+        if let Some((key, entity)) =
+            sunrise_client::save::decode_block_entity_replacing(&tag, name, previous)
         {
             self.world.block_entities.insert(key, entity);
             self.notify_block_entity_load_additional(key);

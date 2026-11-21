@@ -7,7 +7,7 @@ use sunrise_core::nbt::Compound;
 
 static MADE: AtomicU64 = AtomicU64::new(0);
 /// The batches waiting for a block change, by identity. Kept here so that the plain-data
-/// entity crosses to wasm and is saved, cloned and compared without them.
+/// entity is saved, cloned and compared without them.
 static UPDATE_FIELDS: Mutex<BTreeMap<u64, Compound>> = Mutex::new(BTreeMap::new());
 /// How many batches wait: with none, as nearly always, no call takes the lock.
 static WAITING: AtomicUsize = AtomicUsize::new(0);

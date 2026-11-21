@@ -1,6 +1,5 @@
 //! Cargo-facing generation: the mod API's and the game's generated files.
 use super::{Catalog, Target, free_function_source, host, sources};
-use quote::ToTokens;
 use std::{fs, path::Path};
 mod vocab_boundary;
 
@@ -68,64 +67,37 @@ pub fn generate(root: &Path, out_dir: &Path, target: Target) -> Result<(), Strin
             // engine's `GoalCx` in `mobs/part_goals.rs`.
             ("mod_api_goal_view_generated.rs", generated.goal_view),
         ],
-        Target::Api | Target::Vocab => {
-            if matches!(target, Target::Api) {
-                generate_api_parts(root, out_dir)?;
+        Target::Vocab => {
+            write_vocab_output(
+                out_dir,
+                super::parts::OUTPUT,
+                &super::parts::source(root)?,
+                &inventory,
+                &vocab_sources,
+            )?;
+            for (name, code) in super::exports::sources(root)? {
+                write_vocab_output(out_dir, &name, &code, &inventory, &vocab_sources)?;
             }
-            if matches!(target, Target::Vocab) {
-                write_vocab_output(
-                    out_dir,
-                    super::parts::OUTPUT,
-                    &super::parts::source(root)?,
-                    &inventory,
-                    &vocab_sources,
-                )?;
-                for (name, code) in super::exports::sources(root)? {
-                    write_vocab_output(out_dir, &name, &code, &inventory, &vocab_sources)?;
-                }
-            }
-            let hooks = generated.hooks;
             let included = [
                 (host::AREAS_OUTPUT, generated.areas.as_str()),
-                ("mod_api_generated.rs", hooks.as_str()),
+                ("mod_api_generated.rs", generated.hooks.as_str()),
                 ("mod_api_generated_host.rs", generated.host.as_str()),
             ];
-            let (providers, sources) = super::capability_providers::generate(root, &included)?;
-            // The resolver recurses through the API's types: give it a deep stack.
-            let generated_wire = std::thread::scope(|scope| {
-                std::thread::Builder::new()
-                    .stack_size(64 << 20)
-                    .spawn_scoped(scope, || super::wire::generate(root, &included))
-                    .map_err(|e| e.to_string())?
-                    .join()
-                    .map_err(|_| "generating the wire impls panicked".to_string())?
-            })?;
-            for path in sources.iter().chain(&generated_wire.sources) {
+            let (providers, paths) = super::capability_providers::generate(root, &included)?;
+            for path in paths {
                 crate::rerun_if_changed(&path.display());
             }
-            let outputs = vec![
+            vec![
                 (host::AREAS_OUTPUT, generated.areas),
-                ("mod_api_generated.rs", hooks),
+                ("mod_api_generated.rs", generated.hooks),
                 ("mod_api_generated_host.rs", generated.host),
                 ("capability_providers_generated.rs", providers),
-                ("wire_generated.rs", generated_wire.wire),
-                (GUEST_OUTPUT, generated_wire.guest),
-            ];
-            outputs
-                .into_iter()
-                // Vocab keeps the mod side's guest transport as well, for `sunrise-mod-api`'s build to
-                // take (`generate_api_parts`): it comes from the sources Vocab has just generated.
-                .filter(|(name, _)| match target {
-                    Target::Api => *name == GUEST_OUTPUT,
-                    Target::Vocab => true,
-                    Target::Client => unreachable!(),
-                })
-                .collect()
+            ]
         }
     };
     for (name, code) in outputs {
         let code = generated_source(root, &target, name, code)?;
-        if matches!(target, Target::Vocab) && name != GUEST_OUTPUT {
+        if matches!(target, Target::Vocab) {
             write_vocab_output(out_dir, name, &code, &inventory, &vocab_sources)?;
         } else {
             write_if_changed(out_dir.join(name), &code).map_err(|e| e.to_string())?;
@@ -135,12 +107,7 @@ pub fn generate(root: &Path, out_dir: &Path, target: Target) -> Result<(), Strin
     Ok(())
 }
 
-/// The mod side's WebAssembly guest transport, which `sunrise-mod-api` includes.
-pub const GUEST_OUTPUT: &str = "wire_guest_generated.rs";
-
-/// `sunrise-mod-api`'s own generated file: the modules and re-exports of its Part kinds. Its guest
-/// transport ([`GUEST_OUTPUT`]) comes from `sunrise-mod-vocab`'s build, which generates the same sources:
-/// the API's build script copies it instead of parsing the catalog, the vocabulary and the game again.
+/// Generate the mod API's Part registration modules.
 pub fn generate_api_parts(root: &Path, out_dir: &Path) -> Result<(), String> {
     crate::rerun_if_changed(&root.join("crates/sunrise-mod-api/src/parts").display());
     write_if_changed(
@@ -242,8 +209,7 @@ pub fn generate_render(root: &Path, out_dir: &Path) -> Result<(), String> {
         };
         let start = record
             .attrs
-            .iter()
-            .find(|attr| !attr.path().is_ident("doc"))
+            .first()
             .map_or_else(|| record.vis.span().start(), |attr| attr.span().start());
         records.push_str(&source[offset(start)..offset(record.span().end())]);
         records.push('\n');
@@ -280,129 +246,6 @@ fn render_records_need_no_game_sources() {
         5
     );
     fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-#[ignore = "daily"]
-fn listed_render_slots_have_eligible_points() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    super::points::game_points(&root).unwrap();
-}
-
-/// The `mod_api` types with a `Wire` layout ([`super::wire`]), for point records.
-/// A source tree without the mod API (a generator fixture's) has none.
-pub(crate) fn wire_types(root: &Path) -> Result<std::collections::BTreeSet<String>, String> {
-    if !root.join("crates/sunrise-mod-vocab/src/hooks").is_dir() {
-        return Ok(Default::default());
-    }
-    let generated = sources(root, super::FillMode::Require)?;
-    wire_types_from_sources(root, &generated)
-}
-
-/// Resolve Wire layouts from already validated, immutable API sources.
-/// The caller has established that the mod API directory exists.
-pub(super) fn wire_types_from_sources(
-    root: &Path,
-    generated: &super::Sources,
-) -> Result<std::collections::BTreeSet<String>, String> {
-    let included = [
-        (host::AREAS_OUTPUT, generated.areas.as_str()),
-        ("mod_api_generated.rs", generated.hooks.as_str()),
-        ("mod_api_generated_host.rs", generated.host.as_str()),
-    ];
-    // The resolver recurses through the API's types: give it a deep stack.
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(64 << 20)
-            .spawn_scoped(scope, || super::wire::owned_types(root, &included))
-            .map_err(|e| e.to_string())?
-            .join()
-            .map_err(|_| "reading the wire types panicked".to_string())?
-    })
-}
-
-/// `sunrise-mod-points`' generated file: each point's record, `PointId` and typed function constructors,
-/// from the game's source, tracking the game module's files.
-pub fn generate_points(root: &Path, out_dir: &Path) -> Result<(), String> {
-    crate::interface_cache::with_cache(out_dir, || {
-        crate::source::with_walk_cache(|| generate_points_inner(root, out_dir))
-    })
-}
-
-/// Generate the engine-owned point vocabulary and typed dispatch.
-pub fn generate_engine_points(root: &Path, out_dir: &Path) -> Result<(), String> {
-    crate::interface_cache::with_cache(out_dir, || {
-        crate::source::with_walk_cache(|| {
-            for path in super::points::tracked(root)? {
-                crate::rerun_if_changed(&path.display());
-            }
-            crate::rerun_if_staged(root);
-            let points = super::points::game_points(root)?;
-            println!("cargo:rerun-if-env-changed=SUNRISE_POINT_NAMES");
-            let selected = std::env::var("SUNRISE_POINT_NAMES")
-                .ok()
-                .map(|json| {
-                    serde_json::from_str::<std::collections::BTreeSet<String>>(&json)
-                        .map_err(|error| format!("SUNRISE_POINT_NAMES: {error}"))
-                })
-                .transpose()?;
-            let code = super::points::engine_records(&points, selected.as_ref());
-            let generated = syn::parse_file(&code).map_err(|e| format!("engine points: {e}"))?;
-            let mut code = String::new();
-            for item in generated.items {
-                code.push_str(&item.to_token_stream().to_string());
-                code.push('\n');
-            }
-            write_if_changed(out_dir.join("engine_points.rs"), code).map_err(|e| e.to_string())
-        })
-    })
-}
-
-pub(super) fn generate_points_inner(root: &Path, out_dir: &Path) -> Result<(), String> {
-    // Phase durations for CI's build report (points-timing.txt beside the output); never read back.
-    let started = std::time::Instant::now();
-    let mut timing = String::new();
-    let mut phase = |name: &str| {
-        timing.push_str(&format!("{name} {:.2}s\n", started.elapsed().as_secs_f64()));
-    };
-    let src = root.join("crates/sunrise-client/src");
-    crate::rerun_if_changed(&src.join("game.rs").display());
-    crate::rerun_if_changed(&src.join("game").display());
-    for path in super::points::tracked(root)? {
-        crate::rerun_if_changed(&path.display());
-    }
-    phase("tracked");
-    println!("cargo:rerun-if-env-changed=SUNRISE_POINT_NAMES");
-    let selected = std::env::var("SUNRISE_POINT_NAMES")
-        .ok()
-        .map(|json| {
-            serde_json::from_str::<std::collections::BTreeSet<String>>(&json)
-                .map_err(|error| format!("SUNRISE_POINT_NAMES: {error}"))
-        })
-        .transpose()?;
-    // Only a staged copy compiles the points' sites into the game; the wasm host's listener
-    // fixture brings its own.
-    crate::rerun_if_staged(root);
-    let staged =
-        root.join(".sunrise-source-staged").is_file() || cfg!(feature = "listener-fixture");
-    let points = super::points::game_points(root)?;
-    phase("game_points");
-    let code = super::points::records_selected(&points, selected.as_ref())
-        + &format!(
-            "/// Whether this build compiled the points' sites into the game: only the prebuilt game, built from a staged copy of the source, has them. A build without them refuses every listener at load.\npub const STAGED: bool = {staged};\n"
-        );
-    phase("records");
-    let generated = syn::parse_file(&code).map_err(|e| format!("generated Rust: points: {e}"))?;
-    // A single multi-megabyte line makes Clippy's source lookups prohibitively slow.
-    let mut code = String::new();
-    for item in generated.items {
-        code.push_str(&item.to_token_stream().to_string());
-        code.push('\n');
-    }
-    phase("format");
-    write_if_changed(out_dir.join("points_generated.rs"), code).map_err(|e| e.to_string())?;
-    phase("written");
-    fs::write(out_dir.join("points-timing.txt"), timing).map_err(|e| e.to_string())
 }
 
 pub(super) fn track(root: &Path, all_game: bool) -> Result<(), String> {
@@ -457,4 +300,24 @@ pub(super) fn track(root: &Path, all_game: bool) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[test]
+fn unchanged_outputs_keep_their_timestamp_but_changed_outputs_replace_bytes() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+    fs::create_dir_all(&root).unwrap();
+    let output = root.join(format!("write-if-changed-test-{}", std::process::id()));
+    write_if_changed(&output, b"first").unwrap();
+    let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1000);
+    fs::File::options()
+        .write(true)
+        .open(&output)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(old))
+        .unwrap();
+    write_if_changed(&output, b"first").unwrap();
+    assert_eq!(fs::metadata(&output).unwrap().modified().unwrap(), old);
+    write_if_changed(&output, b"second").unwrap();
+    assert_eq!(fs::read(&output).unwrap(), b"second");
+    fs::remove_file(output).unwrap();
 }

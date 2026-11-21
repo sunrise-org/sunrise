@@ -1,1 +1,0 @@
-A mod's colour resolver: vanilla's `ColorResolver`, which the game blends over the biomes around a block as it blends its own (`ClientLevel.calculateBlockTint`, over the biome blend radius) and caches per section while it meshes.

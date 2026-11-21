@@ -302,7 +302,7 @@ pub fn build_with_conditions(
     let known = Known::new(base, &plan, &tags, mod_biomes)?;
     for (file, merge) in &mut tags {
         for (values, _) in &mut merge.layers {
-            values.retain(|v| known.keeps(file, v));
+            values.retain(|v| known.keeps(file, v, &mut warnings));
         }
     }
     let mut bundles: Vec<(&str, J)> = Vec::new();

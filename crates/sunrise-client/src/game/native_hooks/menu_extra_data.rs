@@ -23,7 +23,6 @@ impl Game<'_> {
 
 /// Helpers for native mods, kept as stable as the hook points.
 // Native mods use these; nothing in Sunrise does.
-#[allow(dead_code)]
 impl Game<'_> {
     /// The block of the mod screen that is open (`native_screen`), as the
     /// server named it when the block opened its menu type; None when no mod

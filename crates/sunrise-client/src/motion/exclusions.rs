@@ -12,7 +12,7 @@ impl MotionWorld<'_, '_, '_> {
             &mut self.movement_collisions(),
             &self.player.collision_exclusions,
             CollisionCheckRequest {
-                entity: EntityIdentity(0),
+                entity: player_collision_identity(self.player),
                 context,
                 bounds,
                 candidate_budget: 1_000_000,
@@ -58,6 +58,7 @@ mod tests {
                     original: Some(delta),
                 });
             let mut w = MotionWorld {
+                side: sunrise_client::motion::dry_side(),
                 tag_items: None,
                 block_registries: None,
                 loop_context: crate::test_resources::server_loop_context(),

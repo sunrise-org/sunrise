@@ -161,10 +161,6 @@ pub fn title_entry() -> Option<Screen> {
         None => crate::net::joins_friends().then(|| Screen::friend(true)),
     }
 }
-/// Whether the title screen's Friends icon opens something ([`title_entry`]).
-pub fn has_title_entry() -> bool {
-    page::title_page().is_some() || crate::net::joins_friends()
-}
 
 /// What a click asks the title screen to do.
 pub enum Outcome {
@@ -1126,7 +1122,7 @@ impl Screen {
                                     motd.resolve_legacy(),
                                     Ping::player_count(*players),
                                     format!(
-                                        "gui/sprites/server_list/ping_{}",
+                                        "server_list/ping_{}",
                                         match ms {
                                             0..150 => 5,
                                             150..300 => 4,
@@ -1139,13 +1135,13 @@ impl Screen {
                                 Some(Ping::Incompatible { motd, version, .. }) => (
                                     motd.resolve_legacy(),
                                     version.clone().with_color(crate::text::RED),
-                                    "gui/sprites/server_list/incompatible".to_owned(),
+                                    "server_list/incompatible".to_owned(),
                                 ),
                                 Some(Ping::Failed(_)) => (
                                     Text::translate("multiplayer.status.cannot_connect", &[])
                                         .with_color(0xFF0000),
                                     Text::empty(),
-                                    "gui/sprites/server_list/unreachable".to_owned(),
+                                    "server_list/unreachable".to_owned(),
                                 ),
                                 _ => {
                                     // The pinging bars bounce, offset by the row.
@@ -1154,7 +1150,7 @@ impl Screen {
                                     (
                                         Text::translate("multiplayer.status.pinging", &[]),
                                         Text::empty(),
-                                        format!("gui/sprites/server_list/pinging_{}", frame + 1),
+                                        format!("server_list/pinging_{}", frame + 1),
                                     )
                                 }
                             };
@@ -1200,7 +1196,7 @@ impl Screen {
                                         let lit = if over { "_highlighted" } else { "" };
                                         batch.sprite_scaled(
                                             atlas,
-                                            &format!("gui/sprites/server_list/{sprite}{lit}"),
+                                            &format!("server_list/{sprite}{lit}"),
                                             cx,
                                             cy,
                                             32.0,
@@ -1491,21 +1487,9 @@ impl Screen {
                     return Outcome::Connect { address, lan };
                 }
             }
-            (Self::List { .. }, Some(41)) => {
-                return Outcome::Open(Box::new(Self::Direct {
-                    address: String::new(),
-                }));
-            }
+            (Self::List { .. }, Some(41)) => return Outcome::Open(Box::new(Self::direct())),
             (Self::List { .. }, Some(47)) => return Outcome::Open(Box::new(Self::friend(false))),
-            (Self::List { .. }, Some(42)) => {
-                return Outcome::Open(Box::new(Self::Edit {
-                    index: None,
-                    name: crate::lang::get_or("selectServer.defaultName", "Minecraft Server"),
-                    address: String::new(),
-                    focus: 1,
-                    packs: None,
-                }));
-            }
+            (Self::List { .. }, Some(42)) => return Outcome::Open(Box::new(Self::add_server())),
             (
                 Self::List {
                     servers, selected, ..
@@ -1894,6 +1878,22 @@ impl Screen {
             self,
             Self::Edit { .. } | Self::Friend { .. } | Self::Page(_)
         )
+    }
+    /// Add Server (`EditServerScreen` for a new `ServerData`), empty.
+    pub fn add_server() -> Self {
+        Self::Edit {
+            index: None,
+            name: crate::lang::get_or("selectServer.defaultName", "Minecraft Server"),
+            address: String::new(),
+            focus: 1,
+            packs: None,
+        }
+    }
+    /// Direct Connection (`DirectJoinServerScreen`), empty.
+    pub fn direct() -> Self {
+        Self::Direct {
+            address: String::new(),
+        }
     }
     /// Join a friend, with the relay the player set before.
     pub fn friend(from_title: bool) -> Self {

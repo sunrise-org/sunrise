@@ -70,22 +70,6 @@ impl HookParts {
     }
 }
 
-/// The refusal a wasm mod's entity part earns by overriding a native-only
-/// method: hooks such as [`general_entity_tick`] and [`can_rider_interact`] cross,
-/// but native-only overrides would be silently never called. The subscription macro
-/// records the overrides as [`EntityPart::entity_native_only`] capability
-/// metadata; the generated wasm attach wrapper consults it where the real part
-/// lives, and delivers this refusal through the registration refusal channel.
-// hidden: the generated wasm boundary's refusal, not a mod authoring surface.
-#[doc(hidden)]
-pub fn entity_part_native_only_refusal(part: &dyn EntityPart) -> Option<String> {
-    let native_only = part.entity_native_only();
-    let first = *native_only.first()?;
-    Some(format!(
-        "EntityPart::{first}: a wasm entity part cannot override native-only methods"
-    ))
-}
-
 /// Whether any mod registered a provider of entity capability `key`, for any entity type: one
 /// table lookup, no allocation, so the game's own lookups skip all their work where none did.
 pub fn has_entity_providers<T: ?Sized + 'static, C: 'static>(
@@ -152,8 +136,7 @@ impl dyn Registrar + '_ {
     /// [`EntityPart::register_goals`] runs at every `Mob` construction of that
     /// type, spawning or loading, and its goals join the mob's selectors
     /// beside vanilla's. Its `general_entity_tick` runs for one general row
-    /// of the type (#792). Wasm parts can implement `general_entity_tick`
-    /// and `can_rider_interact`.
+    /// of the type (#792).
     pub fn entity_part<P: EntityPart>(&mut self, entity: &str, part: P) {
         self.attach_entity_part(entity, type_name::<P>(), Arc::new(part));
     }
@@ -165,7 +148,6 @@ impl dyn Registrar + '_ {
     /// loads: only mob types (vanilla and mod) and mod general entity types keep Part state,
     /// and `minecraft:player`, any other vanilla family and an unknown id refuse the load,
     /// naming the type. `entity_part` itself checks no type.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn entity_part_with_state<P: crate::EntityPartState>(
         &mut self,
         entity: &str,
@@ -218,18 +200,13 @@ pub trait EntitiesRegistrar {
     /// Attach `part`, of kind `kind`, to the entity type `entity`
     /// (`minecraft:zombie`, `mymod:golem`): its `register_goals` runs at every
     /// `Mob` construction of that type, and its `general_entity_tick` for one
-    /// general row's authoritative tick (#792). A wasm mod's part crosses
-    /// here as a handler the host calls back; the part's goal, behavior,
-    /// spawn-size and shear methods stay off wasm, as their docs say.
+    /// general row's authoritative tick (#792).
     fn attach_entity_part(&mut self, entity: &str, kind: &'static str, part: Arc<dyn EntityPart>);
 
     /// Record the state declaration of entity Part `part` on entity type `entity`, or refuse
     /// it (as the mod's registration refusal too): see `PartStateDeclaration::check`, a key
     /// outside this mod's namespaces, or one it declared with another Rust type name. Mods reach
     /// it through `entity_part_with_state`.
-    ///
-    /// Not on wasm: entity parts and their state declarations are registered only by native mods.
-    #[cfg(not(target_arch = "wasm32"))]
     fn declare_entity_part_state(
         &mut self,
         entity: &str,

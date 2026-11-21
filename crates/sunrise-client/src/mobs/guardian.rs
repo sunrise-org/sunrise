@@ -17,7 +17,6 @@ use crate::health::DamageLevel;
 use std::f32::consts::PI;
 use sunrise_core::geometry::trig::Mth;
 use sunrise_core::{geometry::Vec3, random::RandomSource};
-use sunrise_world::move_gate::MoveGate;
 
 // Guardian state: `flag` an active beam target (DATA_ID_ATTACK_TARGET),
 // `flag2` moving (DATA_ID_MOVING), `counter2` the client attack time.
@@ -208,23 +207,21 @@ pub fn move_control(m: &mut Mob) {
     m.extra.flag2 = true;
 }
 /// `Guardian.travelInWater`; on land the usual travel.
-pub fn travel(
+pub(super) fn travel(
     m: &mut Mob,
     w: &MobWorld,
     level: &mut DamageLevel<'_>,
     input: Vec3,
     events: &mut Vec<MobEvent>,
-) -> bool {
-    if !m.fluids.in_water {
-        return false;
-    }
+    pause: bool,
+) -> Result<(), super::living::TravelTrample> {
     m.move_relative(0.1, input);
-    m.do_move(w, level, events, &mut MoveGate::new());
-    m.velocity = m.velocity.scale(0.9);
-    if !m.extra.flag2 && m.ai.target.is_none() {
-        m.velocity.y -= 0.005;
-    }
-    true
+    m.travel_move(w, level, events, pause, |m, _, _, _| {
+        m.velocity = m.velocity.scale(0.9);
+        if !m.extra.flag2 && m.ai.target.is_none() {
+            m.velocity.y -= 0.005;
+        }
+    })
 }
 /// `Guardian.aiStep`'s `clientSideTailAnimation` and
 /// `clientSideSpikesAnimation` (the server's and a client's).

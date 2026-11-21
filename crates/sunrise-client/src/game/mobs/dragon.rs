@@ -8,8 +8,6 @@
 //! exit portal, the egg and the next gateway; and its rendering and boss bar.
 #[path = "dragon/death.rs"]
 mod death;
-#[path = "dragon/rays.rs"]
-mod rays;
 #[path = "dragon/residency.rs"]
 mod residency;
 #[path = "dragon/save_lending.rs"]
@@ -24,7 +22,6 @@ use super::{
     potions::{Victim, mob_can_be_affected},
 };
 use mod_api::DragonPhase;
-use rays::dragon_rays;
 use sunrise_client::{
     health::{DamageContainer, DamageLevel, HurtSource, Reduction},
     hud::HudBatch,
@@ -37,10 +34,12 @@ use sunrise_client::{
     text::Text,
 };
 use sunrise_client_core::nbt_value;
+use sunrise_client_gameplay::dragon_render::{dissolve_color, dissolve_mask, dragon_rays};
 use sunrise_core::nbt::Tag;
 use sunrise_core::position::BlockPos;
 use sunrise_core::{
     geometry::{Aabb, Vec3, trig},
+    jmath,
     random::{LegacyRandom, RandomSource},
 };
 use sunrise_protocol::entity_data::Value;
@@ -535,6 +534,12 @@ fn vanilla_normalize(v: glam::DVec3) -> glam::DVec3 {
     } else {
         v / len
     }
+}
+
+/// `DragonStrafePlayerPhase`'s firing angle: `Math.acos` of the float dot, one
+/// `dmul` by `Mth.RAD_TO_DEG`, narrowed to float, then `+ 0.5F`.
+fn strafe_angle(dot: f32) -> f32 {
+    (jmath::acos(f64::from(dot)) * f64::from(trig::RAD_TO_DEG)) as f32 + 0.5
 }
 /// `#minecraft:is_fire`, which the dragon's parts and the crystals refuse
 /// (`isInvulnerableToBase`: both types are fire immune).
@@ -1533,7 +1538,14 @@ impl Game<'_> {
                 Vec3::new(x + 1.0, y + 2.0, z + 1.0),
             ));
             self.combat.explosion_direct = Some(c.id);
-            let _ = self.server_explode(at, 6.0, interaction, false);
+            let _ = self.server_explode_from(
+                at,
+                6.0,
+                interaction,
+                false,
+                super::explosion::ExplosionSource::default()
+                    .with_damage_direct(c.id, sunrise_client::health::DirectEntity::Other),
+            );
             self.combat.explosion_direct = None;
             self.combat.explosion_in_water = false;
             self.fight.blast_by = None;
@@ -2368,10 +2380,13 @@ impl Game<'_> {
                     *charge += 1;
                     let d = self.dragon.as_ref().expect("dragon");
                     let r = f64::from(d.yaw * trig::DEG_TO_RAD);
-                    let dir = glam::DVec2::new(f64::from(trig::sin(r)), f64::from(-trig::cos(r)))
-                        .normalize();
-                    let aim = glam::DVec2::new(pp.x - pos.x, pp.z - pos.z).normalize_or_zero();
-                    let angle = dir.dot(aim).clamp(-1.0, 1.0).acos().to_degrees() + 0.5;
+                    let dir = vanilla_normalize(glam::DVec3::new(
+                        f64::from(trig::sin(r)),
+                        0.0,
+                        f64::from(-trig::cos(r)),
+                    ));
+                    let aim = vanilla_normalize(glam::DVec3::new(pp.x - pos.x, 0.0, pp.z - pos.z));
+                    let angle = strafe_angle(dir.dot(aim) as f32);
                     if *charge >= 5 && (0.0..10.0).contains(&angle) {
                         // From the head, one block back along the view vector.
                         let head = d.parts[0].0;
@@ -2963,7 +2978,7 @@ impl Game<'_> {
         }
         // EnderDragon.aiStep queries living entities, not only players.
         if let Some(d) = self.dragon.as_ref() {
-            let frame = sunrise_client::mobs::dragon_contacts::Frame {
+            let frame = sunrise_gameplay::dragon_contacts::Frame {
                 dragon_id: d.id,
                 origin: d.position,
                 center: (bc, bz),
@@ -2996,7 +3011,7 @@ impl Game<'_> {
                         self.combat.attack(),
                     );
                     let mut credit = plan.lend(&mut self.last_hurt_by_player);
-                    if sunrise_client::mobs::dragon_contacts::contact_part(
+                    if sunrise_gameplay::dragon_contacts::contact_part(
                         crate::game::entity::damage_level_of!(
                             self,
                             &sunrise_client::health::NO_ATTACK,
@@ -3510,16 +3525,24 @@ impl Breath {
         self.age < self.potion.as_ref().map_or(20, |p| p.settings.wait_time)
     }
 }
+#[cfg(test)]
+impl Dragon {
+    pub(super) fn set_render_test_crystal(&mut self, crystal: Option<usize>) {
+        self.nearest_crystal = crystal;
+    }
+}
+
 impl Game<'_> {
-    /// `EnderDragonRenderer` and `EnderDragonModel.setupAnim`.
+    /// `EnderDragonRenderer.submit` and `EnderDragonModel.setupAnim`, from the real dragon's slot.
     pub(super) fn dragon_geometry(
         &self,
+        d: &Dragon,
         camera: glam::DVec3,
         alpha: f64,
         out: &mut Vec<Vertex>,
         additive: &mut Vec<Vertex>,
     ) {
-        let (Some(d), Some(model)) = (self.dragon.as_ref(), self.dragon_model.as_ref()) else {
+        let Some(model) = self.dragon_model.as_ref() else {
             return;
         };
         let a = alpha as f32;
@@ -3664,6 +3687,8 @@ impl Game<'_> {
             (0xFFFF_FFFF, u32::from(d.hurt_time > 0))
         };
         let first = out.len();
+        self.mark_entity(first, "minecraft:ender_dragon");
+        self.mark_motion(first, 0);
         sunrise_client::mobs::render::draw(model, base, &poses, skin, color, light, overlay, out);
         if let Some(mask) = mask {
             dissolve_mask(&mut out[first..], skin, mask);
@@ -3681,8 +3706,10 @@ impl Game<'_> {
             let full = sunrise_client::mobs::render::FULL_BRIGHT;
             sunrise_client::mobs::render::draw(model, base, &poses, glow, color, full, 0, out);
         }
+        #[cfg(test)]
+        super::native_render_pair_tests::witness_body(d.id, first, out.len());
         // RenderTypes.eyes: the glowing eyes, added on top.
-        let mut eye_quads = Vec::new();
+        let first_eye = additive.len();
         sunrise_client::mobs::render::draw(
             model,
             base,
@@ -3691,17 +3718,16 @@ impl Game<'_> {
             0xFFFF_FFFF,
             240 | 240 << 8,
             0,
-            &mut eye_quads,
+            additive,
         );
         // `RenderTypes.eyes` has an `OitPipelineSet`: improved transparency
         // moves the tagged quads into its stages (the HDR tier is the eyes'
         // shine, `mobs::render::EYES_TIER`).
-        for v in &mut eye_quads {
+        for v in &mut additive[first_eye..] {
             v.layer = 2
                 | sunrise_client::gfx::OIT_ENTITY
                 | u32::from(sunrise_client::mesher::BRIGHT) << 16;
         }
-        additive.extend(eye_quads);
         if death > 0.0 {
             let rays = additive.len();
             self.dragon_rays(rays_base, death / 200.0, additive);
@@ -3739,6 +3765,8 @@ impl Game<'_> {
         else {
             return;
         };
+        // Like the other layer-6 beams, this is a separate pack material from its body.
+        self.mark_stage(out.len(), "NONE");
         let q = |v: f32| (v * 65535.0).round().clamp(0.0, 65535.0) as u32;
         let wrap_light = q(s.v0) | q(s.v1 - s.v0) << 16;
         let (dx, dy, dz) = (delta.x as f32, delta.y as f32, delta.z as f32);
@@ -4126,6 +4154,7 @@ impl Game<'_> {
             horizontal_collision: false,
             needs_sync: false,
             sync_position: false,
+            sync_velocity: false,
             stepped: true,
             idle: false,
             bare: false,
@@ -4648,7 +4677,11 @@ impl Game<'_> {
                     false,
                     super::explosion::ExplosionSource::default()
                         .with_silence(self.entity_silent(c.id))
-                        .with_entity(c.id, "minecraft:end_crystal"),
+                        .with_entity(
+                            c.id,
+                            "minecraft:end_crystal",
+                            sunrise_client::health::DirectEntity::Other,
+                        ),
                 );
             }
         }
@@ -5097,9 +5130,6 @@ impl Game<'_> {
 
 #[path = "dragon/crystal.rs"]
 mod crystal;
-#[path = "dragon/death_render.rs"]
-mod death_render;
-use death_render::{dissolve_color, dissolve_mask};
 
 #[cfg(test)]
 mod tests {
@@ -6397,6 +6427,34 @@ mod tests {
         let hurt = d.hurt(level, 0, 5.0, HIT, false);
         assert_eq!(hurt, Hurt::Landed { full: true });
         assert_eq!(d.hurt_time, 10);
+    }
+
+    #[test]
+    fn the_strafe_firing_angle_matches_vanillas_floats() {
+        // `(float)(Math.acos(dot) * (180.0F / (float)Math.PI)) + 0.5F` on a JDK: dots at
+        // and around cos(10°) cross the [0, 10) gate on single ulps.
+        for (dot, angle) in [
+            (0x3f80_0000, 0x3f00_0000), // 1.0 -> 0.5
+            (0x3f7f_be77, 0x4044_00b1), // 0.999 -> 3.0625422
+            (0x3f7c_1c5f, 0x4127_ffca), // over the gate -> 10.4999485
+            (0x3f7c_1c5d, 0x4127_fff3), // under it -> 10.499988
+            (0x3f7c_1c5c, 0x4128_0007), // -> 10.500007
+            (0x3f7c_1bda, 0x4128_0a80), // -> 10.502563
+            (0x3f7c_28f6, 0x4126_fb56), // -> 10.436361
+            (0x3f7a_e148, 0x413f_a742), // 0.98 -> 11.978334
+            (0x3f00_0000, 0x4271_ffff), // 0.5 -> 60.499996
+            (0x0000_0000, 0x42b4_ffff), // 0.0 -> 90.49999
+            (0xbf80_0000, 0x4334_7fff), // -1.0 -> 180.49998
+        ] {
+            assert_eq!(
+                strafe_angle(f32::from_bits(dot)),
+                f32::from_bits(angle),
+                "dot {dot:#010x}"
+            );
+        }
+        // Past 1.0 or NaN, `Math.acos` is NaN and the gate refuses, as vanilla's does.
+        assert!(strafe_angle(f32::from_bits(0x3f80_0001)).is_nan());
+        assert!(strafe_angle(f32::NAN).is_nan());
     }
 
     #[test]

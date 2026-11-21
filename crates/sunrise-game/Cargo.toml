@@ -38,7 +38,6 @@ rng-trace = ["sunrise-client/rng-trace"]
 system-allocator = ["sunrise-client/system-allocator"]
 alloc-census = ["sunrise-client/alloc-census"]
 alloc-count = ["sunrise-client/alloc-count"]
-windows-mimalloc = ["sunrise-client/windows-mimalloc"]
 windows-segment-heap = ["sunrise-client/windows-segment-heap"]
 
 [build-dependencies]

@@ -13,7 +13,6 @@ pub trait Hooks {
     /// counts. Zero crossings post container_open/container_close game events:
     /// the opening or closing player is the source, none on a recheck.
     /// Server-side; open/close runs with the player's state in place.
-    /// Named injections request `hook_version = 2`.
     #[notes = "Version 2 follows ContainerOpenersCounter: synchronous open/close, five-tick rechecks, and game events on zero crossings instead of a per-tick recount."]
     #[hook(
         side = "server",

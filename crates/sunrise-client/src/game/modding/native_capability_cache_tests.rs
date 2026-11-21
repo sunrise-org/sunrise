@@ -34,10 +34,10 @@ impl ResourceHandler<ItemResource> for Empty {
     fn amount(&self, _: &mut dyn ServerHost, _: usize) -> u32 {
         0
     }
-    fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: &ItemResource) -> u32 {
+    fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: Option<&ItemResource>) -> u32 {
         0
     }
-    fn insert(
+    fn insert_at(
         &self,
         _: &mut dyn ServerHost,
         _: &Transaction,
@@ -47,7 +47,7 @@ impl ResourceHandler<ItemResource> for Empty {
     ) -> u32 {
         0
     }
-    fn extract(
+    fn extract_at(
         &self,
         _: &mut dyn ServerHost,
         _: &Transaction,
@@ -404,8 +404,15 @@ fn moves_through_kept_handlers_conserve_every_item_when_some_abort() {
                 let sink = to.get(game).expect("the sink chest answers");
                 let abort = round.is_multiple_of(3);
                 let result = (game as &mut dyn ServerHost).transaction(|host, tx| {
-                    let n = mod_api::move_resources(host, source, sink, |_| true, 7, tx)
-                        .map_err(|_| 0u32)?;
+                    let n = mod_api::resource_util::move_resources(
+                        host,
+                        source,
+                        sink,
+                        |_| true,
+                        7,
+                        Some(tx),
+                    )
+                    .map_err(|_| 0u32)?;
                     if abort && n > 0 { Err(n) } else { Ok(n) }
                 });
                 match result {

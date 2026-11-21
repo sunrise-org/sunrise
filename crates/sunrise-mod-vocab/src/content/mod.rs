@@ -22,3 +22,4 @@ pub(crate) mod professions;
 pub(crate) mod registry_entry;
 pub(crate) mod registry_keys;
 pub(crate) mod resource;
+pub mod resource_util;

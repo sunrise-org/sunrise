@@ -29,8 +29,7 @@ pub trait Hooks {
   settings and mod list as they were at its last resource load (start or `/reload`). A provider is shared by the
   workers, so it keeps no mutable state; the same seed must give the same ground.
 - **Answers.** A state the game's registry doesn't have stops the tree feature, as an invalid state in a data pack
-  does. A wasm mod's hook and provider calls run one at a time for the mod's group: a wasm listener serialises the
-  workers that decorate trees with this decorator.
+  does.
 - **Cost.** With no listener the decorator pays one subscription check per decorated tree and allocates nothing.
   With a listener, one event per tree; a mod's provider is asked per position instead of the decorator's."#]
     #[hook(

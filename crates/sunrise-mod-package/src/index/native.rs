@@ -65,6 +65,7 @@ impl Bundle {
                 None => format!("native-1/{}", native.sunrise),
             },
             game: Some(native.game.clone()),
+            sunrise_pin: Some(native.sunrise.clone()),
             dependencies: super::manifest_dependencies(&self.manifest),
             ..Facts::default()
         }

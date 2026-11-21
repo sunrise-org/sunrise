@@ -44,20 +44,18 @@ impl Game<'_> {
                 sets.insert(key.to_owned(), items);
             }
         }
-        let tags = self.native_tag_items().and_then(|items| {
-            // A packet can install other registries without supplying any item tags.
-            if self.options.execution_role.is_client() && !self.remote.as_ref()?.has_item_tags {
-                return None;
-            }
-            // Match the registry that binds ItemKeys, not the raw pack entries: absent
-            // optional names must not count as members or leave gaps in their indices.
-            let registry: HashSet<&str> = self
-                .items()
-                .registry_order
-                .iter()
-                .map(AsRef::as_ref)
-                .collect();
-            Some(
+        let tags = self
+            .native_tag_items()
+            .filter(|items| items.tags_loaded(sunrise_items::items::TagRegistry::Item))
+            .map(|items| {
+                // Match the registry that binds ItemKeys, not the raw pack entries: absent
+                // optional names must not count as members or leave gaps in their indices.
+                let registry: HashSet<&str> = self
+                    .items()
+                    .registry_order
+                    .iter()
+                    .map(AsRef::as_ref)
+                    .collect();
                 items
                     .item_tag_order
                     .iter()
@@ -69,9 +67,8 @@ impl Game<'_> {
                             .collect();
                         (tag.clone(), ordered)
                     })
-                    .collect(),
-            )
-        });
+                    .collect()
+            });
         let context = Arc::make_mut(&mut self.loop_context);
         context.set_recipe_properties(Arc::new(sets));
         context.set_item_tags(tags);

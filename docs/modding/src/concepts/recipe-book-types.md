@@ -2,7 +2,6 @@
 
 Register a custom recipe book during shared mod registration. Its namespaced ID is
 its stable identity for menus, per-player state, and negotiated synchronization.
-Native and wasm mods use the same registrar and persistence rules.
 
 `recipe_book_type("example:cooking")` saves the book's open and craftable-only
 filtering flags in the engine's `sunrise:book_settings` compound inside the

@@ -26,10 +26,10 @@ mod test_resources;
 pub use sunrise_client_render::{
     assets, atlas_sources, audio, auth, autotune, ban_notice, bidi, biome, block_edit,
     block_entities, block_entity_anim, block_entity_render, block_sprites, block_states, bluemap,
-    bluemap_detect, border_render, breaking, brewing, camera, chat, chunk, chunk_map, cit,
-    cit_armor, cit_assets, cit_glint, client_resources, clouds, collisions, columns, command_block,
-    containers, controller_ui, crash, custom_sky, datapack, dynamic_light, dynamic_resolution,
-    effects, environment, extras, fast_hash, fluid_models, fluid_render, fog, font, gfx, graphics,
+    border_render, breaking, brewing, camera, chat, chunk, chunk_map, cit, cit_armor, cit_assets,
+    cit_glint, client_resources, clouds, collisions, columns, command_block, containers,
+    controller_ui, crash, custom_sky, datapack, dynamic_light, dynamic_resolution, effects,
+    environment, extras, fast_hash, fluid_models, fluid_render, fog, font, gfx, graphics,
     graphics_style, graphics_ui, hdr_calibration, hud, hud_kit, hud_layout, hud_overlays,
     inventory_effects, java_text, jigsaw_block, json_folder, level_loading, light, lod, logging,
     mark_sprite, menu_blur, menu_style, mesher, mipmap, mod_browser, mod_chunk_tickets, mod_list,
@@ -189,6 +189,7 @@ pub mod tick_chunk_membership;
 pub mod ticket_levels;
 pub mod title;
 pub mod toasts;
+pub mod travel_gate;
 pub mod ui_theme;
 pub mod vanillagen;
 pub mod viewed_levels_net;

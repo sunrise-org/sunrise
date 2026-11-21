@@ -132,19 +132,336 @@ fn events(heard: &Arc<Mutex<Heard>>) -> Vec<String> {
 fn two_entities_are_asked_in_the_draw_queues_order() {
     let heard = Arc::default();
     with_pair(&heard, |game| {
+        game.pack_ids = Some(Default::default());
         game.mobs.push(mob(game, "minecraft:zombie", 91, 0.0));
+        admit_own_player(game, false);
         game.mobs.push(mob(game, "minecraft:cow", 92, 2.0));
-        let out = mob_frame(game);
+        let (out, ..) = game.entity_geometry(CAMERA, 1.0, None, Vec::new(), &mut Vec::new());
         assert_eq!(
             events(&heard),
             [
                 "living_pre 91",
                 "living_post 91",
+                "player_pre true",
+                "living_pre 4321",
+                "living_post 4321",
+                "player_post true",
                 "living_pre 92",
                 "living_post 92"
             ]
         );
-        assert_eq!(markers(&out), 8, "each pre hook's marker is kept");
+        assert_eq!(markers(&out), 12, "each pre hook's marker is kept");
+        let motion = game.entity_motion.borrow();
+        let tracked: Vec<_> = motion.iter().copied().filter(|&(_, id)| id != 0).collect();
+        assert_eq!(
+            tracked.iter().map(|&(_, id)| id).collect::<Vec<_>>(),
+            [(1 << 32) | 91, Game::MOTION_OWN_PLAYER, (1 << 32) | 92]
+        );
+        assert!(tracked[0].0 < tracked[1].0 && tracked[1].0 < tracked[2].0);
+        let spans = game.entity_spans.borrow();
+        let local = spans.iter().find(|span| span.player).unwrap();
+        assert_eq!(local.start, tracked[1].0);
+        assert!(!local.hidden);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_spectator_following_an_entity_submits_no_local_body() {
+    use sunrise_client::{camera::CameraType, command::args::GameMode};
+    use sunrise_protocol::packets::play::{Clientbound, SetCamera};
+
+    let heard = Arc::default();
+    with_pair(&heard, |game| {
+        let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();
+        game.connect_local(pipe, "Steve").unwrap();
+        admit_own_player(game, true);
+        game.mode = GameMode::Spectator;
+        game.mobs.push(mob(game, "minecraft:zombie", 91, 0.0));
+        game.handle_packet(Clientbound::SetCamera(SetCamera { camera_id: 91 }))
+            .unwrap();
+        assert!(!game.controls_camera());
+
+        // First test the third-person body, then the separate first-person shadow route.
+        // Native shadows can take a spectator model, so this exercises the camera guard.
+        for (camera, player_shadow) in [
+            (CameraType::ThirdPersonBack, false),
+            (CameraType::FirstPerson, true),
+        ] {
+            game.camera_type = camera;
+            game.occlusion.shadow_casters.1 = player_shadow;
+            game.entity_geometry(CAMERA, 1.0, None, Vec::new(), &mut Vec::new());
+            assert!(
+                !game
+                    .entity_runs
+                    .iter()
+                    .any(|run| run.family == super::entity::DrawFamily::LocalPlayer)
+            );
+            assert!(!events(&heard).iter().any(|event| matches!(
+                event.as_str(),
+                "player_pre true" | "player_post true" | "living_pre 4321" | "living_post 4321"
+            )));
+        }
+    });
+}
+
+pub(super) struct BodyWitness {
+    pub(super) id: u32,
+    pub(super) vertices: std::ops::Range<usize>,
+}
+
+thread_local! {
+    // The new body families do not need motion-history buffers. Observe them only in tests,
+    // after the mesh is emitted, keyed by the same vertex offsets as existing body marks.
+    static BODY_WITNESSES: std::cell::RefCell<Option<Vec<BodyWitness>>> = const { std::cell::RefCell::new(None) };
+}
+
+pub(super) fn witness_body(id: u32, start: usize, end: usize) {
+    if start < end {
+        BODY_WITNESSES.with_borrow_mut(|witnesses| {
+            if let Some(witnesses) = witnesses {
+                witnesses.push(BodyWitness {
+                    id,
+                    vertices: start..end,
+                });
+            }
+        });
+    }
+}
+
+pub(super) fn capture_body_witnesses<T>(draw: impl FnOnce() -> T) -> (T, Vec<BodyWitness>) {
+    BODY_WITNESSES.with_borrow_mut(|witnesses| *witnesses = Some(Vec::new()));
+    let output = draw();
+    let witnesses = BODY_WITNESSES.with_borrow_mut(|witnesses| witnesses.take().unwrap());
+    (output, witnesses)
+}
+
+pub(super) fn submitted_bodies<T>(
+    game: &mut Game<'_>,
+    draw: impl FnOnce(&mut Game<'_>) -> T,
+) -> (T, Vec<u32>) {
+    let (output, witnesses) = capture_body_witnesses(|| draw(game));
+    let mut bodies: Vec<_> = witnesses
+        .into_iter()
+        .map(|w| (w.vertices.start as u32, w.id))
+        .collect();
+    bodies.extend(game.entity_motion.borrow().windows(2).filter_map(|marks| {
+        let (start, id) = marks[0];
+        (id != 0 && start < marks[1].0).then(|| {
+            let id = if id == Game::MOTION_OWN_PLAYER {
+                game.own_entity_id() as u32
+            } else {
+                id as u32
+            };
+            (start, id)
+        })
+    }));
+    bodies.sort_unstable_by_key(|&(start, _)| start);
+    (output, bodies.into_iter().map(|(_, id)| id).collect())
+}
+
+/// Exercise the real packet and draw paths; the parity harness reads the same scene
+/// and compares these submitted body IDs with the vanilla renderer's dispatch order.
+#[test]
+#[ignore = "daily"]
+fn entity_draw_order_after_client_packets() {
+    use sunrise_client::camera::CameraType;
+    use sunrise_protocol::{
+        entity_data::{
+            ITEM_ENTITY_ITEM, Value,
+            serializer::{ITEM_STACK, OPTIONAL_BLOCK_POS},
+        },
+        item::Stack,
+        packets::play::{self, Clientbound as C},
+    };
+
+    super::native_entity_refs::tests::with_client_game(|game| {
+        let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();
+        game.connect_local(pipe, "Steve").unwrap();
+        let builtin = game.remote.as_ref().unwrap().builtin.clone();
+        let types = builtin.get("minecraft:entity_type").unwrap();
+        let stone = builtin
+            .get("minecraft:item")
+            .unwrap()
+            .id("minecraft:stone")
+            .unwrap();
+        let spawn = play::SpawnInfo {
+            dimension_type: 0,
+            dimension: "minecraft:overworld".into(),
+            seed: 1,
+            game_type: 0,
+            previous_game_type: None,
+            debug: false,
+            flat: false,
+            last_death: None,
+            portal_cooldown: 0,
+            sea_level: 63,
+        };
+        game.pack_ids = Some(super::shader_packs::PackIds::with_entity_ids([
+            ("minecraft:ender_dragon", 101),
+            ("minecraft:end_crystal", 102),
+        ]));
+        let mut snapshots = Vec::new();
+        let mut check_beams = false;
+        for line in include_str!("entity-draw-order.txt").lines() {
+            let words: Vec<_> = line.split_whitespace().collect();
+            let packet = match words.as_slice() {
+                ["login", id] => C::Login(play::Login {
+                    player_id: id.parse().unwrap(),
+                    hardcore: false,
+                    levels: vec![spawn.dimension.clone()],
+                    max_players: 20,
+                    chunk_radius: 8,
+                    simulation_distance: 8,
+                    reduced_debug_info: false,
+                    show_death_screen: true,
+                    limited_crafting: false,
+                    spawn: spawn.clone(),
+                    online_mode: false,
+                    enforces_secure_chat: false,
+                }),
+                ["respawn", dimension @ ..] => C::Respawn(play::Respawn {
+                    spawn: play::SpawnInfo {
+                        dimension: dimension
+                            .first()
+                            .map_or_else(|| spawn.dimension.clone(), |key| (*key).into()),
+                        ..spawn.clone()
+                    },
+                    keep: 0,
+                }),
+                ["beams", crystal] => {
+                    let id: u32 = crystal.parse().unwrap();
+                    let index = game.crystals.iter().position(|c| c.id == id).unwrap();
+                    game.dragon
+                        .as_mut()
+                        .unwrap()
+                        .set_render_test_crystal(Some(index));
+                    check_beams = true;
+                    C::SetEntityData(play::SetEntityData {
+                        id: id as i32,
+                        values: vec![(8, OPTIONAL_BLOCK_POS, Value::OptPos(Some([3, 325, 3])))],
+                    })
+                }
+                ["add", id, kind] => {
+                    let id: i32 = id.parse().unwrap();
+                    C::AddEntity(play::AddEntity {
+                        id,
+                        uuid: id as u128,
+                        kind: types.id(kind).unwrap(),
+                        position: [id as f64 % 5.0, 321.0, 0.5],
+                        velocity: [0.0; 3],
+                        pitch: 0,
+                        yaw: 0,
+                        head_yaw: 0,
+                        data: 0,
+                    })
+                }
+                ["item", id] => C::SetEntityData(play::SetEntityData {
+                    id: id.parse().unwrap(),
+                    values: vec![(
+                        ITEM_ENTITY_ITEM,
+                        ITEM_STACK,
+                        Value::Item(Some(Stack::new(stone, 1))),
+                    )],
+                }),
+                ["remove", ids @ ..] => C::RemoveEntities(play::RemoveEntities {
+                    ids: ids.iter().map(|id| id.parse().unwrap()).collect(),
+                }),
+                ["passengers", vehicle, passengers @ ..] => {
+                    let vehicle = vehicle.parse().unwrap();
+                    let passengers: Vec<i32> =
+                        passengers.iter().map(|id| id.parse().unwrap()).collect();
+                    game.handle_packet(C::SetPassengers(play::SetPassengers {
+                        vehicle,
+                        passengers: passengers.clone(),
+                    }))
+                    .unwrap();
+                    let remote = game.remote.as_ref().unwrap();
+                    assert_eq!(
+                        remote.passenger_seats(vehicle as u32).count(),
+                        passengers.len()
+                    );
+                    for id in passengers {
+                        assert_eq!(remote.passenger_vehicle(id as u32), Some(vehicle as u32));
+                    }
+                    continue;
+                }
+                ["camera", camera_id] => C::SetCamera(play::SetCamera {
+                    camera_id: camera_id.parse().unwrap(),
+                }),
+                ["position"] => C::PlayerPosition(play::PlayerPosition {
+                    teleport: 1,
+                    position: [0.5, 321.0, 0.5],
+                    delta: [0.0; 3],
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    relatives: 0,
+                }),
+                ["frame"] => {
+                    game.camera_type = CameraType::ThirdPersonBack;
+                    game.tick_player_model();
+                    let ((vertices, ..), ids) = submitted_bodies(game, |game| {
+                        game.entity_geometry(
+                            glam::DVec3::new(0.5, 321.0, -4.5),
+                            1.0,
+                            None,
+                            Vec::new(),
+                            &mut Vec::new(),
+                        )
+                    });
+                    if std::mem::take(&mut check_beams) {
+                        let spans = game.entity_spans.borrow();
+                        let entities = sunrise_shaders::render_stage("ENTITIES");
+                        let none = sunrise_shaders::render_stage("NONE");
+                        let beams: Vec<_> = spans
+                            .windows(3)
+                            .filter_map(|w| {
+                                let [body, beam, next] = w else {
+                                    unreachable!()
+                                };
+                                let mesh = &vertices[beam.start as usize..next.start as usize];
+                                (!mesh.is_empty() && mesh.iter().all(|v| v.layer & 0xffff == 6))
+                                    .then_some((body, beam))
+                            })
+                            .collect();
+                        assert_eq!(beams.len(), 2);
+                        for ((body, beam), pack_id) in beams.into_iter().zip([101, 102]) {
+                            assert_eq!((body.stage, body.id), (entities, pack_id));
+                            assert!(body.start < beam.start);
+                            assert_eq!(beam.stage, none);
+                        }
+                    }
+                    println!("entity-draw-order: {ids:?}");
+                    snapshots.push(ids);
+                    continue;
+                }
+                _ => panic!("unknown scene operation: {line}"),
+            };
+            game.handle_packet(packet).unwrap();
+        }
+        assert_eq!(
+            snapshots,
+            [
+                vec![4321, 91],
+                vec![91, 40, 4321, 3],
+                vec![4321, 3],
+                vec![4321, 3, 40, 91],
+                vec![4321, 3, 91, 40],
+                vec![4321, 91, 40, 3],
+                vec![4321, 91, 40, 3],
+                vec![4321, 91, 40, 3],
+                vec![91, 40, 3],
+                vec![4321, 91, 40, 3],
+                vec![4321, 91, 40, 3, 7, 8, 9],
+                vec![4321, 91, 40, 3, 8, 9, 7],
+                vec![4321, 23, 82, 110, 20],
+                vec![4321, 23, 82, 110, 20],
+                vec![4321, 82, 110, 20, 23],
+                vec![4321, 82, 23, 110, 20],
+                vec![4321],
+                vec![4321, 110, 23],
+            ]
+        );
     });
 }
 
@@ -207,19 +524,24 @@ fn a_culled_entity_is_asked_neither_hook() {
     });
 }
 
-/// This window's player in third person, drawn by the game's own path for it, with its own entity
-/// id 4321; spectating when `spectator`.
-fn own_player_frame(game: &mut Game<'_>, spectator: bool) -> Vec<Vertex> {
+/// Admit this window's player in third person with entity id 4321.
+fn admit_own_player(game: &mut Game<'_>, spectator: bool) {
     let at = sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5);
     let mut player = sunrise_client::motion::PlayerMotion::new(game.motion, at).unwrap();
     player.entity_id = 4321;
     game.player = Some(player);
+    game.previous_position = at;
     if let Some(remote) = game.remote.as_mut() {
         remote.entity_id = 4321;
     }
     game.camera_type = sunrise_client::camera::CameraType::ThirdPersonBack;
+    game.resident_entities.local_player.renew();
     game.tick_player_model();
     game.player_model.as_mut().unwrap().extra.spectator = spectator;
+}
+
+fn own_player_frame(game: &mut Game<'_>, spectator: bool) -> Vec<Vertex> {
+    admit_own_player(game, spectator);
     game.prepare_entity_culling();
     let mut out = Vec::new();
     game.player_model_geometry(CAMERA, 1.0, &mut out);

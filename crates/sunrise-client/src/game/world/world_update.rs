@@ -14,7 +14,6 @@ impl Game<'_> {
         self.lod_source_attempted = false;
         self.lod_observe.clear();
         self.lod_blue_map = None;
-        self.far_beacons.clear();
         self.lod_covered_at = None;
         if let Some(renderer) = &mut self.renderer {
             renderer.clear_lods();
@@ -74,26 +73,18 @@ impl Game<'_> {
                 let root = home.join("server-terrain");
                 let dir = terrain::level_dir(&root, address, remote.hashed_seed, &remote.level);
                 self.lod_level = Some(remote.level.clone());
-                // Past them, the server's BlueMap, if the player named it or
-                // lets Sunrise look for it (on the BlueMap worker).
+                // Past them, the server's BlueMap, if the player named it.
                 let maps = root.join(terrain::server_folder(address)).join("BlueMap");
                 let settings = &self.settings.sunrise.blue_map;
-                let blue_map = sunrise_client::bluemap_detect::source(
-                    settings,
-                    address,
-                    &maps,
-                    std::time::SystemTime::now(),
-                )
-                .map(|source| {
-                    use sunrise_client::{bluemap, bluemap_detect::Source};
+                let blue_map = settings.server(address).map(|server| {
+                    use sunrise_client::bluemap;
                     // The map's address only at debug: logs land in crash reports.
                     log::info!("Sunrise: far terrain also draws {}'s BlueMap", remote.level);
-                    if let Source::Url { url, .. } = &source {
-                        log::debug!("Sunrise: BlueMap at {url}");
-                    }
-                    let map = Arc::new(bluemap::BlueMap::from_source(
-                        source,
+                    log::debug!("Sunrise: BlueMap at {}", server.url);
+                    let map = Arc::new(bluemap::BlueMap::new(
+                        &server.url,
                         &remote.level,
+                        server.maps.clone(),
                         maps,
                         settings.radius_blocks(),
                         bluemap::Palette::from_game(self.pack.assets.registry, self.res.biomes()),
@@ -102,35 +93,7 @@ impl Game<'_> {
                     map
                 });
                 self.lod_blue_map = blue_map.clone();
-                // And the player's Bobby cache of the level, only read.
-                let bobby = terrain::bobby_level_dir(
-                    &terrain::minecraft_dir().join(".bobby"),
-                    address,
-                    remote.hashed_seed,
-                    &remote.level,
-                )
-                .map(|bobby| {
-                    log::info!(
-                        "Sunrise: far terrain also reads Bobby's chunks of {}",
-                        remote.level
-                    );
-                    let registry = self.pack.assets.registry;
-                    let biomes = self.res.biomes().clone();
-                    let dimension = &remote.dimension;
-                    let layout = sunrise_client::chunk::ColumnLayout::of_level(
-                        dimension.min_y,
-                        dimension.height,
-                    );
-                    let sky_light = dimension.has_skylight;
-                    let decode: terrain::DecodeChunk =
-                        Box::new(move |root: &sunrise_core::nbt::NamedTag| {
-                            sunrise_client::save::decode_lit(
-                                root, registry, &biomes, layout, sky_light,
-                            )
-                        });
-                    terrain::Bobby::new(bobby, decode, self.res.facts())
-                });
-                terrain::ServerTerrain::with_bobby(dir, blue_map, bobby) as _
+                terrain::ServerTerrain::new(dir, blue_map) as _
             }),
             _ => Some(self.streaming.lod_source()),
         };
@@ -220,6 +183,8 @@ impl Game<'_> {
         let (uploads, unloaded) = sunrise_client::spans::time("streaming", || {
             self.streaming.complete_commit(&mut self.world, commit)
         });
+        // Sections chosen to mesh wait for the mods' `section_visibility` (none without a mod).
+        self.prepare_section_visibility();
         self.streaming.extra.truncate(areas);
         // The viewed levels' meshing, queued after the player's level's (nothing while no view
         // names one).
@@ -264,7 +229,7 @@ impl Game<'_> {
         }
         if let Some(lod) = &mut self.lod {
             self.lod_observe
-                .extend(uploads.iter().map(|(key, _)| (key.0, key.2)));
+                .extend(uploads.iter().map(|upload| (upload.key.0, upload.key.2)));
             for chunk in &unloaded {
                 self.lod_observe.remove(&(chunk.x, chunk.z));
             }
@@ -339,8 +304,10 @@ impl Game<'_> {
             if !budgeted && self.pending_uploads.is_empty() && uploads.len() <= AUTO_UPLOADS_AT_ONCE
             {
                 sunrise_client::spans::time("upload", || {
-                    for (key, mesh) in &uploads {
-                        renderer.upload(*key, mesh);
+                    for upload in &uploads {
+                        if self.streaming.can_publish_mesh(&self.world, upload) {
+                            renderer.upload(upload.key, &upload.mesh);
+                        }
                     }
                 });
                 self.streaming.free(uploads);
@@ -351,14 +318,18 @@ impl Game<'_> {
                 // chunks no longer loaded are dropped.
                 let pending = &mut self.pending_uploads;
                 let fresh: sunrise_client::fast_hash::FxHashSet<(i32, i32, i32)> =
-                    uploads.iter().map(|(k, _)| *k).collect();
-                let chunks = &self.world.chunks;
-                let loaded = |k: &(i32, i32, i32)| chunks.contains_key(&(k.0, k.2));
+                    uploads.iter().map(|upload| upload.key).collect();
+                let current = |upload: &sunrise_client::streaming::MeshUpload| {
+                    self.world
+                        .chunks
+                        .contains_key(&(upload.key.0, upload.key.2))
+                        && self.streaming.can_publish_mesh(&self.world, upload)
+                };
                 let mut spent: Vec<_> = pending
-                    .extract_if(.., |(k, _)| fresh.contains(k) || !loaded(k))
+                    .extract_if(.., |upload| fresh.contains(&upload.key) || !current(upload))
                     .collect();
                 for upload in uploads {
-                    if loaded(&upload.0) {
+                    if current(&upload) {
                         pending.push(upload);
                     } else {
                         spent.push(upload);
@@ -374,7 +345,7 @@ impl Game<'_> {
                 let far = |k: &(i32, i32, i32)| {
                     (k.0 - centre.0).pow(2) + (k.1 - cam_y).pow(2) + (k.2 - centre.1).pow(2)
                 };
-                pending.sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
+                pending.sort_unstable_by_key(|upload| std::cmp::Reverse(far(&upload.key)));
                 let (limit, budget) = if budgeted {
                     (
                         g.chunk_updates as usize,
@@ -391,7 +362,8 @@ impl Game<'_> {
                 let auto = (!budgeted).then(|| self.upload_pace.budget(pending.len(), arriving));
                 let started = Instant::now();
                 let upload_span = sunrise_client::spans::guard("upload_queue");
-                while let Some((_, mesh)) = pending.last() {
+                while let Some(upload) = pending.last() {
+                    let mesh = &upload.mesh;
                     if auto.is_some_and(|time| count > 0 && started.elapsed() >= time) {
                         break;
                     }
@@ -403,9 +375,9 @@ impl Game<'_> {
                     {
                         break;
                     }
-                    let (key, mesh) = pending.pop().expect("checked above");
-                    renderer.upload(key, &mesh);
-                    spent.push((key, mesh));
+                    let upload = pending.pop().expect("checked above");
+                    renderer.upload(upload.key, &upload.mesh);
+                    spent.push(upload);
                     count += 1;
                     bytes += size;
                 }

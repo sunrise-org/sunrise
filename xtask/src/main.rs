@@ -38,7 +38,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: cargo run -p xtask -- package BINARY OUTDIR | package-server ENGINE OUTDIR | mod-api [notes|counterparts|coverage] | tokens | icons | perf-wasm | mixins-tool release | mixins-tool patch SOURCE | mixins-tool identity TARGET | sdk-index DIST COMMIT DATE [--nightly NAME] [--previous BUILD DIFF]";
+const USAGE: &str = "usage: cargo run -p xtask -- package BINARY OUTDIR | package-server ENGINE OUTDIR | mod-api [notes|counterparts] | tokens | icons | perf-wasm | mixins-tool release | mixins-tool patch SOURCE | mixins-tool identity TARGET | sdk-index DIST COMMIT DATE [--nightly NAME] [--previous BUILD DIFF]";
 
 /// What the release folder takes from the repository at HEAD, as `git archive` writes it.
 const ARCHIVED: [&str; 6] = [
@@ -50,10 +50,7 @@ const ARCHIVED: [&str; 6] = [
     "LICENSES/MIT-Horizon.txt",
 ];
 
-// The programs that sit beside the client (sunrise-ctl, the command line and MCP server that play
-// the game; sunrise-perf, which reads the game's .hzperf performance captures; sunrise-prepare, which prepares the resources from the player's own Minecraft;
-// sunrise-server, which hosts a server with the client as its engine, docs/server.md) and the
-// wasm runtime are listed, with the checkout's exporters, in the SDK's required inputs
+// The release's companion programs and exporters come from the SDK's required inputs
 // (`sunrise_mod_package::sdk::inputs`): routes `package` and `package-server`.
 
 fn main() -> ExitCode {
@@ -68,7 +65,6 @@ fn main() -> ExitCode {
         [task, counterparts] if task == "mod-api" && counterparts == "counterparts" => {
             mod_api::counterparts()
         }
-        [task, coverage] if task == "mod-api" && coverage == "coverage" => mod_api::coverage(),
         [task, dist, commit, date, options @ ..] if task == "sdk-index" => {
             sdk_index(Path::new(dist), commit, date, options)
         }
@@ -443,8 +439,7 @@ fn program_name(program: &Path, name: &str) -> String {
     }
 }
 
-/// Copies the files `route` needs beside `program` (its companion programs and the wasm
-/// runtime) into `out`.
+/// Copies the files `route` needs beside `program` (its companion programs) into `out`.
 fn copy_runtime(route: &str, program: &Path, out: &Path) -> Result<(), String> {
     let inputs = sunrise_mod_package::sdk::inputs();
     let route = inputs.route(route).map_err(|e| e.to_string())?;
@@ -691,7 +686,6 @@ mod tests {
             "sunrise-client",
             "sunrise-ctl",
             "sunrise-perf",
-            "sunrise-prepare",
             "sunrise-server",
             "sunrise-port-pack",
         ] {
@@ -701,7 +695,7 @@ mod tests {
         fs::create_dir_all(&out).unwrap();
         fs::write(out.join("kept"), b"").unwrap();
         let error = package(&bin.join("sunrise-client"), &out).unwrap_err();
-        assert!(error.contains("sunrise-wasm-std.wasm"), "{error}");
+        assert!(error.contains("sunrise-prepare"), "{error}");
         assert!(!error.contains("sunrise-ctl,"), "{error}");
         assert!(
             out.join("kept").is_file(),

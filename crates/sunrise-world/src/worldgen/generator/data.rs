@@ -466,20 +466,6 @@ impl GeneratorData {
         &self.states
     }
     /// Biome identifiers in registry (identifier-sorted) order.
-    pub fn configured_feature_json(&self, name: &str) -> Option<&str> {
-        self.feature_resources
-            .as_ref()?
-            .features
-            .get(name)
-            .map(String::as_str)
-    }
-    pub fn placed_feature_json(&self, name: &str) -> Option<&str> {
-        self.feature_resources
-            .as_ref()?
-            .placed
-            .get(name)
-            .map(String::as_str)
-    }
     pub fn biome_names(&self) -> &[Arc<str>] {
         &self.biome_names
     }

@@ -10,6 +10,7 @@ impl Game<'_> {
         let weather = self.can_have_weather();
         let player = self.player_view();
         MobWorld {
+            side: self,
             mob_maps: self.mob_maps(),
             section_writer: None,
             professions: self.stations().professions.as_ref(),
@@ -31,6 +32,7 @@ impl Game<'_> {
             others,
             live_mobs: None,
             dragon: self.dragon_target(),
+            armor_stands: &self.armor_stands,
             leash_boats: &self.leash_boats,
             others_grid: None,
             others_index: None,

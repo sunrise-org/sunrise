@@ -90,6 +90,21 @@ class Budgets(unittest.TestCase):
         self.assertIn('1 classified panic reasons; 0 identities withheld; 0 locations withheld; '
                       '1 payloads withheld', log)
 
+    def test_a_shown_panic_message_allows_bounded_rustc_codes_not_diagnostic_text(self):
+        with patch.object(ci, 'tracked_rust_paths', return_value={'crates/example.rs'}), \
+                patch.object(ci, 'source_lines', return_value=['assert!(ok, "fixture did not compile");']):
+            log = self.render(
+                "thread 'generated' panicked at crates/example.rs:1:1:\nfixture did not compile\n"
+                "error[E0433]: PRIVATE\n  --> /hidden/path.rs:2:1\nerror[E0433]: duplicate\n"
+                "error[E0308]: mismatched types\nerror[E0425]: missing name\nerror[E0599]: beyond the bound\n"
+                "test generated ... FAILED\n"
+                "thread 'other' panicked at crates/example.rs:1:1:\nunrecognized panic\n"
+                "error[E0307]: unverified message\ntest other ... FAILED\n"
+            )
+        self.assertIn('compiler: rustc E0433, E0308, E0425 (diagnostic text withheld)', log)
+        for withheld in ('PRIVATE', '/hidden/path.rs', 'mismatched types', 'E0599', 'E0307'):
+            self.assertNotIn(withheld, log)
+
     def test_payloads_cannot_become_locations_or_numeric_operands(self):
         path = 'crates/sunrise-client/src/title/tests.rs'
         for payload in (f'{path}:109:5',

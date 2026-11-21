@@ -2,7 +2,6 @@ use super::*;
 
 /// Helpers for native mods, kept as stable as the hook points.
 // Native mods use these; nothing in Sunrise does.
-#[allow(dead_code)]
 impl Game<'_> {
     /// A snapshot of the current graphics preferences.
     pub(in crate::game) fn graphics_options(&self) -> ClientGraphicsOptions {

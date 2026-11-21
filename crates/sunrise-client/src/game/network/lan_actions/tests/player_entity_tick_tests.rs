@@ -9,12 +9,15 @@ use sunrise_core::geometry::Vec3;
 
 /// A listener's calls, in order: the phase and the entities told.
 type Heard = Arc<Mutex<Vec<(&'static str, Vec<u32>)>>>;
+type PostPositions = Arc<Mutex<Vec<(u32, [f64; 3])>>>;
 
 /// Hears every entity tick; its Pre cancels `cancel`'s. Names players and pigs when `named`.
 struct Players {
     named: bool,
     cancel: Arc<Mutex<Option<u32>>>,
     heard: Heard,
+    rider_immunity_at_pre: Option<i32>,
+    post_positions: PostPositions,
 }
 
 #[mod_api::__subscriptions]
@@ -22,7 +25,7 @@ impl mod_api::Hooks for Players {
     fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
         event.listened = true;
     }
-    fn entity_tick_pre(&self, _: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
+    fn entity_tick_pre(&self, host: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
         self.heard
             .lock()
             .unwrap()
@@ -30,14 +33,28 @@ impl mod_api::Hooks for Players {
         if let Some(id) = *self.cancel.lock().unwrap()
             && event.entities.contains(&id)
         {
+            if let (Some(immunity), HostSide::Server(host)) = (self.rider_immunity_at_pre, host) {
+                assert_eq!(
+                    host.entity(id).unwrap().invulnerable_time(host),
+                    Some(immunity)
+                );
+            }
             event.canceled.push(id);
         }
     }
-    fn entity_tick_post(&self, _: HostSide<'_>, event: &mut mod_api::EntityTickPostEvent<'_>) {
+    fn entity_tick_post(&self, host: HostSide<'_>, event: &mut mod_api::EntityTickPostEvent<'_>) {
         self.heard
             .lock()
             .unwrap()
             .push(("post", event.entities.to_vec()));
+        if let HostSide::Server(host) = host {
+            self.post_positions.lock().unwrap().extend(
+                event
+                    .entities
+                    .iter()
+                    .filter_map(|&id| Some((id, host.entity(id)?.position(host)?))),
+            );
+        }
     }
     fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
         if self.named {
@@ -95,6 +112,8 @@ fn a_canceled_player_skips_its_server_player_tick_while_the_others_run_it() {
             named: false,
             cancel: cancel.clone(),
             heard: heard.clone(),
+            rider_immunity_at_pre: None,
+            post_positions: PostPositions::default(),
         }),
     )]
     .into();
@@ -135,12 +154,15 @@ fn a_canceled_player_skips_its_server_player_tick_while_the_others_run_it() {
 #[ignore = "daily"]
 fn a_player_riding_a_pig_is_told_its_own_tick_as_the_pig_is() {
     let (heard, cancel) = (Heard::default(), Arc::new(Mutex::new(None)));
+    let post_positions = PostPositions::default();
     let mods: Mods = vec![ModEntry::new(
         "player-ticks",
         Box::new(Players {
             named: true,
             cancel: cancel.clone(),
             heard: heard.clone(),
+            rider_immunity_at_pre: Some(7),
+            post_positions: post_positions.clone(),
         }),
     )]
     .into();
@@ -149,7 +171,7 @@ fn a_player_riding_a_pig_is_told_its_own_tick_as_the_pig_is() {
             let [rider, other] = far_chests(game, &cancel);
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             let at = game.lan.as_ref().unwrap().hub.guests[0].position;
-            let mut pig = Mob::new(90, kind, Vec3::new(at[0], at[1], at[2]), 0.0);
+            let mut pig = Mob::new(90, kind, Vec3::new(at[0] + 1.0, at[1], at[2]), 0.0);
             pig.no_ai = true;
             pig.no_gravity = true;
             pig.on_ground = true;
@@ -159,6 +181,10 @@ fn a_player_riding_a_pig_is_told_its_own_tick_as_the_pig_is() {
                 .unwrap()
                 .hub
                 .update_guest(12, |guest| guest.vehicle = Some(90));
+            game.as_guest(12, |game| {
+                game.player.as_mut().unwrap().health.invulnerable_time = 8
+            })
+            .unwrap();
             game.tick_creature_entities().unwrap();
             game.tick_guests();
             assert!(
@@ -175,6 +201,24 @@ fn a_player_riding_a_pig_is_told_its_own_tick_as_the_pig_is() {
                     ("pre", vec![other]),
                     ("post", vec![other]),
                 ]
+            );
+            let seated = game.lan.as_ref().unwrap().hub.guests[0].position;
+            assert_eq!(
+                seated[0],
+                at[0] + 1.0,
+                "a canceled rider follows its moving seat"
+            );
+
+            *cancel.lock().unwrap() = None;
+            game.mobs[0].position.x += 1.0;
+            game.tick_guests();
+            assert!(
+                post_positions.lock().unwrap().contains(&(rider, seated)),
+                "the rider's Post still sees the old seat position"
+            );
+            assert_eq!(
+                game.lan.as_ref().unwrap().hub.guests[0].position[0],
+                at[0] + 2.0
             );
         });
     });

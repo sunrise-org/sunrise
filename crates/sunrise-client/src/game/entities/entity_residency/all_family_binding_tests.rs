@@ -129,6 +129,8 @@ fn every_ordinary_resident_family_binds_its_actual_owned_slot() {
                 payload_version: 1,
                 payload_bytes: Vec::new(),
                 mount: None,
+                vehicle_order: 0,
+                boarding_cooldown: 0,
                 attachment_lifetime: Default::default(),
             });
         bind(game, 4242, Kind::General);

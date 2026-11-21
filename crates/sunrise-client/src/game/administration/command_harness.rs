@@ -562,6 +562,24 @@ impl Game<'_> {
                     out.push_str(&record.to_string());
                     out.push('\n');
                 }
+                "align_game_time" => {
+                    let target = op["target"]
+                        .as_i64()
+                        .ok_or("align_game_time: missing target")?;
+                    let current = self.harness_owner(|g| Ok(g.world.game_time))?;
+                    if current > target {
+                        return Err("align_game_time: target is in the past".into());
+                    }
+                    for _ in current..target {
+                        if Instant::now() > deadline {
+                            return Err("align_game_time: deadline exceeded".into());
+                        }
+                        self.tick_server(false)?;
+                    }
+                    if self.harness_owner(|g| Ok(g.world.game_time))? != target {
+                        return Err("align_game_time: ticks did not reach the target".into());
+                    }
+                }
                 "tick" => {
                     self.chat_capture = Some(Vec::new());
                     let paced_start = Instant::now();

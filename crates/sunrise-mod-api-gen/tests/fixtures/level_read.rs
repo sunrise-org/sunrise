@@ -33,6 +33,12 @@ struct ReadLevel {
 struct LevelTicks<'a> {
     level: &'a GameLevel,
 }
+impl LevelTicks<'_> {
+    // The proof mounts no preview layer, so the read falls through to the level.
+    fn previewed(&self, _: crate::BlockPos) -> Option<crate::registry::BlockStateId> {
+        None
+    }
+}
 impl crate::level::LevelAccess for GameLevel {
     fn block_state(&self, pos: crate::BlockPos) -> crate::registry::BlockStateId {
         self.world.block(pos.0[0], pos.0[1], pos.0[2])

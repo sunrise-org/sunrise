@@ -303,7 +303,7 @@ mod tests {
                         velocity: Vec3::ZERO,
                         value,
                         age: 0,
-                        on_ground: true,
+                        ground: sunrise_world::ground_support::GroundState::from_ground_flag(true),
                         count: 1,
                         fire_ticks: 0,
                         ticks,

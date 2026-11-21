@@ -150,7 +150,8 @@ impl Game<'_> {
             // The carried moves meet the colliders where they stand now.
             wave = wave.max(scratch.order[at].0);
             let now = self.placed_moving_colliders();
-            moving_colliders::in_level(now, || {
+            {
+                let _scope = moving_colliders::Scope::enter_level(self.collider_level(), now);
                 while at < scratch.order.len() && scratch.order[at].0 <= wave {
                     let collider = scratch.order[at].1;
                     let first = scratch.riders.partition_point(|r| r.support < collider);
@@ -167,7 +168,7 @@ impl Game<'_> {
                     );
                     at += 1;
                 }
-            });
+            }
             wave += 1;
         }
     }

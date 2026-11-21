@@ -26,16 +26,6 @@ pub(crate) enum NativeInventoryKind {
     Ender,
 }
 
-#[allow(dead_code)]
-impl NativeInventoryKind {
-    pub(crate) fn size(self) -> usize {
-        match self {
-            Self::Player => 41,
-            Self::Ender => 27,
-        }
-    }
-}
-
 /// A player's inventory as `native_inventory` read it: its slots, and
 /// whether it is the live one (the player is on the server) or their file's.
 #[allow(dead_code)]

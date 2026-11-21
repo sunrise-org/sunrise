@@ -7,7 +7,7 @@ pub(super) struct StaticEntityUniform {
     pub(super) camera_fraction: [f32; 4],
 }
 
-pub(super) struct GpuStaticEntitySection {
+pub(crate) struct GpuStaticEntitySection {
     pub(super) buffer: wgpu::Buffer,
     pub(super) origin_buffer: wgpu::Buffer,
     pub(super) origin: [i32; 3],

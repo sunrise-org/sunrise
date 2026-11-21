@@ -29,7 +29,7 @@ use sunrise_client::server_perf::{self, TickDetail, WorldCounts};
 use sunrise_client::spans::{self, Span};
 use sunrise_perf_format::{
     files,
-    v1::{BenchResult, StopReason, Trigger},
+    v1::{BenchResult, ClientSettings, StopReason, Trigger},
 };
 
 /// How often a progress notice is set again so the action bar keeps it until the work is done.
@@ -547,6 +547,19 @@ impl Game<'_> {
             || !self.profile.server_link.is_idle()
     }
 
+    /// The client options a capture records: what sets how much world it keeps and draws.
+    fn perf_client_settings(&self) -> ClientSettings {
+        let s = &self.settings;
+        ClientSettings {
+            view_distance: Some(s.render_distance.max(0) as u32),
+            loaded_view_distance: Some(self.streaming.radius.max(0) as u32),
+            simulation_distance: Some(s.simulation_distance.max(0) as u32),
+            far_terrain_distance: Some(self.lod_distance()),
+            far_terrain_active: Some(self.lod.is_some()),
+            graphics_preset: s.graphics_preset.clone(),
+        }
+    }
+
     fn start_profile(
         &mut self,
         side: Option<ProfileSide>,
@@ -571,6 +584,7 @@ impl Game<'_> {
             sunrise_client::telemetry::gpu_name().as_deref(),
         );
         start.mods = self.perf_mods();
+        start.client_settings = Some(self.perf_client_settings());
         let t = self.profile.perf.now();
         let path =
             self.profile

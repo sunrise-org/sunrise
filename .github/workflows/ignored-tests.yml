@@ -134,6 +134,8 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
           SUNRISE_DATA_LEG_TIMING: '1'
+          # The mesher and section-visibility tests read the prepared data from their own variable.
+          SUNRISE_MESH_TEST_RESOURCES: ${{ github.workspace }}/.local/sunrise-client/26.3
         run: |
           export SUNRISE_TEST_RESOURCES="$PWD/.local/sunrise-client/26.3"
           python3 tools/ci/with_xvfb.py python3 tools/ci/ignored_tests.py --report "$RUNNER_TEMP/daily-report.json" "$SHARD"

@@ -10,9 +10,9 @@ impl ArmPosesRegistrar for PartRegistrar {
     ) -> crate::CustomArmPose {
         if crate::Identifier::parse(name).is_err()
             || !namespaced(name)
-            || name
-                .split_once(':')
-                .is_none_or(|(namespace, _)| namespace != self.mod_id)
+            || name.split_once(':').is_none_or(|(namespace, _)| {
+                namespace == "minecraft" || !owns_namespace(self.mod_id, namespace)
+            })
             || self.arm_poses.iter().any(|pose| pose.id == name)
         {
             self.refused.push(format!(
@@ -115,5 +115,57 @@ mod tests {
                 assert!(crate::CustomArmPose::from_slot(u32::MAX).is_none());
             },
         );
+    }
+
+    #[test]
+    fn served_by_arm_pose_delegates_to_serving_host_only() {
+        let packages = vec![
+            crate::PackageInfo::new(
+                "host".into(),
+                "1".into(),
+                crate::PackageKind::Code,
+                crate::Side::Both,
+                vec!["host".into()],
+                vec![],
+            ),
+            crate::PackageInfo::new(
+                "other".into(),
+                "1".into(),
+                crate::PackageKind::Code,
+                crate::Side::Both,
+                vec!["other".into()],
+                vec![],
+            ),
+            crate::PackageInfo::new(
+                "runes".into(),
+                "1".into(),
+                crate::PackageKind::Content,
+                crate::Side::Both,
+                vec!["runes".into()],
+                vec![],
+            )
+            .with_served_by(Some("host".into())),
+        ];
+        crate::load_state::with_test_package_inventory(packages, || {
+            let mut registrar = PartRegistrar::new("host");
+            let pose = registrar.register_arm_pose("runes:cast", true, false);
+            assert_eq!(pose.slot(), 0);
+            assert_eq!(
+                registrar
+                    .register_arm_pose("minecraft:cast", false, false)
+                    .slot(),
+                u32::MAX
+            );
+            registrar.mod_id = "other";
+            assert_eq!(
+                registrar
+                    .register_arm_pose("runes:other_cast", false, false)
+                    .slot(),
+                u32::MAX
+            );
+            assert_eq!(registrar.arm_poses.len(), 1);
+            assert_eq!(registrar.arm_poses[0].id, "runes:cast");
+            assert_eq!(registrar.refused.len(), 2);
+        });
     }
 }

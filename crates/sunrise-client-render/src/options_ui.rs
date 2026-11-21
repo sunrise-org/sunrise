@@ -1768,6 +1768,8 @@ pub struct OptionsUi {
     /// The registered key waiting: (mod, mapping) in `mods.installed`.
     selected_mod_key: Option<(usize, usize)>,
     selected_page_key: Option<(usize, usize)>,
+    /// The open registered page's rows its layout was made from (`refresh_added_rows`).
+    added_seen: Vec<sunrise_hooks::pages::Row>,
     pending_mod_key: Option<winit::keyboard::KeyCode>,
     /// Bindings: the action waiting for a pad button.
     pub selected_pad_action: Option<&'static str>,
@@ -1894,6 +1896,7 @@ impl Default for OptionsUi {
             selected_key: None,
             selected_mod_key: None,
             selected_page_key: None,
+            added_seen: Vec::new(),
             pending_mod_key: None,
             selected_pad_action: None,
             pad_glyphs: crate::pad_glyph::Glyphs::default(),
@@ -7083,9 +7086,7 @@ mod tests {
             h: 20,
         };
         for name in ["button", "button_disabled", "button_highlighted"] {
-            atlas
-                .sprites
-                .insert(format!("gui/sprites/widget/{name}"), button);
+            atlas.sprites.insert(format!("widget/{name}"), button);
         }
         for above in [true, false] {
             let mut s = Settings::default();

@@ -105,3 +105,33 @@ fn streaming_adoption_and_resend_stay_resident_until_the_forget() {
         assert_eq!(game.forget_remote_columns(&mut gone, true), [(0, 0)]);
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn a_forget_packet_keeps_published_light_beside_a_loaded_column() {
+    use sunrise_protocol::packets::play::{Clientbound, ForgetLevelChunk};
+    with_game(|game| {
+        use sunrise_client::chunk::SECTIONS;
+        for x in 0..2 {
+            let mut chunk = Chunk::empty(x, 0);
+            chunk.set(0, 0, 0, 1);
+            let s = chunk.section_index(0).unwrap();
+            chunk.add_light_support(s);
+            let mut layers = vec![(None, None); SECTIONS + 2];
+            layers[s + 1] = (Some(vec![0x66; 2048]), Some(vec![0x99; 2048]));
+            sunrise_client::light::light_from_layers(&mut chunk, &layers, true);
+            game.streaming.insert_remote(&mut game.world, chunk);
+        }
+        game.apply_packet(Clientbound::ForgetLevelChunk(ForgetLevelChunk {
+            pos: [1, 0],
+        }))
+        .unwrap();
+        assert!(!game.world.loaded(16, 0));
+        assert_eq!(game.world.light(16, 0, 0), 0x69);
+        game.apply_packet(Clientbound::ForgetLevelChunk(ForgetLevelChunk {
+            pos: [0, 0],
+        }))
+        .unwrap();
+        assert_eq!(game.world.light(16, 0, 0), 0xF0);
+    });
+}

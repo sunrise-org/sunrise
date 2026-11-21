@@ -21,13 +21,10 @@ pub struct ModTickets {
 
 impl ModTickets {
     /// Tickets read from a save, whose controllers are registered (the save
-    /// drops the others): they wait in the loaded set for
-    /// validation and hold nothing yet.
-    pub fn from_saved(saved: Vec<ModTicket>) -> Self {
-        Self {
-            loaded: saved,
-            ..Self::default()
-        }
+    /// drops the others): they wait in the loaded set for validation and hold
+    /// nothing yet. Tickets already held are unaffected.
+    pub fn stage_saved(&mut self, saved: Vec<ModTicket>) {
+        self.loaded = saved;
     }
     /// Hold `ticket`: true when it was new.
     pub fn insert(&mut self, ticket: ModTicket) -> bool {
@@ -137,7 +134,8 @@ mod tests {
     #[test]
     fn saved_tickets_wait_for_validation_and_hold_nothing_yet() {
         let saved = vec![ticket(0, TicketOwner::Entity(1), (4, 4))];
-        let mut tickets = ModTickets::from_saved(saved);
+        let mut tickets = ModTickets::default();
+        tickets.stage_saved(saved);
         assert!(tickets.has_loaded() && !tickets.holds((4, 4)));
         assert_eq!(tickets.to_save().count(), 1);
         for ticket in tickets.take_loaded() {

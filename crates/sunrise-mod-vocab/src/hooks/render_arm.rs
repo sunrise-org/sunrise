@@ -13,6 +13,7 @@ pub trait Hooks {
     /// what the mods drew stays. Client-side.
     #[hook(
         side = "client",
+        version = 2,
         contract = "cancel",
         out = "canceled",
         neoforge = "RenderArmEvent",

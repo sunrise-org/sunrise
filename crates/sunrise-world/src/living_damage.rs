@@ -26,8 +26,7 @@ pub enum Reduction {
     InnateResistance,
 }
 const REDUCTIONS: usize = 6;
-/// How a modifier changes what a reduction took (NeoForge's `IReductionsModifier`, as plain
-/// data so it also crosses into a wasm mod).
+/// How a modifier changes what a reduction took (NeoForge's `IReductionsModifier`, as owned data).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ReductionChange {
     /// Take this much more off (less when negative).
@@ -69,8 +68,7 @@ pub struct DamageContainer {
     inflicted: f32,
     health_damage: f32,
 }
-/// A hit's damage sequence as plain values, field for field: the form it crosses into a wasm
-/// mod as.
+/// A hit's damage sequence as plain values, field for field.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DamageValues {
     pub original: f32,
@@ -104,7 +102,7 @@ impl From<&DamageContainer> for DamageValues {
     }
 }
 
-/// A damage sequence from its values (the form a wasm mod gives it back in).
+/// A damage sequence from its values.
 impl From<DamageValues> for DamageContainer {
     fn from(v: DamageValues) -> Self {
         Self {

@@ -132,8 +132,15 @@ fn the_section_budget_is_shared_by_its_blocks_and_every_renderer() {
         solid: vec![vertex; (MAX_QUADS - 5) * 4],
         ..SectionMesh::default()
     };
-    let mut budget = Budget::left_after(&out);
+    let mut budget = Budget::left_after(&out, 0);
     assert_eq!(budget.quads, 5);
+    let visibility_bytes = budget.bytes - 2 * QUAD_BYTES;
+    let mut combined = Budget::left_after(&out, visibility_bytes);
+    let mut with_visibility = Batch::new(&sprites, &mut combined, &shared);
+    assert_eq!(with_visibility.remaining(), 2);
+    assert!((0..2).all(|_| with_visibility.add(GOLD, quad(false))));
+    assert!(!with_visibility.add(GOLD, quad(false)));
+    drop(with_visibility);
     let mut first = Batch::new(&sprites, &mut budget, &shared);
     assert!((0..3).all(|_| first.add(GOLD, quad(false))));
     drop(first);

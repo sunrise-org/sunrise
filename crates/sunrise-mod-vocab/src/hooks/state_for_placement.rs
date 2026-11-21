@@ -2,13 +2,16 @@
 // catalog-order: 0089
 
 pub trait Hooks {
-    /// A block is about to take the state it is placed in
-    /// (`Block.getStateForPlacement(BlockPlaceContext)`), `state` the block's
-    /// own default state. Answer only for your blocks: put the state you want
-    /// in `answer` as `Some(Some(state))`, including a registered state of
-    /// another block. Survival and entity obstruction use that candidate at
-    /// the placement position, but the selected block's `getStateForPlacement`
-    /// is not called. A mod selecting a multi-cell block is responsible for
+    /// Choose a block's placement candidate (`Block.getStateForPlacement(BlockPlaceContext)`),
+    /// with `state` the block's own default state. This is not a placement notice:
+    /// code holding a `ServerHost` can call `LevelRef::state_for_placement` to ask
+    /// for a candidate without placing anything. The Part still has only its
+    /// `LevelHost` through `LevelSide`, not the caller's `ServerHost`.
+    /// Answer only for your blocks: put the state you want in `answer` as
+    /// `Some(Some(state))`, including a registered state of another block.
+    /// If this is an actual placement, survival and entity obstruction use that
+    /// candidate at the placement position, but the selected block's
+    /// `getStateForPlacement` is not called. A mod selecting a multi-cell block is responsible for
     /// checking its footprint: `setPlacedBy` does not recheck its companion
     /// cell. Sunrise also requires creative-operator permission to select a
     /// game-master block. An unknown state falls back to ordinary placement.
@@ -16,8 +19,8 @@ pub trait Hooks {
     /// as vanilla's `null`. Left empty, the block's own placement runs. `context` is
     /// vanilla's `BlockPlaceContext` (the clicked face, the placer's rotation,
     /// the clicked position, whether the clicked block is being replaced, the
-    /// item in hand) and `fluid` the fluid in the position the block would go
-    /// in, which a waterlogged block reads. Build the state from `state` with
+    /// item key in hand, not an item stack or its components) and `fluid`
+    /// the fluid in the position the block would go in, which a waterlogged block reads. Build the state from `state` with
     /// `native_state_with_property`, and know whether `state` is yours with
     /// `native_state_block`. It is asked for every placer that goes
     /// through vanilla's placement (a player's `BlockItem.place`, a
@@ -39,6 +42,9 @@ pub trait Hooks {
 
 `BlockPart::state_for_placement` is vanilla's `Block.getStateForPlacement` for
 player and dispenser placement, including client prediction for a player.
+Code with a `ServerHost` can also call `LevelRef::state_for_placement` to ask
+for a candidate without placing anything. The Part still receives only its
+`LevelHost` through `LevelSide`; the context carries an item key, not a stack.
 Answer only for your own blocks: `Some(Some(state))` selects a registered
 candidate, `Some(None)` refuses placement without spending the stack, and
 `None` delegates to the next Part or ordinary placement. Use
@@ -46,9 +52,9 @@ candidate, `Some(None)` refuses placement without spending the stack, and
 one your block declares.
 
 A candidate can belong to another block. The selected block does not run its
-placement-state method again. It still gets the primary cell's survival and
-obstruction checks as applicable, and a game-master block requires creative
-operator permission. If the selected block spans cells, check its footprint
+placement-state method again. If actually placed, it still gets the primary
+cell's survival and obstruction checks as applicable, and a game-master
+block requires creative operator permission. If the selected block spans cells, check its footprint
 before returning it: `setPlacedBy` does not recheck its companion cell.
 "##]
     #[hook(

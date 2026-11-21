@@ -44,13 +44,12 @@ The game hashes each file once, when the package opens, and keeps those bytes: y
 `cx.runtime_files()`, a handle you may keep and use from any thread. `files.names()` lists them, `files.file("nav.bin")`
 returns the checked bytes (or `None` for a name your manifest does not list: a mod reads only its own package's files),
 and `files.file_path("nav.bin")`, for native code that wants to map or compile a large file without a copy, returns where
-it sits on disk. The path is native-only: a wasm mod is refused with `RuntimePathError::WasmMod` and reads the bytes. A
-package installed as a `.smod` archive has no path either (`NotAFolder`), and a later edit of a folder is yours to guard
+it sits on disk. A
+package installed as a `.smod` archive has no path (`NotAFolder`), and a later edit of a folder is yours to guard
 against. A mod whose package declares no `[runtime]` gets `RuntimeFilesError::NoRuntimeFiles`.
 
 Although the archive accepts `build.rs`, a native build refuses it unless you disable it with
 `build = false` in Cargo's `[package]` table and remove build dependencies.
 
 A native `.smod` carries both source and content: the launcher compiles the source, and the game
-loads the package's `assets/` and `data/`. [Wasm packages](../wasm-mods.md) carry executable
-`mod.wasm` bytes declared in `[wasm]`. All package kinds take their identity from `sunrise-mod.toml`.
+loads the package's `assets/` and `data/`. All packages take their identity from `sunrise-mod.toml`.

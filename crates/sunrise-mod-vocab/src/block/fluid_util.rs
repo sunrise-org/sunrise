@@ -2,7 +2,7 @@
 //! case of a player right-clicking a tank with a bucket or any fluid container, in one call, with
 //! the bucket's sound and game event, and a container picking up and placing fluid in the world
 //! as a bucket does. Vocabulary over [`FLUIDS`], [`ITEM_FLUIDS`] at an [`ItemPlace`], the move
-//! step of [`move_resources`](crate::move_resources) and the level's
+//! step of [`move_resources`](crate::resource_util::move_resources) and the level's
 //! [`pickup_fluid`](LevelRef::pickup_fluid) and [`place_fluid`](LevelRef::place_fluid), and a
 //! dispenser's answer for a fluid container ([`dispense_container`]): nothing changes until a mod
 //! calls them.
@@ -194,7 +194,11 @@ pub fn try_pickup_world_fluid(
     host.transaction(|host, tx| {
         let picked = level.pickup_fluid(host, pos, player, tx).ok_or(())?;
         let fluid = FluidResource::of(&picked);
-        match destination.insert_any(host, tx, &fluid, picked.amount) == picked.amount {
+        match destination
+            .insert(host, tx, &fluid, picked.amount)
+            .map_err(|_| ())?
+            == picked.amount
+        {
             true => Ok(picked),
             false => Err(()),
         }
@@ -227,7 +231,7 @@ pub fn try_place_fluid(
             continue;
         };
         let placed = host.transaction(|host, tx| {
-            if source.extract(host, tx, index, &fluid, BUCKET) != BUCKET {
+            if source.extract_at(host, tx, index, &fluid, BUCKET) != BUCKET {
                 return Err(());
             }
             match level.place_fluid(host, pos, key, player, validate, tx) {
@@ -309,7 +313,7 @@ pub fn first_stack_contained(host: &mut dyn ServerHost, place: &ItemPlace) -> Op
 /// One move of the first fluid of `from`, index by index, that `to` takes any of, as much of it
 /// as `to` takes in one go (NeoForge's `ResourceHandlerUtil.moveFirst`), all or nothing in a
 /// transaction of its own: what moved, or none, with nothing changed, where none moves or a
-/// handler answers more than it was asked. One go, not [`move_resources`](crate::move_resources)' repeats: a stack of
+/// handler answers more than it was asked. One go, not [`move_resources`](crate::resource_util::move_resources)' repeats: a stack of
 /// buckets has one filled, as vanilla's click fills one.
 fn move_first(
     host: &mut dyn ServerHost,
@@ -330,8 +334,8 @@ fn move_first(
             host,
             ends,
             want,
-            |host, tx, want| from.extract(host, tx, index, &fluid, want),
-            |host, tx, out| to.insert_any(host, tx, &fluid, out),
+            |host, tx, want| from.extract_at(host, tx, index, &fluid, want),
+            |host, tx, out| to.insert(host, tx, &fluid, out),
         );
         if let Ok(moved) = moved
             && moved > 0

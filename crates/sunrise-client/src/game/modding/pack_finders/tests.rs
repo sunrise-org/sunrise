@@ -163,7 +163,7 @@ fn with_finder_hidden(feature: bool, required: bool, hidden: bool, test: impl Fn
 }
 
 #[test]
-fn restricted_pack_discovery_refuses_game_text_reads() {
+fn restricted_pack_discovery_refuses_game_text_reads_and_player_writes() {
     use std::sync::{Arc, Mutex};
 
     struct Observe(Arc<Mutex<Vec<PackType>>>);
@@ -171,8 +171,30 @@ fn restricted_pack_discovery_refuses_game_text_reads() {
     impl Hooks for Observe {
         fn add_pack_finders(&self, host: HostSide<'_>, event: &mut AddPackFindersEvent<'_>) {
             let component = mod_api::Text::literal("Startup");
+            let player = mod_api::__private::game::player_ref(
+                mod_api::EntityRef::new(mod_api::WorldEpoch::new(1), 1),
+                0,
+            );
+            let read_host: &dyn mod_api::Host = match &host {
+                HostSide::Client(host) => &**host,
+                HostSide::Server(host) => &**host,
+            };
+            assert_eq!(
+                player.supporting_block(read_host),
+                Err(mod_api::LevelReadError::Unavailable)
+            );
+            assert_eq!(
+                player.on_block(read_host),
+                Err(mod_api::LevelReadError::Unavailable)
+            );
             let resolved = match host {
-                HostSide::Client(host) => host.text_string(&component),
+                HostSide::Client(host) => {
+                    assert_eq!(
+                        player.reset_fall_distance(host),
+                        Err(mod_api::LevelWriteError::Unavailable),
+                    );
+                    host.text_string(&component)
+                }
                 HostSide::Server(host) => host.text_string(&component),
             };
             assert_eq!(resolved, Err(mod_api::text::TextFormError::Unavailable));
@@ -533,7 +555,6 @@ fn a_mods_pack_is_on_the_screen_and_applies_through_client_reload() {
                 &game.mods,
                 game.register_client_reload_listeners(),
                 &[],
-                &[],
                 &game.pack.assets,
                 &game.res,
                 &game.worker_context(),
@@ -568,7 +589,6 @@ fn a_mods_pack_is_on_the_screen_and_applies_through_client_reload() {
                     &[],
                     &game.mods,
                     listeners,
-                    &[],
                     &[],
                     &game.pack.assets,
                     &game.res,
@@ -676,4 +696,108 @@ fn hidden_optional_data_pack_is_command_selectable_and_loads_its_function() {
             [FunctionLine::Command("say from-optional".into())]
         );
     });
+}
+
+#[test]
+fn disabled_native_mods_skip_add_pack_finders_at_startup_and_after_toggle() {
+    use std::collections::BTreeSet;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct Probe {
+        calls: Arc<AtomicUsize>,
+        register_packs: bool,
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for Probe {
+        fn add_pack_finders(&self, _host: HostSide<'_>, event: &mut AddPackFindersEvent<'_>) {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if !self.register_packs {
+                return;
+            }
+            let path = match event.packs.pack_type() {
+                PackType::ClientResources => ASSET_PACK,
+                PackType::ServerData => DATA_PACK,
+                _ => return,
+            };
+            let pack = PackRegistration::new(
+                Identifier::parse(&format!("packmod:{path}")).unwrap(),
+                event.packs.pack_type(),
+                mod_api::Text::translate("packmod.optional.title", vec![]),
+            );
+            event.packs.add_pack_finders(pack).unwrap();
+        }
+    }
+
+    let fixture = Fixture::new(false);
+    let disabled_calls = Arc::new(AtomicUsize::new(0));
+    let enabled_calls = Arc::new(AtomicUsize::new(0));
+
+    with_mods(
+        vec![
+            ModEntry::new(
+                "discovery_probe",
+                Box::new(Probe {
+                    calls: disabled_calls.clone(),
+                    register_packs: false,
+                }),
+            ),
+            ModEntry::new(
+                "packmod",
+                Box::new(Probe {
+                    calls: enabled_calls.clone(),
+                    register_packs: true,
+                }),
+            ),
+        ]
+        .into(),
+        || {
+            // Startup before Game::start_mods applies saved switches to runtime dispatch:
+            // sunrise-mods.txt has disabled `discovery_probe`, while its runtime slot is still on.
+            let mut sources = fixture.sources();
+            let disabled = BTreeSet::from(["discovery_probe".to_owned()]);
+            sources.capture_code_switches(&disabled);
+            assert!(mod_api::__private::mod_index_on(
+                mod_api::__private::mod_index("discovery_probe").unwrap()
+            ));
+
+            let client_packs = discover(PackType::ClientResources, &sources);
+            let server_packs = data_packs(&sources);
+            assert_eq!(disabled_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(enabled_calls.load(Ordering::SeqCst), 2);
+            assert_eq!(client_packs.len(), 1);
+            assert_eq!(client_packs[0].id, fixture.asset_id());
+            assert_eq!(server_packs.len(), 1);
+            assert_eq!(server_packs[0].id, fixture.data_id());
+
+            // After Game::start_mods applies switches, both startup-style and direct dispatch skip it.
+            sources.apply_code_switches(&disabled);
+            assert!(!mod_api::__private::mod_index_on(
+                mod_api::__private::mod_index("discovery_probe").unwrap()
+            ));
+            let client_packs = discover(PackType::ClientResources, &sources);
+            let server_packs = data_packs(&sources);
+            assert_eq!(disabled_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(enabled_calls.load(Ordering::SeqCst), 4);
+            assert_eq!(client_packs.len(), 1);
+            assert_eq!(server_packs.len(), 1);
+
+            let mut registry = Registry::new(PackType::ClientResources, sources.clone());
+            let mut host = DiscoveryHost;
+            mod_api::dispatch_add_pack_finders(HostSide::Client(&mut host), &mut registry);
+            assert_eq!(disabled_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(enabled_calls.load(Ordering::SeqCst), 5);
+            assert_eq!(registry.packs.len(), 1);
+
+            // Live toggles flip which listener runs without invoking the newly disabled mod.
+            assert!(mod_api::__private::set_mod_enabled("discovery_probe", true));
+            assert!(mod_api::__private::set_mod_enabled("packmod", false));
+            assert!(discover(PackType::ClientResources, &sources).is_empty());
+            assert!(data_packs(&sources).is_empty());
+            assert_eq!(disabled_calls.load(Ordering::SeqCst), 2);
+            assert_eq!(enabled_calls.load(Ordering::SeqCst), 5);
+        },
+    );
 }

@@ -178,7 +178,7 @@ fn queried_ability_parts_grant_and_deny_isolated() {
 
 struct Tags;
 impl engine::LootTags for Tags {
-    fn members(&self, _: &str, _: &str) -> Vec<String> {
-        vec![]
+    fn members(&self, _: &str, _: &str) -> Option<Vec<String>> {
+        None
     }
 }

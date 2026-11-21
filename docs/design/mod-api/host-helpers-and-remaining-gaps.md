@@ -1,5 +1,8 @@
 # Host helpers and remaining gaps
 
+> The native contract below still applies. WebAssembly mods were removed; the parts about guests are history.
+> See [hooks and their hosts](../../modding/src/concepts/hooks-and-the-host.md) for the current native API.
+
 `Host` exposes the documented `Game` helpers declared by area in
 `crates/sunrise-mod-vocab/src/host/<area>.rs`, one trait per area; `Host`, `ServerHost` and `ClientHost` are the
 unions of those traits, so a mod calls through them and never names an area trait. Each helper keeps its
@@ -61,8 +64,8 @@ positive experience when picked up.
 Advancement triggers instead live on `PlayerRef::trigger_criterion`, with a mod-owned
 `CriterionTest` and the game's scoped `CriterionContext` resource. The context keeps real
 world-aware item predicates; it is not a conditions-only snapshot. See
-[advancement triggers](https://playsunrise.net/docs/modding/reference/hook-notes#advancement-triggers) for the contract and
-the wasm runtime's current same-group callback limitation.
+[advancement triggers](https://playsunrise.net/docs/modding/reference/hook-notes#advancement-triggers) for the contract.
+The removed guest runtime imposed a same-group callback limitation.
 
 A mod that consumes a block use can run vanilla advancement predicates and rewards
 through `PlayerRef::trigger_block_use(host, pos)` or
@@ -93,7 +96,7 @@ the predicate evaluators are `DefaultBlockInteractionTrigger`,
 `NotServer` for a remote client, `PlayerUnavailable` for a stale, offline or
 displaced handle, `UnloadedChunk` for a position outside loaded chunks, and
 `Stack(StackWriteError)` when the item boundary rejects the snapshot before any
-trigger fires. Native and wasm use the same generated operations. The
+trigger fires. The
 `minecraft:` guard on `trigger_criterion` remains: this grants no general access
 to fire arbitrary vanilla triggers.
 

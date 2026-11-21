@@ -29,6 +29,16 @@ never a panic. Existing render-distance and block-overlay eligibility filters
 still apply. Overlapping cracks use the highest stage for each cell. The callback
 changes neither break speed nor which blocks break, and never runs on a server.
 
+## Random display ticks
+
+`BlockPart::animate_tick(host, event)` is vanilla's `Block.animateTick`, with a mutable
+`ClientHost`. It runs when the client's ambient sampling (`ClientLevel.animateTick`, 667 random
+positions within 16 blocks and 667 within 32 each tick) picks a position whose block has the part.
+It runs inside the pick: after the block's own vanilla effects, before its fluid's. The event has the client `level`, `pos`, `state`
+and the level's `random`. Add particles with `host.add_particle` and play sounds with
+`host.play_local_sound`. A block without the method costs the sampler one table lookup, and the
+hook never runs on a server. See [Random display ticks for blocks](../../how-to/client/block-animate-ticks.md).
+
 ## Light emission
 
 `BlockPart::light_emission` supplies positional light for blocks that declare
@@ -141,6 +151,21 @@ template block writes still call the rotation Part at their placed world positio
 
 ## Landing writes
 
+`BlockPart::bounce_restitution` answers the block's coefficient for a qualifying downward collision,
+including those of dropped items and other nonliving bodies. `event.pos` and `event.state` are the paired
+`Entity.move` effect contact from `getOnPosLegacy`: its column follows support, but its cell can differ
+from the one supporting the body. Set `event.factor` to edit the block's coefficient. For a nonliving
+body the engine multiplies it by `0.8` in `f32`, then takes the greater of that and the body's own
+bounciness. A zero answer is not a veto. Slow falls and contacts that suppress bounce do not ask.
+
+This runs on whichever side simulates the move. Keep it a pure read of `LevelSide` and the event so
+prediction and replay produce the same answer. It does not run for packet interpolation, projectile
+impacts or a piston's direct slime launch.
+
+When the collision actually bounces, the server runs `BlockPart::bounce_on` before it posts
+`BOUNCE` and commits the returned movement. This is a separate callback, with the captured effect
+state and vanilla's movement-affecting position (which can differ from the legacy position).
+
 `BlockPart::fall_on` runs at vanilla's landing moment on a read-only level random host.
 Hook version 2 exposes writable `event.distance` and `event.damage_multiplier`, not calculated
 damage. Vanilla blocks supply their own pair: hay uses 0.2, beds 0.5, slime 0,
@@ -164,8 +189,8 @@ preserves the requested resource-drop flag.
 `BlockPart::contents_changed(host, event)` observes a world block's storage at `setChanged`,
 with a `ServerHost`, typed `event.level`, `event.pos: BlockPos` and `event.state`. Attach it to the specific
 blocks you observe, including vanilla containers; it has no global `Hooks` counterpart.
-Hook version 2 also lets an automation block entity watch another position without polling or
-attaching Parts to every possible source block type. Its Part calls
+An automation block entity can watch another position without polling or attaching Parts to
+every possible source block type. Its Part calls
 `observer.watch_contents(host, source_pos, true)` on its live `BlockEntityRef`; false unregisters.
 The source is in the observer's level and need not be loaded. Registration is idempotent and
 joins the current transaction: abort restores the previous watches. An observer without a
@@ -181,13 +206,14 @@ source callback. Removal, replacement and chunk unload discard the observer's wa
 alone does not restore them: the Part must call `watch_contents` again. Watches are runtime
 state, never saved. Unloading the source does not cancel watches of its position.
 
-The backing
-contents are already written, before dirty/comparator updates. Game-held vanilla container writes
-coalesce their implicit notice per backing block at root commit. Explicit `BlockEntityRef::set_changed`
+The backing contents are already written, before dirty/comparator updates. The default `ITEMS`
+and item `STORAGE` handlers coalesce their implicit notice per backing block at root commit,
+for vanilla containers and engine-managed mod slots. Explicit `BlockEntityRef::set_changed`
 notifies immediately, even inside a transaction and for unchanged contents; abort does not retract
-it. Raw mod-owned storage writes and restores synthesize no notification. A double container
-notifies each component, not again for the other half's comparator refresh. A listener's writes
-still apply, but its backing block does not re-enter; another block notifies normally.
+it. Direct writes such as `BlockEntityRef::set_item_slot` and writes to storage a mod provides
+itself do not synthesize notifications; neither do rollback restores. A double container notifies
+each component, not again for the other half's comparator refresh. A listener's writes still apply,
+but its backing block does not re-enter; another block notifies normally.
 Entity/menu placeholder coordinates are not block notices. Explicit notices may read tentative items:
 
 ```rust,ignore

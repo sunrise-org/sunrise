@@ -36,6 +36,15 @@ pub trait NoBackend {
     fn no_backend() -> Self;
 }
 
+/// The error a gated Host method refuses with when it is called outside the side or phase that
+/// allows it, in place of unwinding: `Result<_, E>` with `E: AccessRefusal` is what the game-side
+/// forwarder generator accepts for an `#[access]` method (it finds the `impl`s in this crate, so
+/// the impl is the marker), and it answers `Err(E::unavailable())` before the call runs.
+pub trait AccessRefusal {
+    /// The refusal for a call outside its allowed phase.
+    fn unavailable() -> Self;
+}
+
 impl NoBackend for ActionRefused {
     /// No game: as for a handle whose fake is gone.
     fn no_backend() -> Self {
@@ -154,7 +163,7 @@ impl<'a> BackendMutRef<'a> {
 
 /// The read backend behind `host`, or `None` where the host has none; the
 /// caller answers its typed refusal instead of running on.
-// hidden: a game-side helper, the wasm host half serves backend calls through it
+// hidden: a game-side helper, not part of the mod authoring API
 #[doc(hidden)]
 pub fn backend_of(host: &dyn Host) -> Option<&dyn Backend> {
     host.backend().map(|wrapper| wrapper.open())
@@ -229,13 +238,13 @@ impl HostSide<'_> {
 
 /// The write backend behind `host`, or `None` where the host has none; the
 /// caller answers its typed refusal instead of running on.
-// hidden: a game-side helper, the wasm host half serves backend calls through it
+// hidden: a game-side helper, not part of the mod authoring API
 #[doc(hidden)]
 pub fn backend_mut_of(host: &mut dyn ServerHost) -> Option<&mut dyn BackendMut> {
     host.backend_mut().map(|wrapper| wrapper.open())
 }
 
-// hidden: a game-side helper, the wasm host half serves backend calls through it
+// hidden: a game-side helper, not part of the mod authoring API
 #[doc(hidden)]
 pub fn client_backend_mut_of(host: &mut dyn ClientHost) -> Option<&mut dyn ClientBackendMut> {
     host.client_backend_mut().map(|wrapper| wrapper.open())

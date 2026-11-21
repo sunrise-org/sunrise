@@ -219,59 +219,6 @@ fn string_list(v: &Value) -> Vec<String> {
         _ => vec![],
     }
 }
-fn read_tag_dir(dir: &Path) -> HashMap<String, sunrise_world::tag_layers::TagLayers> {
-    read_tag_dir_in(dir, "minecraft")
-}
-/// The resource root's `data/` namespaces other than `minecraft`, in name
-/// order: content mods' files land there (`sunrise_client::mod_content`'s
-/// overlay), as a data pack's namespaces do in `RegistryDataLoader`.
-fn other_namespaces(root: &Path) -> Vec<String> {
-    let mut out = sunrise_world::json_folder::namespaces(&root.join("data"));
-    out.retain(|ns| ns != "minecraft");
-    out
-}
-fn read_tag_dir_in(
-    dir: &Path,
-    namespace: &str,
-) -> HashMap<String, sunrise_world::tag_layers::TagLayers> {
-    let Ok(folder) = sunrise_world::json_folder::read(dir) else {
-        return HashMap::new();
-    };
-    folder
-        .files
-        .iter()
-        .filter_map(|file| {
-            let v = serde_json::from_slice::<Value>(file.bytes().ok()?).ok()?;
-            Some((
-                format!("{namespace}:{}", file.name),
-                sunrise_world::tag_layers::TagLayers::from_file(&v),
-            ))
-        })
-        .collect()
-}
-/// Expand a tag keeping first-seen order and applying removals before its parent uses it.
-fn expand_ordered(
-    name: &str,
-    raw: &HashMap<String, sunrise_world::tag_layers::TagLayers>,
-    out: &mut Vec<String>,
-    depth: u32,
-) {
-    if depth > 16 {
-        return;
-    }
-    if let Some(layers) = raw.get(name) {
-        let members = layers.build(|tag| {
-            let mut child = Vec::new();
-            expand_ordered(tag, raw, &mut child, depth + 1);
-            child
-        });
-        for member in members {
-            if !out.contains(&member) {
-                out.push(member);
-            }
-        }
-    }
-}
 /// Roman numerals as in `enchantment.level.N` (falls back to the number).
 pub fn level_name(level: u32) -> String {
     const NAMES: [&str; 10] = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
@@ -513,46 +460,15 @@ impl Enchantments {
         defaults: &sunrise_world::item_defaults::ItemDefaults,
         files: impl IntoIterator<Item = (&'a str, &'a Value)>,
     ) -> crate::Result<Self> {
-        let data = root.join("data/minecraft");
-        let mut raw_tags = read_tag_dir(&data.join("tags/enchantment"));
-        let namespaces = other_namespaces(root);
-        // Mods' own enchantment tags (`data/<ns>/tags/enchantment/`): an
-        // `exclusive_set` or a tag of the mod's enchantments.
-        for ns in &namespaces {
-            let dir = root.join("data").join(ns).join("tags/enchantment");
-            for (id, values) in read_tag_dir_in(&dir, ns) {
-                raw_tags.insert(id, values);
-            }
-        }
-        for (id, files) in overlay.tag_kind("enchantment") {
-            for bytes in files {
-                let Ok(v) = serde_json::from_slice::<Value>(bytes) else {
-                    continue;
-                };
-                raw_tags.entry(id.clone()).or_default().push(&v);
-            }
-        }
-        let tags: HashMap<String, Vec<Arc<str>>> = raw_tags
-            .keys()
-            .map(|k| {
-                let mut v = Vec::new();
-                expand_ordered(k, &raw_tags, &mut v, 0);
-                (
-                    k.clone(),
-                    v.into_iter().map(|s| Arc::from(s.as_str())).collect(),
-                )
-            })
-            .collect();
-        let unordered = |raw: HashMap<String, sunrise_world::tag_layers::TagLayers>| -> HashMap<String, HashSet<String>> {
-            raw.keys()
-                .map(|k| {
-                    let mut v = Vec::new();
-                    expand_ordered(k, &raw, &mut v, 0);
-                    (k.clone(), v.into_iter().collect())
-                })
-                .collect()
-        };
-        let entity_tags = unordered(read_tag_dir(&data.join("tags/entity_type")));
+        let files: Vec<_> = files.into_iter().collect();
+        let admitted: HashSet<_> = files.iter().map(|&(id, _)| id).collect();
+        let tags = sunrise_world::tag_layers::load(root, "enchantment", overlay, |id| {
+            admitted.contains(id)
+        })?
+        .into_iter()
+        .map(|(name, ids)| (name, ids.into_iter().map(Arc::from).collect()))
+        .collect();
+        let entity_tags = crate::items::load_tags(root, "entity_type", overlay)?;
         let damage_tags = match sunrise_world::damage_source::Catalog::load(root, overlay) {
             Ok(catalog) => catalog
                 .tags()
@@ -564,7 +480,7 @@ impl Enchantments {
                 })
                 .collect(),
             // Small tools/fixtures may not carry the prepared catalog.
-            Err(_) => unordered(read_tag_dir(&data.join("tags/damage_type"))),
+            Err(_) => crate::items::load_tags(root, "damage_type", overlay)?,
         };
         let lang: HashMap<String, String> =
             sunrise_core::prepared_files::read(&root.join("assets/minecraft/lang/en_us.json"))
@@ -597,7 +513,10 @@ impl Enchantments {
         // Mods' English names for their enchantments (`assets/<ns>/lang/`),
         // under vanilla's, which win a clash.
         let mut lang = lang;
-        for ns in &namespaces {
+        for ns in sunrise_world::json_folder::namespaces(&root.join("data"))
+            .into_iter()
+            .filter(|ns| ns != "minecraft")
+        {
             let path = root.join("assets").join(ns).join("lang/en_us.json");
             let Some(map) = sunrise_core::prepared_files::read(&path)
                 .ok()
@@ -1662,7 +1581,7 @@ pub mod tests {
             &root,
             &sunrise_world::loot::PackOverlay {
                 files: &files,
-                ..sunrise_world::loot::PackOverlay::NONE
+                ..sunrise_world::loot::PackOverlay::default()
             },
             &defaults,
         )
@@ -1862,7 +1781,7 @@ pub mod tests {
         )];
         let overlay = sunrise_world::loot::PackOverlay {
             files: &files,
-            ..sunrise_world::loot::PackOverlay::NONE
+            ..sunrise_world::loot::PackOverlay::default()
         };
         let loaded = Enchantments::load_with(&root, &overlay, &defaults).unwrap();
         assert_eq!(
@@ -1875,7 +1794,7 @@ pub mod tests {
         )];
         let overlay = sunrise_world::loot::PackOverlay {
             files: &files,
-            ..sunrise_world::loot::PackOverlay::NONE
+            ..sunrise_world::loot::PackOverlay::default()
         };
         assert!(
             Enchantments::load_with(&root, &overlay, &defaults)
@@ -2422,6 +2341,11 @@ mod ignite_tests {
             std::process::id()
         ));
         std::fs::create_dir_all(root.join("data/minecraft/tags/enchantment")).unwrap();
+        let entries = root.join("data/minecraft/enchantment");
+        std::fs::create_dir_all(&entries).unwrap();
+        for id in ["sharpness", "smite"] {
+            std::fs::write(entries.join(format!("{id}.json")), "{}").unwrap();
+        }
         std::fs::write(root.join("items.json"), "{}").unwrap();
         std::fs::write(root.join("data/minecraft/tags/enchantment/conditional.json"), json!({"neoforge:conditions":[{"type":"neoforge:never"}],"values":["minecraft:sharpness"]}).to_string()).unwrap();
         let files = vec![("tags/minecraft:enchantment/conditional".into(), vec![json!({"neoforge:conditions":[{"type":"neoforge:never"}],"values":["minecraft:smite"],"remove":["minecraft:sharpness"]}).to_string().into_bytes()])];

@@ -38,7 +38,7 @@ fn run_mods(mods: Mods, test: impl FnOnce(&mut Game<'_>)) {
     mod_platform::testing::with_mods(mods, || {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.gui.atlas.sprites.insert(
-                "gui/sprites/container/bundle/slot_background".into(),
+                "container/bundle/slot_background".into(),
                 sunrise_client::hud::Rect {
                     u0: 0.25,
                     v0: 0.25,
@@ -75,7 +75,7 @@ fn grid(game: &Game<'_>, batch: &HudBatch, y: f32, present: bool) {
     sunrise_client::ui::nine_slice(
         &mut expected,
         &game.gui.atlas,
-        "gui/sprites/container/bundle/slot_background",
+        "container/bundle/slot_background",
         94.0,
         y,
         24.0,

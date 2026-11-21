@@ -565,13 +565,11 @@ impl RulesScreen {
                             ui::button_as(
                                 batch,
                                 atlas,
-                                x,
-                                cy,
-                                44.0,
-                                20.0,
+                                [x, cy, 44.0, 20.0],
                                 &label,
                                 true,
                                 hover,
+                                None,
                                 |rect| {
                                     bool_narration(&r, value, rect)
                                         .key(crate::widgets::key_of(&("game_rules", r.name)))

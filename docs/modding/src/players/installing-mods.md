@@ -11,11 +11,9 @@ file by hand into the game folder (the folder that holds `options.txt`):
 | Mod | Goes in | What happens next |
 | --- | --- | --- |
 | Content mod (`.smod`, or a folder holding `sunrise-mod.toml`) | `sunrise-mods/` | Read when the game starts |
-| WebAssembly mod (`.smod` with `mod.wasm`) | `sunrise-mods/` | Loaded into the game's sandbox when the game starts |
 | Native mod (`.smod` with Rust source) | `sunrise-native-mods/` | The launcher builds it for that instance ([Native mods](../how-to/native-mods.md)) |
 
 **Browse Mods** in the game lists content mods only, checked against the same registry as the launcher. Native and
-WebAssembly mods install from the launcher or by hand.
 
 Fabric and NeoForge jars do not run in Sunrise: they target Minecraft's Java runtime, which Sunrise does not have.
 The data and assets inside a jar can be carried over; see
@@ -42,15 +40,17 @@ Benchmarks (`--benchmark`) never load mods.
 
 ## The Mods screen
 
-The **Mods** button on the title screen (also **Options > Mods**) lists Minecraft first (and Sunrise, in the official game with its Sunrise layer on), then each
-installed mod with its icon, name and version. Search the list and sort it A–Z or Z–A. Select a mod to read its
+**Options > Mods** lists Minecraft first (and Sunrise, in the official game with its Sunrise layer on), then each
+installed mod with its icon, name and version. Once a package is installed, the title screen also carries a
+full-width **Mods** button below Minecraft Realms, and it goes away again when the last package leaves. Search
+the list and sort it A–Z or Z–A. Select a mod to read its
 id, version, license, authors, credits and description:
 
 - **Homepage** and **Issues** open the mod's links, after asking you to confirm.
 - **Config** opens the settings page of a mod that registers settings.
 - A mod that is installed but off says so. A mod that could not load shows the reason in red.
 
-The screen has no on/off switch; the launcher and `sunrise-mods.txt` decide which mods run.
+The screen has no on/off switch; `sunrise-mods.txt` decides which mods run.
 
 ## Making a mod
 

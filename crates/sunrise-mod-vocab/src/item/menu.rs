@@ -76,9 +76,36 @@ pub enum DragKind {
 pub struct MenuButtonContext {
     pub player: u128,
     pub player_entity_id: i32,
-    pub pos: [i32; 3],
+    /// The block backing the menu, or None when the menu was opened without a block.
+    pub pos: Option<[i32; 3]>,
     pub id: i32,
 }
+
+#[cfg(test)]
+mod menu_button_context_tests {
+    use super::MenuButtonContext;
+    use crate::wire::{Reader, Writer};
+
+    #[test]
+    fn menu_button_context_round_trips_with_and_without_a_block_position() {
+        for pos in [None, Some([12, -4, 29])] {
+            let context = MenuButtonContext {
+                player: 0x1234,
+                player_entity_id: 57,
+                pos,
+                id: 8,
+            };
+            let mut writer = Writer::new();
+            writer.put(&context);
+            let decoded = Reader::decode::<MenuButtonContext>(writer.bytes()).unwrap();
+            assert_eq!(decoded.player, context.player);
+            assert_eq!(decoded.player_entity_id, context.player_entity_id);
+            assert_eq!(decoded.pos, context.pos);
+            assert_eq!(decoded.id, context.id);
+        }
+    }
+}
+
 /// The logical side on which a menu click runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 // exhaustive: a closed set the game matches without a wildcard

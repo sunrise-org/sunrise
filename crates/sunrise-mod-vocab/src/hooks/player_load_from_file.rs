@@ -10,8 +10,6 @@ pub trait Hooks {
     /// `getPlayerFile(suffix)` names it. Heard once for each join, for the
     /// owner of an integrated server as for anyone else, on a server, with no
     /// player's state swapped in. Not cancellable.
-    ///
-    /// Not on wasm: it gives a path in the game's file system, which a wasm mod has none of; a wasm mod keeps a player's data in attachments.
     #[hook(
         side = "server",
         contract = "listen",

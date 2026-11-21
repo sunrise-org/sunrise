@@ -22,9 +22,6 @@ impl mod_api::RuntimeFileSource for PackageRuntime {
 /// The runtime files of every package that declares `[runtime]`, by mod id. A compiled native
 /// mod's were checked when the game validated its package at startup (a mismatch ends the
 /// start there, as any compiled mod's package failing to read does: `mod-host/src/loading.rs`).
-/// A wasm mod's were checked when the wasm loader opened its package (`sunrise-mod-wasm/src/lib.rs`),
-/// which refuses a mismatch for that mod alone, by name, and kept the bytes it verified; they are
-/// served from there, so no file is hashed twice.
 pub(in crate::game) fn sources(
     mods: &ModsState,
 ) -> BTreeMap<String, Arc<dyn mod_api::RuntimeFileSource>> {
@@ -35,15 +32,6 @@ pub(in crate::game) fn sources(
                 package.manifest.id.clone(),
                 Arc::new(PackageRuntime(runtime.clone())),
             );
-        }
-    }
-    for selected in mods.selected.iter() {
-        let id = &selected.package.manifest.id;
-        if sources.contains_key(id) {
-            continue;
-        }
-        if let Some(runtime) = RuntimeData::opened(id) {
-            sources.insert(id.clone(), Arc::new(PackageRuntime(runtime)));
         }
     }
     sources

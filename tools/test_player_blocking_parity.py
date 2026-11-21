@@ -24,7 +24,10 @@ def corpus():
                 stack({'!minecraft:max_damage': {}}),
                 stack({'!minecraft:damage': {}}),
                 stack({'minecraft:unbreakable': {}, 'minecraft:enchantments': {'minecraft:unbreaking': 3}}),
-                stack({'!minecraft:damage': {}, 'minecraft:enchantments': {'minecraft:unbreaking': 3}})]
+                stack({'!minecraft:damage': {}, 'minecraft:enchantments': {'minecraft:unbreaking': 3}}),
+                stack({'minecraft:blocks_attacks': {
+                    'item_damage': {'threshold': 0, 'base': 1, 'factor': 0}}}),
+                ]
     for item in variants:
         for damage in [0, 2, 8]:
             for pierce, behind, creative in [(False, False, False), (True, False, False),

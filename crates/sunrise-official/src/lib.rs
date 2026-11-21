@@ -12,6 +12,9 @@
 // registries. Without it, rustc can link a private copy into the official dylib.
 extern crate sunrise_game as _;
 
+#[cfg(feature = "sunrise-extras")]
+mod mod_audio;
+
 use sunrise_platform::hooks::{self, ClientIdentity, GetTheGame, Hooks};
 use sunrise_platform::{hud, lang, mod_rows, pages, release, settings};
 
@@ -108,6 +111,8 @@ static SUNRISE_ROW: mod_rows::Row = mod_rows::Row {
 const STORES: &[&dyn settings::Store] = &[
     #[cfg(feature = "sunrise-extras")]
     &sunrise_reconnect::SETTING,
+    #[cfg(feature = "sunrise-extras")]
+    &mod_audio::SETTING,
     &sunrise_discord::SETTING,
     #[cfg(feature = "sunrise-extras")]
     &sunrise_perf_overlay::SETTING,
@@ -116,6 +121,8 @@ const STORES: &[&dyn settings::Store] = &[
 const PAGES: &[&dyn pages::Page] = &[
     #[cfg(feature = "sunrise-extras")]
     &sunrise_reconnect::SECTION,
+    #[cfg(feature = "sunrise-extras")]
+    &mod_audio::SECTION,
     &sunrise_discord::SECTION,
     #[cfg(feature = "sunrise-extras")]
     &sunrise_perf_overlay::SECTION,

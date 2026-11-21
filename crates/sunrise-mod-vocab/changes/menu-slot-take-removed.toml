@@ -1,3 +1,0 @@
-ids = ["hook:menu_slot_take", "method:MenuPart::menu_slot_take", "type:MenuSlotTakeEvent"]
-why = "menu_slot_take is removed again until the hook's contract is settled on #1417. It merged ahead of that decision and never shipped in an SDK."
-migrate = "No mod built against a published SDK used it. A take notice returns through #1417's decision."

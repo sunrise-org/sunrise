@@ -10,7 +10,9 @@ use sunrise_client::{
     gossip::{GossipType, Gossips},
     items::{ItemStack, Items},
     menu::{Env, Input, Kind, Menu},
-    merchant::{self, Event, MerchantOffer, Session, TradeContext, TradeEnv, Trader, Trades},
+    merchant::{
+        self, Event, ItemCost, MerchantOffer, Session, TradeContext, TradeEnv, Trader, Trades,
+    },
     random_sequences::RandomSequences,
 };
 use sunrise_core::nbt::Tag;
@@ -296,6 +298,43 @@ pub fn main() -> sunrise_client::Result<()> {
                     write!(line, " {}", world.sequences.get(&id, seed).next_int())?;
                 }
                 writeln!(out, "{line}")?;
+            }
+            "offer_int" => {
+                let number = |key| kv[key].parse::<i32>().unwrap();
+                let mut offer = MerchantOffer {
+                    base_cost_a: ItemCost {
+                        stack: ItemStack::new("minecraft:emerald", number("base") as u32),
+                    },
+                    cost_b: None,
+                    result: ItemStack::new("minecraft:bread", 1),
+                    uses: number("uses"),
+                    max_uses: number("max"),
+                    reward_exp: false,
+                    special_price_diff: number("special"),
+                    demand: number("demand"),
+                    price_multiplier: kv["multiplier"].parse().unwrap(),
+                    xp: number("xp"),
+                };
+                let before = offer.cost_a_count(&items);
+                offer.update_demand();
+                offer.add_special_price_diff(number("delta"));
+                let mut session = Session::new(vec![offer], true);
+                session.level = 5;
+                session.xp = number("start");
+                session.notify_trade(0, None, &items);
+                let o = &mut session.offers[0];
+                let used = o.uses;
+                o.reset_uses();
+                writeln!(
+                    out,
+                    "{name} {before} {} {} {} {used} {} {} {}",
+                    o.demand,
+                    o.special_price_diff,
+                    o.cost_a_count(&items),
+                    o.uses,
+                    o.xp,
+                    session.xp
+                )?;
             }
             "price" => {
                 let mut m = world.merchant(&kv["v"], origin);

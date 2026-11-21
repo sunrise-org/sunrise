@@ -26,8 +26,7 @@ states are converted to API values, not each block in the returned columns.
 
 `ServerHost::terrain_surface(dimension, columns)` reads the level's generator, not resident
 chunks. It returns one optional `TerrainColumn` per input pair `(x, z)`, in input order.
-At most `MAX_TERRAIN_COLUMNS` (4,096) columns are accepted per call. The call has world-only
-load access and works identically for native and wasm mods.
+At most `MAX_TERRAIN_COLUMNS` (4,096) columns are accepted per call. The call is available in the World phase.
 
 - `height` is one above the highest solid block, skipping fluids, like OceanFloor. The scan
   starts at the level top, so the Nether returns its bedrock roof, not a floor.
@@ -58,7 +57,7 @@ nothing in it.
   doesn't know (as a chunk keeps one) and data the fixes can't read. Version 0 is a valid source.
 - The fixes that need a whole chunk don't run: those that look at the blocks around a block entity, and the one that
   removes bed block entities.
-- `Err` is an `NbtUpgradeError`, the same on native and wasm mods. Depth counts as the data is encoded: the root
+- `Err` is an `NbtUpgradeError`. Depth counts as the data is encoded: the root
   compound is at 0, and the compound the NBT writer puts around each element of a mixed list is a level of its
   own, so that element sits two levels below its list.
   - Refused before any fix runs, on the data you gave: `NegativeVersion`; `FutureVersion`, a version newer than the

@@ -48,8 +48,8 @@ fn ingredient_at_limit_decodes_and_one_record_past_returns_wire_error() {
 }
 
 #[test]
-fn structural_families_fit_the_guest_shadow_stack() {
-    // The guest reserves 256 KiB; retain half for callers and transport plumbing.
+fn structural_families_fit_a_small_stack() {
+    // Verify that the depth limit also bounds stack use.
     std::thread::Builder::new()
         .stack_size(128 * 1024)
         .spawn(|| {
@@ -111,7 +111,7 @@ fn structural_families_fit_the_guest_shadow_stack() {
 }
 
 #[test]
-fn vanilla_trees_keep_their_depth_on_the_guest_shadow_stack() {
+fn vanilla_trees_keep_their_depth_on_a_small_stack() {
     std::thread::Builder::new()
         .stack_size(128 * 1024)
         .spawn(|| {

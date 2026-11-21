@@ -286,7 +286,7 @@ fn the_mirrors_sky_rays_are_the_cameras_reflected() {
 }
 #[test]
 fn scaled_screenshots_follow_resolution_scale_and_quality_within_limits() {
-    use super::scaled_screenshot_factor as factor;
+    use super::screenshot::scaled_screenshot_factor as factor;
     let big = u64::MAX / 2;
     // The window's size at 100% and 1x; Resolution Scale below 100% stays the window's.
     assert_eq!(factor([1920, 1080], 1.0, 1, 16384, big), 1.0);
@@ -305,7 +305,10 @@ fn scaled_screenshots_follow_resolution_scale_and_quality_within_limits() {
     let max = 256 << 20;
     let f = factor([1920, 1080], 1.0, 8, 16384, max);
     let [w, h] = [1920, 1080].map(|s| (s as f32 * f) as u32);
-    assert!(u64::from(super::padded_row(w)) * u64::from(h) <= max, "{f}");
+    assert!(
+        u64::from(super::screenshot::padded_row(w)) * u64::from(h) <= max,
+        "{f}"
+    );
     assert!(f > 3.7, "{f}");
 }
 #[test]
@@ -616,7 +619,7 @@ fn special_material_batches_preserve_quad_order_and_offsets() {
     let mut batch = super::EntityBatch::default();
     let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8), false);
     let vertices = &batch.combined;
-    assert_eq!(counts, [4, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(counts, [4, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(
         vertices
             .as_chunks::<4>()
@@ -753,6 +756,15 @@ fn shaders_translate_to_hlsl_for_directx_12_and_glsl_for_opengl() {
     let mut files = Vec::new();
     wgsl_files(
         std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+        &mut files,
+    );
+    // The pack's own helpers (`pack_post.wgsl`) moved to sunrise-render-shaderpack's
+    // `pack_post`.
+    wgsl_files(
+        std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../sunrise-render-shaderpack/src"
+        )),
         &mut files,
     );
     assert!(files.len() >= 10, "{files:?}");
@@ -1474,10 +1486,12 @@ fn cracks_multiply_instead_of_covering_the_block() {
 fn hdr_screenshots_keep_every_10_bit_step() {
     // Rgb10a2Unorm: red in the low 10 bits, then green, then blue.
     let px = |r: u32, g: u32, b: u32| (r | g << 10 | b << 20 | 3 << 30).to_le_bytes();
-    let out = super::hdr10_to_rgb16(&[px(0, 1023, 512)]);
+    let out = super::screenshot::hdr10_to_rgb16(&[px(0, 1023, 512)]);
     assert_eq!(out, [0, 0, 0xff, 0xff, 0x80, 0x20]);
     assert_eq!(
-        super::hdr_screenshot_path(std::path::Path::new("screenshots/2026-10-28_12.00.00.png")),
+        super::screenshot::hdr_screenshot_path(std::path::Path::new(
+            "screenshots/2026-10-28_12.00.00.png"
+        )),
         std::path::Path::new("screenshots/2026-10-28_12.00.00-hdr.png")
     );
 }

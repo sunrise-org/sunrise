@@ -82,9 +82,6 @@ These correspond to NeoForge's other `ItemAccess` factories:
   Inserts are taken whole, and one item goes to the player only if they have none: into their
   inventory, or dropped at the root commit when it is full. Inserting nothing gives nothing.
 
-Wrappers may nest to any depth in a native mod's own code. A place sent across the wasm
-boundary may nest at most 15 wrappers deep, and a deeper one is refused there.
-
 ## Editing the whole stack
 
 To change components on the **whole stack**, use `place.edit(host, tx, |stack| { ... })`

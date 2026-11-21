@@ -1312,7 +1312,7 @@ fn entity_uuids(tag: &mut Tag) {
     match tag {
         Tag::Compound(c) => {
             let show_entity = matches!(c.get(&"action".into()), Some(Tag::String(a)) if a.to_string_lossy() == "show_entity");
-            for (k, v) in c.iter_mut() {
+            c.for_each_mut(|k, v| {
                 if show_entity && k.to_string_lossy() == "uuid" {
                     let ints = match v {
                         Tag::List(l) => l
@@ -1333,7 +1333,7 @@ fn entity_uuids(tag: &mut Tag) {
                 } else {
                     entity_uuids(v);
                 }
-            }
+            });
         }
         Tag::List(l) => l.iter_mut().for_each(entity_uuids),
         _ => {}

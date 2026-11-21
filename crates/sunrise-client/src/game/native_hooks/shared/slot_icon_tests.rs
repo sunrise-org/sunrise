@@ -9,8 +9,12 @@ use std::sync::{
 fn empty_slot_draws_icon_but_a_filled_slot_does_not() {
     mod_platform::testing::with_mods(mod_api::Mods::default(), || {
         crate::game::native_entity_refs::tests::with_client_game(|game| {
-            let icon = "gui/sprites/container/slot/shield";
-            assert!(game.gui.atlas.sprites.contains_key(icon));
+            let icon = "minecraft:container/slot/shield";
+            let Some(sunrise_client::hud::GuiSprite::Present { rect, .. }) =
+                game.gui.atlas.gui_lookup(icon)
+            else {
+                panic!("the shield icon must resolve to a real GUI sprite");
+            };
             game.screen = Screen::Inventory;
             game.container = Some((1, 2, 3));
             game.mod_screen = Some(OpenNativeScreen {
@@ -27,14 +31,14 @@ fn empty_slot_draws_icon_but_a_filled_slot_does_not() {
                     })],
                     ..Default::default()
                 },
+                mod_type: None,
                 data: Vec::new(),
                 extra: None,
             });
             let mut actual = HudBatch::scratch([128, 128]);
             game.draw_slot_item(&mut actual, None, 300, &None, 8.0, 18.0);
             let mut expected = HudBatch::scratch([128, 128]);
-            expected.sprite_scaled(&game.gui.atlas, icon, 8.0, 18.0, 16.0, 16.0, 0xFFFF_FFFF);
-            assert!(!expected.vertices.is_empty());
+            expected.rect_uv(8.0, 18.0, 16.0, 16.0, rect, 0xFFFF_FFFF);
             let geometry = |batch: &HudBatch| {
                 batch
                     .vertices
@@ -105,8 +109,8 @@ impl mod_api::Hooks for IconMod {
     }
     fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
         event
-            .blocks
-            .push(mod_api::Block::new("icon_open:machine", "minecraft:barrel").with_item(false));
+            .register(mod_api::Block::new("icon_open:machine", "minecraft:barrel").with_item(false))
+            .unwrap();
     }
 }
 struct Diagnostics(Mutex<Vec<String>>);

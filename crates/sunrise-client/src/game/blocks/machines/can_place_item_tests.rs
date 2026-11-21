@@ -6,7 +6,7 @@ use mod_api::{
 };
 use sunrise_client::{
     chunk::Chunk,
-    containers::{ModBlockEntity, ModContainerInsertRule},
+    containers::{ModBlockEntity, ModBlockEntityFields, ModContainerInsertRule},
 };
 use sunrise_core::position::ChunkPos;
 
@@ -26,6 +26,15 @@ impl BlockEntityPart for Filter {
             Some(2) => return None,
             Some(3) => return Some(event.slot == 2 && event.stack.count() == 1),
             Some(4) => return Some(event.slot == 1 && event.stack.count() == 2),
+            Some(5) => {
+                let barrel = mod_api::__private::block_key("minecraft:barrel").unwrap();
+                let metadata = super::super::api_values::block_metadata_table().unwrap();
+                return Some(
+                    event.pos == mod_api::BlockPos::new(TARGET.0, TARGET.1, TARGET.2)
+                        && event.state.block() == barrel
+                        && event.state.property(metadata, "open").unwrap() == Some("true"),
+                );
+            }
             _ => {}
         }
         match event.slot {
@@ -159,6 +168,71 @@ fn hopper_skips_a_refused_slot_and_preserves_the_stack_if_all_refuse() {
 
 #[test]
 #[ignore = "daily"]
+fn shared_admission_part_distinguishes_blocks_and_current_state() {
+    fixture(|game| {
+        let registry = game.pack.assets.registry;
+        let closed = registry.default_state("minecraft:barrel").unwrap();
+        let open = registry
+            .resolve(&sunrise_world::chunk::BlockState {
+                name: "minecraft:barrel".to_owned(),
+                properties: [("open".to_owned(), "true".to_owned())]
+                    .into_iter()
+                    .collect(),
+            })
+            .unwrap();
+        let chest = registry.default_state("minecraft:chest").unwrap();
+        let other = (TARGET.0 + 1, TARGET.1, TARGET.2);
+        game.world.block_entities.set_mod_containers(
+            [closed, open, chest]
+                .into_iter()
+                .map(|state| {
+                    (
+                        state.0,
+                        Arc::new(ModContainer {
+                            slots: 1,
+                            inputs: vec![0],
+                            ..Default::default()
+                        }),
+                    )
+                })
+                .collect(),
+        );
+        for (pos, state) in [(TARGET, closed), (other, open)] {
+            game.world.set(pos.0, pos.1, pos.2, state).unwrap();
+            let entity = ModBlockEntity::new(
+                "admission:filtered".into(),
+                ModBlockEntityFields {
+                    items: vec![None],
+                    data: vec![5],
+                    ..Default::default()
+                },
+            );
+            game.world
+                .block_entities
+                .insert(pos, BlockEntity::Mod(Box::new(entity)));
+        }
+        let mut attempt = PlacementAttempt::default();
+        let stack = ItemStack::new("minecraft:stone", 1);
+        for (pos, state, expected) in [
+            (TARGET, closed, false),
+            (TARGET, open, true),
+            (other, open, false),
+            (TARGET, chest, false),
+        ] {
+            game.world.set(pos.0, pos.1, pos.2, state).unwrap();
+            let containers = game.containers();
+            let view = containers.view(pos, false).unwrap();
+            assert_eq!(
+                containers.can_place(&view, 0, &stack, PlacementQuery::Offer(&mut attempt)),
+                expected,
+                "at {pos:?} with {state:?}",
+            );
+        }
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn dropper_skips_a_refused_slot() {
     fixture(|game| {
         let state = source(game, "minecraft:dropper", 9);
@@ -190,9 +264,9 @@ fn default_items_insert_checks_admission_and_overrides_the_declared_rule() {
         let resource = ItemResource::of(&stack.try_into_api().unwrap());
         assert_eq!(
             mod_api::run_transaction(game, |host, tx| {
-                let first = handler.insert_any(host, tx, &resource, 2);
+                let first = handler.insert(host, tx, &resource, 2).map_err(|_| ())?;
                 // Slot 1's declared OnlyWhenEmpty would refuse this subsequent insert.
-                let second = handler.insert(host, tx, 1, &resource, 1);
+                let second = handler.insert_at(host, tx, 1, &resource, 1);
                 Ok::<_, ()>((first, second))
             }),
             Ok((2, 1))
@@ -218,7 +292,7 @@ fn refusing_a_capability_insert_does_not_journal_the_slot() {
             ItemResource::of(&ItemStack::new("minecraft:stone", 1).try_into_api().unwrap());
         let before = (target(game).revision(), game.transactions.writes());
         let aborted = mod_api::run_transaction(game, |game, tx| {
-            assert_eq!(handler.insert(game, tx, 0, &resource, 1), 0);
+            assert_eq!(handler.insert_at(game, tx, 0, &resource, 1), 0);
             assert_eq!(game.journal_kept(), (0, 0));
             Err::<(), ()>(())
         });
@@ -258,7 +332,7 @@ fn admission_checks_the_offer_before_clamping_to_room() {
             .unwrap();
         assert_eq!(
             mod_api::run_transaction(game, |game, tx| {
-                let indexed = items.insert(game, tx, 2, &resource, 2);
+                let indexed = items.insert_at(game, tx, 2, &resource, 2);
                 let by_kind = storage.insert(game, tx, &resource, 2);
                 Ok::<_, ()>((indexed, by_kind))
             }),
@@ -322,6 +396,19 @@ fn storage_transfer_can_insert_two_despite_a_declared_rule_the_part_replaces() {
 #[ignore = "daily"]
 fn unrepresentable_hook_inputs_refuse_insertion_instead_of_using_any() {
     fixture(|game| {
+        let stone = ItemStack::new("minecraft:stone", 1);
+        let entity = target(game);
+        let mut attempt = PlacementAttempt::default();
+        let unloaded = World::new(BlockStateId(u32::MAX), 0);
+        assert_eq!(
+            attempt.ask(&game.world, TARGET, entity, 1, &stone),
+            Some(true)
+        );
+        assert_eq!(
+            attempt.ask(&unloaded, TARGET, entity, 1, &stone),
+            Some(false)
+        );
+
         let view = game.containers().view(TARGET, false).unwrap();
         let unknown = ItemStack::new("admission:not_registered", 1);
         assert_eq!(
@@ -333,7 +420,6 @@ fn unrepresentable_hook_inputs_refuse_insertion_instead_of_using_any() {
             unreachable!();
         };
         entity.items[2] = Some(unknown.clone());
-        let stone = ItemStack::new("minecraft:stone", 1);
         assert_eq!(game.add_item(None, &view, stone.clone(), None), Some(stone));
         assert_eq!(target(game).items, [None, None, Some(unknown)]);
     });
@@ -352,9 +438,9 @@ fn storage_rechecks_the_entity_after_an_accepted_write_in_the_same_attempt() {
         let resource =
             ItemResource::of(&ItemStack::new("minecraft:stone", 1).try_into_api().unwrap());
         assert_eq!(
-            mod_api::run_transaction(game, |host, tx| {
-                Ok::<_, ()>(handler.insert(host, tx, &resource, 65))
-            }),
+            mod_api::run_transaction(game, |host, tx| Ok::<_, ()>(
+                handler.insert(host, tx, &resource, 65)
+            )),
             Ok(64)
         );
         // Slot 2 would take the remainder if the query still saw slot 1 empty.
@@ -421,6 +507,12 @@ fn native_admission_allocates_only_when_preparing_subscribed_snapshots() {
     with_filter(|mods| {
         crate::game::api_values::install_parts(mods).unwrap();
         mod_api::__private::resolve_items(["minecraft:stone"]).unwrap();
+        let facts =
+            r#"{"defaults":{"minecraft:air":0},"states":[["a",true,false,"","minecraft:air"]]}"#;
+        let registry =
+            sunrise_world::registry::BlockRegistry::from_facts_json(facts.as_bytes()).unwrap();
+        super::super::api_values::resolve_block_definitions(&registry).unwrap();
+        let world = World::new(registry.default_state("minecraft:air").unwrap(), 0);
         let mut stack = ItemStack::new("minecraft:stone", 2);
         stack
             .data_mut()
@@ -434,29 +526,31 @@ fn native_admission_allocates_only_when_preparing_subscribed_snapshots() {
         // doesn't convert the component-bearing offer or the entity's saved fields.
         let plain = make_entity("admission:plain");
         let mut attempt = PlacementAttempt::default();
-        let (plain_answers, plain_allocs) =
-            measure(|| [0, 1].map(|slot| black_box(attempt.ask((0, 64, 0), &plain, slot, &stack))));
+        let (plain_answers, plain_allocs) = measure(|| {
+            [0, 1].map(|slot| black_box(attempt.ask(&world, (0, 64, 0), &plain, slot, &stack)))
+        });
         assert_eq!(plain_answers, [None, None]);
         assert_eq!(plain_allocs, 0);
 
         let mut filtered = make_entity("admission:filtered");
         let mut attempt = PlacementAttempt::default();
         let (first, setup_allocs) =
-            measure(|| black_box(attempt.ask(TARGET, &filtered, 0, &stack)));
+            measure(|| black_box(attempt.ask(&world, TARGET, &filtered, 0, &stack)));
         assert_eq!(first, Some(false));
         assert!(
             setup_allocs > 0,
             "allocation counter must observe snapshot creation"
         );
         stack.count = 1;
-        let (next, reuse_allocs) = measure(|| black_box(attempt.ask(TARGET, &filtered, 2, &stack)));
+        let (next, reuse_allocs) =
+            measure(|| black_box(attempt.ask(&world, TARGET, &filtered, 2, &stack)));
         assert_eq!(next, Some(true));
         assert_eq!(reuse_allocs, 0);
 
         *filtered.item_slot_mut(1).unwrap() = Some(ItemStack::new("minecraft:stone", 1));
         attempt.wrote_entity();
         let (refreshed, refresh_allocs) =
-            measure(|| black_box(attempt.ask(TARGET, &filtered, 2, &stack)));
+            measure(|| black_box(attempt.ask(&world, TARGET, &filtered, 2, &stack)));
         assert_eq!(refreshed, Some(false));
         assert!(refresh_allocs > 0);
         println!(

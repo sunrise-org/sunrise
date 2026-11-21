@@ -26,11 +26,11 @@ COMMIT = "0123456789abcdef0123456789abcdef01234567"
 class ReleaseFileTest(unittest.TestCase):
     def test_the_file_names_the_build_the_game_and_the_contract(self):
         files = {release_file.VERSION_RS: VERSION_RS, release_file.RUST_VERSION: "1.99.1\n"}
-        self.assertEqual(release_file.facts(files.__getitem__, "snapshot", "2026-11-16", COMMIT), {
+        self.assertEqual(release_file.facts(files.__getitem__, "dev", "2026-11-16", COMMIT), {
             "contract": 1,
             "launcher_min": "1.0.0",
-            "channel": "snapshot",
-            "build": "snapshot-2026-11-16-0123456",
+            "channel": "dev",
+            "build": "dev-2026-11-16-0123456",
             "commit": COMMIT,
             "version_id": "9.9",
             "vanilla": "9.9 Pre-Release 1",

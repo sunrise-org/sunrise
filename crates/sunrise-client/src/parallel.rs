@@ -354,7 +354,7 @@ impl ListenSnapshot {
 /// `work` is a function pointer, not a closure, so it captures nothing: what a worker sees is
 /// `view` and its item, and nothing that only the tick thread may touch. Inside `work`,
 /// `sunrise_core::tick_phase::in_tick_phase` holds on every thread, so tick-owned state refuses it by name
-/// ([`TickThread::mint`], `block_contact`'s level, wasm calls):
+/// ([`TickThread::mint`], `block_contact`'s level):
 ///
 /// ```no_run
 /// # use sunrise_client_lib::parallel::{phase, TickThread};

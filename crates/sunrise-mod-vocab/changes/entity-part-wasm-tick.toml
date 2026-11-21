@@ -1,2 +1,0 @@
-ids = ["method:EntitiesRegistrar::attach_entity_part"]
-why = "Entity parts reach wasm mods (#792 stage 4b): a wasm mod attaches an EntityPart with Registrar::entity_part, and its general_entity_tick crosses, with each row's own attachments and a trap rolling the row back. The part's goal, behavior, spawn-size and shear methods stay native-only, and a wasm part that overrides one is refused at load by name. general_entity_tick keeps its version: the native contract the hook already documents is unchanged."

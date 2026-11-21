@@ -111,7 +111,11 @@ impl Game<'_> {
                 !r.iter().all(|v| v.is_finite())
                     || !matches!(
                         t,
-                        Target::Player | Target::Guest(_) | Target::Mob(_) | Target::Other(_)
+                        Target::Player
+                            | Target::Guest(_)
+                            | Target::Mob(_)
+                            | Target::Other(_)
+                            | Target::General(_)
                     )
             })
         {
@@ -129,7 +133,7 @@ impl Game<'_> {
         delta: [f64; 3],
         cause: MoveCause,
     ) -> Option<[f64; 3]> {
-        if self.remote.is_some() || !delta.iter().all(|v| v.is_finite() && v.abs() <= 64.0) {
+        if self.remote.is_some() || !sunrise_client::move_gate::valid_mod_move_delta(delta) {
             return None;
         }
         let mover = sunrise_client::move_gate::mover_of(cause)?;
@@ -140,15 +144,9 @@ impl Game<'_> {
                 Target::Guest(conn) => conn,
                 _ => return None,
             };
-            // The level the player is in, as a teleport is made in it, with that level's moving
-            // colliders when it is not the one ticking.
-            let elsewhere = self.resident_target_dimension(t)? != self.dim;
+            // A teleport is made in the player's level, with that level's moving colliders.
             return self.in_target_level(t, |game| {
-                if elsewhere {
-                    game.in_this_levels_colliders(|game| game.move_player_by(t, conn, mover, delta))
-                } else {
-                    game.move_player_by(t, conn, mover, delta)
-                }
+                game.in_this_levels_colliders(|game| game.move_player_by(t, conn, mover, delta))
             })?;
         }
         let handle = self.native_walk_entity(entity.id())?;
@@ -196,6 +194,13 @@ impl Game<'_> {
                     o.yaw = yaw;
                     o.pitch = pitch;
                 });
+                true
+            }
+            Target::General(id) => {
+                let Some(row) = self.resident_entities.general.row_mut(id) else {
+                    return false;
+                };
+                row.rotation = [yaw, pitch];
                 true
             }
             _ => false,

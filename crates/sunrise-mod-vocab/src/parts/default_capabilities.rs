@@ -1,6 +1,5 @@
 //! Type-bound declarations consumed by the game's default capability providers.
 use super::*;
-use crate::wire::{Reader, Wire, WireError, Writer};
 
 /// A registered item's dynamic slot count. The item type is bound at registration; this
 /// callback runs only for an actual runtime lookup, never to infer whether it is registered.
@@ -8,8 +7,6 @@ pub trait ItemContainerProvider: Send + Sync {
     /// The item's slot count now, or none to let the next registration answer.
     fn slots(&self, host: &dyn Host) -> Option<u32>;
 }
-
-crate::wire::wire_handlers::handler!(dyn ItemContainerProvider, "ItemContainerProvider");
 
 impl<F: Fn(&dyn Host) -> Option<u32> + Send + Sync> ItemContainerProvider for F {
     fn slots(&self, host: &dyn Host) -> Option<u32> {

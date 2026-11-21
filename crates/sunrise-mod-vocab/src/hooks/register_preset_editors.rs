@@ -32,7 +32,7 @@ Use the existing screen render and input hooks for the custom presentation and c
 returns its working dimension stems. `host.set_preset_editor_dimensions(...)` replaces
 that working copy after structural validation. Done commits it to world creation;
 Cancel and Escape discard it. Neither path changes an existing world. Screen drawing
-and input work before a world is loaded and use the same API on native and wasm.
+and input work before a world is loaded.
 Keep custom drawing above the bottom 33 GUI pixels reserved for Done and Cancel.
 Dimension ids, stem structure and flat-layer height bounds are checked before accepting
 an edit; registry resolution and generator-specific decoding still run when opening the world.

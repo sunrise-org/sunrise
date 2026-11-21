@@ -130,10 +130,9 @@ pub fn update_entity_fluids(
     (water_height, lava_height, eye_in_water)
 }
 impl ItemEntity {
-    /// `Entity.getEyeY` of an item (eye height 0.2125), where
-    /// `updateFluidHeightAndDoFluidPushing` reads the fluid.
+    /// `Entity.getEyeY` of an item, sampled by `EntityFluidInteraction.update`.
     pub fn fluid_eye_y(&self) -> f64 {
-        self.position.y + f64::from(0.2125f32)
+        self.position.y + Self::EYE_HEIGHT
     }
     /// The fluid push as the game runs it, for the unit tests.
     #[cfg(test)]
@@ -442,9 +441,8 @@ mod tests {
             position: at,
             previous: at,
             velocity: Vec3::ZERO,
-            on_ground: false,
+            ground: Default::default(),
             vertical_collision: false,
-            horizontal_collision: false,
             age: 0,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -548,7 +546,7 @@ mod tests {
             velocity: Vec3::ZERO,
             value: 1,
             age: 0,
-            on_ground: false,
+            ground: Default::default(),
             count: 1,
             ticks: 0,
             health: 5,
@@ -567,6 +565,8 @@ mod tests {
             None,
             &fluids,
             crate::test_resources::server_loop_context(),
+            None,
+            sunrise_client::motion::dry_side(),
             &mut |_, _| {},
         ));
         assert_eq!(still.position.x, at.x);
@@ -583,6 +583,8 @@ mod tests {
             None,
             &fluids,
             crate::test_resources::server_loop_context(),
+            None,
+            sunrise_client::motion::dry_side(),
             &mut |_, _| {},
         ));
         // Current pushes the orb, then underwater and air drag each widen
@@ -602,6 +604,8 @@ mod tests {
                 None,
                 &fluids,
                 crate::test_resources::server_loop_context(),
+                None,
+                sunrise_client::motion::dry_side(),
                 &mut |_, _| {},
             );
         }
@@ -651,7 +655,7 @@ mod tests {
             velocity: Vec3::ZERO,
             value: 1,
             age: 0,
-            on_ground: false,
+            ground: Default::default(),
             count: 1,
             ticks: 0,
             health: 5,
@@ -669,6 +673,8 @@ mod tests {
             None,
             &fluids,
             crate::test_resources::server_loop_context(),
+            None,
+            sunrise_client::motion::dry_side(),
             &mut |_, _| {},
         ));
         assert!(

@@ -914,6 +914,7 @@ impl Game<'_> {
                 if let Some(ref broken) = broken {
                     self.award_stat("broken", &broken.item, 1);
                     self.player_equipment_broke(world_equipment_slot(slot), broken);
+                    self.player_item_destroyed(&stack, None);
                 }
                 return broken;
             }
@@ -926,6 +927,12 @@ impl Game<'_> {
         if let Some(ref broken) = broken {
             self.award_stat("broken", &broken.item, 1);
             self.player_equipment_broke(world_equipment_slot(slot), broken);
+            let hand = match slot {
+                EquipmentSlot::MainHand => Some(Hand::Main),
+                EquipmentSlot::OffHand => Some(Hand::Off),
+                _ => None,
+            };
+            self.player_item_destroyed(&stack, hand);
             if armor_index(slot).is_some() {
                 self.apply_equipment();
             }
@@ -1779,7 +1786,8 @@ mod tests {
         game.block_ticks
             .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
             .unwrap();
-        assert!(game.run_command("forceload add 0 0"));
+        game.build_registries();
+        assert!(game.as_console(|game| game.run_command("forceload add 0 0")));
         game.enter_level(Dim::Overworld).unwrap();
         let pig = summon_mob(game, "minecraft:pig", "{NoAI:1b}");
         let zombie = summon_mob(game, "minecraft:zombie", ZOMBIE_NBT);

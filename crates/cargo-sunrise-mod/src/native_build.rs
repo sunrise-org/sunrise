@@ -48,10 +48,10 @@ pub(crate) fn install_host(work: &Path) {
 
 /// Fetches through the proxy named in the environment (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`).
 fn get(url: &str) -> Result<host::Body, String> {
-    match sunrise_port_pack::net::agent(url).get(url).call() {
+    match sunrise_proxy::get(url, &[], None) {
         Ok(response) => Ok(Some(Box::new(response.into_reader()))),
-        Err(ureq::Error::Status(404, _)) => Ok(None),
-        Err(error) => Err(format!("{url}: {error}")),
+        Err(error) if error.status() == Some(404) => Ok(None),
+        Err(error) => Err(error.to_string()),
     }
 }
 

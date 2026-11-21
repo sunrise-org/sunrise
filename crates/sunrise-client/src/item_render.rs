@@ -221,8 +221,14 @@ pub struct ItemRenderState {
     /// In HDR output, the block light of an item that glows: its block's, as a placed one has
     /// it, so a torch doesn't go dark in the shade while it shines. 0 for the rest.
     pub hdr_light: u8,
+    /// A third-person held-item submission's opaque ARGB multiplier, never cached with the model.
+    held_tint: Option<u32>,
 }
 impl ItemRenderState {
+    /// Apply a held-item Part's RGB answer to this draw only, preserving model alpha.
+    pub fn set_held_tint(&mut self, rgb: u32) {
+        self.held_tint = Some(rgb | 0xFF00_0000);
+    }
     pub fn is_empty(&self) -> bool {
         self.layers.is_empty()
     }
@@ -231,13 +237,17 @@ impl ItemRenderState {
         self.layers.first().is_some_and(|l| l.uses_block_light)
     }
     /// `getModelBoundingBox`: the transformed extents of every layer, as
-    /// (min, max); a zero box at the origin when there are none.
+    /// (min, max); a zero box at the origin when there are none. Each extent is
+    /// `Vector3f.mulPosition`'s (JOML's `Math.fma` unfused, summed from the right).
     pub fn bounding_box(&self) -> (Vec3, Vec3) {
         let mut lo = Vec3::splat(f32::INFINITY);
         let mut hi = Vec3::splat(f32::NEG_INFINITY);
         for layer in &self.layers {
+            let [c0, c1, c2, c3] = layer.matrix.to_cols_array_2d();
             for p in layer.extents.iter() {
-                let q = layer.matrix.transform_point3(*p);
+                let q = Vec3::from_array(std::array::from_fn(|row| {
+                    c0[row] * p.x + (c1[row] * p.y + (c2[row] * p.z + c3[row]))
+                }));
                 lo = lo.min(q);
                 hi = hi.max(q);
             }
@@ -278,6 +288,13 @@ impl ItemRenderState {
         pose: Mat4,
         sink: &mut dyn ItemSink,
     ) {
+        let mut tinted;
+        let sink: &mut dyn ItemSink = if let Some(tint) = self.held_tint {
+            tinted = TintedItemSink { sink, tint };
+            &mut tinted
+        } else {
+            sink
+        };
         for layer in &self.layers {
             let m = pose * layer.matrix;
             match &layer.geometry {
@@ -366,7 +383,10 @@ impl ItemRenderState {
                 } else {
                     -1
                 };
-                let colors = AXES.map(|d| shaded(argb(color), normals.face(d), lights));
+                let color = self.held_tint.map_or(argb(color), |tint| {
+                    crate::hud_layout::multiply(argb(color), tint)
+                });
+                let colors = AXES.map(|d| shaded(color, normals.face(d), lights));
                 let frame = &mut *skin.frame;
                 frame.jobs.push(SkinJob {
                     first: run.first,
@@ -386,6 +406,18 @@ impl ItemRenderState {
             skin.grow_bounds(m, bounds);
         }
         true
+    }
+}
+
+/// Multiplies every submitted quad's RGB, including special models, before the world sink lights it.
+struct TintedItemSink<'a> {
+    sink: &'a mut dyn ItemSink,
+    tint: u32,
+}
+impl ItemSink for TintedItemSink<'_> {
+    fn quad(&mut self, mut quad: ItemQuad) {
+        quad.color = crate::hud_layout::multiply(quad.color, self.tint);
+        self.sink.quad(quad);
     }
 }
 
@@ -1207,6 +1239,7 @@ impl ItemRenderer {
             cit_glint: None,
             hdr_tier: 0,
             hdr_light: 0,
+            held_tint: None,
         }
     }
     /// `GrassColor.get` over the loaded colormap.
@@ -1527,35 +1560,44 @@ pub fn cluster_poses(state: &ItemRenderState, pose: Mat4, amount: u32, seed: i64
         return Vec::new();
     }
     let (lo, hi) = state.bounding_box();
-    cluster_poses_with_depth(pose, amount, seed, hi.z - lo.z)
+    // `AABB.getZsize`, in doubles, then narrowed.
+    let depth = (f64::from(hi.z) - f64::from(lo.z)) as f32;
+    cluster_poses_with_depth(pose, amount, seed, depth)
 }
 
 /// [`cluster_poses`] with the depth of the resolved model's bounding box
-/// already computed for this draw (also used to place the stack's bob).
+/// already computed for this draw (also used to place the stack's bob). Each
+/// copy's `PoseStack.translate` is JOML's.
 pub fn cluster_poses_with_depth(pose: Mat4, amount: u32, seed: i64, depth: f32) -> Vec<Mat4> {
+    use crate::camera::joml;
     use sunrise_core::random::{LegacyRandom, RandomSource};
     let mut out = Vec::new();
     if amount == 0 {
         return out;
     }
+    let pose = joml::Mat4::affine(pose);
+    let translated = |p: joml::Mat4, x: f32, y: f32, z: f32| {
+        let mut p = p;
+        p.translate(x, y, z);
+        p
+    };
     let mut random = LegacyRandom::new(seed);
     let mut next = || random.next_float() * 2.0 - 1.0;
     if depth > 0.0625 {
-        out.push(pose);
+        out.push(pose.to_glam());
         for _ in 1..amount {
             let (x, y, z) = (next() * 0.15, next() * 0.15, next() * 0.15);
-            out.push(pose * Mat4::from_translation(Vec3::new(x, y, z)));
+            out.push(translated(pose, x, y, z).to_glam());
         }
     } else {
         let offset = depth * 1.5;
-        let mut p = pose
-            * Mat4::from_translation(Vec3::new(0.0, 0.0, -(offset * (amount - 1) as f32 / 2.0)));
-        out.push(p);
-        p *= Mat4::from_translation(Vec3::new(0.0, 0.0, offset));
+        let mut p = translated(pose, 0.0, 0.0, -(offset * (amount - 1) as f32 / 2.0));
+        out.push(p.to_glam());
+        p.translate(0.0, 0.0, offset);
         for _ in 1..amount {
             let (x, y) = (next() * 0.15 * 0.5, next() * 0.15 * 0.5);
-            out.push(p * Mat4::from_translation(Vec3::new(x, y, 0.0)));
-            p *= Mat4::from_translation(Vec3::new(0.0, 0.0, offset));
+            out.push(translated(p, x, y, 0.0).to_glam());
+            p.translate(0.0, 0.0, offset);
         }
     }
     out
@@ -1937,6 +1979,7 @@ mod tests {
             cit_glint: None,
             hdr_tier: 0,
             hdr_light: 0,
+            held_tint: None,
         };
         let poses = [
             Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0)),

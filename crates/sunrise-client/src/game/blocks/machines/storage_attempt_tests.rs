@@ -23,6 +23,7 @@ type Trace = Arc<Mutex<Vec<String>>>;
 #[derive(Default)]
 struct Rules {
     slots: Option<usize>,
+    zero_capacity_slot: Option<usize>,
     accept: Option<&'static str>,
     notify: bool,
     release_first: bool,
@@ -72,10 +73,14 @@ impl ResourceHandler<ItemResource> for Storage {
     fn amount(&self, host: &mut dyn ServerHost, slot: usize) -> u32 {
         self.stack(host, slot).map_or(0, |stack| stack.count())
     }
-    fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: &ItemResource) -> u32 {
-        64
+    fn capacity(&self, _: &mut dyn ServerHost, slot: usize, _: Option<&ItemResource>) -> u32 {
+        if self.probe.rules.lock().unwrap().zero_capacity_slot == Some(slot) {
+            0
+        } else {
+            64
+        }
     }
-    fn insert(
+    fn insert_at(
         &self,
         _: &mut dyn ServerHost,
         _: &Transaction,
@@ -85,13 +90,13 @@ impl ResourceHandler<ItemResource> for Storage {
     ) -> u32 {
         panic!("automation must use the storage's indexless insertion")
     }
-    fn insert_any(
+    fn insert(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, Overanswered> {
         assert_eq!(amount, 1);
         assert_eq!(host.transaction_depth(tx), Some(0));
         let item = mod_api::__private::item_key_id(resource.as_stack().item()).unwrap();
@@ -118,7 +123,7 @@ impl ResourceHandler<ItemResource> for Storage {
         };
         if accept && forward {
             let sink = self.at.level.capability(host, &ITEMS, SINK, None).unwrap();
-            return sink.insert_any(host, tx, resource, amount);
+            return sink.insert(host, tx, resource, amount);
         }
         let entity = self.entity(host);
         if accept {
@@ -131,9 +136,9 @@ impl ResourceHandler<ItemResource> for Storage {
         if notify {
             entity.set_changed(host).unwrap();
         }
-        u32::from(accept)
+        Ok(u32::from(accept))
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -180,7 +185,7 @@ impl ResourceHandler<ItemResource> for Storage {
                 .capability(host, &ITEMS, [8, 64, 8], None)
                 .unwrap();
             let held = hopper.resource(host, 0).unwrap();
-            assert_eq!(hopper.extract(host, tx, 0, &held, 63), 63);
+            assert_eq!(hopper.extract_at(host, tx, 0, &held, 63), 63);
         }
         if notify {
             entity.set_changed(host).unwrap();
@@ -223,8 +228,8 @@ impl BlockPart for Probe {
                 let sink = event.level.capability(host, &ITEMS, OTHER, None).unwrap();
                 host.transaction(|host, tx| {
                     if let Some(resource) = source.resource(host, 0) {
-                        let taken = source.extract(host, tx, 0, &resource, 1);
-                        assert_eq!(sink.insert_any(host, tx, &resource, taken), taken);
+                        let taken = source.extract_at(host, tx, 0, &resource, 1);
+                        assert_eq!(sink.insert(host, tx, &resource, taken), Ok(taken));
                     }
                     if self.rules.lock().unwrap().replace_source_on_notice {
                         let stick = ItemResource::of(
@@ -234,8 +239,8 @@ impl BlockPart for Probe {
                             )
                             .unwrap(),
                         );
-                        assert_eq!(sink.extract(host, tx, 0, &stick, 1), 1);
-                        assert_eq!(source.insert(host, tx, 0, &stick, 1), 1);
+                        assert_eq!(sink.extract_at(host, tx, 0, &stick, 1), 1);
+                        assert_eq!(source.insert_at(host, tx, 0, &stick, 1), 1);
                     }
                     Ok::<_, ()>(())
                 })
@@ -278,8 +283,8 @@ impl BlockPart for CommitMover {
         if let Some(resource) = source.resource(host, 0) {
             let other = event.level.capability(host, &ITEMS, OTHER, None).unwrap();
             host.transaction(|host, tx| {
-                assert_eq!(source.extract(host, tx, 0, &resource, 1), 1);
-                assert_eq!(other.insert_any(host, tx, &resource, 1), 1);
+                assert_eq!(source.extract_at(host, tx, 0, &resource, 1), 1);
+                assert_eq!(other.insert(host, tx, &resource, 1), Ok(1));
                 Ok::<_, ()>(())
             })
             .unwrap();
@@ -778,6 +783,18 @@ fn full_storage_and_fully_stacked_hopper_are_the_only_capacity_shortcuts() {
             game.tick_hopper(HOPPER);
             assert_eq!(trace(&probe), ["face:Up"]);
             assert_eq!(game.hopper_cooldown(HOPPER), 0);
+
+            // An empty index with no capacity is full too, so there is still no push.
+            probe.rules.lock().unwrap().zero_capacity_slot = Some(1);
+            game.world
+                .block_entities
+                .get_mut(&BELOW)
+                .unwrap()
+                .slots_mut()[1] = None;
+            probe.trace.lock().unwrap().clear();
+            game.tick_hopper(HOPPER);
+            assert_eq!(trace(&probe), ["face:Up"]);
+            assert_eq!(game.hopper_cooldown(HOPPER), 0);
         },
     );
 }
@@ -1242,12 +1259,16 @@ fn dropper_removes_accepted_source_before_a_real_root_commit_callback() {
                 rules.forward_to_vanilla = true;
             }
             game.dispense_from(BlockPos::new(8, 64, 8), state).unwrap();
+            // The forwarded slot-less insert owns a nested journal. Its commit must not
+            // notify the sink before the root closes with the reserved source already gone.
             assert_eq!(
                 trace(&probe),
                 [
                     "face:Up",
                     "open",
                     "insert:minecraft:diamond",
+                    "open",
+                    "commit",
                     "commit",
                     "sink-source:0:RootClosing"
                 ]

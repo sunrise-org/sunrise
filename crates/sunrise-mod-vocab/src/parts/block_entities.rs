@@ -38,7 +38,7 @@ pub fn block_entity_transform(id: &str) -> Option<&'static dyn crate::BlockEntit
 
 /// Owned declarations of the block entity types mods registered.
 /// The game converts these snapshots to its content model when registration freezes.
-pub fn block_entity_types() -> &'static [BlockEntityTypeDecl] {
+pub fn block_entity_types() -> &'static [(&'static str, BlockEntityTypeDecl)] {
     installed().map_or(&[], |installed| &installed.block_entity_types)
 }
 
@@ -157,11 +157,13 @@ impl dyn Registrar + '_ {
     /// Attach a Part to a native type, including one another mod declares later.
     /// Vanilla keys are usable for capabilities, but not for native payload Parts.
     ///
-    /// A type declared by another package takes this package's Part only when this package lists
-    /// the declaring package in `[dependencies]`; otherwise load is refused, naming the type, this
-    /// package and "declare <package> as a dependency". A type no package declares is refused too,
-    /// unless the type's namespace is the id of an optional dependency that is not installed (an
-    /// absent package's other namespaces are unknown): the Part is then skipped without a refusal.
+    /// A type declared by another package takes this package's Part only when its
+    /// `[dependencies]` row for the declaring package applies on this installation side and
+    /// survives instance overrides. Otherwise load is refused, naming the type, this package
+    /// and "declare <package> as a dependency". A type no package declares is refused too.
+    /// The Part is skipped only when the type's namespace is the id of an absent package
+    /// with a surviving, applicable optional dependency row. An absent package's other
+    /// namespaces are unknown; a present package must declare the type.
     /// The Part's saved state is the key it declares (see [`Self::block_entity_part_with_state`]),
     /// which a package declares only in its own namespace, so it is saved under this package's id; it
     /// reaches the owner's state only through the owner's declared attachments. Declaring the type, its
@@ -177,7 +179,7 @@ impl dyn Registrar + '_ {
     /// [`Self::block_entity_part`] for a Part with typed state (`BlockEntityPartState`):
     /// each block entity of type `kind` keeps one `P::Data`, under `P::DATA`. Refused, and
     /// reported as the mod's registration refusal, when `P::DATA` syncs, copies on death,
-    /// lacks the codec a wasm mod needs, is outside the mod's namespaces (a Part on another
+    /// is outside the mod's namespaces (a Part on another
     /// package's type declares its state key as its own package does), or names a key
     /// this mod already declared with another type.
     pub fn block_entity_part_with_state<P: crate::BlockEntityPartState>(

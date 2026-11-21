@@ -470,7 +470,7 @@ impl Shared {
             .spawn(move || {
                 let fetched = (|| {
                     let current = install.current().unwrap_or_default();
-                    let release = update::release(None)?;
+                    let release = update::newest(&current)?;
                     if !update::update_available(&release.tag, &current) {
                         return Ok(None);
                     }

@@ -470,14 +470,14 @@ impl Game<'_> {
         name: &str,
         events: Vec<(String, String, Option<i32>)>,
     ) {
-        let board = &mut self.score.board;
-        if board.objectives.is_empty() {
+        if self.score.board.objectives.is_empty() {
             return;
         }
         for (ty, key, amount) in events {
             let criteria = sb::stat_criteria(&ty, &key);
-            if board.has_objectives_for(&criteria) {
-                board.for_all_objectives(&criteria, name, |v| {
+            if self.score.board.has_objectives_for(&criteria) {
+                self.journal_scoreboard();
+                self.score.board.for_all_objectives(&criteria, name, |v| {
                     amount.map_or(0, |n| v.wrapping_add(n))
                 });
             }

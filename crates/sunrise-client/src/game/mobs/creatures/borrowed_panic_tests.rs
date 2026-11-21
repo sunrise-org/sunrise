@@ -16,7 +16,6 @@ enum Family {
     Shield,
     Totem,
     Movement,
-    Breathing,
     Goal,
     MountedGoal,
     Knockback,
@@ -235,13 +234,6 @@ impl mod_api::Hooks for Hooks {
     ) {
         self.0.hear(Family::Movement, event.entity == 72);
     }
-    fn living_breathe(
-        &self,
-        _: &dyn mod_api::LoopContext,
-        event: &mut mod_api::LivingBreatheEvent<'_>,
-    ) {
-        self.0.hear(Family::Breathing, event.entity == 72);
-    }
     fn living_use_totem(
         &self,
         host: &mut dyn mod_api::HitHost,
@@ -423,7 +415,6 @@ fn run_output(family: Family, output: Output) {
                             }
                         }
                         if id == 72 {
-                            mob.air = 100;
                             if family == Family::Knockback {
                                 mob.add_effect(
                                     sunrise_client::brewing::effect("borrowed-panic:hit")
@@ -760,7 +751,7 @@ macro_rules! cases {
         fn $name() { run(Family::$family); }
     )*};
 }
-cases!(damage => Damage, shield => Shield, totem => Totem, movement => Movement, breathing => Breathing, goal => Goal, mounted_goal => MountedGoal, knockback => Knockback, landing => Landing);
+cases!(damage => Damage, shield => Shield, totem => Totem, movement => Movement, goal => Goal, mounted_goal => MountedGoal, knockback => Knockback, landing => Landing);
 
 #[test]
 #[ignore = "daily"]
@@ -1022,4 +1013,183 @@ fn retained_mixed_order() {
 #[ignore = "daily"]
 fn retained_reset() {
     run_output(Family::Damage, Output::Reset);
+}
+
+/// `living_breathe` with the owning host: a listener reads the mob's air and edits what it holds
+/// through a transaction, and the game applies its answer to the air it had decided on, or
+/// refuses when the listener changed that air and rolls the transactional edit back.
+struct Breather {
+    meddle: bool,
+    seen_air: Arc<std::sync::Mutex<Vec<i32>>>,
+}
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for Breather {
+    fn living_breathe(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::LivingBreatheEvent,
+    ) {
+        use mod_api::HostTransaction;
+        if event.entity.id() != 72 {
+            return;
+        }
+        let entity = event.entity.entity();
+        self.seen_air
+            .lock()
+            .unwrap()
+            .push(entity.air_supply(host).unwrap());
+        let place = mod_api::ItemPlace::Equipment {
+            entity: 72,
+            slot: mod_api::EquipmentSlot::MainHand,
+        };
+        host.transaction(|host, tx| place.edit(host, tx, |stack| stack.set_damage(5)))
+            .unwrap();
+        if self.meddle {
+            assert!(entity.set_air_supply(host, 50));
+        }
+        event.can_breathe = false;
+        event.consume = 7;
+    }
+}
+
+/// One tick of a zombie with 100 air and an iron sword: the air it listened to, then the air
+/// and the sword's damage the tick left.
+fn breathing_tick(meddle: bool) -> (Vec<i32>, i32, i32) {
+    crate::entry::install_client_hooks();
+    let _ =
+        sunrise_client::block_contact::HOOKS.set(crate::game::native_hooks::BLOCK_CONTACT_HOOKS);
+    let scratch = Scratch(std::env::temp_dir().join(format!(
+        "sunrise-breathing-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    )));
+    let seen_air = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut left = (0, 0);
+    mod_platform::testing::with_mods(
+        vec![mod_api::ModEntry::new(
+            "breathing",
+            Box::new(Breather {
+                meddle,
+                seen_air: seen_air.clone(),
+            }),
+        )]
+        .into(),
+        || {
+            crate::game::native_entity_refs::tests::with_game(|game| {
+                game.world_root = scratch.0.clone();
+                game.enter_level(Dim::Overworld).unwrap();
+                game.options.dedicated = Some(Vec::new());
+                game.world
+                    .chunks
+                    .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+                assert!(game.entity_ticking_area()(1, 0));
+                let kind = game
+                    .res
+                    .mob_types()
+                    .get("minecraft:zombie")
+                    .unwrap()
+                    .clone();
+                let mut mob = Mob::new(72, kind, Vec3::new(2.0, 80.0, 0.5), 0.0);
+                mob.no_ai = true;
+                mob.air = 100;
+                mob.extra
+                    .set_main_hand_stack(Some(sunrise_client::items::ItemStack::new(
+                        "minecraft:iron_sword",
+                        1,
+                    )));
+                game.mobs.push(mob);
+                game.tick_creature_entities().unwrap();
+                let mob = game.mobs.iter().find(|m| m.id == 72).unwrap();
+                left = (mob.air, mob.extra.main_hand_stack().unwrap().damage);
+            });
+        },
+    );
+    let seen = seen_air.lock().unwrap().clone();
+    (seen, left.0, i32::try_from(left.1).unwrap())
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_mob_breathes_with_what_its_listener_answers_and_wrote() {
+    // Vanilla would raise the 100 air by 4; the listener took 7 and damaged its sword.
+    assert_eq!(breathing_tick(false), (vec![100], 93, 5));
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_mob_whose_air_the_listener_changed_keeps_it_and_loses_the_transactional_writes() {
+    // The decision read 100; the listener left 50, so the answer is refused rather than
+    // recomputed (not 43, not 54), and the sword's edit is undone.
+    assert_eq!(breathing_tick(true), (vec![100], 50, 0));
+}
+
+/// A listener that panics in the owner's `living_breathe` callback keeps its typed payload, leaves
+/// the mob's air as the interrupted tick found it, and is asked again, answering this time, by
+/// the next tick.
+struct BreathPanic(Arc<AtomicUsize>);
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for BreathPanic {
+    fn living_breathe(
+        &self,
+        _: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::LivingBreatheEvent,
+    ) {
+        if event.entity.id() != 72 {
+            return;
+        }
+        if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+            panic!("real breathing listener");
+        }
+        event.can_breathe = false;
+        event.consume = 7;
+    }
+}
+#[test]
+#[ignore = "daily"]
+fn retained_breathing_tail() {
+    crate::entry::install_client_hooks();
+    let _ =
+        sunrise_client::block_contact::HOOKS.set(crate::game::native_hooks::BLOCK_CONTACT_HOOKS);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("sunrise-breath-panic-{}", std::process::id())));
+    mod_platform::testing::with_mods(
+        vec![mod_api::ModEntry::new(
+            "breath-panic",
+            Box::new(BreathPanic(calls.clone())),
+        )]
+        .into(),
+        || {
+            crate::game::native_entity_refs::tests::with_game(|game| {
+                game.world_root = scratch.0.clone();
+                game.enter_level(Dim::Overworld).unwrap();
+                game.options.dedicated = Some(Vec::new());
+                game.world
+                    .chunks
+                    .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+                let kind = game
+                    .res
+                    .mob_types()
+                    .get("minecraft:zombie")
+                    .unwrap()
+                    .clone();
+                let mut mob = Mob::new(72, kind, Vec3::new(2.0, 80.0, 0.5), 0.0);
+                mob.no_ai = true;
+                mob.air = 100;
+                game.mobs.push(mob);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    game.tick_creature_entities()
+                }));
+                assert_eq!(
+                    result.unwrap_err().downcast_ref::<&str>(),
+                    Some(&"real breathing listener")
+                );
+                assert_eq!(calls.load(Ordering::SeqCst), 1);
+                assert_eq!(game.mobs[0].air, 100);
+                game.tick_creature_entities().unwrap();
+                assert_eq!(calls.load(Ordering::SeqCst), 2);
+                assert_eq!(game.mobs[0].air, 93);
+            });
+        },
+    );
 }

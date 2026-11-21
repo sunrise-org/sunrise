@@ -13,10 +13,12 @@ mod attributes;
 pub mod colors;
 pub mod creative_tabs;
 pub mod expr;
+pub mod globals;
 pub mod gpu_particle;
 mod modifiers;
 pub mod pack;
 pub mod particles;
+pub mod shader_modifiers;
 pub mod sprites;
 mod target;
 

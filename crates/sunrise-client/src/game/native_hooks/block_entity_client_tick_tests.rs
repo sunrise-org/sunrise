@@ -4,7 +4,8 @@
 //! told once per client tick each, between `client_tick_pre`, the level's pre and its post, and
 //! `client_tick_post`, in the ticker list's order, with the data the frame's drain merged; not
 //! while paused or frozen; a type that didn't declare them never; a copy removed or whose column
-//! the server forgets not again; and a server, the world's own ticks, never.
+//! the server forgets not again; and a server, the world's own ticks, never. A spawner between
+//! them in the ticker list ticks between them, from the same list.
 use super::block_entity_client_tick::CLIENT_SNAPSHOTS_MADE;
 use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game_at};
 use crate::game::world_loading::WorldRequest;
@@ -29,10 +30,15 @@ const HUMS: [[i32; 3]; 2] = [[1610, 70, 1613], [1601, 64, 1602]];
 const QUIET_AT: [i32; 3] = [1605, 64, 1605];
 /// A hum in the next column, which stays.
 const OTHER: [i32; 3] = [1620, 64, 1600];
+/// A spawner that arrives after the second hum and before the first.
+const SPAWNER_AT: [i32; 3] = [1603, 64, 1608];
 
 /// What the probe heard, in order: the client tick's and level's brackets, each client tick
 /// (`tick`, its position and `rpm`) and each synced data notice (`data`).
 static EVENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// How many particles the game had requested at each client tick told
+/// (`sunrise_client::particles::requested_count`), in order.
+static TICK_PARTICLES: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 
 fn note(event: String) {
     EVENTS.lock().unwrap().push(event);
@@ -55,6 +61,10 @@ fn record(host: &dyn ClientHost, event: &BlockEntityClientTickEvent<'_>) {
     assert_eq!(event.block_entity.position(host), Some(event.pos));
     // The block and its block entity type share the name here.
     assert_eq!(event.state.block().id(host), event.entity.id());
+    TICK_PARTICLES
+        .lock()
+        .unwrap()
+        .push(sunrise_client::particles::requested_count());
     note(format!(
         "tick {:?} {}",
         event.pos,
@@ -122,8 +132,8 @@ impl Hooks for Probe {
     fn blocks(&self, _: &RegistrationContext, event: &mut BlocksEvent<'_>) {
         for block in [HUM, QUIET] {
             event
-                .blocks
-                .push(mod_api::Block::new(block, "minecraft:stone"));
+                .register(mod_api::Block::new(block, "minecraft:stone"))
+                .unwrap();
         }
     }
     fn client_tick_pre(&self, _: &mut dyn ClientHost, _: &mut ClientTickPreEvent) {
@@ -210,7 +220,7 @@ fn a_clients_frames_tick_its_declared_copies_until_they_go() {
         game.options.dedicated = None;
 
         // Not connected yet: no client level, nothing told.
-        game.client_tick_mod_block_entities();
+        game.tick_client_block_entities();
         assert!(take_events().is_empty(), "told without a client level");
 
         let (_sent, mut server) = crate::game::remote::tests::connect_menu_test(game);
@@ -234,7 +244,7 @@ fn a_clients_frames_tick_its_declared_copies_until_they_go() {
             (HUMS[0], hum, HUM, 30),
             (OTHER, hum, HUM, 40),
         ];
-        for ([x, y, z], state, id, speed) in placed {
+        for (n, ([x, y, z], state, id, speed)) in placed.into_iter().enumerate() {
             game.world.set(x, y, z, state).unwrap();
             let entity = ModBlockEntity::new(
                 id.into(),
@@ -246,13 +256,50 @@ fn a_clients_frames_tick_its_declared_copies_until_they_go() {
             game.world
                 .block_entities
                 .insert((x, y, z), BlockEntity::Mod(Box::new(entity)));
+            if n == 0 {
+                // A spawner that sees a player at any range: two particles each client tick.
+                let mut pig = Compound::new();
+                pig.insert("id".into(), Tag::String("minecraft:pig".into()));
+                let spawner = sunrise_client::chunk::block_entity::Spawner {
+                    required_player_range: -1,
+                    next: Some(sunrise_client::chunk::block_entity::Next::Own(
+                        sunrise_client::chunk::block_entity::SpawnData {
+                            entity: pig,
+                            ..Default::default()
+                        },
+                    )),
+                    ..Default::default()
+                };
+                let [x, y, z] = SPAWNER_AT;
+                let state = registry.default_state("minecraft:spawner").unwrap();
+                game.world.set(x, y, z, state).unwrap();
+                game.world
+                    .block_entities
+                    .insert((x, y, z), BlockEntity::Spawner(Box::new(spawner)));
+            }
         }
+        // The player the spawner looks for (`hasNearbyAlivePlayer` needs one, whatever the range).
+        let [x, y, z] = SPAWNER_AT.map(f64::from);
+        game.player = Some(
+            sunrise_client::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::new(x, y + 2.0, z),
+            )
+            .unwrap(),
+        );
         take_events();
 
         // Each declared copy once per tick, in arrival order, inside the level's brackets; the
-        // quiet type never. One snapshot per copy, then none while the copies stay the same.
+        // quiet type never. One snapshot per copy, then none while the copies stay the same. The
+        // spawner ticks between the second hum and the first, as it arrived: its two particles
+        // come between their ticks.
         let all = |first| ticked(&[(HUMS[1], 10), (HUMS[0], first), (OTHER, 40)]);
+        game.particles.requested = Some(Vec::new());
+        TICK_PARTICLES.lock().unwrap().clear();
         assert_eq!(frame(game, 1), (all(30), 3));
+        let seen = std::mem::take(&mut *TICK_PARTICLES.lock().unwrap());
+        assert_eq!([seen[1] - seen[0], seen[2] - seen[1]], [2, 0], "{seen:?}");
+        game.particles.requested = None;
         assert_eq!(frame(game, 2), ([all(30), all(30)].concat(), 0));
 
         // The server's update reaches the next frame's drain: the notice comes first, and both

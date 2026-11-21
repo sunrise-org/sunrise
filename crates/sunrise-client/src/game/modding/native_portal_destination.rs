@@ -115,7 +115,7 @@ impl Game<'_> {
     }
 
     /// `EndPortalBlock.getPortalDestination` for an entity other than a player, without the
-    /// platform: the End's spawn point, or out of the End the Overworld's shared spawn.
+    /// platform: the End's spawn point, or out of the End the world spawn in its level.
     fn probe_end_portal(&self, source: &PortalSide<'_>) -> Result<Probe, PortalError> {
         if source.dim != Dim::End {
             let [x, y, z] = END_SPAWN;
@@ -134,15 +134,16 @@ impl Game<'_> {
                 [s.x.floor() as i32, s.y.floor() as i32, s.z.floor() as i32]
             })
         });
-        let overworld = self
-            .portal_side(Dim::Overworld)
+        let level = self.world_spawn_level();
+        let side = self
+            .portal_side(level)
             .filter(|side| side.world.is_loaded_at(x, 64, z))
             .ok_or(PortalError::ChunksNotLoaded)?;
-        let y = self.motion_top_in(overworld.world, Dim::Overworld, x, z);
+        let y = self.motion_top_in(side.world, level, x, z);
         // Turned by the world spawn's angle.
         let [yaw, pitch] = end_portal_rotation(false, [0.0; 2], self.level.world_spawn_angle);
         Ok(Probe::Fixed(
-            Dim::Overworld,
+            level,
             Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5),
             PortalRotation::new(PortalAngle::Turn(yaw), PortalAngle::Turn(pitch)),
         ))

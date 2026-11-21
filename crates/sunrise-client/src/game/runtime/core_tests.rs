@@ -694,7 +694,9 @@ fn a_mod_screen_on_a_machine_menu_takes_the_stock_layout_out() {
 fn a_falling_block_keeps_its_model_offset() {
     let at = Vec3::new(3.5, 70.25, -1.5);
     let falling = FallingBlock {
-        on_ground: false,
+        ground: Default::default(),
+        fire_ticks: 0,
+        sync_velocity: false,
         attachment_lifetime: Default::default(),
         rotation: [0.0, 0.0],
         join: Default::default(),
@@ -952,8 +954,8 @@ fn selecting_creative_tabs_does_not_drop_the_carried_stack_on_release() {
     let mut creative = Creative::from_json(&serde_json::json!({
         "schema": 4, "item_features": {}, "potion_features": {},
         "tabs": [
-            {"id":"minecraft:building_blocks","type":"CATEGORY","build":[]},
-            {"id":"minecraft:inventory","type":"INVENTORY","build":[]}
+            {"id":"minecraft:building_blocks","title":"Building Blocks","type":"CATEGORY","build":[]},
+            {"id":"minecraft:inventory","title":"Survival Inventory","type":"INVENTORY","build":[]}
         ]
     }))
     .unwrap();

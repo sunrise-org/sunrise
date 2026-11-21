@@ -117,12 +117,13 @@ pub enum OffsetType {
     Xyz,
 }
 
-/// PushReaction in a load-time content declaration.
-#[derive(Clone, Debug, PartialEq)]
+/// Vanilla's piston reaction for a block state or an entity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 // exhaustive: these variants are the closed content declaration vocabulary.
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum PushReaction {
-    /// Declaration option.
+    /// Vanilla's default: pistons can push and pull.
+    #[default]
     PushPull,
     /// Declaration option.
     Push,
@@ -130,7 +131,7 @@ pub enum PushReaction {
     Popped,
     /// Declaration option.
     Immoveable,
-    /// Declaration option.
+    /// Do not push this entity.
     IgnoreEntity,
 }
 
@@ -298,6 +299,10 @@ pub struct Block {
     /// Its item's component patch: `Some(tag)` sets a component, `None` removes it.
     /// Component names do not include the removal prefix `!`; repeated IDs are refused.
     pub components: Vec<(String, Option<crate::Tag>)>,
+    /// Suspicious stew effects this block supplies, in order, as pairs of effect ID
+    /// and duration in ticks. Its block items feed these effects to brown mooshrooms
+    /// and generate stews in Creative. `None` declares no effect source.
+    pub suspicious_stew_effects: Option<Vec<(String, i32)>>,
     /// A connecting block (template `minecraft:chorus_plant`, a `PipeBlock`
     /// without the chorus plant's rules): the block tag, without `#`, whose
     /// blocks it joins besides itself (a cable's machines).
@@ -389,6 +394,7 @@ impl Default for Block {
             block_item: None,
             pick_item: None,
             components: Vec::new(),
+            suspicious_stew_effects: None,
             connects_to: None,
             thickness: None,
             wood_type: None,

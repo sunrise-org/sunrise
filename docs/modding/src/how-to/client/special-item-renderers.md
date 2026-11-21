@@ -3,8 +3,7 @@
 You can draw an item from several resource models chosen from its stack: a skillet with what it
 cooks, a tool with moving parts. This is the counterpart of NeoForge 26.3's
 `RegisterSpecialModelRendererEvent`: the mod registers one renderer per special model type at start,
-before resources load, and every `minecraft:special` item model of that type is drawn by it. Native
-and wasm mods register and draw the same way.
+before resources load, and every `minecraft:special` item model of that type is drawn by it.
 
 The geometry stays in the packs. The renderer doesn't make quads: it answers which model files to
 draw, each with a transform and tints, and the game draws them as it draws any item model.
@@ -112,7 +111,7 @@ The inner item resolves every time the outer one is drawn, so its own `Frame` re
 animations keep moving. A stack that is already being expanded above itself (a cycle), more than
 `MAX_NESTED_STACK_PARTS` (64) stack parts in one draw of an item, or a stack the game can't read,
 refuses the answer whole, as the other limits do: the item draws the missing model and the log
-names the item. Native and wasm renderers are refused identically.
+names the item.
 
 ## Registrations and refusals
 
@@ -122,7 +121,7 @@ names the item. Native and wasm renderers are refused identically.
 - A special model of a type no mod registered and vanilla doesn't have is an error naming the type and
   the item: that item draws the missing model, and the rest of the resources load.
 - A renderer that returns an `Err`, panics, answers more than `MAX_SPECIAL_MODEL_PARTS` (256) parts
-  or a transform that isn't finite, or (in a wasm mod) has its call refused or trapped, is logged once
+  or a transform that isn't finite, is logged once
   with its type and asked no more until resources reload. Its special models draw the missing model
   until then; nothing it answered is drawn in part.
 - A part naming a model no pack has makes that answer draw the missing model, logged once for the

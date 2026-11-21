@@ -390,7 +390,7 @@ fn enchantment_glint_override_decodes_boolean_literals_and_borrowed_numeric_valu
     let mut items = Items::empty();
     items.component_defaults = std::sync::Arc::new(std::collections::HashMap::from([(
         "minecraft:apple".into(),
-        std::collections::BTreeMap::from([(COMPONENT.into(), Tag::Short(256))]),
+        sunrise_core::nbt::Compound::from([(COMPONENT.into(), Tag::Short(256))]),
     )]));
     let enabled = parse(
         r#"{"type":"neoforge:components","items":"minecraft:apple","components":{"minecraft:enchantment_glint_override":true}}"#,
@@ -869,7 +869,7 @@ fn block_state_component_recipes_decode_validate_and_match() {
     // Codec.STRING preserves Java UTF-16, including unpaired surrogates; it is
     // deliberately not Identifier.CODEC or a UTF-8/lossy conversion.
     for units in [vec![0xd800], vec![0xdc00], vec![0xd83d, 0xde00]] {
-        let raw = Tag::Compound(std::collections::BTreeMap::from([(
+        let raw = Tag::Compound(sunrise_core::nbt::Compound::from([(
             sunrise_core::nbt::JavaString(units.clone()),
             Tag::String(sunrise_core::nbt::JavaString(units)),
         )]));
@@ -1735,7 +1735,7 @@ fn mob_visibility_component_recipe_codec_and_borrowed_matching() {
     )];
     let overlay = sunrise_world::loot::PackOverlay {
         files: &files,
-        ..sunrise_world::loot::PackOverlay::NONE
+        ..sunrise_world::loot::PackOverlay::default()
     };
     let active = Items::tags_only(root.path(), &overlay, &defaults).unwrap();
     let custom = ingredient(

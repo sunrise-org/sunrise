@@ -16,8 +16,14 @@ pub struct Requests {
     pub game_events: Names,
 }
 
+/// The slots and identities of one registry's keys. Cloning shares the tables until one side
+/// changes them, so a test process can hold equal tables of its many installations once.
 #[derive(Clone, Default, PartialEq)]
-pub struct Names {
+pub struct Names(pub std::sync::Arc<Table>);
+
+/// The shared payload of [`Names`]: a registry's requested keys and their resolved slots.
+#[derive(Clone, Default, PartialEq)]
+pub struct Table {
     pub entries: Vec<Request>,
     pub slots: HashMap<String, u32>,
     /// Typed identifier lookup without formatting a string on metadata reads.
@@ -27,6 +33,19 @@ pub struct Names {
     /// Slots in the completed registry's registration order, when a completion
     /// recorded one. Empty while the table holds only mod requests.
     pub order: Vec<u32>,
+}
+
+impl std::ops::Deref for Names {
+    type Target = Table;
+    fn deref(&self) -> &Table {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Names {
+    fn deref_mut(&mut self) -> &mut Table {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -87,8 +106,8 @@ impl Names {
     /// its number and an id another mod requested stays requested; with no requester left,
     /// resolution has nothing to refuse (and returns no value at that position).
     pub fn withdraw(&mut self, mod_id: &'static str, id: &str) {
-        if let Some(slot) = self.slots.get(id) {
-            self.entries[*slot as usize].mods.retain(|m| *m != mod_id);
+        if let Some(&slot) = self.slots.get(id) {
+            self.entries[slot as usize].mods.retain(|m| *m != mod_id);
         }
     }
 

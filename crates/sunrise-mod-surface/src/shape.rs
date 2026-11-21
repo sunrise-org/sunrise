@@ -35,7 +35,7 @@
 //! A shape is computed once per key and argument list, except for a type in a cycle, which is
 //! described afresh each time it is reached: the result never depends on the order shapes are
 //! asked for.
-use mod_call::digest;
+use crate::digest;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

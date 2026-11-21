@@ -123,6 +123,7 @@ fn the_fish_ai_never_plays_the_players_sting() {
     let ran = with_test_world(&[], |w, types| {
         let p = crate::mobs::world::test_player(Vec3::new(0.5, 64.0, 0.5));
         let world = MobWorld {
+            side: sunrise_client::motion::dry_side(),
             player: Some(p),
             ..w.clone()
         };

@@ -15,6 +15,7 @@ struct ScreenEvents {
     draw: Vec<(Option<String>, Option<[i32; 3]>)>,
     frames: Vec<Frame>,
     tooltip_at: Vec<[f32; 2]>,
+    data: Vec<Vec<i32>>,
 }
 type Seen = Arc<Mutex<ScreenEvents>>;
 /// A mod menu type no block opens here.
@@ -46,6 +47,7 @@ impl mod_api::MenuPart for Position {
     fn screen_draw(&self, _: &dyn mod_api::ClientHost, event: &mut mod_api::ScreenDrawEvent<'_>) {
         let mut seen = self.0.lock().unwrap();
         seen.draw.push((event.block.map(str::to_owned), event.pos));
+        seen.data.push(event.data.to_vec());
         seen.frames.push(Frame {
             pointer: event.pointer,
             size: event.gui_size,
@@ -86,6 +88,111 @@ fn with_listener(test: impl FnOnce(&mut Game<'_>, &Seen)) {
         crate::game::native_entity_refs::tests::with_client_game(|game| test(game, &seen));
     });
 }
+#[test]
+#[ignore = "daily"]
+fn slotless_screen_draw_sees_full_width_updates_only_for_its_window() {
+    use sunrise_protocol::{
+        connection::Pipe,
+        menu_extra::{DATA_CHANNEL, DataSlot, LIVE_DATA_REVISION},
+        packets::{
+            configuration::CustomPayload,
+            play::{Clientbound as C, ContainerClose, OpenScreen},
+        },
+    };
+    sunrise_client::containers::with_mod_menu_types(
+        [(
+            PACK.into(),
+            "test".into(),
+            0,
+            2,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            false,
+            None,
+        )],
+        || {
+            with_listener(|game, seen| {
+                let (pipe, _server) = Pipe::pair();
+                game.connect_local(pipe, "Slotless").unwrap();
+                let remote = game.remote.as_mut().unwrap();
+                Arc::make_mut(&mut remote.registries).menu_extra_revision = LIVE_DATA_REVISION;
+                Arc::make_mut(&mut remote.builtin).registries.insert(
+                    "minecraft:menu".into(),
+                    sunrise_protocol::registry::Ids::from_names(
+                        ["minecraft:anvil", PACK].map(str::to_owned).to_vec(),
+                    ),
+                );
+                let open = |game: &mut Game<'_>, window, menu| {
+                    game.handle_packet(C::OpenScreen(OpenScreen {
+                        container: window,
+                        menu,
+                        title: sunrise_core::nbt::Tag::String("Test".into()),
+                    }))
+                    .unwrap();
+                };
+                let receive = |game: &mut Game<'_>, window, index, value| {
+                    game.handle_packet(C::CustomPayload(CustomPayload {
+                        channel: DATA_CHANNEL.into(),
+                        data: DataSlot {
+                            window,
+                            index,
+                            value,
+                        }
+                        .encode(),
+                    }))
+                    .unwrap();
+                };
+                let draw = |game: &Game<'_>| {
+                    let mut batch = HudBatch::scratch([200, 200]);
+                    assert!(game.draw_native_screen(&mut batch, 0.0, 0.0));
+                };
+                open(game, 1, 0); // Anvil
+                assert!(game.station.is_some());
+                assert!(!game.slots().is_empty());
+                game.cursor = (25.0, 40.0);
+                open(game, 2, 1); // No intervening close packet.
+                assert_eq!(game.screen, Screen::Inventory);
+                assert_eq!(game.cursor, (25.0, 40.0));
+                assert!(game.station.is_none());
+                assert!(game.slots().is_empty());
+                assert_eq!(game.slot_count(), 0);
+                assert_eq!(Game::inventory_screen_slot(PACK, 0), None);
+                assert_eq!(
+                    game.slot_at(&HudBatch::scratch([200, 200]), 25.0, 40.0),
+                    None
+                );
+                receive(game, 2, 0, -80_000);
+                receive(game, 2, 1, 3);
+                draw(game);
+                receive(game, 2, 2, 9);
+                receive(game, 2, 0, i32::MAX);
+                draw(game);
+                open(game, 3, 1);
+                receive(game, 2, 0, 8);
+                draw(game);
+                receive(game, 3, 0, -17);
+                receive(game, 3, 1, i32::MIN);
+                draw(game);
+                game.handle_packet(C::ContainerClose(ContainerClose { container: 3 }))
+                    .unwrap();
+                receive(game, 3, 1, 18);
+                assert!(game.shown_native_screen().is_none());
+                assert_eq!(
+                    seen.lock().unwrap().data,
+                    [
+                        vec![-80_000, 3],
+                        vec![i32::MAX, 3],
+                        vec![],
+                        vec![-17, i32::MIN],
+                    ]
+                );
+            })
+        },
+    );
+}
+
 /// A mod that adds `test:crate`, a block whose container opens vanilla's
 /// `minecraft:generic_9x3`, with the `Position` screen on that type.
 struct CrateMod(Seen);
@@ -105,8 +212,8 @@ impl mod_api::Hooks for CrateMod {
     }
     fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
         event
-            .blocks
-            .push(mod_api::Block::new("test:crate", "minecraft:barrel").with_item(false));
+            .register(mod_api::Block::new("test:crate", "minecraft:barrel").with_item(false))
+            .unwrap();
     }
 }
 /// A mod block whose container opens a vanilla menu type: the client's screen is the type's
@@ -225,7 +332,18 @@ fn a_mod_blocks_menu_of_a_vanilla_type_gets_the_types_screen_on_both_sides() {
 #[ignore = "daily"]
 fn a_mod_menu_opened_without_a_block_gets_its_types_screen() {
     sunrise_client::containers::with_mod_menu_types(
-        [(PACK.into(), 9, 0, Vec::new(), None, None)],
+        [(
+            PACK.into(),
+            "test".into(),
+            9,
+            0,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            true,
+            None,
+        )],
         || {
             with_listener(|game, seen| {
                 let key = (i32::MIN, 0, 0);
@@ -314,8 +432,8 @@ impl<const HIDDEN: usize> mod_api::Hooks for HopperMod<HIDDEN> {
     fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
         let id = format!("{}:machine", self.0.owner);
         event
-            .blocks
-            .push(mod_api::Block::new(&id, "minecraft:barrel").with_item(false));
+            .register(mod_api::Block::new(&id, "minecraft:barrel").with_item(false))
+            .unwrap();
     }
 }
 /// Two mods' machines opening vanilla's hopper menu each get only their own mod's screen:

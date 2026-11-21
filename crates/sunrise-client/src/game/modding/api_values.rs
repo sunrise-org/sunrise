@@ -380,41 +380,10 @@ pub(in crate::game) fn mod_tint_values(
     Ok(Some(crate::mesher::ModTintValues { states, metadata }))
 }
 
-fn block_metadata_table()
+pub(super) fn block_metadata_table()
 -> Result<&'static sunrise_mod_runtime::block_definitions::Blocks, mod_api::BlockStateError> {
     mod_api::__private::block_definitions().ok_or(mod_api::BlockStateError::Unavailable)
 }
-impl super::Game<'_> {
-    pub(in crate::game) fn block_metadata_name(
-        &self,
-        block: mod_api::BlockKey,
-    ) -> Result<&str, mod_api::BlockStateError> {
-        mod_api::BlockMetadata::name(block_metadata_table()?, block)
-    }
-    pub(in crate::game) fn block_metadata_property(
-        &self,
-        state: mod_api::BlockStateRecord,
-        name: &str,
-    ) -> Result<Option<&str>, mod_api::BlockStateError> {
-        mod_api::BlockMetadata::property(block_metadata_table()?, state, name)
-    }
-    pub(in crate::game) fn block_metadata_with(
-        &self,
-        state: mod_api::BlockStateRecord,
-        name: &str,
-        value: &str,
-    ) -> Result<mod_api::BlockStateRecord, mod_api::BlockStateError> {
-        mod_api::BlockMetadata::with(block_metadata_table()?, state, name, value)
-    }
-    pub(in crate::game) fn block_metadata_of(
-        &self,
-        block: mod_api::BlockKey,
-        properties: &[mod_api::StateConstraint],
-    ) -> Result<mod_api::BlockStateRecord, mod_api::BlockStateError> {
-        mod_api::BlockMetadata::of(block_metadata_table()?, block, properties)
-    }
-}
-
 /// Normalize an existing game write's answer without changing its implementation.
 /// Generated API forwarders add the checked-input refusal around successful native answers.
 pub(in crate::game) trait IntoWriteResult {
@@ -468,7 +437,7 @@ where
 /// Validate a mod value against the game's registry before admitting it to engine state.
 #[path = "api_values/content_declarations.rs"]
 mod content_declarations;
-pub(in crate::game) use content_declarations::push_reaction;
+pub(in crate::game) use content_declarations::{api_push_reaction, push_reaction};
 
 #[path = "api_values/stack_count.rs"]
 mod stack_count;
@@ -749,9 +718,16 @@ impl TryIntoEngine for mod_api::ItemCost {
     type Engine = sunrise_client::merchant::ItemCost;
     type Error = StackWriteError;
     fn try_into_engine(&self, items: &Items) -> Result<Self::Engine, Self::Error> {
-        Ok(Self::Engine {
-            stack: self.stack.try_into_engine(items)?,
-        })
+        // ItemCost's codec uses a positive Java int, not the normal stack's count limit.
+        let maximum = i32::MAX as u32;
+        if self.stack.count() > maximum {
+            return Err(StackWriteError::CountExceeded { maximum });
+        }
+        let stack = self.stack.try_into_engine_preserving_count(items)?;
+        if &*stack.item == "minecraft:air" {
+            return Err(StackWriteError::EmptyEngineStack);
+        }
+        Ok(Self::Engine { stack })
     }
 }
 impl TryIntoApi for sunrise_client::merchant::MerchantOffer {
@@ -773,21 +749,54 @@ impl TryIntoApi for sunrise_client::merchant::MerchantOffer {
         Ok(offer)
     }
 }
+#[derive(Debug)]
+pub(super) enum OfferWriteError {
+    NonFinitePrice,
+    Stack(StackWriteError),
+}
+
+impl From<StackWriteError> for OfferWriteError {
+    fn from(error: StackWriteError) -> Self {
+        Self::Stack(error)
+    }
+}
+
+/// A collect answer and a MerchantRef write admit offers through the same check. All i32
+/// fields fit `MerchantOffer.CODEC`; their arithmetic follows Java wrapping in the engine.
+pub(super) fn checked_merchant_offer(
+    offer: &mod_api::MerchantOffer,
+    items: &Items,
+) -> Result<sunrise_client::merchant::MerchantOffer, OfferWriteError> {
+    if !offer.price_multiplier.is_finite() {
+        return Err(OfferWriteError::NonFinitePrice);
+    }
+    let result = offer.result.try_into_engine(items)?;
+    if &*result.item == "minecraft:air" {
+        return Err(StackWriteError::EmptyEngineStack.into());
+    }
+    Ok(sunrise_client::merchant::MerchantOffer {
+        base_cost_a: offer.base_cost_a.try_into_engine(items)?,
+        cost_b: offer.cost_b.try_into_engine(items)?,
+        result,
+        uses: offer.uses,
+        max_uses: offer.max_uses,
+        reward_exp: offer.reward_exp,
+        special_price_diff: offer.special_price_diff,
+        demand: offer.demand,
+        price_multiplier: offer.price_multiplier,
+        xp: offer.xp,
+    })
+}
+
 impl TryIntoEngine for mod_api::MerchantOffer {
     type Engine = sunrise_client::merchant::MerchantOffer;
     type Error = StackWriteError;
     fn try_into_engine(&self, items: &Items) -> Result<Self::Engine, Self::Error> {
-        Ok(Self::Engine {
-            base_cost_a: self.base_cost_a.try_into_engine(items)?,
-            cost_b: self.cost_b.try_into_engine(items)?,
-            result: self.result.try_into_engine(items)?,
-            uses: self.uses,
-            max_uses: self.max_uses,
-            reward_exp: self.reward_exp,
-            special_price_diff: self.special_price_diff,
-            demand: self.demand,
-            price_multiplier: self.price_multiplier,
-            xp: self.xp,
+        checked_merchant_offer(self, items).map_err(|error| match error {
+            // MerchantRef's existing write API returns StackWriteError; the decision coordinator
+            // uses the typed offer refusal directly.
+            OfferWriteError::NonFinitePrice => StackWriteError::InvalidMaximum,
+            OfferWriteError::Stack(error) => error,
         })
     }
 }
@@ -1145,19 +1154,20 @@ pub(crate) fn install_stack_hooks() {
     });
 }
 
-/// Adapt a player's block menu `stillValid` check; the game asks only for a menu
+/// Adapt a player's menu `stillValid` check; the game asks only for a menu
 /// whose type has a part answering it (`menu_still_valid_listens`, when it opened).
 pub(crate) fn menu_still_valid(
     context: &sunrise_world::native_load_context::LoopContext,
     player: u128,
     menu: &str,
-    pos: [i32; 3],
+    pos: Option<[i32; 3]>,
     eye: [f64; 3],
+    opening_item: Option<mod_api::MenuOpeningItem>,
     valid: &mut bool,
 ) {
     let reader = sunrise_client_render::api_context::LoopReader(context);
     let context = reader.context();
-    mod_api::dispatch_menu_still_valid(&context, player, menu, pos, eye, valid);
+    mod_api::dispatch_menu_still_valid(&context, player, menu, pos, eye, opening_item, valid);
 }
 
 impl TryIntoApi for crate::stations::AnvilResult {
@@ -1330,19 +1340,20 @@ impl super::Game<'_> {
         pos: [i32; 3],
         value: &mut crate::menu::GrindstonePlace,
         cancel: &mut bool,
-    ) {
+    ) -> Result<(), crate::game::transactions::decision::InvalidReason> {
         let Ok(mut api) = value.try_into_api() else {
-            return;
+            return Ok(());
         };
         let original = api.clone();
         self.native_grindstone_place(player, entity, pos, &mut api, cancel);
         if api == original {
-            return;
+            return Ok(());
         }
-        match api.try_into_engine(self.items()) {
-            Ok(result) => *value = result,
-            Err(_) => *cancel = true,
-        }
+        // An answer that is no stack is refused, never read as a cancel.
+        *value = api
+            .try_into_engine(self.items())
+            .map_err(|_| crate::game::transactions::decision::InvalidReason::Count)?;
+        Ok(())
     }
     pub(in crate::game) fn api_grindstone_take(
         &mut self,
@@ -1351,19 +1362,20 @@ impl super::Game<'_> {
         pos: [i32; 3],
         value: &mut crate::menu::GrindstoneTake,
         cancel: &mut bool,
-    ) {
+    ) -> Result<(), crate::game::transactions::decision::InvalidReason> {
         let Ok(mut api) = value.try_into_api() else {
-            return;
+            return Ok(());
         };
         let original = api.clone();
         self.native_grindstone_take(player, entity, pos, &mut api, cancel);
         if api == original {
-            return;
+            return Ok(());
         }
-        match api.try_into_engine(self.items()) {
-            Ok(result) => *value = result,
-            Err(_) => *cancel = true,
-        }
+        // An answer that is no stack is refused, never read as a cancel.
+        *value = api
+            .try_into_engine(self.items())
+            .map_err(|_| crate::game::transactions::decision::InvalidReason::Count)?;
+        Ok(())
     }
     pub(in crate::game) fn api_anvil_craft_pre(
         &mut self,
@@ -1855,83 +1867,49 @@ impl super::Game<'_> {
 
     pub(in crate::game) fn api_menu_button(
         &mut self,
+        menu: &str,
+        block: Option<&str>,
         context: &mod_api::item::menu::MenuButtonContext,
-        entity: &mut crate::containers::ModBlockEntity,
+        entity: Option<&mut crate::containers::ModBlockEntity>,
         carried: &mut Option<EngineStack>,
     ) {
         if !mod_api::__private::has_part_hook(mod_api::HookId::MenuButton) {
             return;
         }
-        let (Ok(mut api), Ok(mut cursor)) = (entity.try_into_api(), carried.try_into_api()) else {
+        let mut api_entity = match entity.as_deref().map(TryIntoApi::try_into_api).transpose() {
+            Ok(entity) => entity,
+            Err(_) => return,
+        };
+        let Ok(mut cursor) = carried.try_into_api() else {
             return;
         };
-        let revision = api.revision();
+        let revision = api_entity.as_ref().map(|entity| entity.revision());
         let original = cursor.clone();
-        self.native_menu_button(context, &mut api, &mut cursor);
-        let cursor = if cursor == original {
-            Ok(None)
-        } else {
-            cursor
-                .try_into_engine(self.items())
-                .map(Some)
-                .map_err(|_| BlockEntitySnapshotError::InvalidStack)
-        };
-        if let Ok(Some(cursor)) = finish_block_entity_writeback(
-            entity,
-            &api,
-            revision,
-            self.items(),
-            "menu_button",
-            cursor,
-        ) {
-            *carried = cursor;
-        }
-    }
-    pub(in crate::game) fn api_menu_quick_move(
-        &mut self,
-        pos: [i32; 3],
-        entity: &mut crate::containers::ModBlockEntity,
-        container_slots: usize,
-        slot: usize,
-        stack: &mut Option<EngineStack>,
-        handled: &mut bool,
-    ) {
-        if !mod_api::__private::has_part_hook(mod_api::HookId::MenuQuickMove) {
-            return;
-        }
-        let (Ok(mut api), Ok(mut held)) = (entity.try_into_api(), stack.try_into_api()) else {
-            return;
-        };
-        let revision = api.revision();
-        let original = held.clone();
-        let mut candidate_handled = *handled;
-        self.native_menu_quick_move(
-            pos,
-            &mut api,
-            container_slots,
-            slot,
-            &mut held,
-            &mut candidate_handled,
-        );
-        let held = if held == original {
-            Ok(None)
-        } else {
-            held.try_into_engine(self.items())
-                .map(Some)
-                .map_err(|_| BlockEntitySnapshotError::InvalidStack)
-        };
-        if let Ok(held) = finish_block_entity_writeback(
-            entity,
-            &api,
-            revision,
-            self.items(),
-            "menu_quick_move",
-            held,
-        ) {
-            if let Some(held) = held {
-                *stack = held;
+        self.native_menu_button(menu, block, context, api_entity.as_mut(), &mut cursor);
+        // The outer Option means whether the callback changed the cursor; the inner one is its
+        // new value. `Some(None)` is an explicit consume, while `None` leaves it untouched.
+        let cursor: Result<Option<Option<EngineStack>>, BlockEntitySnapshotError> =
+            if cursor == original {
+                Ok(None)
+            } else {
+                cursor
+                    .try_into_engine(self.items())
+                    .map(Some)
+                    .map_err(|_| BlockEntitySnapshotError::InvalidStack)
+            };
+        if let (Some(entity), Some(api), Some(revision)) = (entity, api_entity.as_ref(), revision) {
+            if let Ok(Some(cursor)) = finish_block_entity_writeback(
+                entity,
+                api,
+                revision,
+                self.items(),
+                "menu_button",
+                cursor,
+            ) {
+                *carried = cursor;
             }
-            *handled = candidate_handled;
+        } else if let Ok(Some(cursor)) = cursor {
+            *carried = cursor;
         }
     }
 }
@@ -2607,11 +2585,10 @@ impl TryIntoEngine<()> for mod_api::BlockEntityTypeDecl {
     }
 }
 pub(in crate::game) fn block_entity_declarations()
--> Vec<sunrise_mod_package::content::BlockEntityType> {
+-> impl Iterator<Item = (&'static str, sunrise_mod_package::content::BlockEntityType)> {
     mod_api::__private::block_entity_types()
         .iter()
-        .map(|decl| decl.try_into_engine(&()).unwrap())
-        .collect()
+        .map(|(owner, decl)| (*owner, decl.try_into_engine(&()).unwrap()))
 }
 
 #[cfg(test)]
@@ -2635,9 +2612,10 @@ mod declaration_snapshot_tests {
             }
         }
         install_parts(&[mod_api::ModEntry::new("test", Box::new(Mod))]).unwrap();
-        let declarations = block_entity_declarations();
-        assert_eq!(declarations[0].id, "test:machine");
-        assert_eq!(declarations[0].blocks, ["test:second", "test:first"]);
+        let (owner, declaration) = block_entity_declarations().next().unwrap();
+        assert_eq!(owner, "test");
+        assert_eq!(declaration.id, "test:machine");
+        assert_eq!(declaration.blocks, ["test:second", "test:first"]);
         let registry = game_rule_registry();
         let key = *KEY.get().unwrap();
         assert_eq!(
@@ -2888,19 +2866,21 @@ fn with_rule_schema<T>(f: impl FnOnce(&mod_api::__private::RuleSchema<'_>) -> T)
 pub(in crate::game) fn install_test_platform() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
-        let result = sunrise_engine_slots::install_platform(sunrise_engine_slots::Platform {
-            install_packages: mod_platform::__private::install_packages,
-            install_registration_data: mod_platform::__private::install_registration_data,
-            install_parts: mod_platform::__private::install_parts,
-            profiler_is_enabled: mod_platform::__private::profiler::is_enabled,
-            profiler_start: mod_platform::__private::profiler::start,
-            profiler_stop: mod_platform::__private::profiler::stop,
-            profiler_summary: mod_platform::__private::profiler::summary,
-            profiler_firefox_profile: mod_platform::__private::profiler::firefox_profile,
-        });
+        let result = mod_api::__private::platform::install_platform(
+            mod_api::__private::platform::Platform {
+                install_packages: mod_platform::__private::install_packages,
+                install_registration_data: mod_platform::__private::install_registration_data,
+                install_parts: mod_platform::__private::install_parts,
+                profiler_is_enabled: mod_platform::__private::profiler::is_enabled,
+                profiler_start: mod_platform::__private::profiler::start,
+                profiler_stop: mod_platform::__private::profiler::stop,
+                profiler_summary: mod_platform::__private::profiler::summary,
+                profiler_firefox_profile: mod_platform::__private::profiler::firefox_profile,
+            },
+        );
         assert!(
             result.is_ok()
-                || result == Err(sunrise_engine_slots::PlatformRefusal::AlreadyInstalled)
+                || result == Err(mod_api::__private::platform::PlatformRefusal::AlreadyInstalled)
         );
     });
 }
@@ -2908,7 +2888,7 @@ pub(in crate::game) fn install_parts(mods: &[mod_api::ModEntry]) -> Result<(), V
     #[cfg(test)]
     install_test_platform();
     with_rule_schema(|schema| {
-        (sunrise_engine_slots::platform()
+        (mod_api::__private::platform::platform()
             .map_err(|e| vec![e.to_string()])?
             .install_parts)(mods, schema, super::native_dimensions::valid_shape)
     })
@@ -2928,6 +2908,10 @@ pub(in crate::game) fn register_game_keys(ids: impl IntoIterator<Item = String>)
         |id| sunrise_client_core::potions::effect(id).map(|def| def.index),
     )
     .unwrap();
+    mod_api::__private::validate_effect_part_owners(|id| {
+        sunrise_client_core::potions::effect(id)?.owner
+    })
+    .unwrap();
     if let Some(types) = sunrise_client_core::block_entity_types::current() {
         // Registration just replaced the mod snapshot, but the process-wide engine
         // table can still belong to an earlier fixture. Include this fixture's
@@ -2936,9 +2920,10 @@ pub(in crate::game) fn register_game_keys(ids: impl IntoIterator<Item = String>)
         mod_api::__private::resolve_block_entity_types(
             types
                 .names()
-                .chain(declared.iter().map(|kind| kind.id.as_str())),
+                .chain(declared.iter().map(|(_, kind)| kind.id.as_str())),
             |id| {
-                (types.key(id).is_some() || declared.iter().any(|kind| kind.id == id)).then_some(())
+                (types.key(id).is_some() || declared.iter().any(|(_, kind)| kind.id == id))
+                    .then_some(())
             },
         )
         .unwrap();

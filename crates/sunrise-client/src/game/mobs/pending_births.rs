@@ -1,7 +1,7 @@
 //! The engine side of pending children (docs/design/mod-api/pending-children.md):
 //! it constructs the children of a split or a breeding, lends them to `mob_split` and
 //! `baby_entity_spawn` listeners as an engine-owned, ordered list, then freezes, validates and
-//! hands back what is left, once. Native and wasm listeners reach the same arena through
+//! hands back what is left, once. Mod listeners reach the same arena through
 //! the same editor (`native_pending_children`), so a call has the same effect from either.
 //!
 //! Nothing here replays construction or draws randomness: a veto, a stale parent or an invalid
@@ -61,7 +61,7 @@ impl Drop for HookScope {
 impl Game<'_> {
     /// Lends `initial` to the listeners `fire` calls and returns the children that survive them,
     /// in order, each with its entity number issued but not yet in any level. Empty means no
-    /// child: a cancel, a list a listener emptied, a trapped wasm listener, a stale parent (one of
+    /// child: a cancel, a list a listener emptied, a stale parent (one of
     /// `parents` is gone or no longer in the state the children were built from, or the world or
     /// dimension changed) or a final child that breaks an invariant. Nothing is recomputed.
     ///
@@ -118,7 +118,6 @@ impl Game<'_> {
             previous: hook_cell.replace(Some(hook)),
             cell: hook_cell.clone(),
         };
-        let failures = self.wasm_dispatch_failures.clone();
         let run = catch_unwind(AssertUnwindSafe(|| {
             PendingChildren::run_scoped(
                 &arena,
@@ -129,13 +128,8 @@ impl Game<'_> {
                     let editor = Children::new(&*self, action, breeding);
                     // The baseline: listeners entered from here on end the previous lease.
                     super::native_pending_children::sync_listener(&arena, &hook_cell);
-                    let failed_before = failures.get();
                     let mut cancel = false;
                     fire(self, &editor, &mut cancel);
-                    // A trapped wasm listener leaves its edits behind: none of them may commit.
-                    if failures.get() != failed_before {
-                        return Decision::Failed;
-                    }
                     // A listener's Host writes ran against the live world: the frozen list is
                     // only valid if what it was made from still stands.
                     if self.lend_epoch() != epoch

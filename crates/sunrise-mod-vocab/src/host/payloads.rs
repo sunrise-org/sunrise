@@ -45,7 +45,7 @@ pub trait PayloadsClientHost {
     /// Queue exact application bytes to the connected server, using the frozen
     /// declaration for its current protocol. Optional absent channels return
     /// UnsupportedPeer. Frame refusal and Backpressure write no application bytes.
-    /// The root transaction owns publication and cancellation on both native and wasm.
+    /// The root transaction owns publication and cancellation.
     #[access(ClientSetup)]
     fn send_payload_to_server(
         &mut self,

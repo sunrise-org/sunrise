@@ -35,6 +35,18 @@ fn compiler_plan(
     }
 }
 
+const LOGGERS: &str = "/* MOD_LOGGERS */";
+
+fn check_log_template(template: &str, native_log: bool) -> Result<(), String> {
+    if native_log && template.matches(LOGGERS).count() != 1 {
+        return Err(trf(
+            "The prebuilt SDK declares native log forwarding, but {file} must contain exactly one {marker} slot.",
+            &[("file", super::api_route::TEMPLATE), ("marker", LOGGERS)],
+        ));
+    }
+    Ok(())
+}
+
 /// `out` is the mods folder's staging folder, rewritten every build; `target_dir` is cargo's build
 /// folder, kept between builds of the same game build (see `prebuilt::compile`).
 #[allow(clippy::too_many_arguments)]
@@ -49,6 +61,8 @@ pub fn compile(
     options: Options<'_>,
 ) -> Result<(PathBuf, Vec<PathBuf>), String> {
     let sdk = prebuilt::identity(game)?;
+    let template = api::template(&game.join(super::api_route::TEMPLATE))?;
+    check_log_template(&template, sdk.native_log)?;
     let lock = sdk.registry_lock.as_ref().ok_or_else(|| tr("The prebuilt SDK does not declare a locked registry graph; install an SDK that supports registry-bearing native mods").to_string())?;
     let mut patches = sdk.registry_patches.clone().ok_or_else(|| {
         tr("The prebuilt SDK does not declare game registry patches; install a newer SDK")
@@ -95,7 +109,6 @@ pub fn compile(
         fs::rename(out, &previous).map_err(|e| e.to_string())?;
     }
     fs::create_dir_all(out).map_err(|e| e.to_string())?;
-    let template = api::template(&game.join(super::api_route::TEMPLATE))?;
     let mut bindings = BTreeMap::new();
     let mut members = Vec::new();
     let mut wrapper_deps = toml::Table::new();
@@ -210,7 +223,6 @@ pub fn compile(
                     prebuilt::library_entry(
                         &template,
                         &[&bundle.manifest],
-                        &catalog,
                         sdk.commit(),
                         id,
                         &bundle.manifest.version.to_string(),
@@ -221,9 +233,6 @@ pub fn compile(
                 let mut source = fs::read_to_string(&root).map_err(|e| e.to_string())?;
                 prebuilt::check_entry_root(&source, id)?;
                 source.push_str("\n#[allow(unsafe_code)]\n#[path = \"__sunrise_entry.rs\"] mod __sunrise_entry;\n");
-                if project.uses_wasmtime() {
-                    source.push_str(prebuilt::WASMTIME_LINK);
-                }
                 fs::write(&root, source).map_err(|e| e.to_string())?;
                 mod_dirs.insert(id.clone(), dest.clone());
                 mod_roots.insert(id.clone(), root);
@@ -236,12 +245,6 @@ pub fn compile(
         ]);
         for (name, path) in &externs {
             prebuilt::refuse_closure_rlib(id, name, path)?;
-        }
-        if project.uses_wasmtime() {
-            externs.insert(
-                "sunrise_mod_wasm".into(),
-                prebuilt::library(&deps, "sunrise_mod_wasm")?,
-            );
         }
         for (name, package) in project.api_dependencies() {
             if package != "internals" {
@@ -383,15 +386,8 @@ pub fn compile(
         .as_ref()
         .map(|patch| patch.installs.as_slice())
         .unwrap_or(&[]);
-    let mut entry = prebuilt::library_entry(
-        &template,
-        &[],
-        &catalog,
-        sdk.commit(),
-        "sunrise_patch",
-        "0",
-        installs,
-    );
+    let mut entry =
+        prebuilt::library_entry(&template, &[], sdk.commit(), "sunrise_patch", "0", installs);
     entry.push_str(prebuilt::PATCH_HOST_LINK);
     fs::write(out.join("src/lib.rs"), entry).map_err(|e| e.to_string())?;
     let mut manifest = toml::toml! { [package] name = "sunrise_patch" version = "0.0.0" edition = "2024" [lib] crate-type = ["dylib"] [workspace] resolver = "2" };
@@ -427,20 +423,19 @@ pub fn compile(
     let wanted = super::crates::wanted(out, &declared_paths)?;
     let mut plan = registry_plan::Plan::read(lock, projects, &wanted)?;
     plan.authorize_game_patches(&patches);
-    registry_plan::apply_patches(out, &patches)?;
-    fs::write(
-        out.join("Cargo.lock"),
-        plan.mods.seed("version=4\npackage=[]\n")?,
-    )
-    .map_err(|e| e.to_string())?;
     plan.fetch_with_patches(rust, out, &patches)?;
-    let mut metadata = super::registry_inventory::read(rust, out)
-        .map_err(|error| plan.explain_resolution(error))?;
+    let mut metadata = super::registry_inventory::read(rust, out)?;
     // When two or more mods link registry crates, those crates, as cargo just resolved them, come
     // from one library, so a mod depending on several mods doesn't reach a copy of each through
     // each of them (`registry_shared`). The mods' manifests were checked above without it; it adds
     // no package cargo hasn't already resolved and locked.
-    let shared = registry_shared::Shared::select(metadata.runtime_uses(out, &mod_dirs)?);
+    // The SDK owns the entry template and the sink it can call. The mod's lock still owns log.
+    let logs = if sdk.native_log {
+        metadata.runtime_logs()?
+    } else {
+        Default::default()
+    };
+    let shared = registry_shared::Shared::select(metadata.runtime_uses(out, &mod_dirs)?, logs);
     if let Some(shared) = &shared {
         shared.check_name(&metadata.packages, out)?;
         shared.write(out)?;
@@ -455,6 +450,18 @@ pub fn compile(
             registry_shared::link(&mut manifest, &mut source).map_err(|e| format!("{id}: {e}"))?;
             fs::write(&path, manifest.to_string()).map_err(|e| e.to_string())?;
             fs::write(root, source).map_err(|e| e.to_string())?;
+            if !shared.logs.is_empty() {
+                let path = root.with_file_name("__sunrise_entry.rs");
+                let entry = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+                fs::write(
+                    path,
+                    entry.replace(
+                        LOGGERS,
+                        "extern crate sunrise_registry_shared;\n    sunrise_registry_shared::install_loggers();",
+                    ),
+                )
+                .map_err(|e| e.to_string())?;
+            }
         }
         let path = out.join("Cargo.toml");
         let mut manifest: toml::Table = fs::read_to_string(&path)
@@ -468,31 +475,33 @@ pub fn compile(
             .ok_or("generated workspace")?
             .push(registry_shared::RELATIVE.into());
         fs::write(&path, manifest.to_string()).map_err(|e| e.to_string())?;
-        // Bindings with no `--extern`, so the compiler wrapper still links it like a mod: dynamic
-        // linking, and the mods' rpath arguments.
+        // Link it like a mod (dynamic, with the same rpath). Only the forwarder calls the SDK.
+        let mut externs = BTreeMap::new();
+        if !shared.logs.is_empty() {
+            let api = prebuilt::library(&deps, "mod_api")?;
+            prebuilt::refuse_closure_rlib(registry_shared::CRATE, "mod_api", &api)?;
+            externs.insert("mod_api".into(), api);
+        }
         bindings.insert(
             out.join(registry_shared::RELATIVE),
             registry_rustc::Bindings {
-                externs: BTreeMap::new(),
+                externs,
                 link_args: mod_link_args(),
             },
         );
         // Cargo records the new local package in the lock, offline: every crate it names is
         // already resolved there, at that exact version.
-        metadata = super::registry_inventory::read(rust, out)
-            .map_err(|error| plan.explain_resolution(error))?;
+        metadata = super::registry_inventory::read(rust, out)?;
     }
-    plan.allowed
-        .check_pins(&super::registry_lock::RegistryLock::parse(
-            &super::read_lock(out)?,
-        )?)?;
+    let resolved = super::read_lock(out)?;
+    plan.check_resolved(&super::registry_lock::RegistryLock::parse(&resolved)?)?;
     let mut game_names = plan.game.game_package_names();
     for registry in patches.values() {
         for name in registry.as_table().expect("validated SDK patches").keys() {
             game_names.remove(name);
         }
     }
-    super::crates::check_game_graph_names(out, &super::read_lock(out)?, &game_names)?;
+    super::crates::check_game_graph_names(out, &resolved, &game_names)?;
     let inventory = metadata.inventory(&super::registry_lock::RegistryLock::default(), links)?;
     if inventory.added_crates > 0 && !options.consent.is_some_and(|ask| ask(&inventory)) {
         return Err(crate::host::tr("The mods' crates.io dependencies were not compiled: the plan's \"registry\" field is false or the question was declined. \"registry\": true approves compiling them; their build scripts and proc macros then run on this computer").into());
@@ -531,7 +540,9 @@ pub fn compile(
         ])
         .arg("--target-dir")
         .arg(target_dir)
-        .arg("--message-format=json-render-diagnostics");
+        // Not `json-render-diagnostics`: Cargo would print every diagnostic again on its standard
+        // error, at the staged files. The failure shows them from the messages, at the author's.
+        .arg("--message-format=json");
     // Cargo's per-crate timings (`target/cargo-timings/`), for the check that measures where a
     // registry build's time goes; a player's kept build folder doesn't collect them.
     if std::env::var_os("SUNRISE_NATIVE_CARGO_TIMINGS").is_some() {
@@ -545,18 +556,49 @@ pub fn compile(
         tr("Compiling registry mod libraries"),
         |_| {},
         Some(fs::File::create(&messages).map_err(|e| e.to_string())?),
+        None,
     );
     let outputs = super::registry_runtime::Outputs::read(&messages)?;
     if let Some(patch) = &patch {
         patch.log()?;
     }
     super::append_log(&fs::read_to_string(&messages).map_err(|e| e.to_string())?)?;
+    // What the compiler printed, as a readable part of the log (the messages above, unmapped).
+    for diagnostic in &outputs.errors {
+        super::append_log(diagnostic.rendered().unwrap_or_default())?;
+    }
     if let Err(failure) = result {
-        let mut error = format!("{}\n{}", failure.error, outputs.errors.join("\n"));
-        if error.contains("E0277") || error.contains("E0308") {
-            error.push_str(&format!("\n\n{}", crate::host::tr("SDK values keep the SDK's Rust crate identities. A registry-built copy of a trait or type is not interchangeable, even at the same version. Type mismatches are refused; SDK libraries are never substituted.")));
+        // The compiler runs in the build's folder: its relative file names are relative to it.
+        let sources = super::present::Sources::new(
+            out.to_path_buf(),
+            projects
+                .iter()
+                .map(|project| super::present::Staged {
+                    root: out.join("native-api").join(&project.bundle.manifest.id),
+                    author: project.bundle.dir.clone(),
+                })
+                .collect(),
+        );
+        let (mut error, mut raw) = (failure.error, String::new());
+        let mut explained = false;
+        for diagnostic in &outputs.errors {
+            error.push('\n');
+            error.push_str(&sources.text(diagnostic));
+            raw.push_str(diagnostic.rendered().unwrap_or_default());
+            // Only this route builds registry crates beside the SDK's, and only a copy of one of
+            // those is a different crate from the SDK's; the direct route has none to explain.
+            if !explained && diagnostic.crate_present_twice() {
+                explained = true;
+                error.push_str(&format!("\n{}\n", crate::host::tr("SDK values keep the SDK's Rust crate identities. A registry-built copy of a trait or type is not interchangeable, even at the same version. Type mismatches are refused; SDK libraries are never substituted.")));
+            }
         }
-        return Err(error);
+        // The linker's and Application Control's words are in the compiler's messages, no
+        // longer on Cargo's standard error.
+        let (blocked, libraries) = (
+            crate::rust::blocked_by_app_control(&raw),
+            raw.lines().any(crate::rust::missing_system_libraries),
+        );
+        return Err(super::advised(error, blocked, libraries));
     }
     let binary = game.join("bin").join(if cfg!(windows) {
         "sunrise-client.exe"
@@ -674,6 +716,14 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn forwarding_sdk_requires_one_logger_slot_in_its_template() {
+        assert!(check_log_template("fn entry() {}", false).is_ok());
+        assert!(check_log_template("fn entry() {}", true).is_err());
+        assert!(check_log_template("/* MOD_LOGGERS */", true).is_ok());
+        assert!(check_log_template("/* MOD_LOGGERS */ /* MOD_LOGGERS */", true).is_err());
+    }
 
     #[test]
     #[ignore = "daily"]
@@ -804,7 +854,6 @@ mod tests {
         for name in [
             "mod_api",
             "mod_vocab",
-            "mod_points",
             "sunrise_mod_package",
             "sunrise_mod_host",
         ] {
@@ -842,7 +891,11 @@ mod tests {
                 String::from_utf8_lossy(&result.stderr)
             );
         }
-        fs::write(game.join(prebuilt::TEMPLATE), "fn main() { sunrise_mod_host::main_with(); }\n/* MOD_ENTRIES */\n/* MOD_SLOTS */\n/* BUILT_MODS */\n").unwrap();
+        fs::write(
+            game.join(prebuilt::TEMPLATE),
+            "fn main() { sunrise_mod_host::main_with(); }\n/* MOD_ENTRIES */\n/* BUILT_MODS */\n",
+        )
+        .unwrap();
         let template = api::template(&game.join(prebuilt::TEMPLATE)).unwrap();
         let wrapper = scratch.path().join("wrapper");
         fs::create_dir_all(wrapper.join("src")).unwrap();
@@ -851,11 +904,7 @@ mod tests {
             "[package]\nname='registry-game'\nversion='0.0.0'\nedition='2024'\n[workspace]\n",
         )
         .unwrap();
-        fs::write(
-            wrapper.join("src/main.rs"),
-            api::main_rs(&template, &[], &internals::Catalog::default()),
-        )
-        .unwrap();
+        fs::write(wrapper.join("src/main.rs"), api::main_rs(&template, &[])).unwrap();
         let bindings = prebuilt::wrapper_externs(&game.join("deps")).unwrap();
         let mut wrapper_plan = compiler_plan(
             &rust,

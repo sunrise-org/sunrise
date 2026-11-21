@@ -6,34 +6,45 @@ use crate::*;
 #[doc(hidden)]
 #[sunrise_mod_api_macros::host_area]
 pub trait EntityRidingBackend {
-    /// Side: server.
+    /// Side: both.
     /// What the entity rides (`Entity.getVehicle`): `None` when it rides
     /// nothing, its actual vehicle is retained off-level and has no resident handle,
     /// or the supplied handle is stale. `is_passenger` still reports the relationship.
+    /// On a client, the vehicle the passenger has boarded from the server's list, if
+    /// this window has a handle for it. Lists for unknown vehicles or entities that
+    /// cannot accept passengers (markers and ominous item spawners) have no effect.
     #[access(WorldOnly)]
     fn entity_vehicle(&self, entity: EntityRef) -> Option<EntityRef>;
-    /// Side: server.
+    /// Side: both.
     /// Whether the entity rides another (`Entity.isPassenger`), including a retained
-    /// off-level vehicle that cannot be returned by `vehicle`. Stale handles return `None`.
+    /// off-level vehicle that cannot be returned by `vehicle`. On a client, whether the
+    /// entity boarded from the server's passenger list. Stale or untracked handles return `None`.
     #[access(WorldOnly)]
     fn entity_is_passenger(&self, entity: EntityRef) -> Option<bool>;
-    /// Side: server.
+    /// Side: both.
     /// The lowest vehicle under the entity (`Entity.getRootVehicle`): the
     /// entity itself when it rides nothing. Traverses retained off-level intermediaries,
     /// but returns `None` if the actual root has no resident handle, the supplied handle
     /// is stale, or the relationship contains a cycle. Never substitutes a descendant.
+    /// On a client, follows the server's passenger lists and returns the root only if
+    /// this window has a handle for it.
     #[access(WorldOnly)]
     fn entity_root_vehicle(&self, entity: EntityRef) -> Option<EntityRef>;
-    /// Side: server.
+    /// Side: both.
     /// The entities riding this one (`Entity.getPassengers`), in `addPassenger`'s order: each
     /// behind those aboard, except that a player goes first when the first is no player.
     /// Only resident handles are returned; retained off-level passengers are omitted.
-    /// Dying passengers stay aboard until removed.
+    /// Dying passengers stay aboard until removed. On a client, unknown passengers and
+    /// links that would form a cycle do not board. Returns their handles in packet order.
+    /// Returns `None` for a stale or untracked vehicle, an empty list for one with no
+    /// passengers whose handles can be returned.
     #[access(WorldOnly)]
     fn entity_passengers(&self, entity: EntityRef) -> Option<Vec<EntityRef>>;
-    /// Side: server.
+    /// Side: both.
     /// Whether anything rides the entity (`Entity.isVehicle`), including retained
     /// off-level passengers omitted from `passengers`. Dying is not removal.
+    /// On a client, whether any passenger boarded from the server's list.
+    /// Stale or untracked handles return `None`.
     #[access(WorldOnly)]
     fn entity_is_vehicle(&self, entity: EntityRef) -> Option<bool>;
     /// Side: server.
@@ -90,13 +101,12 @@ pub trait EntityRidingBackendMut {
     /// Attempts to board a vehicle through the shared server mount path, and names the cause of
     /// a refusal (`StartRidingRefusal`).
     ///
-    /// Players and mobs can ride a mob, boat, minecart or generic seat entity
-    /// (an armor stand, display, marker or interaction). A successful mob mount drops its
-    /// lead as an item without a sound and emits `entity_unleash`; a refused mount leaves the
-    /// leash alone. Mob vehicle capacity
-    /// follows its species; minecarts store one passenger and boats store one
-    /// mob and up to two passengers in total. Generic seats admit one passenger unless forced.
-    /// `force` bypasses normal admission checks, not these storage limits.
+    /// Players, mobs and declared general entities can ride a mob, boat, minecart, declared
+    /// general vehicle or generic seat (such as an armor stand or display). A general type with
+    /// `NoSave` can ride but cannot carry a passenger, even when forced. A successful mob mount
+    /// drops its lead as an item without a sound and emits `entity_unleash`; a refused mount
+    /// leaves the lead alone. Mob capacity follows its species. Boats and minecarts keep their
+    /// vehicle limits even when forced; other seats admit one passenger unless forced.
     /// Player boarding cooldown and the strider's
     /// eye-in-lava admission check are not represented by the game.
     /// A player vehicle is refused as `StartRidingRefusal::PlayerVehicle`, forced or not:
@@ -137,7 +147,7 @@ pub trait EntityRidingBackendMut {
     /// Side: server.
     /// Gets the entity off its vehicle (`Entity.stopRiding`), where the
     /// vehicle lets it out, as `/ride ... dismount` does. False when it rode
-    /// nothing, a mod's `mob_ride` hook kept it on, or for a stale handle.
+    /// nothing, an `entity_mount` listener kept it on, or for a stale handle.
     #[access(WorldOnly)]
     fn entity_stop_riding(&mut self, entity: EntityRef) -> bool;
     /// Side: server.

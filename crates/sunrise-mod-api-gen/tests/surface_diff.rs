@@ -11,7 +11,6 @@ fn function(path: &str) -> Function {
         FunctionContract {
             signature: format!("fn {path}()"),
             impl_generics: String::new(),
-            wasm: true,
             refs: vec![],
         },
     )
@@ -70,6 +69,25 @@ fn run(dir: &Path, extra: &[&str]) -> (i32, String, String) {
         String::from_utf8(stdout).unwrap(),
         String::from_utf8(stderr).unwrap(),
     )
+}
+
+#[test]
+#[ignore = "daily"]
+fn stable_release_gates_the_real_surface_verdict() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = std::process::Command::new("python3")
+        .current_dir(root)
+        .env("SUNRISE_STAGE_TOOL", env!("CARGO_BIN_EXE_sunrise-stage"))
+        .env("PYTHONPATH", ".")
+        .arg("tests/stable_mod_api_integration.py")
+        .output()
+        .expect("run the stable release integration test");
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -180,13 +198,118 @@ fn a_new_note_naming_an_unchanged_id_fails_and_an_old_or_edited_one_is_ignored()
 
 #[test]
 #[ignore = "daily"]
+fn a_landed_note_is_checked_only_against_its_own_merge() {
+    let dir = folder();
+    let sha = "6597e0855f562498319f093afcf2ed1ea8d717cb";
+    let own = ["--notes", "changes", "--base-notes", "base"];
+    let landed = [own[0], own[1], own[2], own[3], "--landed", sha];
+    // Changed in that merge: attached with `--landed`, and left out of the pull request's own diff.
+    note(
+        dir.path(),
+        "changes",
+        "late.toml",
+        &format!("ids = [\"fn:spawn\"]\nwhy = \"Late.\"\nlanded = \"{sha}\"\n"),
+    );
+    let (code, out, err) = run(dir.path(), &own);
+    assert_eq!(code, 0, "{err}");
+    assert!(!out.contains("Late."), "{out}");
+    let (code, out, err) = run(dir.path(), &landed);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("Late."), "{out}");
+    // An id that did not change in that merge is stale; another merge's notes are not read.
+    note(
+        dir.path(),
+        "changes",
+        "late.toml",
+        &format!("ids = [\"fn:keep\"]\nwhy = \"Late.\"\nlanded = \"{sha}\"\n"),
+    );
+    let (code, _, err) = run(dir.path(), &landed);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("change note late.toml names fn:keep, which did not change"),
+        "{err}"
+    );
+    let other = "1".repeat(40);
+    let (code, out, _) = run(
+        dir.path(),
+        &[own[0], own[1], own[2], own[3], "--landed", &other],
+    );
+    assert_eq!(code, 0);
+    assert!(!out.contains("Late."), "{out}");
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_merges_own_notes_cover_its_diff_apart_from_the_late_ones() {
+    let dir = folder();
+    let sha = "6597e0855f562498319f093afcf2ed1ea8d717cb";
+    let late = |ids: &str| format!("ids = [{ids}]\nwhy = \"Late.\"\nlanded = \"{sha}\"\n");
+    let gated = [
+        "--notes",
+        "changes",
+        "--base-notes",
+        "base",
+        "--landed",
+        sha,
+        "--covered-by",
+        "merge",
+        "--covered-base",
+        "parent",
+        "--gate",
+    ];
+    // fn:spawn's removal, with no note at all, is breaking and unnoted.
+    for folder in ["changes", "base", "merge", "parent"] {
+        std::fs::create_dir_all(dir.path().join(folder)).unwrap();
+    }
+    let (code, _, err) = run(dir.path(), &gated);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("breaking change without a change note: fn:spawn"),
+        "{err}"
+    );
+    // The merge's own note covers it, and its unchanged fn:keep is not stale: it was checked when it merged.
+    note(
+        dir.path(),
+        "merge",
+        "late.toml",
+        "ids = [\"fn:spawn\", \"fn:keep\"]\nwhy = \"Then.\"\n",
+    );
+    let (code, out, err) = run(dir.path(), &gated);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("Then."), "{out}");
+    // A late note of the same file name is read apart from it: still checked, and a wrong id still fails.
+    note(dir.path(), "changes", "late.toml", &late("\"fn:keep\""));
+    let (code, _, err) = run(dir.path(), &gated);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("change note late.toml names fn:keep, which did not change"),
+        "{err}"
+    );
+    // Nor does a file of that name in the first parent's notes hide it.
+    note(
+        dir.path(),
+        "parent",
+        "late.toml",
+        "ids = [\"fn:x\"]\nwhy = \"Old.\"\n",
+    );
+    let (code, _, err) = run(dir.path(), &gated);
+    assert_eq!(code, 1);
+    assert!(err.contains("names fn:keep, which did not change"), "{err}");
+    note(dir.path(), "changes", "late.toml", &late("\"fn:spawn\""));
+    let (code, out, err) = run(dir.path(), &gated);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("Late."), "{out}");
+}
+
+#[test]
+#[ignore = "daily"]
 fn sdk_note_scope_ignores_engine_ids_but_checks_api_ids() {
     let dir = folder();
     note(
         dir.path(),
         "changes",
-        "point.toml",
-        "ids = [\"point:game::old_tick\"]\nwhy = \"Tick moved.\"\n",
+        "internal.toml",
+        "ids = [\"internal:fn:game::old_tick\"]\nwhy = \"Tick moved.\"\n",
     );
     note(
         dir.path(),
@@ -197,12 +320,12 @@ fn sdk_note_scope_ignores_engine_ids_but_checks_api_ids() {
     let notes = ["--notes", "changes", "--base-notes", "base"];
     let mut publish = notes.to_vec();
     publish.extend(["--api-notes-only", "--json", "diff.json"]);
-    let (code, out, err) = run(dir.path(), &publish);
+    let (code, _, err) = run(dir.path(), &publish);
     assert_eq!(code, 0, "{err}");
     assert!(err.is_empty(), "{err}");
-    assert!(out.contains("0 breaking without a note"), "{out}");
     let diff: mod_surface::Diff =
         serde_json::from_slice(&std::fs::read(dir.path().join("diff.json")).unwrap()).unwrap();
+    assert_eq!(diff.undeclared().count(), 0);
     let noted: Vec<_> = diff
         .changes
         .iter()
@@ -216,27 +339,37 @@ fn sdk_note_scope_ignores_engine_ids_but_checks_api_ids() {
 
     let (code, _, err) = run(dir.path(), &notes);
     assert_eq!(code, 1);
-    assert!(
-        err.contains("change note point.toml names point:game::old_tick, which did not change"),
-        "{err}"
-    );
-    assert!(
-        err.contains("change note mixed.toml names loop:old.tick, which did not change"),
-        "{err}"
-    );
+    for refused in [
+        [
+            "internal.toml",
+            "internal:fn:game::old_tick",
+            "which did not change",
+        ],
+        ["mixed.toml", "loop:old.tick", "which did not change"],
+    ] {
+        assert!(
+            err.lines()
+                .any(|line| refused.iter().all(|word| line.contains(word))),
+            "{err}"
+        );
+    }
 
     note(
         dir.path(),
         "changes",
         "api-stale.toml",
-        "ids = [\"point:game::new_tick\", \"fn:keep\"]\nwhy = \"No API change.\"\n",
+        "ids = [\"internal:fn:game::new_tick\", \"fn:keep\"]\nwhy = \"No API change.\"\n",
     );
     let (code, _, err) = run(dir.path(), &publish);
     assert_eq!(code, 1);
-    assert_eq!(
-        err.trim(),
-        "change note api-stale.toml names fn:keep, which did not change"
+    // The engine id in the same note is outside the SDK's scope, so only the API id is refused.
+    assert!(
+        err.contains("api-stale.toml")
+            && err.contains("fn:keep")
+            && err.contains("which did not change"),
+        "{err}"
     );
+    assert!(!err.contains("internal:fn:game::new_tick"), "{err}");
 }
 
 #[test]

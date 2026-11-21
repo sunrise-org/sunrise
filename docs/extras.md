@@ -72,6 +72,12 @@ in Controls, and adding one would put a non-vanilla mapping into `options.txt`.
 - Off: nothing is gathered and the shaders' loop runs zero times (the count is 0), so it costs
   nothing measurable (numbers in the pull request, #814).
 
+### Mod audio streams (`modAudioStreams`, default on)
+- Mods can play audio they make (`ClientHost::open_audio_stream`, [the how-to](modding/src/how-to/client/audio-streams.md)).
+  Off, every stream plays on unheard: the engine mixes none of it and only takes each stream's audio in at its own pace.
+- The one extra that is on by default; its line is written to `sunrise-extras.txt` only while it is off. It lives in
+  `crates/sunrise-official/src/mod_audio.rs` and sets the engine's mod-stream gain (`sunrise_platform::sound`).
+
 ### Moved to native mods
 
 The **FPS counter**, **Keystrokes** and **Zoom** are official native mods now (in
@@ -172,6 +178,15 @@ and the container screen tests are unchanged).
 - Done with ordinary left clicks planned by `inv_sort::plan`, so a vanilla
   server accepts it; a unit test replays the planned clicks through the menu
   engine on random chests.
+
+### Shader pack key (`shaderPackKey`, `K` by default; `lastShaderPack`, none picked)
+
+- The Extras page's key for the Shader Packs pick: press it and the running pack turns off, press it again and
+  the same pack runs again. Click the row, then press a key to rebind it (Escape unbinds); it is not a vanilla
+  key binding, so it never collides with one (Replay Studio keeps physical `K` for its camera keyframe).
+- Turning off writes the pick to `lastShaderPack`, so the pack stays off across restarts until the key is
+  pressed again. The menu's second click on the picked pack does the same through the same pick.
+- A pack whose owning mod is off can't run: the key reports that instead of claiming it turned on.
 
 ### Smooth chat (`chatAnimation`, default off; `chatIndicator`, default on)
 - A new chat line slides in from the left while it fades in over a quarter of

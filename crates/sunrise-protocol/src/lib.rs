@@ -11,6 +11,7 @@ pub mod chunk;
 pub mod chunk_batch;
 pub mod collider_sync;
 pub mod connection;
+pub mod connection_groups;
 pub mod crypto;
 pub mod custom_book;
 pub mod entity_data;

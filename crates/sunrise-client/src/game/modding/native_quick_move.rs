@@ -92,44 +92,37 @@ impl Game<'_> {
     /// `ServerGamePacketListenerImpl.handleContainerClick` for a quick move
     /// in a guest's open mod container menu (on a vanilla menu type or the
     /// mod's own): the mods' `native_menu_quick_move` first, as the clicking
-    /// player. True when a mod took it: the slot keeps what the mod left and
-    /// the guest's client gets the whole menu again. False for every other
-    /// click, and for one no mod took, so the game's own routing runs.
-    pub(super) fn lan_mod_quick_move(&mut self, conn: u32, p: &play::ContainerClick) -> bool {
-        let Some(host) = self.lan.as_ref() else {
-            return false;
-        };
-        let Some(g) = host.hub.guest(conn) else {
-            return false;
-        };
-        let Some(menu) = g
-            .menu
-            .as_ref()
-            .filter(|m| p.container != 0 && m.window == p.container)
-        else {
-            return false;
-        };
+    /// player. `Some` reports whether this route applied; `None` lets ordinary routing run.
+    pub(super) fn lan_mod_quick_move(
+        &mut self,
+        conn: u32,
+        p: &play::ContainerClick,
+    ) -> Option<bool> {
+        use super::lan_menus::ClickReply;
+        if !mod_api::__private::has_part_hook(mod_api::HookId::MenuQuickMove) {
+            return None;
+        }
+        let host = self.lan.as_ref()?;
+        let g = host.hub.guest(conn)?;
+        let menu = g.menu.as_ref().filter(|m| {
+            p.container != 0
+                && m.window == p.container
+                && usize::try_from(p.slot).is_ok_and(|slot| slot < m.slot_count())
+        })?;
         let Slots::Block(pos) = menu.slots else {
-            return false;
+            return None;
         };
-        let Some(at) = quick_move_slot(
+        let at = quick_move_slot(
             p.input,
             i32::from(p.button),
             i32::from(p.slot),
             menu.size,
             &menu.hidden,
-        ) else {
-            return false;
-        };
-        // A spectator's or a dead player's click and a menu no longer valid
-        // change nothing, and a shift-click during a drag only ends the drag
-        // (`doClick`'s resetQuickCraft): the game's own path answers them.
-        if g.spectator()
-            || g.dead
-            || menu.drag.is_some()
-            || !menu.still_valid(&host.hub.loop_context, &self.world, g)
-        {
-            return false;
+        )?;
+        // A shift-click during a drag only ends the drag (`doClick`'s resetQuickCraft).
+        // The ordinary path also answers spectators and dead players.
+        if g.spectator() || g.dead || menu.drag.is_some() {
+            return None;
         }
         let (size, window, menu_type) = (menu.size, menu.window, menu.mod_type);
         // A mod menu type keeps its drag in the connection's machine menu
@@ -141,44 +134,33 @@ impl Game<'_> {
             .and_then(|play| play.crafting.machine.as_ref())
             .is_some_and(|(w, m)| *w == window && m.quick_crafting())
         {
-            return false;
+            return None;
         }
         if !matches!(
             self.world.block_entities.get(&pos),
             Some(BlockEntity::Mod(m)) if !m.id().is_empty()
         ) {
-            return false;
+            return None;
         }
         let slot = p.slot as usize;
         // The game's own routing reuses the pickup rule's answer asked before the hook, so the
         // click asks it once, as the client's prediction does.
-        let (handled, asked) = if mod_api::__private::has_part_hook(mod_api::HookId::MenuQuickMove)
-        {
-            // A listener: the move is one action, decided (`decided_action`): the hook's answer
-            // is validated and applied once, and a refused move changes nothing.
-            match self.decided_mod_quick_move(conn, pos, size, menu_type, slot, at, window) {
-                Some(decided) => decided,
-                None => {
-                    // The client predicted the game's routing: it gets the menu as it is.
-                    if let Some(host) = self.lan.as_mut() {
-                        host.hub.resend_menu(conn, window, &self.world);
-                    }
-                    return true;
-                }
-            }
-        } else {
-            let handled = self
-                .as_guest(conn, |game| game.mod_menu_quick_move(pos, size, slot, at))
-                .unwrap_or(false);
-            (handled, Asked::default())
+        let Some((handled, asked)) =
+            self.decided_mod_quick_move(conn, pos, size, menu_type, slot, at, window)
+        else {
+            // The client predicted the game's routing: it gets the menu as it is.
+            self.reply_menu_click(conn, ClickReply::Resend(window));
+            return Some(false);
         };
         if !handled {
-            return !asked.is_empty() && self.lan_machine_click_asked(conn, p, asked);
+            return if asked.is_empty() {
+                None
+            } else {
+                self.lan_machine_click_asked(conn, p, asked)
+            };
         }
         // The mod menu type's engine starts over from the block entity next click.
-        let Some(host) = self.lan.as_mut() else {
-            return false;
-        };
+        let host = self.lan.as_mut()?;
         if let Some(play) = host.menus.get_mut(&conn)
             && play
                 .crafting
@@ -191,61 +173,19 @@ impl Game<'_> {
         // sendAllDataToRemote: the client predicted the game's routing. A mod
         // that removed its own block leaves no menu to send: it closes, and
         // the inventory goes out on its own.
-        if matches!(
+        let reply = if matches!(
             self.world.block_entities.get(&pos),
             Some(BlockEntity::Mod(_))
         ) {
-            host.hub.resend_menu(conn, window, &self.world);
-        } else if let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) {
-            host.hub.close_container(conn);
-            host.hub.send_inventory(gi);
-        }
-        true
+            ClickReply::Resend(window)
+        } else {
+            ClickReply::Close(window)
+        };
+        self.reply_menu_click(conn, reply);
+        Some(true)
     }
 
-    /// The mods' `native_menu_quick_move` on menu slot `slot` (living at
-    /// `at`) of the mod container at `pos` (`size` container slots), for the
-    /// player in place: true when
-    /// one took it, the slot then holding what is left of its stack. The
-    /// block entity is out of the world during the call. This is the call with no part to
-    /// answer (it asks nobody, the slot rules included); with a part the move is decided
-    /// (`decided_mod_quick_move`).
-    fn mod_menu_quick_move(&mut self, pos: Pos, size: usize, slot: usize, at: MenuSlot) -> bool {
-        let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos) else {
-            return false;
-        };
-        let held = match at {
-            MenuSlot::Container(k) => m.items.get(k).cloned().flatten(),
-            MenuSlot::Inventory(i) => self.inventory.get(i).cloned().flatten(),
-        };
-        let Some(stack) = held.filter(|s| s.count > 0) else {
-            return false;
-        };
-        let mut stack = Some(stack);
-        let mut taken = std::mem::take(&mut **m);
-        let items = taken.items.clone();
-        let mut handled = false;
-        self.api_menu_quick_move(
-            [pos.0, pos.1, pos.2],
-            &mut taken,
-            size,
-            slot,
-            &mut stack,
-            &mut handled,
-        );
-        settle(
-            at,
-            handled,
-            stack,
-            &items,
-            &mut taken.items,
-            &mut self.inventory,
-        );
-        self.put_back_mod_block_entity(pos, taken, &items);
-        handled
-    }
-
-    /// The call of `mod_menu_quick_move`: the block entity is taken out of the world (journaled
+    /// Dispatch `MenuQuickMove`: the block entity is taken out of the world (journaled
     /// first, so a refused move puts it back) and the mods answer on a copy of the slot's stack.
     fn mod_menu_quick_move_fire(
         &mut self,
@@ -299,8 +239,8 @@ impl Game<'_> {
         })
     }
 
-    /// `api_menu_quick_move`, saying whether the mods' answer was valid: an invalid one leaves
-    /// the block entity, the stack and `handled` as they were and is refused by the decision.
+    /// Check the mods' answer before applying it. An invalid answer leaves the block entity,
+    /// stack and `handled` as they were and is refused by the decision.
     fn menu_quick_move_checked(
         &mut self,
         pos: [i32; 3],
@@ -313,9 +253,6 @@ impl Game<'_> {
         use crate::game::api_values::{
             BlockEntitySnapshotError, TryIntoApi, TryIntoEngine, finish_block_entity_writeback,
         };
-        if !mod_api::__private::has_part_hook(mod_api::HookId::MenuQuickMove) {
-            return true;
-        }
         let (Ok(mut api), Ok(mut held)) = (entity.try_into_api(), stack.try_into_api()) else {
             return true;
         };
@@ -357,14 +294,25 @@ impl Game<'_> {
     }
 
     /// What `mod_menu_quick_move_fire` kept, applied: the slot, the block's items and the block
-    /// entity back in the world. True when a mod took the click.
-    fn mod_menu_quick_move_apply(&mut self, pos: Pos, fired: Fired) -> bool {
+    /// entity back in the world. True when a mod took the click. A move from a mod menu type's
+    /// own slot is then heard as a take (`menu_slot_take`) with the amount it moved; a failed
+    /// listener undoes the move.
+    fn mod_menu_quick_move_apply(
+        &mut self,
+        pos: Pos,
+        take_menu: Option<&'static ModMenuType>,
+        fired: Fired,
+    ) -> bool {
         let Fired {
             at,
             mut taken,
             items,
             stack,
         } = fired;
+        let player = self.native_acting_id();
+        if matches!(at, MenuSlot::Inventory(_)) {
+            self.journal_player(player);
+        }
         settle(
             at,
             true,
@@ -373,7 +321,23 @@ impl Game<'_> {
             &mut taken.items,
             &mut self.inventory,
         );
-        self.put_back_mod_block_entity(pos, taken, &items);
+        if let (Some(menu), MenuSlot::Container(slot)) = (take_menu, at)
+            && let Some(held) = items.get(slot).and_then(Option::as_ref)
+        {
+            let left = taken.items.get(slot).and_then(Option::as_ref);
+            let count = held.count.saturating_sub(left.map_or(0, |l| l.count));
+            if count > 0 {
+                let mut moved = held.clone();
+                moved.count = count;
+                let take = (slot, moved, left.cloned());
+                if !self.api_menu_slot_take(&mut taken, player, menu.id, &take) {
+                    // The click's savepoint still owns both inventories, including everything
+                    // the quick-move listener wrote before the notice failed.
+                    return false;
+                }
+            }
+        }
+        self.put_back_menu_entity(pos, taken, &items);
         true
     }
 
@@ -403,7 +367,7 @@ impl Game<'_> {
         }
     }
 
-    /// `mod_menu_quick_move` as one decided action, with the slot rules' answers asked before it.
+    /// Route a mod menu quick move as one decided action, after asking the slot rules.
     /// `Some((handled, asked))`: the decision stood (a mod took the click), or no mod did and the
     /// action was cancelled with every write of the listeners undone, so the game routes the
     /// click (`handled` false), or the slot's rules refused the pickup before any mod was asked;
@@ -429,7 +393,7 @@ impl Game<'_> {
         }
         let admitted = Admitted::of(self, conn, pos, size, window)?;
         let fired = Rc::new(RefCell::new(None));
-        let handled = Rc::new(Cell::new(false));
+        let handled = Rc::new(Cell::new(None));
         let untaken = Rc::new(Cell::new(false));
         let (kept, taken, result, left) = (
             fired.clone(),
@@ -437,39 +401,63 @@ impl Game<'_> {
             handled.clone(),
             untaken.clone(),
         );
-        let applied = self.decided_action(
-            "menu_quick_move",
-            route,
-            actor,
-            Epoch::Player,
-            // Everything the click was admitted on is still so.
-            move |game| admitted.holds(game),
-            move |game| match game
-                .as_guest(conn, |g| g.mod_menu_quick_move_fire(pos, size, slot, at))
-            {
-                Some(Fire::Done(fired)) => {
-                    *kept.borrow_mut() = Some(fired);
-                    Reply::Allow
-                }
-                Some(Fire::Untaken) => {
-                    left.set(true);
-                    Reply::Cancel
-                }
-                Some(Fire::Nothing) => Reply::Allow,
-                Some(Fire::Invalid) => Reply::Invalid(InvalidReason::Plan),
-                None => Reply::Failed,
-            },
-            move |game| {
-                if let Some(fired) = taken.take() {
-                    result.set(
-                        game.as_guest(conn, |g| g.mod_menu_quick_move_apply(pos, fired))
+        let take_menu = menu_type.filter(|menu| {
+            matches!(at, MenuSlot::Container(slot) if menu.owns_slot(slot))
+                && matches!(self.world.block_entities.get(&pos), Some(BlockEntity::Mod(entity))
+                    if mod_api::__private::block_entity_type_listens(mod_api::HookId::MenuSlotTake, entity.id()))
+        });
+        let decide = |game: &mut Self| {
+            game.decided_action(
+                "menu_quick_move",
+                route,
+                actor,
+                Epoch::Player,
+                // Everything the click was admitted on is still so.
+                move |game| admitted.holds(game),
+                move |game| match game
+                    .as_guest(conn, |g| g.mod_menu_quick_move_fire(pos, size, slot, at))
+                {
+                    Some(Fire::Done(fired)) => {
+                        *kept.borrow_mut() = Some(fired);
+                        Reply::Allow
+                    }
+                    Some(Fire::Untaken) => {
+                        left.set(true);
+                        Reply::Cancel
+                    }
+                    Some(Fire::Nothing) => Reply::Allow,
+                    Some(Fire::Invalid) => Reply::Invalid(InvalidReason::Plan),
+                    None => Reply::Failed,
+                },
+                move |game| {
+                    if let Some(fired) = taken.take() {
+                        result.set(Some(
+                            game.as_guest(conn, |g| {
+                                g.mod_menu_quick_move_apply(pos, take_menu, fired)
+                            })
                             .unwrap_or(false),
-                    );
+                        ));
+                    }
+                },
+            )
+        };
+        let applied = if take_menu.is_some() {
+            mod_api::run_transaction(self, |game, _| {
+                // `decided_action` closes its own savepoint into this one. If the apply was
+                // entered but the notice failed, also abort the earlier quick-move writes.
+                let applied = decide(game);
+                if applied && handled.get() != Some(false) {
+                    Ok(true)
+                } else {
+                    Err(())
                 }
-            },
-        );
+            })
+            .is_ok()
+        } else {
+            decide(self)
+        };
         if applied {
-            Some((handled.get(), asked))
+            Some((handled.get().unwrap_or(false), asked))
         } else {
             untaken.get().then_some((false, asked))
         }

@@ -1,1 +1,0 @@
-sunrise-mod-wasm a_compiled_part_answers_a_collision_query_like_the_native_one test:collision_shape daily wasm-fixture

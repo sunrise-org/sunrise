@@ -71,10 +71,6 @@ pub(super) struct ScreenBuild {
     pub(super) layout: BuildLayout,
     /// Panels drawn outside `rect`.
     pub(super) exclusion: Vec<[f32; 4]>,
-    /// `screen_init_pre` cancelled the screen's own widgets. Always false
-    /// until that hook lands (step 7).
-    #[allow(dead_code, reason = "step 7 of #903 reads the cancel")]
-    pub(super) cancelled: bool,
 }
 
 /// A container screen's layout: the panel it draws in, the panels beside it,
@@ -254,7 +250,6 @@ impl ScreenBuild {
             origin,
             layout,
             exclusion,
-            cancelled: false,
         }
     }
 
@@ -303,6 +298,13 @@ impl ScreenBuild {
 pub(super) struct ScreenState {
     pub(super) observed: Option<ObservedScreen>,
     pub(super) build: ScreenBuildState,
+    /// A mod's `ScreenOpening::Vanilla` answer is opening its screen: that
+    /// change fires no screen hook again.
+    pub(super) replacing: bool,
+    /// The last change the screen hooks decided went another way than asked
+    /// (a mod's `Cancel`, `ModScreen` or `Vanilla`): a caller's grab after it
+    /// leaves the screen that shows its pointer. Never set with no listener.
+    pub(super) answered: std::cell::Cell<bool>,
 }
 
 /// One frame's `RenderInventoryMobEffects` answer and what it was taken for.
@@ -1007,10 +1009,10 @@ mod tests {
                 (113.0, 98.0, 98.0, "gui.advancements", 4, true),
             ],
             icons: [
-                (173.0, 122.0, "gui/sprites/pause_menu/bug"),
-                (197.0, 122.0, "gui/sprites/pause_menu/social_interactions"),
-                (221.0, 122.0, "gui/sprites/friends/friends"),
-                (245.0, 122.0, "gui/sprites/pause_menu/player_reporting"),
+                (173.0, 122.0, "pause_menu/bug"),
+                (197.0, 122.0, "pause_menu/social_interactions"),
+                (221.0, 122.0, "friends/friends"),
+                (245.0, 122.0, "pause_menu/player_reporting"),
             ],
         };
         state.sync(

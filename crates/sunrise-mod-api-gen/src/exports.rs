@@ -40,7 +40,7 @@ pub(crate) fn sources(root: &Path) -> Result<BTreeMap<String, String>, String> {
         .collect())
 }
 
-/// Expand the same generated surfaces for source consumers (Host validation and wasm resolution).
+/// Expand the same generated surfaces for source consumers such as Host validation.
 pub(crate) fn expand(root: &Path, source: &str) -> Result<String, String> {
     fn items(input: Vec<Item>, sources: &BTreeMap<String, String>) -> Result<Vec<Item>, String> {
         let mut out = Vec::new();

@@ -12,7 +12,9 @@ whole file, **Open full log** opens it outside the launcher, **Show in folder** 
 refresh, not a live stream: a running build's later output appears only on the next refresh. Nothing is
 uploaded; the log stays on the player's computer.
 
-The `sunrise-launcher native-build` command writes build progress to stderr. A terminal keeps
+`cargo sunrise-mod build` keeps its own log and prints that log's path when it ends, built or failed.
+
+The launcher's `native-build` command writes build progress to stderr. A terminal keeps
 detailed download updates; redirected stderr reports only the first and completed updates for each
 Rust toolchain or mod-tools download. Build phases, compiler progress and failures are still
 reported in order, and the full build log is unchanged.

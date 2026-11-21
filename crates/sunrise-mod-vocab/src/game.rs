@@ -85,7 +85,7 @@ pub struct Clock {
 pub const MAX_TERRAIN_COLUMNS: usize = 4096;
 
 /// The generator's undecorated surface, without slope rules or chunk allocation.
-/// Created only by the game; identical on native and wasm.
+/// Created only by the game.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]

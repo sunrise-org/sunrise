@@ -1,17 +1,17 @@
 //! A package's runtime data files: the `runtime/` folder and the `[runtime]` table that lists
-//! each file with its SHA-512, the way `[wasm]` lists `mod.wasm`.
+//! each file with its SHA-512.
 //!
 //! Runtime files are the bytes a mod's code opens beside itself (a compiled script bundle, a baked
 //! lookup table). They are not pack data: no datapack or resource pack can replace them and no
-//! reload touches them. Both native and wasm packages may carry them.
-use super::wasm::{sha512_hex, sha512_of};
+//! reload touches them.
+use super::hash::{sha512_hex, sha512_of};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 /// The folder of a package that holds its runtime files.
 pub const RUNTIME_DIR: &str = "runtime";
-/// The most one runtime file may weigh: what `mod.wasm` may.
+/// The most one runtime file may weigh.
 pub const MAX_RUNTIME_FILE: u64 = 64 << 20;
 /// The most all of a package's runtime files may weigh together.
 pub const MAX_RUNTIME_TOTAL: u64 = 256 << 20;
@@ -144,30 +144,7 @@ pub struct RuntimeData {
     dir: Option<PathBuf>,
 }
 
-/// The runtime files of the packages the process opened and verified outside the engine (the wasm
-/// loader opens a wasm package before the engine exists), by mod id, so the engine serves those
-/// bytes and the files are hashed once.
-static OPENED: std::sync::Mutex<BTreeMap<String, RuntimeData>> =
-    std::sync::Mutex::new(BTreeMap::new());
-
 impl RuntimeData {
-    /// Keeps the verified files of mod `id` for [`Self::opened`].
-    pub fn keep_opened(id: &str, data: Self) {
-        OPENED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id.to_owned(), data);
-    }
-
-    /// The verified files of mod `id`, when a loader opened its package and kept them.
-    pub fn opened(id: &str) -> Option<Self> {
-        OPENED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(id)
-            .cloned()
-    }
-
     pub(super) fn new(
         files: BTreeMap<String, Arc<[u8]>>,
         digest: String,

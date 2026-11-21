@@ -1,1 +1,0 @@
-What a tint source reads of the world around the block it colours: vanilla's `BlockAndTintGetter`, over the region a section is meshed from (`RenderSectionRegion`: the section's chunk and its eight neighbours).

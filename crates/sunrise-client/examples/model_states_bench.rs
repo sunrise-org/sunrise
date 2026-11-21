@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, fs, hint::black_box, path::PathBuf, time::Insta
 use sunrise_client::{Result, models::StateModels, sprites::Sprites};
 use sunrise_core::position::BlockPos;
 use {
-    sunrise_core::nbt::Tag,
+    sunrise_core::nbt::{Compound, Tag},
     sunrise_world::{
         DATA_VERSION,
         chunk::BlockState,
@@ -44,7 +44,7 @@ impl Fixture {
         let blocks = (target_bytes / (serde_json::to_vec(&fact)?.len() + 26)).max(1);
         let mut facts = BTreeMap::new();
         let mut states = Vec::new();
-        let mut defaults = BTreeMap::new();
+        let mut defaults = Compound::new();
         for i in 0..blocks {
             let block = format!("fixture_{i:04}");
             let name = format!("minecraft:{block}");

@@ -7,6 +7,21 @@ use crate::*;
 #[sunrise_mod_api_macros::host_area]
 pub trait LevelBlocksBackend {
     /// Side: both.
+    /// The contextual friction of `state` at `pos` (`IBlockExtension.getFriction`).
+    /// The state need not occupy the position. `entity` is the optional id and type
+    /// passed to the block's part. Returns `Ok(None)` for a nested query that repeats
+    /// an active read or exceeds the nesting bound. A stale level, unknown state, or
+    /// unavailable host or phase returns a typed read error.
+    /// The query never loads chunks or changes the world.
+    #[access(WorldOnly)]
+    fn level_friction(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+        state: BlockState,
+        entity: Option<(u32, &str)>,
+    ) -> Result<Option<f32>, LevelReadError>;
+    /// Side: both.
     /// How fast `tool` (None is an empty hand) mines the block at `pos`: the tool's own mining
     /// speed on that block (`ItemStack.getDestroySpeed`, 1.0 for no tool; for a block it has no
     /// rule for, the tool's default mining speed), before the player's enchantments, attributes, water, ground and
@@ -54,6 +69,19 @@ pub trait LevelBlocksBackend {
     /// `block_state`. API 381.
     #[access(WorldOnly)]
     fn level_block_property(&self, level: LevelRef, pos: [i32; 3], key: &str) -> Option<String>;
+    /// Side: both.
+    /// The mod-published connection group at `pos`, or `Ok(None)` when unset, unloaded, or out
+    /// of height. Returns `Err(LevelReadError::Stale)` for a stale handle or closed level, and
+    /// `Err(LevelReadError::Unavailable)` when the host is not readable in this phase.
+    /// Connection groups are derived visual state: they are synced to Sunrise clients with chunk
+    /// loads and updates, never saved to disk, and cleared when the block at `pos` is replaced by
+    /// a different block (same-block state changes preserve the group).
+    #[access(WorldOnly)]
+    fn level_connection_group(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+    ) -> Result<Option<u64>, LevelReadError>;
 }
 /// The handles' writes of the `level_blocks` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
@@ -88,6 +116,28 @@ pub trait LevelBlocksBackendMut {
         state: BlockState,
     ) -> Result<BlockState, LevelWriteError>;
     /// Side: server.
+    /// Ask `Block.getStateForPlacement(BlockPlaceContext)` without placing the block.
+    /// The placement-state parts see `block`'s default state, as in a real placement.
+    /// A registered answer belonging to another block is returned as given; an unknown
+    /// answer falls back to the block's own rule, as in a real placement.
+    /// The context is taken as written, with no target or click re-resolution. Nothing is
+    /// written, notified or loaded. No additional survival, obstruction or permission check
+    /// from `BlockItem.place` runs.
+    /// Only the level in play is queried. Returns `Err(LevelReadError::Stale)` for a
+    /// stale handle or closed level, and `Err(LevelReadError::Unavailable)` for a parked
+    /// level, an unavailable host or load phase, or a state that the API cannot represent.
+    ///
+    /// Returns `Ok(None)` for vanilla's `null`, a part's `Some(None)`, an unknown block
+    /// or item key, an unloaded or out-of-bounds destination, or a non-finite hit or
+    /// rotation. `None` in `context.item` means an empty hand.
+    #[access(WorldOnly)]
+    fn level_state_for_placement(
+        &mut self,
+        level: LevelRef,
+        block: BlockKey,
+        context: &PlacementContext,
+    ) -> Result<Option<BlockState>, LevelReadError>;
+    /// Side: server.
     /// Write `state` at `pos` as a placement does and run `Block.setPlacedBy` for it, with no
     /// player: a bed places its head, a door its upper half, a tall plant its top. The write
     /// is `level_set_block`'s with `NEIGHBORS | CLIENTS` (plus `KNOWN_SHAPE` when
@@ -109,8 +159,10 @@ pub trait LevelBlocksBackendMut {
     /// Side: server.
     /// Run `Block.setPlacedBy` on the block currently at `pos`, without a placer. `stack` is
     /// a detached item value (`None` is the empty stack); the block may inspect its components.
-    /// Write the initial state and load any block entity data before calling. The callback can
-    /// write companion cells and produce block-specific effects, but will not load stack NBT.
+    /// Write the initial state and load any block entity data before calling. Vanilla's part can
+    /// write companion cells and produce block-specific effects, but does not load stack NBT.
+    /// The block's subscribed `BlockPart::set_placed_by` runs after vanilla's work, with
+    /// the same read-only stack and no placer. This does not notify the item's part.
     /// `Ok(false)` at an unloaded or out-of-height origin or on carrier-transfer refusal.
     /// The fence check covers the origin and cells the callback writes directly, including
     /// companions; neighbour updates follow the level's normal rules.
@@ -126,6 +178,7 @@ pub trait LevelBlocksBackendMut {
     ) -> Result<bool, LevelWriteError>;
     /// Side: server.
     /// Remove a block in place (`Level.removeBlock`), preserving its fluid.
+    /// In a Host transaction the removal is tentative and its effects wait for commit.
     #[access(WorldOnly)]
     fn level_remove_block(&mut self, level: LevelRef, pos: [i32; 3], moved: bool) -> bool;
     /// Side: server.
@@ -134,8 +187,8 @@ pub trait LevelBlocksBackendMut {
     /// stacks without spawning their item entities; otherwise return an empty list after
     /// spawning them. The one level drop path runs loot, block-drop hooks and experience
     /// once, in vanilla's random order. `drop` false suppresses resources entirely.
-    /// None means nothing broke: air, a refused write, a stale handle, a client, an
-    /// unloaded/out-of-height position, or a parked level.
+    /// `Ok(None)` means nothing broke: air, a refused write, a stale handle, a client, an
+    /// unloaded/out-of-height position, a parked level, or an open Host transaction.
     #[access(WorldOnly)]
     fn level_destroy_block(
         &mut self,
@@ -169,4 +222,34 @@ pub trait LevelBlocksBackendMut {
     /// parked handle, a client, and a block that did not grow.
     #[access(WorldOnly)]
     fn level_bone_meal(&mut self, level: LevelRef, pos: [i32; 3]) -> bool;
+    /// Side: server.
+    /// Set or clear the mod-published connection group at `pos` (any `u64`, including `0`; `None`
+    /// clears). Connected-texture rules with `"connect_group": true` join two neighbours only when
+    /// both hold the same group; blocks with no group join nothing.
+    ///
+    /// Returns `Ok(true)` if the stored group changed, or `Ok(false)` if it was already `group`,
+    /// `pos` is in an unloaded chunk or outside the level's vertical bounds, or the cell is
+    /// currently locked by an in-flight carrier transfer fence. Refuses with
+    /// `Err(LevelWriteError::Stale)` for a stale handle and `Err(LevelWriteError::Unavailable)`
+    /// on a client, parked level, or outside the world phase.
+    ///
+    /// Connection groups are derived visual state and **never saved to disk**. A negotiated
+    /// client receives the cell's current authoritative block state with its group, including
+    /// in viewed levels. If only the group would be sent, a current block update goes first in
+    /// the same bundle, only to negotiated clients. To keep block-entity-backed groups across
+    /// reloads, republish them from `block_entity_on_load` (when `HostSide::Server`). Otherwise,
+    /// record loaded chunks in `chunk_load` and publish on the next server tick. Changing a
+    /// block's state properties on the same block (or weathering a copper chest / copper golem
+    /// statue) preserves the group; replacing it with a different block (or air) clears it
+    /// automatically.
+    ///
+    /// Participates in open `Host` transactions: tentative writes are visible immediately,
+    /// synced on root commit, and restored silently on abort.
+    #[access(WorldOnly)]
+    fn level_set_connection_group(
+        &mut self,
+        level: LevelRef,
+        pos: [i32; 3],
+        group: Option<u64>,
+    ) -> Result<bool, LevelWriteError>;
 }

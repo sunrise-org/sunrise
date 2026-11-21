@@ -2,7 +2,7 @@
 
 A mod opens a level of its own while the server runs and closes it again: an instanced dungeon, a
 minigame arena, a pocket dimension per player. `host.runtime_levels()` has `open`, `unload`, `delete`
-and `is_open`, the same on a native and a wasm mod.
+and `is_open`.
 
 ```rust,ignore
 fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>) -> Flow {
@@ -29,8 +29,7 @@ fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut RunModCommandEv
   name is `UnknownDimensionType`; a data pack's own dimension types are not offered yet.
 - **`generator`** is `RuntimeGenerator::Flat` (bedrock, two dirt, a grass block, over plains),
   `Void` (air), or `Mod(name)`, a chunk generator a native mod registered
-  ([`register_chunk_generator`](dimension-shape.md#chunk-generators)). A wasm mod can name a
-  generator a native mod installed; one nobody installed is `UnknownGenerator`. A noise
+  ([`register_chunk_generator`](dimension-shape.md#chunk-generators)). An unregistered generator returns `UnknownGenerator`. A noise
   generator is `NoiseUnsupported` for now.
 - **`seed`** is the level's own. It reaches the mod generator (`ChunkAccess::seed`), the level's block-tick
   and level randoms and the hashed seed clients are sent. It does not change structures or
@@ -51,7 +50,10 @@ never names a later open of the same id: it reads as stale, like a handle from a
 A folder that exists under the id is reopened as it was saved, a persistent level after an
 unload or a restart. Nothing reopens a runtime level by itself at the next start: the mod
 reopens what it keeps, and a player saved in a level that was not reopened keeps the usual
-fallback.
+fallback. At server startup the Overworld, Nether and End are published in that order, each
+firing `level_load` before the next is available. The server then validates and activates their
+saved tickets and waits for the ticketed chunks before `server_started`, even if no player
+visits those levels.
 
 Success means queue admission, not apply completion. Apply failures are logged with the
 requesting mod and level id. A failed open rolls back publication and frees the id for retry;
@@ -67,7 +69,7 @@ the opened level, whereas the Host still names the current level.
 while a player, or an arrival that has not landed, is in the level, both when it is called and
 when it is applied: move the players out first with `entity.teleport_to_level`. `NotOpen` is the
 answer for a level that is not open (or still waiting to open). The idle close the game gives
-every level without players applies too, as to any other level: a runtime level nobody is in and
+custom levels without players applies to runtime levels too: a runtime level nobody is in and
 no forced chunk holds is saved and dropped from memory after 300 ticks (`level_unload` fires), but
 it stays open: `is_open` still says true, and the level opens again from its folder, with
 `level_load`, when a player or a mod enters it. Only `unload` or `delete` closes it for good.

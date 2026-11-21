@@ -25,16 +25,18 @@ pub fn game_rule_int_slot(key: crate::IntGameRuleKey) -> Option<u32> {
     installed()?.game_rule_slots.get(key.0 as usize).copied()
 }
 
-/// Registrar operations for game rules.
+/// Registrar operations for game rules. Bare declarations use the calling mod's ID as their
+/// namespace. Explicit declarations may use a namespace owned by its manifest or by a content
+/// package it serves via `served_by`.
 pub trait GameRulesRegistrar {
-    /// Declare a game rule category in a namespace owned by the calling mod's manifest. Invalid,
-    /// foreign or duplicate IDs refuse mod loading even if the error is ignored.
+    /// Declare a game rule category. Invalid, foreign or duplicate IDs refuse mod loading even
+    /// if the error is ignored.
     /// Categories appear in the host's game rules screen; remote clients do not
     /// receive them in this version.
     fn game_rule_category(&mut self, id: &str) -> Result<(), crate::GameRuleError>;
 
-    /// Declare a boolean game rule in a namespace owned by this mod's manifest. Category references are
-    /// resolved after all mods register; an unknown category refuses installation then.
+    /// Declare a boolean game rule. Category references are resolved after all mods register;
+    /// an unknown category refuses installation then.
     fn game_rule_bool(
         &mut self,
         id: &str,
@@ -42,9 +44,9 @@ pub trait GameRulesRegistrar {
         default: bool,
     ) -> Result<crate::BoolGameRuleKey, crate::GameRuleError>;
 
-    /// Declare an integer game rule (vanilla's `IntegerValue`, such as `random_tick_speed`) in a
-    /// namespace owned by this mod's manifest, with its default and the range `/gamerule` and the
-    /// game rules screen accept. `min` above `max`, or `default` outside `min..=max`, returns
+    /// Declare an integer game rule (vanilla's `IntegerValue`, such as `random_tick_speed`)
+    /// with its default and the range `/gamerule` and the game rules screen accept. `min` above
+    /// `max`, or `default` outside `min..=max`, returns
     /// [`GameRuleError::InvalidRange`](crate::GameRuleError::InvalidRange). Like
     /// [`game_rule_bool`](Self::game_rule_bool), a refusal refuses mod loading even if ignored, and
     /// the category is resolved after all mods register.

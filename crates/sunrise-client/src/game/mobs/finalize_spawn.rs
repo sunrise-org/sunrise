@@ -95,12 +95,13 @@ impl finalize::FinalizeLevel for FinalizeGame<'_, '_> {
         self.game.finalize_spawn_event_result(mob, reason)
     }
     fn create(&mut self, kind: &str, _: Reason) -> Option<Mob> {
+        let t = self.game.res.mob_types().get(kind)?;
         if self.game.world.health_rules.difficulty == Difficulty::Peaceful
-            && !finalize::allowed_in_peaceful(kind)
+            && !t.allowed_in_peaceful()
         {
             return None;
         }
-        let t = self.game.res.mob_types().get(kind)?.clone();
+        let t = t.clone();
         self.game.next_entity += 1;
         Some(Mob::new(self.game.next_entity, t, Vec3::ZERO, 0.0))
     }

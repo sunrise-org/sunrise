@@ -139,6 +139,7 @@ fn filled_slot_tooltip_replaces_lines_but_keeps_item_image_and_visibility() {
                     window: 1,
                     menu: "minecraft:generic_9x3".into(),
                     block: Some("tips:chest".into()),
+                    mod_type: None,
                     data: Vec::new(),
                     extra: None,
                     screen: mod_api::Screen {

@@ -298,7 +298,9 @@ fn real_integrated_stone_break_updates_counter_score_and_dirty_award() {
             {
                 let player = game.player.as_mut().unwrap();
                 player.ground.on_ground = true;
+                let side = game_side!(game);
                 let mut world = sunrise_client::motion::MotionWorld {
+                    side: &side,
                     entities: &[],
                     player,
                     scene: &mut game.world,
@@ -502,36 +504,6 @@ fn lan_noncanonical_rewrite_keeps_the_entire_original_award() {
                 .unwrap();
             }
         });
-    });
-}
-
-#[test]
-#[ignore = "needs SUNRISE_TEST_RESOURCES, SUNRISE_WASM_FIXTURE and SUNRISE_WASM_STD; build with sunrise-mod-wasm/listener-fixture"]
-fn wasm_real_break_and_jump_rewrite_awards() {
-    sunrise_guest_stack::run_on_guest_stack(|| {
-        use sunrise_mod_package::manifest::Package;
-        use sunrise_mod_wasm::{WasmPackage, load};
-        let path = std::path::PathBuf::from(std::env::var_os("SUNRISE_WASM_FIXTURE").unwrap());
-        let manifest = Package::read(&path).unwrap().manifest;
-        let info = mod_api::PackageInfo::new(
-            manifest.id.clone(),
-            manifest.version.to_string(),
-            mod_api::PackageKind::Code,
-            mod_api::Side::Both,
-            vec![manifest.id.clone()],
-            vec![],
-        );
-        let loaded = load(
-            &std::fs::read(std::env::var_os("SUNRISE_WASM_STD").unwrap()).unwrap(),
-            vec![WasmPackage {
-                manifest,
-                module: Package::read_wasm(&path).unwrap(),
-            }],
-        );
-        assert!(loaded.refused.is_empty(), "{:?}", loaded.refused);
-        assert_eq!(loaded.mods.len(), 1);
-        loaded.initialize(&[info]).unwrap();
-        lan_real_break_and_jump(loaded.mods.into(), "wasm_fixture:steps", None);
     });
 }
 

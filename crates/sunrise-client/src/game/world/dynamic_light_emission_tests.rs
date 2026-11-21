@@ -64,7 +64,7 @@ impl Hooks for Lights {
             let mut block = mod_api::Block::new(id, "minecraft:glass");
             block.properties.light = Some(4);
             block.properties.dynamic_light = dynamic.then_some(true);
-            event.blocks.push(block);
+            event.register(block).unwrap();
         }
     }
 }

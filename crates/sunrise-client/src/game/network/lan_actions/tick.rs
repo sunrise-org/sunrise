@@ -1,20 +1,51 @@
 use super::*;
 
 impl Game<'_> {
-    /// Per tick, for every guest: dig, use items, pick up drops, die.
-    pub(in crate::game) fn tick_guests(&mut self) {
+    /// The level path: `ServerLevel.tick` calls `ServerPlayer.tick` before the
+    /// server starts its connection ticks.
+    pub(in crate::game) fn tick_level_guests(&mut self) {
         building_cache(self.lan.as_ref());
-        self.tick_guests_inner();
+        self.tick_level_guests_inner();
         building_cache(None);
-        self.pickup_columns = None;
     }
 
-    fn tick_guests_inner(&mut self) {
+    fn tick_level_guests_inner(&mut self) {
         // `EntityEvent.Size` for the poses the guests' moves set since the last tick.
         self.native_guest_sizes();
-        // EntityTickEvent.Pre for each player's `ServerPlayer.tick`, before its first part: its
-        // parts are the batches below and those in the player's own turn.
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        host.hub.sync_initial_health_data();
+        Self::sync_hub_mod_flags(&mut host.hub);
+        let turns: Vec<_> = host
+            .hub
+            .guests
+            .iter()
+            .filter(|g| host.hub.here(g))
+            .map(|g| (g.conn, g.vehicle.is_some()))
+            .collect();
+        // A passenger's Entity.commonTick precedes its rideTick and cannot
+        // be canceled by the ride tick's EntityTickEvent.Pre.
+        for &(conn, passenger) in &turns {
+            if self.on_server_trip(conn) {
+                continue;
+            }
+            let Some(host) = self.lan.as_mut() else {
+                return;
+            };
+            host.play.entry(conn).or_default().level_up_sound.tick();
+            if passenger {
+                self.advance_guest_entity_clock(conn);
+            }
+        }
+        // For a root player the common tick is part of the cancellable
+        // round, even for a spectator touching an unloaded chunk.
         let round = self.native_players_tick_pre();
+        for &(conn, passenger) in &turns {
+            if !passenger && !self.player_tick_canceled(conn) && !self.on_server_trip(conn) {
+                self.advance_guest_entity_clock(conn);
+            }
+        }
         self.tick_guest_cameras();
         self.lan_merchant_tick();
         self.lan_stations_tick();
@@ -25,128 +56,30 @@ impl Game<'_> {
         self.tick_lan_mount_menus();
         self.native_players_equipment();
         self.announce_guest_advancements();
-        // Entity.commonTick belongs to each player, including spectators and
-        // players whose client has not loaded yet, not to the server clock.
-        if let Some(host) = self.lan.as_mut() {
-            for g in &host.hub.guests {
-                if g.participates_in_player_simulation()
-                    && host.hub.here(g)
-                    && !self.server_trips.iter().any(|t| t.is(g.conn))
-                {
-                    host.play.entry(g.conn).or_default().level_up_sound.tick();
-                }
-            }
-        }
-        let Some(host) = self.lan.as_ref() else {
-            return;
-        };
-        let conns: Vec<u32> = host
-            .hub
-            .guests
-            .iter()
-            // hasClientLoaded gates incoming actions, not ServerPlayer.doTick.
-            .filter(|g| host.hub.here(g))
-            .map(|g| g.conn)
-            .collect();
-        // The players' pickups ask which columns items reach before
-        // scanning every item: most players stand on none.
-        self.pickup_columns = Some(Default::default());
-        // The players the guests' hooks can catch.
-        if host.play.values().any(|p| p.hook.is_some()) {
-            self.refresh_hook_targets();
-        }
-        // The player told alone whose turn just ended: its Post comes before the next turn.
         let mut told = None;
-        for conn in conns {
+        for &(conn, _) in &turns {
             self.native_player_tick_post_alone(&round, &mut told);
             let canceled = self.player_tick_canceled(conn);
             let Some(host) = self.lan.as_mut() else {
-                return;
+                break;
             };
-            let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
+            let Some(gi) = host
+                .hub
+                .guests
+                .connection_index(conn)
+                .filter(|&i| host.hub.here(&host.hub.guests[i]))
+            else {
                 continue;
             };
             if !canceled && round.alone_kind(crate::game::native_ticks::PLAYER) {
                 told = Some(host.hub.guests[gi].entity_id as u32);
             }
-            // ServerGamePacketListenerImpl.tick: the chat and command throttlers
-            // decay one a tick, dead or alive.
-            let play = host.play.entry(conn).or_default();
-            play.chat_spam = play.chat_spam.saturating_sub(1);
-            play.command_spam = play.command_spam.saturating_sub(1);
-            play.recipe_checks = play.recipe_checks.saturating_sub(1);
-            // commandSuggestionsProvider.tick: one answer a tick, to the latest request.
-            play.suggestion_budget = true;
-            self.guest_try_suggestions(conn);
-            // ServerPlayer.doTick runs the body (`super.tick()`: Player.tick,
-            // where NeoForge posts PlayerTickEvent.Pre/Post) unless the player
-            // is a spectator touching an unloaded chunk. Decided once, before
-            // the body, as vanilla's `if` is.
-            let body = self
-                .lan
-                .as_ref()
-                .is_some_and(|host| self.guest_body_ticks(&host.hub.guests[gi]));
-            if body {
-                self.guest_player_tick(gi, conn, mod_api::HookId::PlayerTickPre, |game, player| {
-                    game.native_player_tick_pre(mod_api::__private::PlayerTickPreCall { player })
-                });
-            }
-            self.guest_sleep_tick(gi, body);
-            let Some(host) = self.lan.as_mut() else {
-                return;
-            };
-            if host.hub.guests[gi].dead
-                || (host.hub.guests[gi].health <= 0.0 && host.hub.guests[gi].death_canceled)
-            {
-                // LivingEntity.baseTick's tickDeath is part of the body vanilla skips.
-                if body {
-                    self.guest_tick_death(gi);
-                }
-                if let Some(host) = self.lan.as_ref() {
-                    refresh_building_player(host, conn);
-                }
-                if body {
-                    self.guest_player_tick(
-                        gi,
-                        conn,
-                        mod_api::HookId::PlayerTickPost,
-                        |game, player| {
-                            game.native_player_tick_post(mod_api::__private::PlayerTickPostCall {
-                                player,
-                            })
-                        },
-                    );
-                }
+            // A player waiting for a teleport destination cannot dig there yet.
+            if canceled || self.on_server_trip(conn) {
                 continue;
             }
-            if self.on_server_trip(conn) {
-                // LivingEntity.hurt kills at once (die), whether the level
-                // has loaded around the player or not: its respawn request
-                // is taken as soon as it comes.
-                self.guest_die(gi, conn);
-                if let Some(host) = self.lan.as_ref() {
-                    refresh_building_player(host, conn);
-                }
-                if body {
-                    self.guest_player_tick(
-                        gi,
-                        conn,
-                        mod_api::HookId::PlayerTickPost,
-                        |game, player| {
-                            game.native_player_tick_post(mod_api::__private::PlayerTickPostCall {
-                                player,
-                            })
-                        },
-                    );
-                }
-                continue;
-            }
-            // ServerPlayerGameMode.tick stops an active destroy when its block is air.
-            let Some(host) = self.lan.as_mut() else {
-                return;
-            };
-            if !canceled
-                && let Some((pos, _)) = host.play.get(&conn).and_then(|play| play.digging)
+            let host = self.lan.as_mut().unwrap();
+            if let Some((pos, _)) = host.play.get(&conn).and_then(|play| play.digging)
                 && self
                     .res
                     .facts()
@@ -157,25 +90,10 @@ impl Game<'_> {
                 play.mining = None;
             }
             let play = host.play.entry(conn).or_default();
-            // ServerGamePacketListenerImpl.tick's dropSpamThrottler.
-            play.creative_drops = play.creative_drops.saturating_sub(1);
             let digging = play.digging;
-            let using = play.using.is_some();
-            let delayed = play.destroy_delay > 0 || play.use_delay > 0 || play.attack_ticks < 100;
-            if digging.is_some() || using || delayed {
-                let players = if using {
-                    self.stab_players_for(conn)
-                } else {
-                    Vec::new()
-                };
-                self.as_guest(conn, |g| {
-                    let outer = std::mem::replace(&mut g.stab_players, players);
-                    // Player.tick's attackStrengthTicker, part of the body.
-                    if body {
-                        g.attack_ticks = g.attack_ticks.saturating_add(1);
-                    }
-                    // ServerPlayerGameMode.tick's destroy progress, part of ServerPlayer.tick.
-                    if let Some((pos, face)) = digging.filter(|_| !canceled) {
+            if digging.is_some() || play.mining.is_some() || play.destroy_delay > 0 {
+                let _ = self.as_guest_at(gi, conn, |g| {
+                    if let Some((pos, face)) = digging {
                         g.forced_hit = Some(Hit {
                             pos,
                             face,
@@ -187,114 +105,272 @@ impl Game<'_> {
                             inside: false,
                         });
                     }
-                    if !canceled {
-                        let _ = g.tick_mining();
-                    }
+                    let _ = g.tick_mining();
                     g.forced_hit = None;
-                    g.right = g.using.is_some();
-                    g.tick_using();
-                    g.stab_players = outer;
-                    if g.use_delay > 0 {
-                        g.use_delay -= 1;
-                    }
                 });
-                self.land_player_stabs();
-                // ServerPlayerGameMode.handleBlockBreakAction: creative and
-                // instant survival STARTs finish without a STOP from the client.
-                // tick_mining clears mining on completion; forget the START too,
-                // so a flower or crop planted here later is not broken again.
+                // Instant STARTs complete without a STOP; do not break a later
+                // block planted in the same position again.
                 if digging.is_some()
                     && let Some(host) = self.lan.as_mut()
                     && let Some(play) = host.play.get_mut(&conn)
-                    && (host.hub.guests[gi].creative() || play.mining.is_none())
+                    && (host.hub.guest(conn).is_some_and(|g| g.creative()) || play.mining.is_none())
                 {
                     play.digging = None;
                 }
             }
-            if body {
-                // Player.tick's ItemCooldowns.tick, once a tick for each player
-                // (the shield an axe disabled, a thrown pearl), after
-                // LivingEntity.tick's use: an entry a finished use starts has 20
-                // ticks left when the next tick's packets are handled, as the
-                // guest's own client counts.
-                let Some(host) = self.lan.as_mut() else {
-                    return;
-                };
-                let play = host.play.entry(conn).or_default();
-                play.shield_cooldown = play.shield_cooldown.saturating_sub(1);
-                // ServerItemCooldowns.onCooldownEnded: a finished entry is told to
-                // the guest (a duration of 0 removes it).
-                for group in play.cooldowns.tick() {
-                    host.hub.send_to(
-                        conn,
-                        &C::Cooldown(play::Cooldown {
-                            group: group.to_string(),
-                            duration: 0,
-                        }),
-                    );
+            self.guest_delayed_destroy(conn);
+            self.guest_dig_feedback(conn);
+            let _ = self.as_guest(conn, |g| {
+                if let Some(player) = g.player.as_mut() {
+                    player.health.advance_damage_cooldown();
                 }
-                // Player.tick: a different main-hand item resets the attack
-                // strength, and detectEquipmentUpdates gives the guest its modifiers.
-                let g = &host.hub.guests[gi];
-                let held = crate::game::held_items::held_attack_item(&g.inventory, g.selected);
-                let play = host.play.entry(conn).or_default();
-                if play.attack_item.as_ref() != held {
-                    play.attack_ticks = 0;
-                    play.attack_item = held.cloned();
-                }
-            }
-            if !canceled {
-                self.guest_delayed_destroy(conn);
-            }
-            self.guest_server_tick(conn, body);
-            // Player.tick's statistics and ServerPlayer.tick's triggers, then
-            // PlayerAdvancements.flushDirty.
-            let Some(host) = self.lan.as_mut() else {
-                return;
-            };
-            let sleeping = host.hub.guests[gi].sleeping;
-            // ServerPlayer.doTick's updateScoreForCriteria: the health, food,
-            // armor, experience and level objectives follow the guest.
-            let mut recorded =
-                std::mem::take(&mut host.play.entry(conn).or_default().score_recorded);
-            self.as_guest(conn, |g| {
-                g.tick_fishing();
-                // Player.aiStep's Inventory.tick and doTick's statistics are the body's.
-                if body {
-                    g.tick_maps();
-                    g.tick_lodestone_compasses();
-                    g.native_inventory_ticks();
-                    g.count_tick_stats(sleeping);
-                }
-                // ServerPlayer.tick's triggers and updatePlayerAttributes.
-                if !canceled {
-                    g.tick_advancements();
-                    g.update_player_attributes();
-                }
-                g.record_player_scores(&mut recorded);
+                // ServerPlayer.tick: the TICK and LEVITATION triggers,
+                // player attributes, then PlayerAdvancements.flushDirty.
+                g.tick_level_advancements();
+                g.update_player_attributes();
             });
             if let Some(host) = self.lan.as_mut() {
-                host.play.entry(conn).or_default().score_recorded = recorded;
-            }
-            self.lan_map_updates(conn);
-            // ServerPlayer.tick's PlayerAdvancements.flushDirty and ServerPlayerGameMode.tick's
-            // destroy progress.
-            if !canceled {
-                if let Some(host) = self.lan.as_mut() {
-                    host.hub.flush_progress(conn);
+                host.hub.flush_progress(conn);
+                if !host.hub.native_advancement_grants.is_empty() {
+                    self.run_native_advancement_grants();
                 }
-                self.guest_dig_feedback(conn);
             }
-            // A hand-over freezes this player's inventory until its record is released.
-            if self
+            if let Some(host) = self.lan.as_mut()
+                && let Some(gi) = host.hub.guests.connection_index(conn)
+                && host.hub.here(&host.hub.guests[gi])
+                && host.hub.guests[gi].post_effects_dirty
+            {
+                host.hub.send_post_effects(gi);
+            }
+        }
+        self.native_player_tick_post_alone(&round, &mut told);
+        self.native_tick_post_batch(round);
+        // Entity.rideTick positions the rider after its tick (and after Post
+        // even for batched listeners). Canceling the tick does not stop this.
+        for (conn, passenger) in turns {
+            if passenger && !self.on_server_trip(conn) {
+                self.guest_vehicle_tick(conn);
+            }
+        }
+    }
+
+    fn advance_guest_entity_clock(&mut self, conn: u32) {
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        let advanced = host.hub.update_guest(conn, |guest| {
+            guest
+                .motion
+                .as_mut()
+                .map(|motion| motion.health.advance_entity_clock())
+        });
+        if advanced == Some(None) {
+            // Joining players have not borrowed their saved body yet.
+            self.as_guest(conn, |game| {
+                if let Some(player) = game.player.as_mut() {
+                    player.health.advance_entity_clock();
+                }
+            });
+        }
+    }
+
+    /// Tick each connection once, in hub order. Resolve its level at dispatch
+    /// time: a preceding player tick can move a later player to another level.
+    /// `across_levels` is false for standalone ticks of the level in place.
+    pub(in crate::game) fn tick_guest_connections(
+        &mut self,
+        across_levels: bool,
+    ) -> sunrise_client::Result<()> {
+        building_cache(self.lan.as_ref());
+        let result = self.tick_guest_connections_inner(across_levels);
+        building_cache(None);
+        self.pickup_columns = None;
+        result
+    }
+
+    fn tick_guest_connections_inner(&mut self, across_levels: bool) -> sunrise_client::Result<()> {
+        let Some(host) = self.lan.as_ref() else {
+            return Ok(());
+        };
+        let conns: Vec<_> = host
+            .hub
+            .guests
+            .iter()
+            // hasClientLoaded gates incoming actions, not ServerPlayer.doTick.
+            .filter(|g| {
+                if across_levels {
+                    g.placed && g.participates_in_player_simulation()
+                } else {
+                    host.hub.here(g)
+                }
+            })
+            .map(|g| g.conn)
+            .collect();
+        let mut active_level = None;
+        let mut collision = None;
+        for conn in conns {
+            let Some(dim) = self
                 .lan
                 .as_ref()
-                .is_some_and(|host| host.hub.guests[gi].handover.is_none())
-            {
-                self.guest_pickups(gi);
-                self.guest_arrows(gi);
-                self.guest_orbs(gi);
+                .and_then(|host| host.hub.guest(conn))
+                .map(|g| Dim::from_id(&g.dimension))
+            else {
+                continue;
+            };
+            if !across_levels && dim != self.dim {
+                continue;
             }
+            if active_level != Some(dim) {
+                if across_levels {
+                    if active_level.is_some() {
+                        self.finish_guest_connection_level();
+                        drop(collision.take());
+                    }
+                    if self.dim != dim {
+                        self.enter_level(dim)?;
+                    }
+                    collision = Some((self.placed_moving_colliders(), self.collision_parts()));
+                }
+                active_level = Some(dim);
+                // Most players aren't in any of the columns items reach.
+                self.pickup_columns = Some(Default::default());
+                if self
+                    .lan
+                    .as_ref()
+                    .is_some_and(|h| h.play.values().any(|p| p.hook.is_some()))
+                {
+                    self.refresh_hook_targets();
+                }
+            }
+            if let Some((colliders, _parts)) = &collision {
+                sunrise_client_render::moving_colliders::in_level(colliders.clone(), || {
+                    sunrise_client::block_contact::in_level(self.tick, Some(dim.id()), || {
+                        self.tick_guest_connection(conn);
+                    });
+                });
+                self.drain_entity_inside();
+                if let Some(host) = self.lan.as_mut() {
+                    host.hub.sync_guest_after_tick(conn);
+                }
+            } else {
+                self.tick_guest_connection(conn);
+            }
+        }
+        if across_levels && active_level.is_some() {
+            self.finish_guest_connection_level();
+        }
+        Ok(())
+    }
+
+    fn finish_guest_connection_level(&mut self) {
+        self.flush_guest_connection_effects();
+        self.flush_attachment_sync();
+        self.flush_native_sounds();
+    }
+
+    fn tick_guest_connection(&mut self, conn: u32) {
+        self.tick_guest_connection_body(conn);
+        if !self.on_server_trip(conn) {
+            // Like the rest of doTick outside Player.tick, LOCATION also runs
+            // for unloaded spectators and canceled entity ticks.
+            let tick_count = self
+                .lan
+                .as_ref()
+                .and_then(|host| host.hub.guest(conn).filter(|g| host.hub.here(g)))
+                .map(|guest| guest.motion.as_ref().map(|m| m.health.tick_count));
+            match tick_count {
+                Some(Some(tick_count)) if tick_count % 20 == 0 => {
+                    let _ = self.as_guest(conn, |game| game.trigger_location_advancement());
+                }
+                // Joining players have not borrowed their saved body yet: read
+                // its clock through the swap, as `advance_guest_entity_clock` does.
+                Some(None) => {
+                    let _ = self.as_guest(conn, |game| {
+                        if game
+                            .player
+                            .as_ref()
+                            .is_some_and(|player| player.health.tick_count % 20 == 0)
+                        {
+                            game.trigger_location_advancement();
+                        }
+                    });
+                }
+                _ => {}
+            }
+            self.guest_vehicle_movement_baseline(conn);
+        }
+        if self
+            .lan
+            .as_ref()
+            .is_some_and(|host| !host.hub.native_advancement_grants.is_empty())
+        {
+            self.run_native_advancement_grants();
+        }
+    }
+
+    fn tick_guest_connection_body(&mut self, conn: u32) {
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        // ServerGamePacketListenerImpl.tick: the chat and command throttlers
+        // decay one a tick, dead or alive.
+        let play = host.play.entry(conn).or_default();
+        play.chat_spam = play.chat_spam.saturating_sub(1);
+        play.command_spam = play.command_spam.saturating_sub(1);
+        play.decay_recipe_checks();
+        // commandSuggestionsProvider.tick: one answer a tick, to the latest request.
+        play.suggestion_budget = true;
+        self.guest_try_suggestions(conn);
+        // ServerPlayer.doTick runs the body (`super.tick()`: Player.tick,
+        // where NeoForge posts PlayerTickEvent.Pre/Post) unless the player
+        // is a spectator touching an unloaded chunk. Decided once, before
+        // the body, as vanilla's `if` is.
+        let Some((gi, body)) = self.lan.as_ref().and_then(|host| {
+            let gi = host.hub.guests.connection_index(conn)?;
+            let guest = &host.hub.guests[gi];
+            host.hub
+                .here(guest)
+                .then(|| (gi, self.guest_body_ticks(guest)))
+        }) else {
+            return;
+        };
+        if body {
+            self.guest_player_tick(gi, conn, mod_api::HookId::PlayerTickPre, |game, player| {
+                game.native_player_tick_pre(mod_api::__private::PlayerTickPreCall { player })
+            });
+        }
+        self.guest_sleep_tick(gi, body);
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        if host.hub.guests[gi].dead
+            || (host.hub.guests[gi].health <= 0.0 && host.hub.guests[gi].death_canceled)
+        {
+            // LivingEntity.baseTick's tickDeath is part of the body vanilla skips.
+            if body {
+                self.guest_tick_death(gi);
+            }
+            if let Some(host) = self.lan.as_ref() {
+                refresh_building_player(host, conn);
+            }
+            if body {
+                self.guest_player_tick(
+                    gi,
+                    conn,
+                    mod_api::HookId::PlayerTickPost,
+                    |game, player| {
+                        game.native_player_tick_post(mod_api::__private::PlayerTickPostCall {
+                            player,
+                        })
+                    },
+                );
+            }
+            return;
+        }
+        if self.on_server_trip(conn) {
+            // LivingEntity.hurt kills at once (die), whether the level
+            // has loaded around the player or not: its respawn request
+            // is taken as soon as it comes.
             self.guest_die(gi, conn);
             if let Some(host) = self.lan.as_ref() {
                 refresh_building_player(host, conn);
@@ -311,9 +387,139 @@ impl Game<'_> {
                     },
                 );
             }
+            return;
         }
-        self.native_player_tick_post_alone(&round, &mut told);
-        self.native_tick_post_batch(round);
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        let play = host.play.entry(conn).or_default();
+        // ServerGamePacketListenerImpl.tick's dropSpamThrottler.
+        play.creative_drops = play.creative_drops.saturating_sub(1);
+        let using = play.using.is_some();
+        let delayed = play.use_delay > 0 || play.attack_ticks < 100;
+        if using || delayed {
+            let players = if using {
+                self.stab_players_for(conn)
+            } else {
+                Vec::new()
+            };
+            let _ = self.as_guest_at(gi, conn, |g| {
+                let outer = std::mem::replace(&mut g.stab_players, players);
+                // Player.tick's attackStrengthTicker, part of the body.
+                if body {
+                    g.attack_ticks = g.attack_ticks.saturating_add(1);
+                }
+                g.right = g.using.is_some();
+                g.tick_using();
+                g.stab_players = outer;
+                if g.use_delay > 0 {
+                    g.use_delay -= 1;
+                }
+            });
+            self.land_player_stabs();
+        }
+        if body {
+            // Player.tick's ItemCooldowns.tick, once a tick for each player
+            // (the shield an axe disabled, a thrown pearl), after
+            // LivingEntity.tick's use: an entry a finished use starts has 20
+            // ticks left when the next tick's packets are handled, as the
+            // guest's own client counts.
+            let Some(host) = self.lan.as_mut() else {
+                return;
+            };
+            let play = host.play.entry(conn).or_default();
+            play.shield_cooldown = play.shield_cooldown.saturating_sub(1);
+            // ServerItemCooldowns.onCooldownEnded: a finished entry is told to
+            // the guest (a duration of 0 removes it).
+            for group in play.cooldowns.tick() {
+                host.hub.send_to(
+                    conn,
+                    &C::Cooldown(play::Cooldown {
+                        group: group.to_string(),
+                        duration: 0,
+                    }),
+                );
+            }
+            // Player.tick: a different main-hand item resets the attack
+            // strength (its modifiers come with detectEquipmentUpdates below).
+            let g = &host.hub.guests[gi];
+            let held = crate::game::held_items::held_attack_item(&g.inventory, g.selected);
+            let play = host.play.entry(conn).or_default();
+            if play.attack_item.as_ref() != held {
+                play.attack_ticks = 0;
+                play.attack_item = held.cloned();
+            }
+        }
+        // LivingEntity.tick's detectEquipmentUpdates, part of the body: after the
+        // item use above and before aiStep's travel and updatePlayerPose, so a new
+        // scale modifier rebuilds the box this tick.
+        if body
+            && let Some(host) = self.lan.as_mut()
+            && {
+                let g = &host.hub.guests[gi];
+                let held = g.inventory.get(g.selected).and_then(Option::as_ref);
+                let play = host.play.entry(conn).or_default();
+                equipment_changed(&mut play.equipped, &g.armor, held, g.offhand.as_ref())
+            }
+        {
+            let _ = self.as_guest_at(gi, conn, |g| g.put_equipment_modifiers());
+        }
+        self.guest_server_tick(conn, body);
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        let sleeping = host.hub.guests[gi].sleeping;
+        // ServerPlayer.doTick's updateScoreForCriteria: the health, food,
+        // armor, experience and level objectives follow the guest.
+        let mut recorded = std::mem::take(&mut host.play.entry(conn).or_default().score_recorded);
+        let _ = self.as_guest_at(gi, conn, |g| {
+            g.tick_fishing();
+            // Player.aiStep's Inventory.tick and doTick's statistics are the body's.
+            if body {
+                g.tick_maps();
+                g.tick_lodestone_compasses();
+                g.native_inventory_ticks();
+                g.count_tick_stats(sleeping);
+            }
+            g.record_player_scores(&mut recorded);
+        });
+        if let Some(host) = self.lan.as_mut() {
+            host.play.entry(conn).or_default().score_recorded = recorded;
+        }
+        self.lan_map_updates(conn);
+        // A hand-over freezes this player's inventory until its record is released.
+        if self
+            .lan
+            .as_ref()
+            .is_some_and(|host| host.hub.guests[gi].handover.is_none())
+        {
+            self.guest_pickups(gi);
+            self.guest_arrows(gi);
+            self.guest_orbs(gi);
+        }
+        self.guest_die(gi, conn);
+        if let Some(host) = self.lan.as_ref() {
+            refresh_building_player(host, conn);
+        }
+        if body {
+            self.guest_player_tick(gi, conn, mod_api::HookId::PlayerTickPost, |game, player| {
+                game.native_player_tick_post(mod_api::__private::PlayerTickPostCall { player })
+            });
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::game) fn tick_guests(&mut self) {
+        building_cache(self.lan.as_ref());
+        self.tick_guests_inner();
+        building_cache(None);
+    }
+
+    #[cfg(test)]
+    fn tick_guests_inner(&mut self) {
+        self.tick_level_guests_inner();
+        self.tick_guest_connections_inner(false).unwrap();
+        self.pickup_columns = None;
     }
 
     /// Whether guest `g`'s body ticks this tick: `ServerPlayer.doTick`'s
@@ -401,7 +607,9 @@ impl Game<'_> {
             player.position = Vec3::new(from[0], from[1], from[2]);
             player.yaw = yaw;
             player.ground.on_ground = true;
+            let side = game_side!(game);
             let mut w = MotionWorld {
+                side: &side,
                 entities: &[],
                 player,
                 scene: &mut game.world,
@@ -429,9 +637,17 @@ impl Game<'_> {
 mod building_cache_tests;
 
 #[cfg(test)]
+#[path = "tests/dig_tick_order_tests.rs"]
+mod dig_tick_order_tests;
+
+#[cfg(test)]
 #[path = "tests/fall_sound_tests.rs"]
 mod fall_sound_tests;
 
 #[cfg(test)]
 #[path = "tests/spectator_body_tick_tests.rs"]
 mod spectator_body_tick_tests;
+
+#[cfg(test)]
+#[path = "tests/equipment_tick_tests.rs"]
+mod equipment_tick_tests;

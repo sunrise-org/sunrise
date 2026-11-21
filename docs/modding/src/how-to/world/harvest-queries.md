@@ -1,7 +1,6 @@
 # Is this the right tool for a block
 
-Two read-only queries answer whether a tool harvests a block, on both sides and for native and wasm
-mods alike. Use them to show that the block under the crosshair drops loot with the held item.
+Two read-only queries answer whether a tool harvests a block on both sides. Use them to show that the block under the crosshair drops loot with the held item.
 
 ## The stack alone
 
@@ -23,16 +22,17 @@ itself uses for a dig's progress, for whether a break drops loot, and for a door
 3. then the global `player_harvest_check` listeners, each hearing what the ones before left.
 
 Because it **runs those hooks**, it takes a mutable host. Asked from inside a `can_harvest_block` or
-`player_harvest_check` listener, it would run them again without end, so it refuses there and answers `None`. Nothing requires `pos` to hold `state`: pass
-the pair you are asking about.
+`player_harvest_check` listener, it answers `None` to prevent recursion, even for a different state.
+Outside those hooks, nothing requires `pos` to hold `state`: pass the pair you are asking about.
 
 Sunrise's sites share this one answer (the part, then `player_harvest_check`), so this one query covers
 NeoForge's `Player.hasCorrectToolForDrops(state, level, pos)` and `IBlockStateExtension.canHarvestBlock`.
 It differs from NeoForge's break progress, which skips the block override.
 
-On a server any online player can be asked; on a client only the local player. The query returns `None` for
-a stale handle, a dead server player, a player the client has no state for, an unknown state, a `level`
-other than the one in place, and a call from inside the harvest hooks.
+On a server you can ask about a connected or [fake player](../entities/fake-players.md); on a client,
+only the local player. A fake player uses its own selected slot even outside one of its actions.
+The query returns `None` for a stale handle, a dead server player, a player the client has no state for,
+an unknown state, a `level` other than the one in place, and a call from inside the harvest hooks.
 
 ```rust,ignore
 fn harvestable_under_crosshair(host: &mut dyn Host, player: PlayerRef, pos: [i32; 3], state: BlockState) -> bool {

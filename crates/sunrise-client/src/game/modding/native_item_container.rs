@@ -227,7 +227,7 @@ impl Game<'_> {
         let fits = self.fits_inside_container_items(item);
         insert_one(stack, size, item, self.item_container_limit(item), fits)
     }
-    /// `ResourceHandler.insert(index, …)`: as `item_container_insert`,
+    /// `ResourceHandler.insert_at(index, …)`: as `item_container_insert`,
     /// into slot `slot` alone: topped up when it holds the same item and
     /// components, filled when empty. Nothing goes into a slot past the
     /// item's slots or holding another item.
@@ -268,7 +268,7 @@ impl Game<'_> {
             0
         }
     }
-    /// `ResourceHandler.extract`: up to `max` out of slot `slot` of one item
+    /// `ResourceHandler.extract_at`: up to `max` out of slot `slot` of one item
     /// of `stack`. What came out (none when the slot is empty or past the
     /// item's slots), and the single item it becomes. The stack given is not
     /// changed, as with `item_container_insert`. None where the item

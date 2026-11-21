@@ -62,7 +62,7 @@ fn worker_prepares_owned_models_and_inventory_before_handoff() {
     std::fs::write(
         root.join("creative-inventory.json"),
         r#"{"schema":4,"item_features":{},"potion_features":{},"tabs":[{
-        "id":"minecraft:building_blocks","type":"CATEGORY","build":[
+        "id":"minecraft:building_blocks","title":"Building Blocks","type":"CATEGORY","build":[
             {"kind":"stack","visibility":"PARENT_AND_SEARCH_TABS","snbt":"{count:1,id:\"minecraft:stone\"}"}
         ]
     }]}"#,

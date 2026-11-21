@@ -151,8 +151,8 @@ impl CustomBooks {
         }
     }
 
-    /// The [`EXTENSION`] compound to save, both flags of every book written (zero too), in id
-    /// order. None when no book has flags, as a missing extension reads empty.
+    /// The [`EXTENSION`] NBT compound to save, with both flags of each book
+    /// written (including zero). Returns `None` when no book has flags.
     pub fn write(&self) -> Option<Tag> {
         self.write_excluding(&[])
     }

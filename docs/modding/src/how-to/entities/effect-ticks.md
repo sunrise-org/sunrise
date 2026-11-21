@@ -18,17 +18,23 @@ Implement the Part with `#[mod_api::sunrise_part]`. Its two methods are:
   apply after every Part returns, in Part order. Clear `event.keep` to end the effect
   immediately, before its duration counts down, and skip later Parts.
 
-These are version 3 methods in the `effect` scope, keyed by `effect`; there are no
+These are version 4 methods in the `effect` scope, keyed by `effect`; there are no
 corresponding global `Hooks` methods. Each Part has its own `apply`, starting false,
-so one package's cadence never drives another package's action. Parts run by mod
-dispatch order, then registration order, sharing the same holder snapshots.
+so one package's cadence never drives another package's action. The owning package's
+Parts (the declaring package's, or the serving native host's for an effect declared by a
+`served_by` content package) run first within that effect, even with `order = "before"` or `"none"`. Other Parts
+run by mod dispatch order, then registration order. All share the same holder snapshots.
+This owner-first rule is specific to effects; it does not change package dispatch or
+the order of block entity Parts.
 
-A Part may attach to an effect declared by its own package or by a package listed in
-its `[dependencies]` (required or optional). Dependencies dispatch first. An attachment
-without that dependency refuses loading, naming the effect, its declaring package and
-the dependency to add. An absent optional package skips its Parts and key requests;
-a present optional package must declare the requested effect. Unknown effects keep
-the normal unknown-key refusal. An override dropping the dependency also drops permission.
+A Part may attach to an effect declared by its own package, by a content package it
+serves (`served_by`), or by an active required
+or optional dependency in its `[dependencies]`. An attachment without that
+dependency refuses loading, naming the effect, its owning package and the dependency to add.
+If the effect's namespace is the ID of an absent package, its Part and key request are
+skipped only when an optional dependency row applies on the installation side and survives
+instance overrides. A present package must declare the requested effect; other unknown effects
+keep the normal unknown-key refusal.
 
 Unresolved keys refuse with `MobEffectPartError::InvalidKey`; vanilla effects refuse
 immediately with `MobEffectPartError::VanillaEffect`; attaching the same concrete
@@ -61,11 +67,4 @@ amounts therefore subtract exhaustion. To remove at most 4, read the current foo
 snapshot and add `-food.exhaustion.min(4.0)` only when exhaustion is positive. Food
 changes have no effect on a mob without food data.
 
-## Native and wasm
-
-The same Part methods, resolved keys, snapshots and queued changes cross the shared
-Wire boundary for both targets. Content-only owners can have native or wasm dependents;
-code dependencies still obey the existing same-target linking rule. A `side = "server"`
-package can attach because both methods are server-only. No engine-owned holder storage crosses it. A wasm
-module requiring an unavailable import is refused while linking, naming the
-module and missing symbol; it is not loaded with a silently disabled capability.
+A `side = "server"` package can attach a Part because both methods are server-only.

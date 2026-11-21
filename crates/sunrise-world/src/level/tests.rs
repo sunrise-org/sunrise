@@ -1638,6 +1638,90 @@ fn wire_connects_only_to_the_block_that_answers_should_redstone_wire_connect_to(
     assert_eq!(connection(&mut w), before);
 }
 
+/// `affectNeighborsAfterRemoval` calls `updatePowerStrength` with the wire's
+/// REMOVED state: the power that state still carries decides whether the
+/// position's six neighbours are updated again (the write itself already
+/// updated them once). Reading the level's power — air by then — skipped that
+/// fan-out inside a neighbour-update run's wire cache (#3230).
+#[test]
+fn a_dropped_wire_notifies_its_neighbours_from_its_removed_state() {
+    use std::cell::RefCell;
+    struct Observer {
+        inner: TestLevel,
+        seen: RefCell<Vec<BlockPos>>,
+    }
+    impl crate::level::BlockEntityNeighbors for Observer {}
+    impl LevelAccess for Observer {
+        fn block_state(&self, pos: BlockPos) -> BlockStateId {
+            self.inner.block_state(pos)
+        }
+        fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
+            self.inner.set_raw(pos, state)
+        }
+        fn is_loaded(&self, pos: BlockPos) -> bool {
+            self.inner.is_loaded(pos)
+        }
+        fn random(&mut self) -> &mut LegacyRandom {
+            self.inner.random()
+        }
+        fn game_time(&self) -> i64 {
+            self.inner.game_time()
+        }
+        fn observe_neighbor_changed(
+            &self,
+            _: &mut Ticks,
+            pos: BlockPos,
+            _: BlockStateId,
+            _: BlockId,
+            _: bool,
+        ) {
+            self.seen.borrow_mut().push(pos);
+        }
+    }
+    let Some(f) = fixture() else {
+        return;
+    };
+    let b = &f.behaviours;
+    let mut level = Observer {
+        inner: TestLevel::new(b),
+        seen: RefCell::new(Vec::new()),
+    };
+    let mut ticks = Ticks::new(0);
+    let pos = BlockPos::new(0, 1, 0);
+    let support = BlockPos::new(0, 0, 0);
+    let stone = f.registry.default_state("minecraft:stone").unwrap();
+    let wire = b.table.set_int(
+        f.registry.default_state("minecraft:redstone_wire").unwrap(),
+        b.props.power,
+        7,
+    );
+    level.set_raw(support, stone);
+    level.set_raw(pos, wire);
+    // Removing the support drops the wire mid-run, so the removal cascade is
+    // processed with the run's wire cache open.
+    b.set_block(&mut level, &mut ticks, support, b.air(), flags::UPDATE_ALL);
+    assert_eq!(
+        level.block_state(pos),
+        b.air(),
+        "the unsupported wire drops"
+    );
+    let heard = |at: BlockPos| level.seen.borrow().iter().filter(|&&pos| pos == at).count();
+    for (dx, dy, dz) in [
+        (0, -1, 0),
+        (0, 1, 0),
+        (0, 0, -1),
+        (0, 0, 1),
+        (-1, 0, 0),
+        (1, 0, 0),
+    ] {
+        assert_eq!(
+            heard(BlockPos::new(pos.x + dx, pos.y + dy, pos.z + dz)),
+            2,
+            "heard at ({dx}, {dy}, {dz}) of the wire"
+        );
+    }
+}
+
 #[test]
 fn connections_follow_connects_to_both_ways() {
     // Each kind with its block and the side values for connected and not.
@@ -4149,7 +4233,7 @@ fn the_level_chooses_the_state_a_block_is_placed_in() {
         asked: RefCell<Vec<Asked>>,
         unloaded: Option<BlockPos>,
         max_y: i32,
-        rewrite: Option<(BlockPos, BlockStateId)>,
+        rewrite_on_update: Option<(BlockPos, BlockStateId)>,
     }
     impl crate::level::BlockEntityNeighbors for Placer {}
     impl LevelAccess for Placer {
@@ -4157,11 +4241,17 @@ fn the_level_chooses_the_state_a_block_is_placed_in() {
             self.inner.block_state(pos)
         }
         fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
-            let state = self
-                .rewrite
-                .filter(|(at, _)| pos == *at)
-                .map_or(state, |(_, state)| state);
             self.inner.set_raw(pos, state)
+        }
+        fn send_block_updated(&mut self, pos: BlockPos) {
+            // Model a side effect after the chunk accepts the write, but
+            // before Level.setBlock returns to BlockItem.
+            if let Some((at, state)) = self.rewrite_on_update
+                && at == pos
+            {
+                self.rewrite_on_update = None;
+                self.inner.set_raw(pos, state);
+            }
         }
         fn is_loaded(&self, pos: BlockPos) -> bool {
             self.unloaded != Some(pos)
@@ -4247,7 +4337,7 @@ fn the_level_chooses_the_state_a_block_is_placed_in() {
         asked: RefCell::new(Vec::new()),
         unloaded: None,
         max_y: 320,
-        rewrite: None,
+        rewrite_on_update: None,
     };
     let mut ticks = Ticks::new(0);
     ticks.add_empty_chunk(ChunkPos::new(0, 0)).unwrap();
@@ -4467,7 +4557,7 @@ fn the_level_chooses_the_state_a_block_is_placed_in() {
     // but the door's tag and companion are not applied to that other block.
     level.set_raw(top, b.air());
     level.answer = Some(Some(door));
-    level.rewrite = Some((pos, stone));
+    level.rewrite_on_update = Some((pos, stone));
     let placed = b
         .place_block_with_state(&mut level, &mut ticks, &ctx, |state| {
             assert_eq!(
@@ -4489,10 +4579,9 @@ fn the_level_chooses_the_state_a_block_is_placed_in() {
     let east_foot = f.registry.id(&foot).unwrap();
     foot.properties.insert("part".into(), "head".into());
     let east_head = f.registry.id(&foot).unwrap();
-    level.rewrite = None;
     level.set_raw(pos, b.air());
     level.answer = Some(Some(bed));
-    level.rewrite = Some((pos, east_foot));
+    level.rewrite_on_update = Some((pos, east_foot));
     let placed = b
         .place_block_with_context(&mut level, &mut ticks, &ctx)
         .unwrap();

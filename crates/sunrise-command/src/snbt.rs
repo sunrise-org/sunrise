@@ -128,8 +128,9 @@ mod tests {
     #[test]
     fn errors_after_multibyte_text_report_java_positions() {
         // `{"éééé":[1e309]}`: the error is at `]`, Java index 14 (byte 18).
+        // The optional float suffix fails before the float conversion reports infinity.
         let error = parse_fully("{\"éééé\":[1e309]}").unwrap_err();
-        assert_eq!(error.key, "snbt.parser.infinity_not_allowed");
+        assert_eq!(error.key, "argument.literal.incorrect");
         assert_eq!(error.java_cursor(), 14);
         assert_eq!(error.context().unwrap(), "...éé\":[1e309<--[HERE]");
         // Five emoji are ten units: the error is at index 20, the window starts at the fifth.

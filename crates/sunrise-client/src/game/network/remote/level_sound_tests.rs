@@ -219,8 +219,8 @@ fn game_events_ask_client_level_before_playback() {
             let mut player = PlayerMotion::new(game.motion, Vec3::new(1.0, 64.0, 1.0)).unwrap();
             player.dimensions.eye_height = 1.25;
             game.player = Some(player);
-            for event in [6, 9, 10] {
-                game.handle_packet(C::GameEvent(play::GameEvent { event, param: 1.0 }))
+            for (event, param) in [(6, 1.0), (9, 1.0), (10, 1.4)] {
+                game.handle_packet(C::GameEvent(play::GameEvent { event, param }))
                     .unwrap();
             }
             assert_eq!(
@@ -252,7 +252,7 @@ fn game_events_ask_client_level_before_playback() {
             );
             game.handle_packet(C::GameEvent(play::GameEvent {
                 event: 10,
-                param: 0.0,
+                param: 1.5,
             }))
             .unwrap();
             assert_eq!(

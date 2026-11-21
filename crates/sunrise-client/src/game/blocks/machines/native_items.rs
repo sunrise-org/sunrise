@@ -4,7 +4,6 @@
 //! a client's copy, and only on the level in place.
 use super::{Game, Insertion, Kind, MoveIn, PlacementAttempt, Pos, Slots, View};
 use crate::game::transactions::After;
-use mod_api::__private::game::CapabilityChecked;
 use mod_api::{BlockSide, LevelRef, Transaction};
 use sunrise_client::items::ItemStack;
 use sunrise_core::geometry::Direction;
@@ -89,7 +88,6 @@ impl Game<'_> {
         &mut self,
         part: &mod_api::Capability<dyn mod_api::ResourceHandler<mod_api::ItemResource>>,
         stack: &ItemStack,
-        at: [i32; 3],
         source: &View,
         slot: usize,
     ) -> bool {
@@ -103,10 +101,9 @@ impl Game<'_> {
             game.journal_block_entity_slot(pos, index);
             // Reserve the offered item before writable insertion notices can re-enter.
             let reserved = game.take_one(source, slot).ok_or(())?;
-            let went = part.insert_any(game, tx, &resource, 1);
             // A part answering more than it was offered is a broken mod: abort, undoing
             // whatever its insertion moved. A plain refusal still commits.
-            let accepted = part.checked(went, 1, &at).ok_or(())? == 1;
+            let accepted = part.insert(game, tx, &resource, 1).map_err(|_| ())? == 1;
             if !accepted {
                 match game.slot_mut_at(source, slot).ok_or(())? {
                     Some(held) if held.same_item_same_components(&reserved) => {
@@ -212,8 +209,7 @@ impl Game<'_> {
             return;
         }
         let slot_only = match view.kind {
-            // Plain item slots: no state beside the slot changes. Vanilla containers defer
-            // their implicit notice; mod-owned storage writes remain silent.
+            // Plain item slots: no state beside the slot changes.
             Kind::Generic | Kind::Shulker | Kind::Mod => true,
             // State beside the slot: filling an empty input restarts a furnace's cooking; an
             // insert into an empty hopper sets its cooldown; a jukebox's disc starts its song;
@@ -232,9 +228,9 @@ impl Game<'_> {
             self.journal_block_entity(part);
         }
     }
-    /// Game-held vanilla containers coalesce their implicit notice at the root commit.
+    /// Default capability writes to engine-managed containers notify once at root commit.
     fn view_told(&mut self, view: &View) {
-        if matches!(view.kind, Kind::Composter(_) | Kind::Mod) {
+        if matches!(view.kind, Kind::Composter(_)) {
             return;
         }
         for &(pos, _) in &view.parts {
@@ -443,19 +439,24 @@ impl Game<'_> {
     }
     /// How many of `stack` slot `slot` of those `at`'s side reaches holds when empty, as
     /// NeoForge's `isValid` and `getCapacityAsLong` answer: none where it may not go in (a
-    /// furnace's output, `canPlaceItem`), else the slot's limit for it.
+    /// furnace's output, `canPlaceItem`), else the slot's limit for it. `None` asks for the
+    /// general slot limit before item-specific rules.
     pub(in crate::game) fn container_capacity(
         &self,
         at: BlockSide,
         slot: usize,
-        stack: &ItemStack,
+        stack: Option<&ItemStack>,
     ) -> u32 {
         let Some(view) = self.capability_view(at) else {
             return 0;
         };
-        view.capability_slots(at.side)
-            .nth(slot)
-            .map_or(0, |slot| self.containers().capacity(&view, slot, stack))
+        view.capability_slots(at.side).nth(slot).map_or(0, |slot| {
+            let containers = self.containers();
+            match stack {
+                Some(stack) => containers.capacity(&view, slot, stack),
+                None => containers.slot_stack_limit(&view, slot, None),
+            }
+        })
     }
     /// Takes up to `max` out of slot `slot` of those `at`'s side reaches, in transaction `tx`;
     /// through a side, only what that side may take (`canTakeItemThroughFace`). What came out.
@@ -529,7 +530,3 @@ mod tests {
 #[cfg(test)]
 #[path = "storage_attempt_tests.rs"]
 mod storage_attempt_tests;
-
-#[cfg(test)]
-#[path = "storage_attempt_wasm_tests.rs"]
-mod storage_attempt_wasm_tests;

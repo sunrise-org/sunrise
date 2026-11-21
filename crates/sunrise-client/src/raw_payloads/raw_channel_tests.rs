@@ -6,7 +6,7 @@ use crate::lan::{NetEvent, PlayerSender};
 use mod_api::{Hooks, IPayloadContext, IPayloadHandler, ModEntry, PayloadBytes, Registrar};
 use sunrise_protocol::packets::{custom_payload::CustomPayload, play};
 
-const CHANNEL: &str = "voicechat:secret";
+pub(super) const CHANNEL: &str = "voicechat:secret";
 const SEND_ONLY: &str = "bungeecord:main";
 
 struct Listener;
@@ -58,7 +58,7 @@ impl Hooks for Typed {
 
 /// Two receiving mods and a send-only one, with a vanilla peer admitted
 /// without an offer, as `finish_without_offer` admits it.
-fn with_vanilla_peer(run: impl FnOnce(Arc<Transport>)) {
+pub(super) fn with_vanilla_peer(run: impl FnOnce(Arc<Transport>)) {
     let mods = vec![
         ModEntry::new(
             "voicechat",
@@ -90,7 +90,7 @@ fn with_vanilla_peer(run: impl FnOnce(Arc<Transport>)) {
     });
 }
 
-fn serverbound(channel: &str, len: usize) -> CustomPayload {
+pub(super) fn serverbound(channel: &str, len: usize) -> CustomPayload {
     CustomPayload {
         channel: channel.into(),
         data: vec![7; len],
@@ -250,8 +250,6 @@ fn a_raw_declaration_colliding_with_a_typed_payload_refuses_load() {
 #[derive(Clone, Copy)]
 enum Fault {
     Failed,
-    BusyExpired,
-    BusyOnRetry,
     Disconnect,
 }
 struct FaultHandler {
@@ -261,7 +259,7 @@ struct FaultHandler {
 impl IPayloadHandler for FaultHandler {
     fn handle(
         &self,
-        bytes: PayloadBytes,
+        _: PayloadBytes,
         context: &mut dyn IPayloadContext,
     ) -> Result<(), mod_api::PayloadHandleError> {
         use std::sync::atomic::Ordering;
@@ -272,17 +270,6 @@ impl IPayloadHandler for FaultHandler {
                 Err(mod_api::PayloadHandleError::Failed(
                     "deliberate failure".into(),
                 ))
-            }
-            Some(Fault::BusyExpired | Fault::BusyOnRetry) => {
-                Err(mod_api::PayloadHandleError::Busy {
-                    payload: bytes,
-                    holder: mod_api::PayloadBusy::new(
-                        "faultfirst".into(),
-                        "handle".into(),
-                        "test".into(),
-                        0,
-                    ),
-                })
             }
             Some(Fault::Disconnect) => {
                 context.disconnect(mod_api::Text::literal("successful disconnect"));
@@ -305,16 +292,8 @@ impl Hooks for FaultRegistration {
 
 #[test]
 fn network_raw_failures_drop_only_the_failing_copy() {
-    use std::{
-        sync::atomic::{AtomicUsize, Ordering},
-        time::Instant,
-    };
-    for fault in [
-        Fault::Failed,
-        Fault::BusyExpired,
-        Fault::BusyOnRetry,
-        Fault::Disconnect,
-    ] {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for fault in [Fault::Failed, Fault::Disconnect] {
         let calls = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
         let mods = [("faultfirst", Some(fault)), ("faultsecond", None)]
             .into_iter()
@@ -343,36 +322,20 @@ fn network_raw_failures_drop_only_the_failing_copy() {
                 endpoint: endpoint.clone(),
                 conn: Some(1),
             };
-            let main = queue();
             let Ok(Classified::Raw(deliveries)) =
                 Incoming::classify(&transport, Phase::Play, serverbound(CHANNEL, 1))
             else {
                 panic!("raw fan-out expected");
             };
-            let now = Instant::now();
             for mut incoming in deliveries {
-                // Raw registration currently selects Main. Exercise the physical
-                // network executor with the same real per-owner receivers.
+                // Raw registration selects Main. Exercise the physical network executor
+                // with the same per-owner receivers, whose main path has its own test.
                 incoming.receiver.thread = mod_api::HandlerThread::Network;
-                if matches!(fault, Fault::BusyOnRetry) {
-                    let connection = transport.connection.as_ref().unwrap();
-                    if let Some(incoming) = connection.queue_payload(incoming) {
-                        connection.defer_payload(incoming);
-                    }
-                } else {
-                    dispatch(incoming, endpoint.clone(), queue());
-                }
+                dispatch(incoming, endpoint.clone(), queue());
             }
-            if matches!(fault, Fault::BusyExpired | Fault::BusyOnRetry) {
-                super::executor::dispatch_pending_at(
-                    &endpoint,
-                    &main,
-                    now + connection::PAYLOAD_DEADLINE + std::time::Duration::from_secs(1),
-                );
-            }
+            assert_eq!(calls[0].load(Ordering::SeqCst), 1);
             if matches!(fault, Fault::Disconnect) {
                 assert!(transport.closed(), "successful raw handlers may disconnect");
-                assert_eq!(calls[0].load(Ordering::SeqCst), 1);
                 assert_eq!(calls[1].load(Ordering::SeqCst), 0);
             } else {
                 assert!(

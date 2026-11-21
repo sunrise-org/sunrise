@@ -57,7 +57,11 @@ impl Game<'_> {
             // doPlayerRide: `player.startRiding(this)`, which keeps the
             // rider's view (`ServerPlayer.startRiding`'s `Relative.ROTATION`).
             let id = self.mobs[index].id;
-            if !self.native_may_board(id) {
+            // `startRiding` without `force` asks `canAddPassenger`: a fifth rider is refused.
+            let aboard = self.seated_passengers(id).len();
+            if !sunrise_client::mobs::riders::can_add_passenger(&self.mobs[index], aboard)
+                || !self.native_may_board(id)
+            {
                 return true;
             }
             self.break_leash(id, true, false);

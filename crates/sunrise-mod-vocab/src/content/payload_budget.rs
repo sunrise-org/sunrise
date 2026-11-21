@@ -5,8 +5,8 @@
 //!
 //! Sizes are those of a 64-bit target, whatever the target running the codec: a size here is
 //! scaled by `8 / size_of::<usize>()`, exact on a 64-bit target and at most twice the 64-bit size
-//! on a 32-bit one (a pointer-wide field doubles, nothing grows more). So a wasm32 sender cannot
-//! pass a body a native reader refuses; a wasm32 reader is at most that much stricter.
+//! on a 32-bit one (a pointer-wide field doubles, nothing grows more). A 32-bit writer cannot
+//! pass a body a 64-bit reader refuses on budget grounds.
 
 /// What is left of one value's allocation budget.
 #[derive(Debug)]

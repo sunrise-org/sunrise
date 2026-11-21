@@ -462,10 +462,6 @@ impl KeyBinds {
             .map(|(n, _, _)| *n)
             .collect()
     }
-    /// The mapping a physical input triggers (first in list order).
-    pub fn mapping_for(&self, key: &str) -> Option<&'static str> {
-        self.mappings_for(key).next()
-    }
     /// Every mapping a physical input triggers, in list order: like
     /// `KeyMapping.set`/`click`, one key drives all the mappings bound to it.
     pub fn mappings_for<'a>(&'a self, key: &'a str) -> impl Iterator<Item = &'static str> + 'a {

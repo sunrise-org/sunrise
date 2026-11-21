@@ -10,7 +10,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
-import lab
 import perf_bench as bench
 import stress_scenes as stress
 
@@ -95,14 +94,6 @@ def write_options(game_dir, distance, version=None):
     return text
 
 bench.write_options = write_options
-
-original_game_env = lab.game_env
-
-def game_env(base=None, **extra):
-    extra['SUNRISE_OCCLUSION_CULL_COUNTS'] = '1'
-    return original_game_env(base, **extra)
-
-bench.lab.game_env = game_env
 
 original_control_call = bench.Control.__call__
 CURRENT_MODE = 'off'

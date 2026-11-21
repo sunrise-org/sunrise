@@ -45,7 +45,7 @@ EnchantmentHelper.onHitBlock	port	crates/sunrise-client/src/game/items/trident.r
 EnchantmentHelper.modifyDurabilityToRepairFromXp	port	crates/sunrise-client/src/game/items/enchant_effects.rs::Game::mending	Mending's repair with XP
 EnchantmentHelper.getFishingLuckBonus	port	crates/sunrise-client/src/game/items/fishing.rs::Game::use_fishing_rod	Luck of the Sea read when the rod is cast
 EnchantmentHelper.getFishingTimeReduction	port	crates/sunrise-client/src/game/items/fishing.rs::Game::use_fishing_rod	Lure ticks read at cast; used by catching_fish
-EnchantmentHelper.getTridentReturnToOwnerAcceleration	port	crates/sunrise-client/src/game/items/trident.rs::ThrownTrident::loyalty_pull	Loyalty level pull and acceleration
+EnchantmentHelper.getTridentReturnToOwnerAcceleration	port	crates/sunrise-gameplay/src/trident.rs::ThrownTrident::loyalty_pull	Loyalty level pull and acceleration
 EnchantmentHelper.modifyCrossbowChargingTime	port	crates/sunrise-client/src/game/items/crossbow.rs::Game::charge_ticks	Quick Charge: 1.25 s minus 0.25 s per level
 EnchantmentHelper.getTridentSpinAttackStrength	inline	crates/sunrise-client/src/game/items/trident.rs::Game::release_trident	Riptide's strength 1.5 + 0.75 per level above the first, folded into the release
 EnchantmentHelper.hasTag	port	crates/sunrise-items/src/enchant.rs::Enchantments::in_tag	per enchantment id; callers loop over the stack
@@ -59,7 +59,7 @@ Equippable.llamaSwag	skip:data		datagen factory for the carpet equippable data
 Equippable.saddle	skip:data		datagen factory for the saddle equippable data
 Equippable.harness	skip:data		datagen factory for the harness equippable data
 Equippable.equipOnTarget	port	crates/sunrise-client/src/game/mobs/ghasts.rs::Game::interact_happy_ghast	gap: minor: the harness on a happy ghast only; saddles are put on in mounts.rs and nautili.rs
-Equippable.canBeEquippedBy	port	crates/sunrise-client/src/game/interface/mount_menu.rs::shows_saddle	gap: minor: the saddle slot's entity check only; the armour swap has no entity test
+Equippable.canBeEquippedBy	port	crates/sunrise-gameplay/src/mount_rules.rs::shows_saddle	gap: minor: the saddle slot's entity check only; the armour swap has no entity test
 Equippable.Builder	skip:data		datagen builder for equippable data
 ItemCost.withComponents	skip:data		datagen helper; no runtime caller in 26.3
 ItemCost.test	port	crates/sunrise-client/src/merchant.rs::ItemCost::test	item match, then the stack data when the cost has data
@@ -94,8 +94,8 @@ Level.getWorldBorderAdjustedRespawnData	missing		unsure: respawn clamp to the wo
 Level.hasEntities	missing		unsure: no entity-in-box test found for this use
 Level.getClockTimeTicks	port	crates/sunrise-client/src/game/blocks/level_access.rs::GameLevel::day_time	day time; no separate clock time
 Level.getThunderLevel	port	crates/sunrise-client-render/src/world.rs::World::levels	thunder scaled by rain
-Level.setThunderLevel	port	crates/sunrise-client/src/game/network/remote/mod.rs::Game::handle_packet	weather game event sets the thunder level
-Level.setRainLevel	port	crates/sunrise-client/src/game/network/remote/mod.rs::Game::handle_packet	weather game event sets the rain level
+Level.setThunderLevel	port	crates/sunrise-client/src/game/network/remote/packets_world.rs::Game::apply_game_event_packet	weather game event sets the thunder level
+Level.setRainLevel	port	crates/sunrise-client/src/game/network/remote/packets_world.rs::Game::apply_game_event_packet	weather game event sets the rain level
 Level.fillReportDetails	skip:debug		crash-report details
 BlockGetter.getBlockEntity	skip:other		bare block_entities map lookup at each caller
 BlockGetter.isBlockInLine	skip:other		no caller in 26.3 code
@@ -112,7 +112,7 @@ ChunkPos.getRegionZ	port	crates/sunrise-core/src/position.rs::ChunkPos::region
 ChunkPos.getBlockAt	skip:other		no caller in 26.3 code
 ChunkPos.contains	port	crates/sunrise-core/src/position.rs::BlockPos::chunk	a block is in a chunk when its chunk() is that chunk
 ChunkPos.getChessboardDistance	inline	crates/sunrise-client/src/ticket_levels.rs::compute	Chebyshev distance folded into the ticket level loop
-ChunkPos.distanceSquared	inline	crates/sunrise-client/src/lan/hub.rs::requeue_ring	the pending chunk queue is sorted by the squared chunk distance, the only use vanilla makes of it (PlayerChunkSender.collectChunksToSend)
+ChunkPos.distanceSquared	inline	crates/sunrise-client/src/lan/hub.rs::requeue	the pending chunk queue is sorted by the squared chunk distance, the only use vanilla makes of it (PlayerChunkSender.collectChunksToSend)
 CollisionGetter.isUnobstructed	port	crates/sunrise-client/src/game/blocks/level_access.rs::GameLevel::is_unobstructed	the state-based overload
 CollisionGetter.noBorderCollision	port	crates/sunrise-client-render/src/collisions.rs::EntityCollisions::movement_border	border shape when inside close to the border
 CollisionGetter.getPreMoveCollisions	inline	crates/sunrise-client-render/src/collisions.rs::SceneCollisions::resolve_with_context	gap: minor: entity and block shapes are not returned as a list; the resolver takes them together

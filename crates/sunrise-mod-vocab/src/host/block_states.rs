@@ -86,6 +86,7 @@ pub trait BlockStatesServerHost {
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
 #[doc(hidden)]
 #[sunrise_mod_api_macros::host_area]
+#[table_backend("crate::game::native_block_tables::BlockTables")]
 pub trait BlockStatesBackend {
     /// Side: both. The age read by `BlockStates::weathering_age`.
     #[access(Metadata)]
@@ -208,6 +209,14 @@ pub trait BlockStatesBackend {
     /// or the predicate needs a level and position.
     #[access(Metadata)]
     fn block_state_is_redstone_conductor(&self, state: BlockState) -> Option<bool>;
+    /// Side: both.
+    /// The read of `BlockStates::block_class`: `Ok(None)` for an unknown state.
+    #[access(Metadata)]
+    fn block_state_class(
+        &self,
+        state: BlockState,
+        class: BlockClass,
+    ) -> Result<Option<bool>, LevelReadError>;
     /// Side: both.
     /// The states of `block` (`StateDefinition.getPossibleStates`) in immutable local ordinal
     /// order, independent of world numeric IDs. None for unavailable metadata or an unknown block.

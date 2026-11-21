@@ -96,7 +96,7 @@ fn mob(game: &mut Game<'_>, uuid: &str) -> usize {
 
 /// The knots the level in place's selectors list, by entity id.
 fn knots(game: &Game<'_>) -> Vec<u32> {
-    game.level_candidates()
+    game.level_candidates(false)
         .into_iter()
         .filter_map(|t| match t {
             super::Target::Knot(id) => Some(id),

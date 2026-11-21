@@ -636,11 +636,7 @@ fn parsed_arguments(context: &Context, input: &str, start: usize) -> Vec<ParsedA
 /// The bytes a text occupies in Java modified UTF-8: a tooltip's NBT string limit counts those.
 fn modified_utf8_len(text: &str) -> usize {
     text.encode_utf16()
-        .map(|unit| match unit {
-            1..=0x7f => 1,
-            0..=0x7ff => 2,
-            _ => 3,
-        })
+        .map(sunrise_core::modified_utf8::unit_len)
         .sum()
 }
 
@@ -1139,6 +1135,11 @@ fn particle_options(id: &str, t: &sunrise_core::nbt::Tag) -> Result<(), String> 
         };
         let _ = snbt;
         return Err(super::codec::either(first, "Not a string".into()));
+    }
+    if id == "minecraft:item"
+        && let Some(item) = get(map, "item")
+    {
+        sunrise_world::item_defaults::validate_stack_tag(item)?;
     }
     Ok(())
 }

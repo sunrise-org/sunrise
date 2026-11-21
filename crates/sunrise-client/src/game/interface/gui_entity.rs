@@ -257,7 +257,8 @@ impl Game<'_> {
         let mut parts = None;
         // A mod's renderer for the type draws in place of the model only: the mods' layers
         // still follow, as in the world.
-        let modded = self.mod_living_renderer_geometry(mob, partial, camera, FULL_BRIGHT, out);
+        let modded =
+            self.mod_living_renderer_geometry(mob, partial, camera, FULL_BRIGHT, false, out);
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         // A screen's entity: custom entity model animations see is_in_gui = 1.

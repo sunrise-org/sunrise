@@ -46,19 +46,35 @@ fn sprite_source(&self, _context: &RegistrationContext, event: &mut SpriteSource
 ```
 
 Use it as an entry of a definition's `sources`, `{"type": "example:checker", "size": 8}`: the whole object
-reaches the hook as `event.config`, `event.atlas` names the atlas, and `event.listed` holds the sprites the
-entries before it listed. A source pushes `SpriteSourceOutput`s, which apply in order as vanilla's
+reaches the hook as `event.config`, `event.atlas` names the atlas, and `event.resources` reads the load's
+resources. A source pushes `SpriteSourceOutput`s, which apply in order as vanilla's
 `SpriteSource.Output` calls do: `Texture` adds a texture of the resources as a sprite, `Pixels` adds pixels
-the mod made, and `Remove` drops a listed sprite (vanilla's `removeAll`, by id). A sprite of an id listed
-already replaces the earlier one, as a built-in source's does.
+the mod made, and `Remove` drops a sprite by id (vanilla's `removeAll`). A sprite of an id listed
+already replaces the earlier one, as a built-in source's does. A source never sees what the entries before
+it listed: output is write-only.
 
-Sprite sources apply to the atlases built from their definitions: the atlases mods register
-(`register_texture_atlases`). An entry whose type no mod registered fails its definition, as an unknown type
-fails it in vanilla, and the log names the type and the entry's place. A `Texture` the resources lack, and
-`Pixels` whose length isn't `width * height * 4` or whose side is over 32768 pixels, are logged and skipped
-one by one."#]
+`event.resources` is the `ResourceManager` vanilla hands `SpriteSource.run`, read-only: `read(path)` gives
+the winning copy of a resource (`assets/<namespace>/textures/<path>.png`), `read_stack(path)` every pack's
+copy lowest first, and `list(prefix)` the paths under a prefix. A source can make a sprite from the pixels
+of a texture any pack has, a player's retexture included. It is valid for the one callback it is given to: a reader a source keeps reads nothing
+afterwards and keeps nothing alive.
+
+Each entry is asked once per atlas each time the client prepares its resources, and the answer is kept
+for everything that reads the atlas, so a source that counts or varies its answers is still seen as one
+answer. Sprite sources run in the game's blocks, items and GUI atlas definitions (`assets/minecraft/atlases/blocks.json`,
+`items.json` and `gui.json`: the sprites block and item models name, and the GUI's own, which `DrawContext::sprite` and
+`gui_sprite` find by id: `minecraft:container/slot`, a mod's `mymod:panel`) and in the definition of an atlas a mod
+registered (`register_texture_atlases`); an atlas is asked under its own id, so two atlases sharing a
+definition each get their own question. Each atlas keeps its own sprites, by its own id: when the blocks
+and items atlases both list an id, a model's material is the items atlas's, and `texture_sprites` finds
+the blocks atlas's sprite of that id (and every sprite a source made in the blocks atlas, though no model
+names it) after `texture_atlas_stitched`. A sprite only the items atlas lists has no block array to be found
+in. An entry whose type no mod registered fails its definition, as an unknown type fails it in vanilla, and
+the log names the type and the entry's place. A `Texture` the resources lack, and `Pixels` whose length
+isn't `width * height * 4` or whose side is over 32768 pixels, are logged and skipped one by one."#]
     #[hook(
         side = "client",
+        version = 2,
         contract = "collect",
         out = "sources",
         context = "registration",

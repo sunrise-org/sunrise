@@ -34,7 +34,7 @@ impl Game<'_> {
     ) {
         self.fire_interaction_key_mapping_triggered(key, hand, attempt, swing_hand, canceled);
     }
-    /// Preserve cancellation and swing independently for both native and wasm dispatch.
+    /// Preserve cancellation and swing independently during dispatch.
     pub(in crate::game) fn native_interaction(
         &mut self,
         key: InteractionKey,

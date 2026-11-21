@@ -130,12 +130,15 @@ impl Hooks for Declare {
                 GeneralEntityCategory::Misc,
                 0.8,
                 1.9,
+                None,
                 if save {
                     GeneralSavePolicy::Save
                 } else {
                     GeneralSavePolicy::NoSave
                 },
                 true,
+                false,
+                None,
                 8,
                 3,
                 1,
@@ -493,12 +496,12 @@ fn a_listener_discarded_row_gets_no_callback() {
     });
 }
 
-/// A rider a listener discarded from its vehicle's callback does not tick,
-/// and neither does the rider's own subtree: the edge is re-checked at the
-/// parent's callback (`tickPassenger`'s `getVehicle` gate).
+/// A discarded rider is skipped in `tickPassenger`, but `Entity.setRemoved`
+/// dismounts its passenger. `ServerLevel.tick` reads the live mount at the
+/// former passenger's own later slot, so it ticks after the vehicle's subtree.
 #[test]
 #[ignore = "daily"]
-fn a_listener_discarded_rider_stops_its_subtree() {
+fn a_discarded_riders_passenger_ticks_at_its_later_root_slot() {
     with_counter(|game, l| {
         let grandchild = record_at("mymod:robot", [8, 8, 8, 8], [0.5, 64.0, 0.5], Vec::new());
         let rider = record_at(
@@ -512,7 +515,33 @@ fn a_listener_discarded_rider_stops_its_subtree() {
         let ids = row_ids(game);
         *l.action.lock().unwrap() = OnTick::Remove(ids[1]);
         tick(game);
+        assert_eq!(*l.trace.lock().unwrap(), [root, ids[3], ids[2]]);
+    });
+}
+
+/// `EntityTickList` does not revisit a slot already passed while mounted.
+#[test]
+#[ignore = "daily"]
+fn a_discarded_riders_passenger_waits_if_its_root_slot_passed() {
+    with_counter(|game, l| {
+        let grandchild = seeded_row(game, [8, 8, 8, 8], 0);
+        let rider = record_at("mymod:robot", [9, 9, 9, 9], [0.5, 64.0, 0.5], Vec::new());
+        let sibling = record_at("mymod:robot", [7, 7, 7, 7], [0.5, 64.0, 0.5], Vec::new());
+        let root = spawn_tree(game, [1, 2, 3, 4], [0.5, 64.0, 0.5], vec![rider, sibling]);
+        let ids = row_ids(game);
+        let rider = game.entity(ids[2]).unwrap();
+        game.entity(grandchild)
+            .unwrap()
+            .start_riding(game, rider, true)
+            .unwrap();
+        *l.action.lock().unwrap() = OnTick::Remove(rider.id());
+
+        tick(game);
         assert_eq!(*l.trace.lock().unwrap(), [root, ids[3]]);
+
+        l.trace.lock().unwrap().clear();
+        tick(game);
+        assert_eq!(*l.trace.lock().unwrap(), [grandchild, root, ids[3]]);
     });
 }
 
@@ -768,17 +797,16 @@ fn a_canceled_passenger_still_follows_and_his_passengers_tick() {
     });
 }
 
-/// A rider removed in its own Pre — the removal the liveness re-check
-/// exists for: it neither ticks nor walks its descendants, however its Pre
-/// ended. A stack of three covers the depth: the middle rider's own Pre
-/// discards it, and the bottom row hears nothing at all.
+/// A rider removed in its own Pre gets no tick or Post. Its dismounted
+/// passenger ticks at its later root slot, after the sibling rider.
 #[test]
 #[ignore = "daily"]
-fn a_rider_removed_in_its_own_pre_walks_no_descendants() {
+fn a_riders_removal_in_pre_leaves_its_passengers_later_root_tick() {
     with_counter(|game, l| {
         let bottom = record_at("mymod:robot", [8, 8, 8, 8], [0.5, 64.0, 0.5], Vec::new());
         let middle = record_at("mymod:robot", [9, 9, 9, 9], [0.5, 64.0, 0.5], vec![bottom]);
-        let root = spawn_tree(game, [1, 2, 3, 4], [0.5, 64.0, 0.5], vec![middle]);
+        let sibling = record_at("mymod:robot", [7, 7, 7, 7], [0.5, 64.0, 0.5], Vec::new());
+        let root = spawn_tree(game, [1, 2, 3, 4], [0.5, 64.0, 0.5], vec![middle, sibling]);
         let ids = row_ids(game);
         tick(game);
         l.events.lock().unwrap().clear();
@@ -794,26 +822,30 @@ fn a_rider_removed_in_its_own_pre_walks_no_descendants() {
                 (root, "tick"),
                 (root, "post"),
                 (ids[1], "pre"),
-            ],
-            "the removed rider neither ticks nor walks its descendants"
+                (ids[3], "pre"),
+                (ids[3], "tick"),
+                (ids[3], "post"),
+                (ids[2], "pre"),
+                (ids[2], "tick"),
+                (ids[2], "post"),
+            ]
         );
         assert_eq!(counter(game, ids[1]), 1);
-        assert_eq!(counter(game, ids[2]), 1, "the descendant did not tick");
+        assert_eq!(counter(game, ids[2]), 2);
         assert_eq!(counter(game, root), 2);
     });
 }
 
-/// The same removal with the Pre also canceled: the liveness re-check runs
-/// after a canceled Pre too — the cancel skips the rider's tick and Post,
-/// not the check — so a rider that removed itself in its canceled Pre
-/// walks no descendants, and a live one keeps the ruling's follow.
+/// The liveness check still applies when the rider cancels Pre as it is
+/// removed. Its former passenger ticks at its own slot, not in that branch.
 #[test]
 #[ignore = "daily"]
-fn a_rider_removed_in_its_own_canceled_pre_walks_no_descendants() {
+fn a_riders_removal_in_canceled_pre_leaves_its_passengers_later_root_tick() {
     with_counter(|game, l| {
         let bottom = record_at("mymod:robot", [8, 8, 8, 8], [0.5, 64.0, 0.5], Vec::new());
         let middle = record_at("mymod:robot", [9, 9, 9, 9], [0.5, 64.0, 0.5], vec![bottom]);
-        let root = spawn_tree(game, [1, 2, 3, 4], [0.5, 64.0, 0.5], vec![middle]);
+        let sibling = record_at("mymod:robot", [7, 7, 7, 7], [0.5, 64.0, 0.5], Vec::new());
+        let root = spawn_tree(game, [1, 2, 3, 4], [0.5, 64.0, 0.5], vec![middle, sibling]);
         let ids = row_ids(game);
         tick(game);
         l.events.lock().unwrap().clear();
@@ -831,9 +863,15 @@ fn a_rider_removed_in_its_own_canceled_pre_walks_no_descendants() {
                 (root, "tick"),
                 (root, "post"),
                 (ids[1], "pre"),
+                (ids[3], "pre"),
+                (ids[3], "tick"),
+                (ids[3], "post"),
+                (ids[2], "pre"),
+                (ids[2], "tick"),
+                (ids[2], "post"),
             ]
         );
-        assert_eq!(counter(game, ids[2]), 1, "the descendant did not tick");
+        assert_eq!(counter(game, ids[2]), 2);
         assert_eq!(counter(game, root), 2);
         l.cancel_on.store(0, std::sync::atomic::Ordering::Relaxed);
     });
@@ -1046,9 +1084,7 @@ fn spawn_entity_inserts_a_general_row_with_its_owner() {
         assert_eq!(row.owner, Some(owner_uuid));
         assert_eq!(game.entity_owner(missile), Some(turret));
         // The save keeps the owner, and a load reads it back.
-        let record = game
-            .general_row_record(missile.id(), &mut std::collections::HashSet::new())
-            .unwrap();
+        let record = game.general_row_record(missile.id(), false).unwrap();
         let tag = record.to_tag();
         assert_eq!(tag.get("Owner"), Some(&Tag::IntArray(owner_uuid.to_vec())));
         assert_eq!(record_from_compound(&tag).unwrap().owner, Some(owner_uuid));
@@ -1062,9 +1098,7 @@ fn spawn_entity_inserts_a_general_row_with_its_owner() {
             )
             .unwrap();
         assert_eq!(game.entity_owner(alone), None);
-        let record = game
-            .general_row_record(alone.id(), &mut std::collections::HashSet::new())
-            .unwrap();
+        let record = game.general_row_record(alone.id(), false).unwrap();
         assert_eq!(record.to_tag().get("Owner"), None);
         // Bodies of another family, and a general body for a mob, refuse.
         let rows = game.resident_entities.general.rows.len();
@@ -1085,345 +1119,4 @@ fn spawn_entity_inserts_a_general_row_with_its_owner() {
         assert_eq!(game.resident_entities.general.rows.len(), rows);
         assert_eq!(game.mobs.len(), mobs);
     });
-}
-
-// Stage 4b (#792): the same matrix rows through a compiled wasm mod's
-// `EntityPart`, the guest fixture of `crates/sunrise-mod-wasm/tests/fixture`.
-// Its counter lives in the row's attachments under `wasm_fixture`, and its
-// tick traps once its count reaches the row's `entity_trap_after` attachment,
-// after the write. The tests seed and observe through the saved form only: a
-// decoded value stays in its own link group (the modding book's attachments
-// page: values from another Rust type domain answer `TypeMismatch` rather
-// than falling back to saved decoding), so a host never writes the guest's
-// counter through the typed methods, and never reads one mid-tick — the way
-// a saved world hands values to a freshly loaded mod, and the part_state
-// tests' view of a wasm value.
-
-/// The wasm fixture's counter, as the guest declares it (`entity_parts.rs`).
-/// Seeding and reading go through the saved form, so this type only names the
-/// key and codec here.
-static WASM_COUNTER: AttachmentType<i32> = AttachmentType {
-    namespace: "wasm_fixture",
-    name: "entity_counter",
-    default: || 0,
-    codec: Some(AttachmentCodec {
-        encode: |n| Ok([("n".into(), Tag::Int(*n))].into()),
-        decode: |tag: &Compound| match tag.get(&"n".into()) {
-            Some(Tag::Int(n)) => Ok(*n),
-            _ => Err(AttachmentError::Decode),
-        },
-    }),
-    copy_on_death: false,
-    sync: false,
-};
-
-/// The native observer part's own counter, so a row's two parts leave two
-/// separable traces.
-static NATIVE_COUNTER: AttachmentType<i32> = AttachmentType {
-    namespace: "mymod",
-    name: "native_counter",
-    default: || 0,
-    codec: None,
-    copy_on_death: false,
-    sync: false,
-};
-
-/// A native part on the wasm fixture's type: it records whether the wasm
-/// counter is already stored when its turn comes, pinning that both kinds of
-/// part tick one row in one pass and in which order. Presence (`has`, never a
-/// value) is the one cross-group answer the store promises: a value decoded
-/// in the guest's link group does not cross back to a typed host read.
-struct Observer {
-    seen: Arc<Mutex<Vec<(u32, bool)>>>,
-}
-
-#[mod_api::sunrise_part]
-impl EntityPart for Observer {
-    fn general_entity_tick(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut GeneralEntityTickEvent<'_>,
-    ) {
-        let holder = Holder::Entity(event.entity.id());
-        let seen = WASM_COUNTER.has(host, holder).unwrap();
-        let count = NATIVE_COUNTER.get(host, holder).unwrap() + 1;
-        NATIVE_COUNTER.set(host, holder, count).unwrap();
-        self.seen.lock().unwrap().push((event.entity.id(), seen));
-    }
-}
-
-/// The observer's mod: its part joins the wasm fixture's on
-/// `wasm_fixture:robot`.
-struct Observe {
-    seen: Arc<Mutex<Vec<(u32, bool)>>>,
-}
-
-#[mod_api::__subscriptions]
-impl Hooks for Observe {
-    fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
-        r.register_attachment_type("mymod:native_counter", false)
-            .unwrap();
-        r.entity_part(
-            "wasm_fixture:robot",
-            Observer {
-                seen: self.seen.clone(),
-            },
-        );
-    }
-}
-
-/// The compiled fixture and (optionally) the native observer as mods, then a
-/// counter game over them. The observer joins after the fixture, so a row's
-/// parts answer in install order: wasm first, native second. `name` is the
-/// calling test: each runs in a fresh child process, since the content
-/// registry is process-global and freezes on the first game's membership.
-fn with_wasm_parts(
-    name: &str,
-    observer: bool,
-    test: impl FnOnce(&mut Game<'_>, Option<Arc<Mutex<Vec<(u32, bool)>>>>) + Send + 'static,
-) {
-    if std::env::var_os("SUNRISE_WASM_FIXTURE").is_none() {
-        // The compiled fixture is the wasm-mods CI lane's to build; without it
-        // these tests say so and pass, never silently. The lane runs each by
-        // name with the environment set (tools/ci/ignored-tests/wasm-fixture.txt).
-        eprintln!("skipped: no compiled SUNRISE_WASM_FIXTURE (the wasm-mods lane runs this)");
-        return;
-    }
-    if crate::game::native_entity_refs::tests::run_fresh_cases(
-        &format!("game::general::tick_tests::{name}"),
-        "SUNRISE_GENERAL_ENTITY_WASM_CHILD",
-        &["fresh"],
-    ) {
-        return;
-    }
-    let with_observer = observer;
-    crate::game::native_entity_refs::tests::run_on_guest_stack(move || {
-        mod_platform::__private::initialize().expect("the wasm fixture needs the runtime");
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let mut entries = crate::game::block_entity_tick_reply_tests::wasm_mods();
-        if with_observer {
-            entries.push(mod_api::ModEntry::new(
-                "mymod",
-                Box::new(Observe { seen: seen.clone() }),
-            ));
-        }
-        let mods: mod_api::Mods = entries.into();
-        let _phase =
-            mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::Registration);
-        mod_platform::testing::with_mods(mods.clone(), || {
-            crate::game::api_values::install_parts(&mods).unwrap();
-            // The fixture's other parts (its `part_state` counter) declare
-            // blocks through their content, so the game builds over the
-            // prepared root the way the part-state tests do.
-            let base = std::path::PathBuf::from(
-                std::env::var_os("SUNRISE_TEST_RESOURCES").expect("prepared resources"),
-            );
-            let root = crate::game::mods::content_root(&base, &Default::default()).unwrap();
-            crate::game::native_entity_refs::tests::with_game_at(
-                root.prepared().to_owned(),
-                |game| {
-                    game.options.dedicated = Some(Vec::new());
-                    game.native_level_opened(crate::game::Dim::Overworld);
-                    game.build_registries();
-                    game.reset_entity_residency();
-                    let _world =
-                        mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
-                    test(game, with_observer.then_some(seen));
-                },
-            );
-        });
-    });
-}
-
-/// One integer's saved envelope — `{"value": {"n": n}}` — the bytes a save
-/// writes and a load reads back.
-fn wasm_envelope(n: i32) -> Tag {
-    let mut value = Compound::new();
-    value.insert("n".into(), Tag::Int(n));
-    let mut envelope = Compound::new();
-    envelope.insert("value".into(), Tag::Compound(value));
-    Tag::Compound(envelope)
-}
-
-/// One `wasm_fixture:robot` row whose saved record carries the fixture's
-/// counter, and for the trap row its `entity_trap_after`: the way a saved
-/// world hands the guest its values. Nothing is written or decoded natively —
-/// a decoded value stays in its own link group.
-fn wasm_row(
-    game: &mut Game<'_>,
-    uuid: [i32; 4],
-    counter: Option<i32>,
-    trap_after: Option<i32>,
-) -> u32 {
-    let mut record = record_at("wasm_fixture:robot", uuid, [0.5, 64.0, 0.5], Vec::new());
-    let mut fixture = Compound::new();
-    if let Some(n) = counter {
-        fixture.insert("entity_counter".into(), wasm_envelope(n));
-    }
-    if let Some(n) = trap_after {
-        fixture.insert("entity_trap_after".into(), wasm_envelope(n));
-    }
-    if let Tag::Compound(map) = &mut record
-        && !fixture.is_empty()
-    {
-        let mut names = Compound::new();
-        names.insert("wasm_fixture".into(), Tag::Compound(fixture));
-        map.insert(
-            sunrise_mod_runtime::attachments::ATTACHMENTS_KEY.into(),
-            Tag::Compound(names),
-        );
-    }
-    game.load_listed("wasm_fixture:robot", None, None, record)
-        .unwrap();
-    game.resident_entities
-        .general
-        .rows
-        .iter()
-        .find(|row| row.uuid == uuid)
-        .unwrap()
-        .id
-}
-
-/// The row's wasm counter from its saved form: the host's view of a wasm
-/// value, the part_state tests' channel.
-fn saved_wasm_counter(game: &Game<'_>, id: u32) -> Option<i32> {
-    let saved = game.entity_attachments.get(&id)?.to_nbt();
-    let Some(Tag::Compound(names)) = saved.get(&"wasm_fixture".into()) else {
-        return None;
-    };
-    let Some(Tag::Compound(entry)) = names.get(&"entity_counter".into()) else {
-        return None;
-    };
-    let Some(Tag::Compound(value)) = entry.get(&"value".into()) else {
-        return None;
-    };
-    match value.get(&"n".into()) {
-        Some(Tag::Int(n)) => Some(*n),
-        _ => None,
-    }
-}
-
-/// The matrix's counter row through the compiled wasm part: seeded 40 by its
-/// saved record, one tick produces 41.
-#[test]
-#[ignore = "daily"]
-fn wasm_counter_advances_one_per_tick() {
-    with_wasm_parts("wasm_counter_advances_one_per_tick", false, |game, _| {
-        let id = wasm_row(game, [1, 2, 3, 4], Some(40), None);
-        tick(game);
-        assert_eq!(saved_wasm_counter(game, id), Some(41));
-    });
-}
-
-/// Two rows of one type share the wasm part; their counters live apart.
-#[test]
-#[ignore = "daily"]
-fn wasm_two_rows_share_the_part_but_not_their_counters() {
-    with_wasm_parts(
-        "wasm_two_rows_share_the_part_but_not_their_counters",
-        false,
-        |game, _| {
-            let first = wasm_row(game, [1, 2, 3, 4], Some(40), None);
-            let second = wasm_row(game, [5, 6, 7, 8], Some(7), None);
-            tick(game);
-            assert_eq!(
-                (
-                    saved_wasm_counter(game, first),
-                    saved_wasm_counter(game, second)
-                ),
-                (Some(41), Some(8))
-            );
-        },
-    );
-}
-
-/// A row's wasm part and a native part on the same type tick one row in one
-/// pass, in install order: the fixture first, the observer second. The row
-/// starts with no stored counter, so the observer's `has` answer names what
-/// it saw: stored already, only if the wasm part's write ran first.
-#[test]
-#[ignore = "daily"]
-fn wasm_and_native_parts_tick_in_install_order() {
-    with_wasm_parts(
-        "wasm_and_native_parts_tick_in_install_order",
-        true,
-        |game, seen| {
-            let seen = seen.unwrap();
-            let id = wasm_row(game, [1, 2, 3, 4], None, None);
-            tick(game);
-            assert_eq!(
-                *seen.lock().unwrap(),
-                [(id, true)],
-                "the wasm part ticked first"
-            );
-            assert_eq!(saved_wasm_counter(game, id), Some(1));
-            assert_eq!(NATIVE_COUNTER.get(game, Holder::Entity(id)).unwrap(), 1);
-        },
-    );
-}
-
-/// The trap row: a wasm part that traps after its write rolls the whole
-/// row's tick back — its own count and the native part's write of the same
-/// row — while the later row's dispatch still runs, its wasm part silenced by
-/// the group stop and its native part ticking, and the next tick proceeds.
-#[test]
-#[ignore = "daily"]
-fn a_trapping_wasm_row_rolls_back_and_the_next_tick_proceeds() {
-    with_wasm_parts(
-        "a_trapping_wasm_row_rolls_back_and_the_next_tick_proceeds",
-        true,
-        |game, seen| {
-            let seen = seen.unwrap();
-            let failures = sunrise_mod_runtime::dispatch_failures::dispatch_failure_counter();
-            let before = failures.get();
-            // The trap row: 40 seeded, armed to trap once its count reaches 41.
-            let first = wasm_row(game, [1, 2, 3, 4], Some(40), Some(41));
-            // The later row carries no counter: whether one appears says whether
-            // its wasm part ran.
-            let second = wasm_row(game, [5, 6, 7, 8], None, None);
-            tick(game);
-            // The trapping row rolled back both parts' writes of that row; the
-            // later row's wasm part answered nothing (its group stopped with the
-            // trap) and stored no counter, its native part ticked.
-            assert_eq!(
-                (
-                    saved_wasm_counter(game, first),
-                    saved_wasm_counter(game, second)
-                ),
-                (Some(40), None)
-            );
-            assert_eq!(NATIVE_COUNTER.get(game, Holder::Entity(first)).unwrap(), 0);
-            assert_eq!(NATIVE_COUNTER.get(game, Holder::Entity(second)).unwrap(), 1);
-            // The observer ran inside the doomed pass too, after the trap row's
-            // wasm part had already written.
-            assert_eq!(*seen.lock().unwrap(), [(first, true), (second, false)]);
-            assert_eq!(failures.get(), before + 1, "one trap, one dispatch failure");
-            // The next tick: the poisoned group answers nothing, the native parts
-            // keep ticking — the rollback left the trap row at 40, its baseline.
-            tick(game);
-            assert_eq!(
-                (
-                    saved_wasm_counter(game, first),
-                    saved_wasm_counter(game, second)
-                ),
-                (Some(40), None)
-            );
-            assert_eq!(NATIVE_COUNTER.get(game, Holder::Entity(first)).unwrap(), 1);
-            assert_eq!(NATIVE_COUNTER.get(game, Holder::Entity(second)).unwrap(), 2);
-            assert_eq!(
-                *seen.lock().unwrap(),
-                [
-                    (first, true),
-                    (second, false),
-                    (first, true),
-                    (second, false)
-                ]
-            );
-            assert_eq!(
-                failures.get(),
-                before + 1,
-                "no second failure: the group is off"
-            );
-        },
-    );
 }

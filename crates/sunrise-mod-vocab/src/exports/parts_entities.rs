@@ -4,8 +4,5 @@ pub use parts::{
     has_entity_providers,
 };
 mod __private {
-    pub use crate::parts::{
-        EntityTickEach, entity_part_native_only_refusal, entity_parts, entity_tick_each,
-        has_entity_parts,
-    };
+    pub use crate::parts::{EntityTickEach, entity_parts, entity_tick_each, has_entity_parts};
 }

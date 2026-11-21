@@ -2,6 +2,18 @@
 use crate::Tag;
 use sunrise_core::nbt::clone_tag;
 
+/// A proposed substitution in a resolved text run, for [`crate::Hooks::substitute_inline_images`].
+// exhaustive: a plain byte range and sprite id that mods build directly as a literal, like vanilla's records.
+#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+pub struct InlineImageReplacement {
+    /// Inclusive start byte in the run.
+    pub start: u32,
+    /// Exclusive end byte in the run. Both ends must be UTF-8 character boundaries.
+    pub end: u32,
+    /// Sprite id in `minecraft:gui`, including a dynamic texture id.
+    pub sprite: crate::Identifier,
+}
+
 /// A component tree, retaining translation keys, styles and ordered children.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]

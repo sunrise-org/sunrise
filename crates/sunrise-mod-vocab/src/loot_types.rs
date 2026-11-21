@@ -1,7 +1,5 @@
 //! Static, unsynced loot function and condition map-codec registries.
-use crate::wire::{Reader, Wire, WireError, Writer};
 use crate::{Identifier, LootContext, LootStack, RandomSource, Tags};
-use std::sync::Arc;
 #[path = "loot_types/owned.rs"]
 pub(crate) mod owned;
 
@@ -60,7 +58,6 @@ pub trait ModLootFunction: Send + Sync + 'static {
         context: &mut dyn LootTypeContext,
     ) -> Result<LootStack, String>;
 }
-crate::wire::wire_handlers::handler!(dyn ModLootFunction, "ModLootFunction");
 
 /// A map codec in `Registries.LOOT_CONDITION_TYPE`, registered before data loads.
 /// Terms run in order and short-circuit; a skipped term draws no random.
@@ -75,4 +72,3 @@ pub trait ModLootCondition: Send + Sync + 'static {
     fn test(&self, data: &LootEntryData, context: &mut dyn LootTypeContext)
     -> Result<bool, String>;
 }
-crate::wire::wire_handlers::handler!(dyn ModLootCondition, "ModLootCondition");

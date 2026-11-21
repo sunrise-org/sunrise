@@ -1,6 +1,6 @@
 # Register game rule categories
 
-In `Hooks::register`, call `registrar.game_rule_category("machines")` to declare a category in your mod's namespace. The call returns `Result<(), GameRuleError>`. A full ID in a manifest-owned namespace is also accepted.
+In `Hooks::register`, call `registrar.game_rule_category("machines")` to declare a category in your mod's namespace. The call returns `Result<(), GameRuleError>`. A full ID in a manifest-owned namespace, or in a namespace delegated to the mod through `served_by` (see [Declare content in code](../content-mods.md#declare-content-in-code)), is also accepted.
 
 Declare a boolean rule with `registrar.game_rule_bool("enabled", "mymod:machines", true)`. Handle its `Result<BoolGameRuleKey, GameRuleError>` and retain the key from `Ok(key)`. Read the value with `level.game_rule_bool(host, key)`, which returns `Option<bool>`.
 

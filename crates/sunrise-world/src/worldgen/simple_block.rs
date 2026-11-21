@@ -119,7 +119,10 @@ mod tests {
         worldgen::anchor::WorldGenerationContext,
     };
     use std::collections::{BTreeMap, BTreeSet};
-    use sunrise_core::{nbt::Tag, random::LegacyRandom};
+    use sunrise_core::{
+        nbt::{Compound, Tag},
+        random::LegacyRandom,
+    };
 
     #[derive(Default)]
     struct World(BTreeMap<[i32; 3], BlockStateId>);
@@ -169,7 +172,7 @@ mod tests {
         for bottom in ["false", "true"] {
             for code in 0..81 {
                 let mut n = code;
-                let mut props = BTreeMap::from([("bottom".into(), Tag::String(bottom.into()))]);
+                let mut props = Compound::from([("bottom".into(), Tag::String(bottom.into()))]);
                 for side in ["north", "east", "south", "west"] {
                     props.insert(
                         side.into(),
@@ -183,7 +186,7 @@ mod tests {
                 ]));
             }
         }
-        let mut defaults: BTreeMap<_, _> = names
+        let mut defaults: Compound = names
             .iter()
             .enumerate()
             .map(|(i, name)| ((*name).into(), Tag::Int(i as i32)))

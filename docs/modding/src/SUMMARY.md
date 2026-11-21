@@ -11,7 +11,6 @@
 - [Install the mod tool](start/install-tool.md)
 - [Your first content mod](start/first-content-mod.md)
 - [Your first native mod](start/first-mod.md)
-- [Your first WebAssembly mod](start/first-wasm-mod.md)
 - [Writing hooks](start/writing-hooks.md)
 - [Using an AI agent](for-agents.md)
 
@@ -30,7 +29,6 @@
 - [Registry keys](concepts/registry-keys.md)
 - [Wire types](concepts/wire-types.md)
 - [Dependencies between mods](concepts/dependencies.md)
-- [Injections](concepts/injections.md)
 - [The native route](concepts/native-route.md)
 - [Testing a mod](concepts/testing.md)
 
@@ -38,7 +36,6 @@
 
 - [Content mods](how-to/content-mods.md)
 - [Native mods: building and shipping](how-to/native-mods.md)
-- [WebAssembly mods](how-to/wasm-mods.md)
 - [Config files and settings](how-to/mod-settings.md)
 - [Publishing your mod](how-to/publish.md)
 - [Levels, dimensions and blocks](how-to/world.md)

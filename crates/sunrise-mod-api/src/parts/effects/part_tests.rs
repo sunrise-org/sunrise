@@ -25,7 +25,10 @@ impl<const PERIOD: i32> MobEffectPart for Cadence<PERIOD> {
             .unwrap()
             .push((self.package, event.health));
         event.heal(PERIOD as f32);
-        if self.package == "owner" && event.amplifier == 99 {
+        if matches!(
+            (self.package, event.amplifier),
+            ("owner", 99) | ("other", 100)
+        ) {
             event.keep = false;
         }
     }
@@ -204,13 +207,14 @@ fn install(mods: &[ModEntry]) -> EffectKey {
 }
 
 #[test]
-fn two_packages_keep_independent_cadences_and_share_snapshots() {
+fn effect_owner_runs_first_even_when_the_dependent_dispatches_first() {
     let trace = Arc::new(Mutex::new(Vec::new()));
     let mods: Mods = vec![
+        // The package resolver can put dependents first (order = "before").
         ModEntry::new(
-            "owner",
-            Box::new(Cadence::<2> {
-                package: "owner",
+            "other",
+            Box::new(Cadence::<6> {
+                package: "other",
                 trace: trace.clone(),
             }),
         ),
@@ -221,12 +225,20 @@ fn two_packages_keep_independent_cadences_and_share_snapshots() {
                 trace: trace.clone(),
             }),
         ),
+        ModEntry::new(
+            "owner",
+            Box::new(Cadence::<2> {
+                package: "owner",
+                trace: trace.clone(),
+            }),
+        ),
     ]
     .into();
     crate::load_state::with_test_package_inventory(
         vec![
             package("owner", None),
             package("behaviour", Some(DependencyKind::Required)),
+            package("other", Some(DependencyKind::Required)),
         ],
         || {
             crate::testing::with_mods(mods.clone(), || {
@@ -252,8 +264,12 @@ fn two_packages_keep_independent_cadences_and_share_snapshots() {
                     (
                         6,
                         0,
-                        vec![EffectTickChange::Heal(2.0), EffectTickChange::Heal(3.0)],
-                        vec![("owner", 10.0), ("behaviour", 10.0)],
+                        vec![
+                            EffectTickChange::Heal(2.0),
+                            EffectTickChange::Heal(6.0),
+                            EffectTickChange::Heal(3.0),
+                        ],
+                        vec![("owner", 10.0), ("other", 10.0), ("behaviour", 10.0)],
                         true,
                     ),
                     (
@@ -261,6 +277,13 @@ fn two_packages_keep_independent_cadences_and_share_snapshots() {
                         99,
                         vec![EffectTickChange::Heal(2.0)],
                         vec![("owner", 10.0)],
+                        false,
+                    ),
+                    (
+                        6,
+                        100,
+                        vec![EffectTickChange::Heal(2.0), EffectTickChange::Heal(6.0)],
+                        vec![("owner", 10.0), ("other", 10.0)],
                         false,
                     ),
                 ] {
@@ -301,7 +324,7 @@ fn two_packages_keep_independent_cadences_and_share_snapshots() {
 }
 
 #[test]
-fn foreign_effect_parts_require_the_actual_declaring_package() {
+fn a_removed_dependency_row_cannot_authorize_a_foreign_effect_part() {
     let trace = Arc::new(Mutex::new(Vec::new()));
     let mods: Mods = vec![ModEntry::new(
         "behaviour",
@@ -312,19 +335,26 @@ fn foreign_effect_parts_require_the_actual_declaring_package() {
     )]
     .into();
     crate::load_state::with_test_package_inventory(
-        vec![package("owner", None), package("behaviour", None)],
+        vec![
+            package("owner", None),
+            package("behaviour", Some(DependencyKind::Required)),
+        ],
         || {
-            crate::testing::with_mods(mods.clone(), || {
-                install(&mods);
-                let errors = mod_vocab::__private::validate_effect_part_owners(|_| Some("owner"))
-                    .unwrap_err();
-                assert_eq!(
-                    errors,
-                    [format!(
-                        "mod behaviour attached {} to effect owner:comfort, declared by package owner; declare owner as a dependency",
-                        std::any::type_name::<Cadence<3>>()
-                    )]
-                );
+            // The manifest still declares owner; the effective graph lost that row.
+            crate::load_state::with_test_dependencies(Default::default(), || {
+                crate::testing::with_mods(mods.clone(), || {
+                    install(&mods);
+                    let errors =
+                        mod_vocab::__private::validate_effect_part_owners(|_| Some("owner"))
+                            .unwrap_err();
+                    assert_eq!(
+                        errors,
+                        [format!(
+                            "mod behaviour attached {} to effect owner:comfort, declared by package owner; declare owner as a dependency",
+                            std::any::type_name::<Cadence<3>>()
+                        )]
+                    );
+                });
             });
         },
     );

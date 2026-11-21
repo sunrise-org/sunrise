@@ -5,7 +5,6 @@ use crate::*;
 #[sunrise_mod_api_macros::host_area]
 pub trait TagsHost {
     /// The merged-tag service, using load-resolved item and tag keys.
-    /// Not on wasm: a frame resource; its methods are the imports.
     #[access(Metadata)]
     #[service]
     fn tags(&self) -> &dyn Tags;

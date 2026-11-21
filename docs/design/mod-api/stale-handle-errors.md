@@ -1,5 +1,9 @@
 # Design: stale handle errors
 
+> Historical: this design predates the removal of WebAssembly mods.
+> See [the mod API reference](../../modding/src/reference/api.md) for the current native API.
+> Check each operation for its refusal result; this proposal does not establish a blanket native stale-handle contract. The guest refusal representation, traps and cross-runtime fixtures are historical.
+
 Provisional answer to [#1644](https://github.com/arismoko/horizon/issues/1644): **typed stale errors for ordinary handle reads and writes**. This question is small enough for an issue comment proposing the answer, as Ari permits; this short page records that proposal for review, not implemented behavior.
 
 ## Proposed contract

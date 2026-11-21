@@ -6,6 +6,7 @@ use super::Game;
 use sunrise_client::actions::Action;
 use sunrise_client::{
     blocks::Fluid,
+    first_person::Hand,
     hud::HudBatch,
     items::ItemStack,
     mobs::{Mob, MobEvent, Species, Who, equine},
@@ -260,20 +261,27 @@ impl Game<'_> {
         if self.mobs[i].species() != species || !equine::boost(&mut self.mobs[i]) {
             return false;
         }
-        if let Some(stack) = self.inventory[self.selected].clone() {
+        let slot = self.held_slot();
+        let hand = self.hand;
+        if let Some(stack) = self.stack_in(slot).cloned() {
             let (updated, broken) = self.damage_stack(&stack, wear, true);
-            if self.inventory[self.selected].as_ref() == Some(&stack) {
-                self.inventory[self.selected] = updated;
+            if self.stack_in(slot) == Some(&stack) {
+                *self.stack_in_mut(slot) = updated;
                 if let Some(broken) = broken {
-                    self.player_equipment_broke(
-                        sunrise_core::equipment_slot::EquipmentSlot::MainHand,
-                        &broken,
-                    );
+                    use sunrise_core::equipment_slot::EquipmentSlot;
+                    let equipment = match hand {
+                        Hand::Main => EquipmentSlot::MainHand,
+                        Hand::Off => EquipmentSlot::OffHand,
+                    };
+                    self.player_equipment_broke(equipment, &broken);
                     self.award_stat("broken", &broken.item, 1);
+                    self.player_item_destroyed(&stack, Some(hand));
                     // hurtAndConvertOnBreak keeps the broken stick's components.
-                    let mut rod = stack.transmute("minecraft:fishing_rod", 1);
-                    rod.damage = 0;
-                    self.inventory[self.selected] = Some(rod);
+                    if self.stack_in(slot).is_none() {
+                        let mut rod = stack.transmute("minecraft:fishing_rod", 1);
+                        rod.damage = 0;
+                        *self.stack_in_mut(slot) = Some(rod);
+                    }
                 }
             }
         }
@@ -649,6 +657,14 @@ impl Game<'_> {
             self.dismount_mob(rider);
         }
     }
+    /// This player's index in `vehicle`'s `getPassengers`, 0 when it is not listed.
+    fn own_passenger_index(&self, vehicle: u32) -> usize {
+        let own = self.riding_player().map(|(id, _)| id);
+        self.seated_passengers(vehicle)
+            .iter()
+            .position(|&(_, id, player)| player && Some(id) == own)
+            .unwrap_or(0)
+    }
     /// `positionRider`: the player sits on the mount after it moves.
     pub(super) fn position_rider(&mut self) {
         let Some(i) = self.mount_index() else {
@@ -668,11 +684,14 @@ impl Game<'_> {
             seat_of(m, sunrise_client::mobs::riders::type_attachment(m))
         };
         if m.species() == Species::HappyGhast {
-            // The attachment of the player's seat on the harnessed back.
-            let seat = self.remote.as_ref().map_or(0, |r| r.passenger_index);
+            // The attachment of the player's place in `getPassengers`, in the ghast's own dimensions.
+            let seat = self
+                .remote
+                .as_ref()
+                .map_or_else(|| self.own_passenger_index(m.id), |r| r.passenger_index);
             at = seat_of(
                 m,
-                sunrise_client::mobs::riders::happy_ghast_attachment(seat),
+                sunrise_client::mobs::riders::passenger_attachment_at(m, seat),
             );
         }
         // AbstractHorse.getPassengerAttachmentPoint: the rider slides back and
@@ -960,7 +979,9 @@ impl Game<'_> {
         let Some(player) = self.player.as_mut() else {
             return;
         };
+        let side = game_side!(self);
         let _ = MotionWorld {
+            side: &side,
             entities: &[],
             player,
             scene: &mut self.world,
@@ -992,13 +1013,19 @@ impl Game<'_> {
     /// `Hud.extractVehicleHealth` (a native mod's `minecraft:vehicle_health`
     /// layer, only while riding a mount). Returns the mount's heart count
     /// (`getVehicleMaxHearts`).
-    pub(super) fn draw_mount_hud(&mut self, batch: &mut HudBatch, w: i32, h: i32) -> i32 {
+    pub(super) fn draw_mount_hud(
+        &mut self,
+        batch: &mut HudBatch,
+        w: i32,
+        h: i32,
+        heights: &mut sunrise_client::hud_layout::StatusBarHeights,
+    ) -> i32 {
         let Some(i) = self.mount_index() else {
             return 0;
         };
         let m = &self.mobs[i];
         let hearts = sunrise_client::hud_layout::vehicle_max_hearts(m.attrs.max_health);
-        let draws = sunrise_client::hud_layout::vehicle_health(w, h, hearts, m.health);
+        let draws = sunrise_client::hud_layout::vehicle_health(w, h, hearts, m.health, heights);
         self.keep_status_rows(&draws, w, h);
         self.gui_layer("minecraft:vehicle_health", batch, |g, batch| {
             sunrise_client::hud_layout::paint(batch, &g.gui.atlas, &draws);

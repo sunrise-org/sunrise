@@ -30,7 +30,7 @@ pub(super) fn pending_error(error: Error) -> UnspawnedMobError {
         Error::Ownership => UnspawnedMobError::Ownership,
         Error::Capacity => UnspawnedMobError::Capacity,
         Error::Budget => UnspawnedMobError::Budget,
-        Error::Invalid | Error::Stale | Error::Failed => UnspawnedMobError::Invalid,
+        Error::Invalid | Error::Stale => UnspawnedMobError::Invalid,
     }
 }
 

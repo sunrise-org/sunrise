@@ -1,7 +1,7 @@
 //! Keyframe animations (vanilla's `AnimationDefinition`, `AnimationChannel`, `Keyframe`,
 //! `KeyframeAnimation` and `AnimationState`) as plain data and pure functions. The game samples its
 //! own mobs' animations through [`AnimationChannel::sample`], and a mod plays the files it ships
-//! (`RenderAssets::animation`) on its own `ModelPart` with the same code, natively or in wasm.
+//! (`RenderAssets::animation`) on its own `ModelPart` with the same code.
 use crate::{Identifier, ModelPart};
 
 #[cfg(test)]

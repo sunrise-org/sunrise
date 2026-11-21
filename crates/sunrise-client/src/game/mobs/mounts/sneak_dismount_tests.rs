@@ -176,3 +176,16 @@ fn a_kept_server_player_still_drives_and_sneaks() {
         assert!(rider(game, horse).is_none(), "the mount lost its rider");
     });
 }
+
+/// `Entity.setRemoved` offers each passenger's dismount to `entity_mount` once: a local rider the
+/// listener keeps on a destroyed vehicle is not asked a second time.
+#[test]
+#[ignore = "daily"]
+fn a_destroyed_vehicle_asks_once_to_let_its_local_rider_go() {
+    with_horse(|game, horse, _, leaves| {
+        game.start_riding(horse);
+        game.remove_mob_now(horse, false);
+        assert_eq!(leaves.load(Ordering::SeqCst), 1, "one ask for one edge");
+        assert_eq!(game.riding, Some(horse), "the listener kept the rider");
+    });
+}

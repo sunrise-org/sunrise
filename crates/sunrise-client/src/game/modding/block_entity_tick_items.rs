@@ -9,7 +9,6 @@ use sunrise_client::{
 pub(super) struct Key {
     pub pos: (i32, i32, i32),
     pub placeholder_identity: u64,
-    pub failure_generation: u64,
     pub transaction_depth: usize,
     pub unbalanced: bool,
 }
@@ -26,7 +25,6 @@ pub(super) struct Scope {
     pub generation: Option<u64>,
     pos: (i32, i32, i32),
     placeholder_identity: u64,
-    pub(super) failure_generation: u64,
     pub poisoned: bool,
     pub items: Option<Vec<Proposal>>,
     pub unchanged: bool,
@@ -40,12 +38,11 @@ pub(super) struct Scope {
 }
 
 impl Scope {
-    pub fn new(pos: (i32, i32, i32), placeholder_identity: u64, failure_generation: u64) -> Self {
+    pub fn new(pos: (i32, i32, i32), placeholder_identity: u64) -> Self {
         Self {
             generation: None,
             pos,
             placeholder_identity,
-            failure_generation,
             poisoned: false,
             items: None,
             unchanged: false,
@@ -110,7 +107,7 @@ impl Game<'_> {
     ) -> Option<bool> {
         let key = self.block_entity_tick_key?;
         if self.block_entity_tick_items.is_none() {
-            let mut scope = Scope::new(key.pos, key.placeholder_identity, key.failure_generation);
+            let mut scope = Scope::new(key.pos, key.placeholder_identity);
             scope.savepoints.resize_with(
                 self.transactions
                     .len()
@@ -184,7 +181,6 @@ impl Game<'_> {
         let owns_placeholder = self.world.block_entities.generation(&pos) == scope.generation
             && matches!(self.world.block_entities.get(&pos), Some(BlockEntity::Mod(entity)) if entity.id().is_empty() && entity.revision().identity() == scope.placeholder_identity);
         let valid = owns_placeholder && !scope.poisoned && scope.balanced()
-            && scope.failure_generation == self.wasm_dispatch_failures.get()
             && scope.items.as_ref().is_none_or(|items| items.iter().all(|proposal| {
                 matches!(self.server_resident_entity(proposal.id), EntityLookup::Found { location, .. } if location == proposal.location)
                     && self.dropped.iter().any(|e| e.id == proposal.id && e.stack == proposal.original)

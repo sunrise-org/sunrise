@@ -5,11 +5,10 @@ vanilla has no screen for (the on-screen keyboard a controller types with). Ever
 and the HUD are not part of it: they are vanilla's, because parity is the point of the game, and
 Sunrise's own settings are pages built from vanilla's widgets, the way mods add theirs.
 
-The tokens live in one place, `crates/sunrise-theme`. The launcher (`https://github.com/sunrise-org/sunrise-launcher/blob/main/src/theme.rs`)
-and the game (`crates/sunrise-client/src/ui_theme.rs`) read them as Rust constants, and the
-website reads them as CSS custom properties generated from the same crate
-(`cargo run -p xtask -- tokens` writes `crates/sunrise-theme/tokens.css`, which the website's build
-reads from main; a test fails when the file is out of date). Change a value in the crate and all three follow.
+The game reads Rust tokens from `crates/sunrise-theme`; the website reads the CSS custom properties
+it generates (`cargo run -p xtask -- tokens` writes `crates/sunrise-theme/tokens.css`, which the
+website's build reads from main; a test fails when the file is out of date). The standalone
+launcher has its own theme crate (`https://github.com/sunrise-org/sunrise-launcher/tree/main/crates/theme`).
 
 ## Where it comes from
 
@@ -148,22 +147,18 @@ Geist (400, 500, 600) and Geist Mono (400), bundled under the SIL Open Font Lice
   pixels sits in the footer.
 - **Game**: vanilla's screens. The on-screen keyboard is a rounded plate of keys in the page
   colour, the focused key in the accent. Sunrise's graphics, controller, Extras and Shaders
-  settings screens take the Blocks palette below in a lighter form (`graphics_style.rs`, through
-  the shared `settings_shell.rs`).
+  settings screens draw with vanilla's widgets and list background (`graphics_style.rs`, through
+  the shared `settings_shell.rs`; #452, Q2).
 
 ## Blocks
 
-A blocky, Minecraft-like look in Sunrise's purple, for the website, the redesigned launcher and
-the game's graphics, controller, Extras and Shaders settings screens:
+A blocky, Minecraft-like look in Sunrise's purple, for the website and the redesigned launcher:
 Minecraft's inventory rather than a document. Its colours are `sunrise_theme::Blocks`
 (`BLOCKS_LIGHT`, `BLOCKS_DARK`), which `tokens.css` carries under the same names as before plus
 `--panel`, `--raised`, `--button`, `--well`, `--bevel`, `--lip`, `--outline` and the `--face`
 of the main action. The game's other menus keep `LIGHT` and `DARK`.
 
-In the game these settings screens draw the Blocks palette in GUI pixels, lighter than the
-website's blocks so the world stays in view: square panels of the page colour, see-through, with a
-1 px edge and no bevel or lip, flat controls, the violet face on Done, and vanilla's font rather
-than Pixelify. Hover and focus are vanilla's white edge.
+The game's settings screens don't use Blocks: they draw vanilla's widgets (see **Game** above).
 
 - **Pixel type for what names and what you act on.** Headings, navigation, buttons and the
   wordmark use Pixelify Sans (OFL; Medium, SemiBold, Bold); paragraphs and numbers stay in Geist
@@ -328,8 +323,8 @@ as `--glass-*`.
   `accent-soft` (half accent, half white in OKLab) draws progress, ticks, links and the focus ring;
   text on the accent turns dark when a player's accent is light. `Glass::new` does the mockup's
   `color-mix` sums, so a player's own accent comes out as the website's would.
-- **White text at a few opacities** (`glass::ink`: 100, 80, 70, 60, 50, 45, 40 %) and white fills
-  for states (`glass::fill`: hover 5 %, field 7 %, button 8 %, selected 10 %, active 12 %).
+- **White text at a few opacities** (100, 80, 70, 60, 50, 45, 40 %) and white fills for states
+  (hover 5 %, field 7 %, button 8 %, selected 10 %, active 12 %).
   Live `#4ade80`, busy `#f2c46b`, destructive `#ff8a8a`.
 - **Type**: Geist for everything; Bricolage Grotesque SemiBold for page, instance and dialog names,
   at the optical size a browser picks for them: `Bricolage Grotesque Display` (56) and

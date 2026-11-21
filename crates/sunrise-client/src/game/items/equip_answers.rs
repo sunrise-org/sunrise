@@ -10,7 +10,6 @@ use sunrise_client::mobs::equip::CanEquip;
 /// Empty when no part of the item listens (the component's answer stands and nothing is
 /// converted). A listening stack that cannot be prepared refuses the decision.
 pub(in crate::game) struct EquipStack {
-    _leases: Vec<Box<dyn std::any::Any>>,
     reads: Vec<mod_api::EquipReadRow>,
     read_indices: std::collections::HashMap<u32, usize>,
     stack: Option<Box<mod_api::ItemStack>>,
@@ -21,14 +20,8 @@ pub(in crate::game) struct EquipStack {
 }
 
 impl Game<'_> {
-    pub(in crate::game) fn equip_stack(
-        &self,
-        stack: &ItemStack,
-        kinds: &[&str],
-        targets: &[u32],
-    ) -> EquipStack {
+    pub(in crate::game) fn equip_stack(&self, stack: &ItemStack, targets: &[u32]) -> EquipStack {
         let empty = |refused| EquipStack {
-            _leases: Vec::new(),
             reads: Vec::new(),
             read_indices: Default::default(),
             stack: None,
@@ -44,7 +37,7 @@ impl Game<'_> {
         let source = match sunrise_client::mobs::equip::source_stamp_at(address) {
             Some(Some(stamp)) => Some((address, stamp)),
             // A retired tracked scope is different from an ordinary immutable
-            // input without a barrier. It must never prepare or ask a guest.
+            // input without a barrier. It must not prepare an equipment check.
             Some(None) => return empty(true),
             None => None,
         };
@@ -59,19 +52,11 @@ impl Game<'_> {
                 .filter_map(|id| order(*id).map(|generation| (*id, generation)))
                 .collect::<std::collections::HashMap<_, _>>()
         };
-        let rows = admissions
+        let reads = admissions
             .keys()
             .filter_map(|id| self.capture_equip_read(*id))
             .collect::<Vec<_>>();
-        let prepared = stack
-            .as_ref()
-            .map(|stack| mod_api::__private::prepare_equip_parts(stack, kinds, &rows))
-            .transpose();
-        let (leases, refused) = match prepared {
-            Ok(Some(leases)) => (leases, false),
-            Ok(None) | Err(_) => (Vec::new(), true),
-        };
-        let reads = rows;
+        let refused = stack.is_none();
         let read_indices = reads
             .iter()
             .enumerate()
@@ -82,7 +67,6 @@ impl Game<'_> {
             epoch: self.native_lifecycle.epoch(),
             admissions,
             reads,
-            _leases: leases,
             stack,
             refused,
             source,
@@ -239,7 +223,7 @@ impl MenuEquip<'_, '_> {
 }
 
 impl CanEquip for MenuEquip<'_, '_> {
-    fn prepare(&self, stack: &ItemStack, entity: u32, kind: &str) -> bool {
+    fn prepare(&self, stack: &ItemStack, entity: u32, _kind: &str) -> bool {
         if self.stale_source(stack) {
             return false;
         }
@@ -252,7 +236,7 @@ impl CanEquip for MenuEquip<'_, '_> {
         if let Some((original, ready)) = self.prepared.borrow().get(&stamp.scope()) {
             return *original == stamp && !ready.refused;
         }
-        let ready = self.game.equip_stack(stack, &[kind], &[entity]);
+        let ready = self.game.equip_stack(stack, &[entity]);
         let valid = !ready.refused;
         self.prepared
             .borrow_mut()
@@ -414,7 +398,7 @@ mod tests {
                 slots.map(|slot| lent.can_equip(&other, slot, player, kind, slot == "head"))
             });
             assert_eq!((answers, allocations), ([true, false, false, false], 0));
-            let prepared = game.equip_stack(&helmet, &["minecraft:player"], &[player]);
+            let prepared = game.equip_stack(&helmet, &[player]);
             assert!(
                 prepared.reads[0].equipment[5]
                     .as_ref()
@@ -506,7 +490,7 @@ mod tests {
                 42,
                 ItemStack::new("minecraft:iron_helmet", 0),
             );
-            let prepared = game.equip_stack(&empty, &["minecraft:player"], &[player]);
+            let prepared = game.equip_stack(&empty, &[player]);
             assert!(!game.can_equip(&prepared, "head", player, "minecraft:player", true));
             assert!(!game.equip_can_apply(&prepared, player));
             assert_eq!(asked.load(Ordering::Relaxed), 0);
@@ -573,7 +557,7 @@ mod tests {
                 let mut slot = Some(helmet);
                 let mut source = EquipDecision::new(42, &mut slot);
                 take_equip_conversions();
-                let prepared = game.equip_stack(&source, &["minecraft:player"], &[player]);
+                let prepared = game.equip_stack(&source, &[player]);
                 assert_eq!(take_equip_conversions(), 1);
                 assert!(game.can_equip(&prepared, "feet", player, "minecraft:player", false));
                 let before = asked.load(Ordering::Relaxed);
@@ -617,7 +601,7 @@ mod tests {
             let index = game.mobs.len();
             game.mobs.push(Mob::new(21, kind.clone(), at, 0.0));
             let source = EquipInput::new(1, rich_helmet());
-            let prepared = game.equip_stack(&source, &["minecraft:zombie"], &[21]);
+            let prepared = game.equip_stack(&source, &[21]);
             assert!(game.can_equip(&prepared, "feet", 21, "minecraft:zombie", false));
             let before = asked.load(Ordering::Relaxed);
             assert!(!game.can_equip(&prepared, "feet", 9999, "minecraft:zombie", true));
@@ -628,7 +612,7 @@ mod tests {
             assert_eq!(asked.load(Ordering::Relaxed), before);
             take_equip_conversions();
             let other = ItemStack::new("minecraft:diamond_helmet", 3);
-            let data = game.equip_stack(&other, &[], &[]);
+            let data = game.equip_stack(&other, &[]);
             assert_eq!(take_equip_conversions(), 0);
             assert!(game.can_equip(&data, "head", 9999, "minecraft:zombie", true));
         });

@@ -180,8 +180,7 @@ impl Game<'_> {
         self.with_container_at(target, side, |game, into| match into {
             ContainerTarget::Part(part) => {
                 // `insertCrafterOutput`: the handler takes what it will; the rest is dispensed.
-                let at = [target.0, target.1, target.2];
-                rest.count -= game.put_into_part(&part, at, &rest, |_, _| Some(()));
+                rest.count -= game.put_into_part(&part, &rest, |_, _| Some(()));
             }
             ContainerTarget::View(into) => {
                 let into_is_crafter = game.crafter_at(target).is_some();
@@ -217,6 +216,8 @@ impl Game<'_> {
                     origin: me.position,
                     tool: None,
                     block_pos: None,
+                    target: None,
+                    interacting: None,
                 };
                 adv::conditions(&c["player"], &ctx, w) && recipe_matches(&c["recipes"], &id)
             });

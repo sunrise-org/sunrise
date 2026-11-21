@@ -160,8 +160,7 @@ impl ZoomAim {
         // player faces, and there is no direction to compare it with. Tested
         // on the box rather than on the circle below, whose radius a camera
         // on a corner matches exactly -- a float coin-toss.
-        // In i64: a level 22 tile is 67 million blocks wide, so the sum
-        // at the far edge of the world overflows an i32.
+        // In i64, so a tile at the world's edge never overflows.
         let (ox64, oz64, size64) = (i64::from(ox), i64::from(oz), i64::from(size));
         if (ox64..ox64 + size64).contains(&i64::from(camera[0]))
             && (oz64..oz64 + size64).contains(&i64::from(camera[1]))
@@ -191,19 +190,13 @@ impl ZoomAim {
 }
 
 /// The coarsest tile level: `Plan` roots cover at most `MAX_CHUNKS` chunks
-/// around (a level-22 tile is 67 million blocks wide: the whole world).
-pub(crate) const MAX_LEVEL: u8 = 22;
-/// Tiles this far from the camera (1024 chunks, as far as far terrain went
-/// before it covered the world) are planned with `WORLD_SPLIT`.
-const WORLD_START: i32 = 1024 * 16;
-/// How many tile widths away from the camera a tile of the world-wide terrain
-/// splits (`Plan::visit`: cells then span about 1/48 of the distance).
-const WORLD_SPLIT: i32 = 3;
+/// around (a level-10 tile is 16,384 blocks wide).
+pub(crate) const MAX_LEVEL: u8 = 10;
 /// A split tile stays split until its distance passes the threshold by this
 /// ratio (`Plan::visit`): 1 / 0.95.
 const RETURN: (i64, i64) = (20, 19);
 /// The farthest `Plan` reaches, in chunks.
-pub const MAX_CHUNKS: u32 = 1 << 22;
+pub const MAX_CHUNKS: u32 = 1 << MAX_LEVEL;
 /// The coarsest tile level whose chunks are generated in full (trees,
 /// structures) rather than sampled: cells of up to 4 blocks, out to about
 /// 1024 blocks at Full far detail.
@@ -793,31 +786,19 @@ impl Plan {
         // blocks. Reduced keeps them twice as large (a quarter of the cells).
         let held = previous.split.contains(&key);
         let split = if held { 10 } else { 8 };
-        // Beyond the old 1024-chunk limit the cells are as large as `reduced`'s:
-        // the whole world is 22 levels, not all of them worth full cells.
-        let world = key.distance(camera) >= WORLD_START;
         // A zoomed view magnifies the tiles its cone covers, so those split
         // further; every other tile keeps the plan it would have had
-        // ([`ZoomAim`]). The world-wide threshold is boosted too: the horizon is
-        // where a spyglass shows the coarsest cells of all.
+        // ([`ZoomAim`]).
         let boost = match self.aim {
             Some(aim) if aim.covers(key, camera) => i64::from(aim.boost),
             _ => 1,
         };
-        let threshold = i64::from(key.size())
-            * i64::from(if world {
-                WORLD_SPLIT
-            } else if reduced {
-                split / 2
-            } else {
-                split
-            })
-            * boost;
+        let threshold =
+            i64::from(key.size()) * i64::from(if reduced { split / 2 } else { split }) * boost;
         // The 8 to 10 band above is wide already. The ring of full detail
-        // around the camera and the world-wide threshold have none: a tile
-        // split last plan stays split until it is 5% past them, or it
-        // flickered between two levels as the camera moved a block to and
-        // fro across the line.
+        // around the camera has none: a tile split last plan stays split
+        // until it is 5% past it, or it flickered between two levels as the
+        // camera moved a block to and fro across the line.
         let hold = |bound: i64| {
             if held {
                 bound * RETURN.0 / RETURN.1
@@ -828,8 +809,7 @@ impl Plan {
         let distance = i64::from(key.distance(camera));
         if key.level > 0
             && (distance < hold(i64::from(detail) * 16 + 16)
-                || distance.max(i64::from(self.elevation))
-                    < if world { hold(threshold) } else { threshold })
+                || distance.max(i64::from(self.elevation)) < threshold)
         {
             self.split.insert(key);
             for child in key.children() {
@@ -1706,25 +1686,6 @@ impl Lod {
             returned_at: std::time::Instant::now(),
             keeps_observed,
         }
-    }
-    /// The solid ground at block column (x, z): its top face's height and
-    /// its block, from the finest tile sampled there. For aiming past the
-    /// resident chunks (`game.raycast`); water is passed, as the view's ray
-    /// passes it.
-    pub fn ground(&self, x: i32, z: i32) -> Option<(i32, BlockStateId)> {
-        (0..=MAX_LEVEL).find_map(|level| {
-            let size = 16 << level;
-            let key = TileKey {
-                x: x.div_euclid(size),
-                z: z.div_euclid(size),
-                level,
-            };
-            let columns = self.ready.get(&key).filter(|c| c.len() == CELLS * CELLS)?;
-            let cell = size / CELLS as i32;
-            let (cx, cz) = ((x - key.x * size) / cell, (z - key.z * size) / cell);
-            let surface = columns[cz as usize * CELLS + cx as usize].surface?;
-            Some((surface.height, surface.state))
-        })
     }
     pub fn stats(&self) -> (usize, usize) {
         (self.active.len(), self.ready.len())
@@ -3624,56 +3585,6 @@ mod tests {
             .origin(),
             [-32, 0, -64]
         );
-    }
-    #[test]
-    fn world_wide_plans_stay_small_and_cover_every_level() {
-        // About 10 000 nodes at a corner of the world, 9 000 at its centre.
-        const WORLD_PLAN_NODES: usize = 16_384;
-        for (camera, elevation) in [
-            ([0, 0], 0),
-            ([115, 135], 49_000_000),
-            ([-30_000_000, 29_999_000], 90),
-        ] {
-            let plan = Plan::with_previous(
-                camera,
-                12,
-                MAX_CHUNKS,
-                &Plan::default(),
-                elevation,
-                false,
-                None,
-            );
-            let reduced = Plan::with_previous(
-                camera,
-                12,
-                MAX_CHUNKS,
-                &Plan::default(),
-                elevation,
-                true,
-                None,
-            );
-            let top = plan.nodes.iter().map(|k| k.level).max().unwrap();
-            assert_eq!(top, MAX_LEVEL, "{camera:?} y={elevation}: roots stop short");
-            assert!(
-                plan.nodes.len() < WORLD_PLAN_NODES,
-                "{camera:?} y={elevation}: {} nodes",
-                plan.nodes.len()
-            );
-            assert!(
-                reduced.nodes.len() <= plan.nodes.len(),
-                "{camera:?} y={elevation}: reduced has {} nodes, full {}",
-                reduced.nodes.len(),
-                plan.nodes.len()
-            );
-            // Every level from the finest planned one up to the roots has tiles.
-            let finest = plan.nodes.iter().map(|k| k.level).min().unwrap();
-            for level in finest..=MAX_LEVEL {
-                assert!(
-                    plan.nodes.iter().any(|k| k.level == level),
-                    "{camera:?} y={elevation}: no level-{level} tile"
-                );
-            }
-        }
     }
     #[test]
     fn aerial_distance_avoids_unseen_full_detail_outside_the_near_area() {

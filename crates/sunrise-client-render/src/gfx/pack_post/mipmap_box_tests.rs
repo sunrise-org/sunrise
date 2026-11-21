@@ -3,8 +3,8 @@
 //! (8.14.4) recommends a box filter for generated mipmaps, and Iris 1.11.7's colortex mipmaps
 //! kept a 26x22-pixel spot of a 1280x720 buffer in its last level (probe packs of ours).
 use super::destination_tests::Fixture;
-use super::*;
 use std::io::{Cursor, Write};
+use sunrise_shaders::Post;
 
 const VERTEX: &str = "#version 120\nvarying vec2 uv;\nvoid main() { uv=gl_MultiTexCoord0.xy; gl_Position=ftransform(); }\n";
 

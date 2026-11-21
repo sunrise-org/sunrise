@@ -29,6 +29,17 @@ pub trait ItemsHost {
     #[access(Metadata)]
     fn item_default_component(&self, item: ItemKey, component: &str) -> Option<Tag>;
     /// Side: both.
+    /// `ItemStack.getHoverName()` as a component, as vanilla builds it: the custom name as
+    /// written, else a potion's or tipped arrow's contents name, a written book's non-blank
+    /// title, a player head's `%s's Head` for its owner, the `item_name` component (a removed one
+    /// reads empty; the ominous banner's included), else the item's default name as a bare
+    /// translatable (`item.*` or `block.*`); only a fallback written into a component is kept.
+    /// It carries no rarity colour or italics (`getStyledHoverName` adds those). Each viewer renders a translatable in their own
+    /// language; call `text_string` on it for a string in this side's language. An invalid stack
+    /// is a [`TextFormError`].
+    #[access(Metadata)]
+    fn hover_name(&self, stack: &ItemStack) -> Result<Text, TextFormError>;
+    /// Side: both.
     /// Item `item`'s cooking-fuel burn time in ticks (`FuelValues.burnDuration` of its `cooking_fuel`
     /// component, the data pack's context int provider resolved), None where it is no fuel. API
     /// @API:item_components@.
@@ -74,6 +85,17 @@ pub trait ItemsHost {
         &mut self,
         permissions: CreativeTabPermissions,
     ) -> Result<std::sync::Arc<CreativeModeTabs>, CreativeTabReadError>;
+    /// Side: both. The catalog this side last finished building, as
+    /// `CreativeModeTab.getDisplayItems` reads it, for a reader that only has `&dyn Host`.
+    /// It never builds and never fires `build_creative_mode_tab_contents`. `Ok(None)` before
+    /// this side has built once (a read through [`creative_tabs`](Self::creative_tabs), or the
+    /// creative screen, builds it); [`CreativeTabReadError::Unavailable`] in setup or reload
+    /// and without a live world. The snapshot keeps the permissions of that build and stays
+    /// immutable: a later build publishes a new one.
+    #[access(Metadata)]
+    fn built_creative_tabs(
+        &self,
+    ) -> Result<Option<std::sync::Arc<CreativeModeTabs>>, CreativeTabReadError>;
 }
 /// The server host's methods of the `items` area, implemented by the game and reached through [`ServerHost`].
 #[sunrise_mod_api_macros::host_area]
@@ -154,13 +176,6 @@ pub trait ItemsClientHost {
     /// hotbar, then the inventory. The count is cut to one stack.
     #[access(WorldOnly)]
     fn give(&mut self, item: ItemKey, count: u32) -> Result<(), String>;
-    /// Side: client.
-    /// `ItemStack.getHoverName()` as plain text: the custom name, else a written book's non-blank
-    /// title, else the item's name in the client's language (potion contents, a head's owner and
-    /// the `item_name` component as vanilla). No rarity colour or italics. An invalid stack reads
-    /// an empty string.
-    #[access(ClientSetup)]
-    fn hover_name(&self, stack: &ItemStack) -> String;
     /// Side: client.
     /// The creative search tab's final display order, for ranking stacks in inventory sorters.
     /// This requests the same catalog as the creative screen (using the player's permission and
@@ -286,9 +301,10 @@ pub trait ItemsBackend {
     /// Side: server.
     /// How many of `stack` slot `slot` of those `at`'s side reaches holds when empty, as
     /// NeoForge's `isValid` and `getCapacityAsLong` answer: none where it may not go in (a
-    /// furnace's output, `canPlaceItem`), else the slot's limit for it.
+    /// furnace's output, `canPlaceItem`), else the slot's limit for it. `None` asks for the
+    /// general slot limit before item-specific rules.
     #[access(WorldOnly)]
-    fn container_capacity(&self, at: BlockSide, slot: usize, stack: &ItemStack) -> u32;
+    fn container_capacity(&self, at: BlockSide, slot: usize, stack: Option<&ItemStack>) -> u32;
     /// Side: server.
     /// How much of `resource` the slots `at`'s side reaches hold in all: [`STORAGE`]'s
     /// amount for a container or composter port, in one pass. None where the total does

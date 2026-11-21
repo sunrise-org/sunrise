@@ -86,9 +86,9 @@ fn a_type_that_holds_itself_has_a_finite_schema() {
 
 #[test]
 fn the_fingerprint_is_pinned_for_every_build_and_target() {
-    // Two peers compare this number at admission: a native and a wasm build of the same type, and
-    // builds of different game versions, must agree. FNV-1a 64 of `struct { counter: VarInt }`:
-    // "struct", then the field count 1 and the hash of "var_int" as little-endian u64s, computed
+    // Two peers compare this number at admission: builds of the same schema must agree across
+    // platforms and game versions. FNV-1a 64 of `struct { counter: VarInt }`: "struct",
+    // then the field count 1 and the hash of "var_int" as little-endian u64s, computed
     // outside Rust (Python) from that definition.
     assert_eq!(payload_schema::<Counter>(), 0xf0f2_25e6_8e40_be70);
     assert_eq!(

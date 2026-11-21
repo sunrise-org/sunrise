@@ -25,6 +25,14 @@ impl Game<'_> {
         self.refresh_infiniburn();
         self.refresh_creative_search_tags();
         self.install_remote_tags();
+        if self.recipe_ui.server_stations.is_some()
+            && tags
+                .registries
+                .iter()
+                .any(|tags| tags.registry == "minecraft:item")
+        {
+            self.refresh_remote_stonecutter();
+        }
     }
 
     pub(super) fn refresh_creative_search_tags(&mut self) {
@@ -58,11 +66,9 @@ impl Game<'_> {
         };
         if r.registries.tags.is_empty() {
             r.tags = None;
-            r.has_item_tags = false;
             self.refresh_recipe_property_context();
             return;
         }
-        let has_item_tags = r.registries.tags.contains_key("minecraft:item");
         let names = SyncedNames {
             builtin: &r.builtin,
             dynamic: &r.registries,
@@ -92,7 +98,6 @@ impl Game<'_> {
         };
         if let Some(r) = self.remote.as_mut() {
             r.tags = Some(items);
-            r.has_item_tags = has_item_tags;
         }
         self.bind_parts(parts);
         self.refresh_recipe_property_context();
@@ -107,7 +112,9 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use crate::game::native_entity_refs::tests::with_client_game;
-    use mod_api::{Hooks, HostSide, Identifier, ModEntry, TagsUpdateCause, TagsUpdatedEvent};
+    use mod_api::{
+        Hooks, HostSide, Identifier, ModEntry, TagMembers, TagsUpdateCause, TagsUpdatedEvent,
+    };
     use mod_platform::__private::part_tests::block_key;
     use std::sync::{Arc, Mutex};
     use sunrise_protocol::packets::{
@@ -120,8 +127,9 @@ mod tests {
     #[derive(Debug, PartialEq)]
     struct Seen {
         cause: TagsUpdateCause,
-        items: Option<Vec<String>>,
-        fluids: Option<usize>,
+        items: TagMembers<mod_api::ItemKey>,
+        empty_items: TagMembers<mod_api::ItemKey>,
+        fluids: TagMembers<mod_api::FluidKey>,
         stone_in_block_tag: Option<bool>,
         dirt_in_block_tag: Option<bool>,
         stick_in_item_tag: Option<bool>,
@@ -139,11 +147,11 @@ mod tests {
             let tags = host.tags();
             let key = |tag| tags.key(&Identifier::parse(tag).unwrap()).unwrap();
             let stick = host.item_key(&Identifier::parse("minecraft:stick").unwrap());
-            let items = tags.items(key("test:items"));
             self.0.lock().unwrap().push(Seen {
                 cause: event.cause,
-                items: items.map(|keys| keys.into_iter().map(|key| key.id(host)).collect()),
-                fluids: tags.fluids(key("test:fluids")).map(|keys| keys.len()),
+                items: tags.items(key("test:items")),
+                empty_items: tags.items(key("test:empty_items")),
+                fluids: tags.fluids(key("test:fluids")),
                 stone_in_block_tag: host.block_in_tag(block_key("minecraft:stone"), "test:blocks"),
                 dirt_in_block_tag: host.block_in_tag(block_key("minecraft:dirt"), "test:blocks"),
                 stick_in_item_tag: tags.is_in_tag(stick.unwrap(), key("test:items")),
@@ -153,16 +161,20 @@ mod tests {
     }
 
     fn update(builtin: &Builtin, tags: &[(&str, &str, &[&str])]) -> UpdateTags {
-        let id = |registry: &str, name: &str| builtin.get(registry).unwrap().id(name).unwrap();
+        let mut registries = std::collections::BTreeMap::<_, Vec<_>>::new();
+        for &(registry, tag, members) in tags {
+            let names = builtin.get(registry).unwrap();
+            registries.entry(registry).or_default().push(TagEntry {
+                name: tag.into(),
+                ids: members.iter().map(|name| names.id(name).unwrap()).collect(),
+            });
+        }
         UpdateTags {
-            registries: tags
-                .iter()
-                .map(|(registry, tag, members)| RegistryTags {
-                    registry: (*registry).into(),
-                    tags: vec![TagEntry {
-                        name: (*tag).into(),
-                        ids: members.iter().map(|name| id(registry, name)).collect(),
-                    }],
+            registries: registries
+                .into_iter()
+                .map(|(registry, tags)| RegistryTags {
+                    registry: registry.into(),
+                    tags,
                 })
                 .collect(),
         }
@@ -196,10 +208,6 @@ mod tests {
         })
     }
 
-    fn names(names: &[&str]) -> Option<Vec<String>> {
-        Some(names.iter().map(|name| (*name).to_owned()).collect())
-    }
-
     #[test]
     #[ignore = "daily"]
     fn a_client_notice_reads_each_applied_set_of_server_tags() {
@@ -216,6 +224,11 @@ mod tests {
                 let tag =
                     mod_api::__private::tag_key(&Identifier::parse("test:items").unwrap()).unwrap();
                 let stick = mod_api::__private::item_key("minecraft:stick").unwrap();
+                let potion = mod_api::__private::item_key("minecraft:potion").unwrap();
+                let empty_tag =
+                    mod_api::__private::tag_key(&Identifier::parse("test:empty_items").unwrap())
+                        .unwrap();
+                assert_eq!(mod_api::Tags::items(game, tag), TagMembers::Unavailable);
                 let item_reads = |game: &super::Game<'_>| {
                     let reader = LoopReader(&game.loop_context);
                     let view = reader.context();
@@ -243,10 +256,13 @@ mod tests {
                 assert!(game.native_tag_items().is_none());
 
                 game.handle_packet(login()).unwrap();
+                let lava = mod_api::__private::fluid_key("minecraft:lava").unwrap();
                 let received = TagsUpdateCause::ClientPacketReceived {
                     integrated_server: false,
                 };
                 assert_eq!(seen.lock().unwrap()[0].stone_in_block_tag, Some(true));
+                assert_eq!(seen.lock().unwrap()[0].items, TagMembers::Unavailable);
+                assert_eq!(seen.lock().unwrap()[0].stick_in_item_tag, None);
                 assert_eq!(item_reads(game), (None, None, None));
 
                 game.handle_packet(C::UpdateTags(UpdateTags {
@@ -257,19 +273,68 @@ mod tests {
                 }))
                 .unwrap();
                 assert_eq!(item_reads(game), (Some(false), Some(0), None));
+                assert_eq!(seen.lock().unwrap()[1].items, TagMembers::Missing);
+                assert_eq!(seen.lock().unwrap()[1].stick_in_item_tag, Some(false));
 
-                game.handle_packet(C::UpdateTags(update(
-                    &builtin,
-                    &[("minecraft:item", "test:items", &["minecraft:stick"])],
-                )))
+                let mut files: Vec<_> = crate::game::native_tags::PACK_BINDING_CASES
+                    .iter()
+                    .map(|(path, bytes, _)| {
+                        (format!("tags/binding:item/{path}"), vec![bytes.to_vec()])
+                    })
+                    .collect();
+                files.extend([
+                    (
+                        "tags/test:item/items".into(),
+                        vec![br#"{"values":["minecraft:potion","minecraft:stick"]}"#.to_vec()],
+                    ),
+                    (
+                        "tags/test:item/empty_items".into(),
+                        vec![br#"{"values":[]}"#.to_vec()],
+                    ),
+                ]);
+                let overlay = sunrise_world::loot::PackOverlay::new(&files);
+                let root = &game.options.resources;
+                let item_data = &game.res.core.item_data;
+                let sources =
+                    crate::game::lan::sync::server_sources(root, item_data, &overlay).unwrap();
+                let wire = sunrise_client::lan::data::SyncData::load(
+                    root,
+                    &overlay,
+                    item_data.defaults(),
+                    &sources,
+                )
                 .unwrap();
-                assert_eq!(item_reads(game), (Some(true), Some(1), Some(stick)));
+                // Deliver just the item table: the block/fluid snapshots above are independent.
+                let registries = wire
+                    .tags
+                    .registries
+                    .into_iter()
+                    .filter(|tags| tags.registry == "minecraft:item")
+                    .collect();
+                game.handle_packet(C::UpdateTags(UpdateTags { registries }))
+                    .unwrap();
+                for (path, _, is_bound) in crate::game::native_tags::PACK_BINDING_CASES {
+                    let key = mod_api::__private::tag_key(
+                        &Identifier::parse(&format!("binding:{path}")).unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        mod_api::Tags::items(game, key),
+                        if is_bound {
+                            TagMembers::Members(vec![])
+                        } else {
+                            TagMembers::Missing
+                        }
+                    );
+                }
+                assert_eq!(item_reads(game), (Some(true), Some(2), Some(potion)));
                 assert_eq!(
                     seen.lock().unwrap()[2],
                     Seen {
                         cause: received,
-                        items: names(&["minecraft:stick"]),
-                        fluids: Some(1),
+                        items: TagMembers::Members(vec![potion, stick]),
+                        empty_items: TagMembers::Members(vec![]),
+                        fluids: TagMembers::Members(vec![lava]),
                         stone_in_block_tag: Some(true),
                         dirt_in_block_tag: Some(true),
                         stick_in_item_tag: Some(true),
@@ -282,7 +347,7 @@ mod tests {
                     &[("minecraft:block", "test:blocks", &["minecraft:stone"])],
                 )))
                 .unwrap();
-                assert_eq!(item_reads(game), (Some(true), Some(1), Some(stick)));
+                assert_eq!(item_reads(game), (Some(true), Some(2), Some(potion)));
 
                 // An update in play replaces the registries it names and keeps the others.
                 game.handle_packet(C::UpdateTags(update(
@@ -293,14 +358,16 @@ mod tests {
                     ],
                 )))
                 .unwrap();
+                assert_eq!(mod_api::Tags::items(game, empty_tag), TagMembers::Missing);
                 let seen = seen.lock().unwrap();
                 assert_eq!(seen.len(), 5);
                 assert_eq!(
                     seen[4],
                     Seen {
                         cause: received,
-                        items: Some(Vec::new()),
-                        fluids: Some(1),
+                        items: TagMembers::Missing,
+                        empty_items: TagMembers::Missing,
+                        fluids: TagMembers::Members(vec![lava]),
                         stone_in_block_tag: Some(false),
                         dirt_in_block_tag: Some(true),
                         stick_in_item_tag: Some(false),

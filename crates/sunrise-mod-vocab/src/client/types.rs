@@ -321,6 +321,7 @@ pub struct HumanoidRenderState<'a> {
 /// Translation is in blocks and rotation is in degrees (pitch, yaw, roll).
 /// The renderer applies the transform before the ordinary hand and item poses.
 // exhaustive: the game builds it with a literal; mods only read it
+#[derive(Clone)]
 pub struct HandRender<'a> {
     /// The UUID of the player whose hand is drawn.
     pub player: u128,
@@ -580,7 +581,112 @@ pub struct SoundPlay {
     pub attenuation: SoundAttenuation,
     /// It plays at the listener, wherever they move.
     pub relative: bool,
+    /// How the mixer shapes it: its own gain, filters and reverb sends ([`SoundEffects`], with
+    /// every field's range). [`SoundEffects::NONE`] by default, which changes nothing.
+    ///
+    /// Set at the play (`play_local_sound`, or a `play_sound` edit with `starting` true), and
+    /// changed afterwards only on the live refresh of a ticking sound (a `play_sound` edit with
+    /// `starting` false, once a tick). A sound that doesn't tick keeps the effects it started
+    /// with until it ends: nothing changes them after it starts. A value out of range refuses
+    /// the play or the edit ([`SoundEffects::valid`]).
+    pub effects: SoundEffects,
 }
+
+/// How the mixer shapes one sound ([`SoundPlay::effects`]): a gain, a low-pass and a high-pass on
+/// the sound heard directly, and how much of it goes to each of three shared reverbs. A muffled
+/// sound behind a wall takes a low `lowpass` and some `direct` away; a sound in a cave sends to
+/// `cavern`. Every change glides over one output buffer, so moving them each tick never clicks.
+/// [`SoundEffects::NONE`] changes nothing, and a sound with it plays exactly as without effects.
+///
+/// Every field's valid range, inclusive at both ends:
+///
+/// | field | range | off / open |
+/// | --- | --- | --- |
+/// | `gain` | 0 to 1 | 1 |
+/// | `direct` | 0 to 1 | 1 |
+/// | `lowpass` | 20 to 20000 Hz | 20000 (open) |
+/// | `highpass` | 0 to 20000 Hz | 0 (off) |
+/// | `room`, `hall`, `cavern` | 0 to 1 | 0 (no send) |
+/// | `reverb_lowpass` | 20 to 20000 Hz | 20000 (open) |
+///
+/// The cutoffs are in hertz whatever the output's sample rate, so the same value is valid on
+/// every device. NaN, infinities and anything outside a range are refused, never clamped
+/// ([`SoundEffects::valid`]): the `play_sound` edit at the start, the live refresh of a ticking
+/// sound and `play_local_sound` all run that one check, and a refused value plays nothing, as a
+/// bad volume does. Inside the mixer, a direct-sound cutoff above the output's Nyquist frequency
+/// (half its sample rate; the mixer stops at 0.49 of the rate) works as that limit: on a 32 kHz
+/// output, `lowpass` 18000 filters as 15680 would. That limit depends on the device, not on the
+/// value, and is not a refusal.
+///
+/// A plain value with no sound id in it, so other audio may take the same type later.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub struct SoundEffects {
+    /// The whole sound's level, direct and sent, 0 to 1, after its volume and distance. It
+    /// doesn't change how far the sound carries.
+    pub gain: f32,
+    /// The level of the sound heard directly, 0 to 1; the sends keep theirs. Lower it for a
+    /// sound heard only around a corner or through a wall.
+    pub direct: f32,
+    /// The direct sound's low-pass cutoff in hertz, 20 to 20000, independent of the output
+    /// rate: at 20000 it is open (no filter). A two-pole Butterworth (12 dB per octave).
+    pub lowpass: f32,
+    /// The direct sound's high-pass cutoff in hertz, 0 to 20000, independent of the output
+    /// rate: at 0 it is off (no filter). A two-pole Butterworth (12 dB per octave).
+    pub highpass: f32,
+    /// The send to the small room's reverb, 0 to 1: 0.6 s to fall 60 dB, damped above 7000 Hz
+    /// (a house, a corridor).
+    pub room: f32,
+    /// The send to the hall's reverb, 0 to 1: 1.8 s to fall 60 dB, damped above 4500 Hz (a
+    /// large build, a ravine).
+    pub hall: f32,
+    /// The send to the cavern's reverb, 0 to 1: 4.0 s to fall 60 dB, damped above 3000 Hz (a
+    /// deep cave).
+    pub cavern: f32,
+    /// The sends' low-pass cutoff in hertz, 20 to 20000, independent of the output rate: at
+    /// 20000 it is open. A one-pole low-pass (6 dB per octave) on what goes to the reverbs.
+    pub reverb_lowpass: f32,
+}
+
+impl SoundEffects {
+    /// No effects: full level, filters open, no reverb.
+    pub const NONE: Self = Self {
+        gain: 1.0,
+        direct: 1.0,
+        lowpass: 20_000.0,
+        highpass: 0.0,
+        room: 0.0,
+        hall: 0.0,
+        cavern: 0.0,
+        reverb_lowpass: 20_000.0,
+    };
+
+    /// Every value is a finite number in its range: `gain`, `direct`, `room`, `hall` and
+    /// `cavern` 0 to 1; `lowpass` and `reverb_lowpass` 20 to 20000 Hz; `highpass` 0 to 20000 Hz
+    /// (all inclusive). False for NaN, an infinity or anything outside; nothing is clamped. The
+    /// one check behind the `play_sound` edit, the live refresh of a ticking sound and
+    /// `play_local_sound`. The ranges don't depend on the output's sample rate.
+    pub fn valid(&self) -> bool {
+        let within = |v: f32, lo: f32, hi: f32| v.is_finite() && (lo..=hi).contains(&v);
+        [self.gain, self.direct, self.room, self.hall, self.cavern]
+            .iter()
+            .all(|&v| within(v, 0.0, 1.0))
+            && within(self.lowpass, 20.0, 20_000.0)
+            && within(self.highpass, 0.0, 20_000.0)
+            && within(self.reverb_lowpass, 20.0, 20_000.0)
+    }
+}
+
+impl Default for SoundEffects {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+#[cfg(test)]
+#[path = "sound_effects_tests.rs"]
+mod sound_effects_tests;
 
 impl SoundPlay {
     /// Sound event `identifier` at the listener, not fading with distance, on the interface
@@ -596,6 +702,7 @@ impl SoundPlay {
             delay: 0,
             attenuation: SoundAttenuation::None,
             relative: true,
+            effects: SoundEffects::NONE,
         }
     }
     /// Sound event `identifier` at `position` on `source`, fading with distance, at volume
@@ -611,6 +718,7 @@ impl SoundPlay {
             delay: 0,
             attenuation: SoundAttenuation::Linear,
             relative: false,
+            effects: SoundEffects::NONE,
         }
     }
     /// The same sound at `volume`.
@@ -620,6 +728,10 @@ impl SoundPlay {
     /// The same sound at `pitch`.
     pub fn with_pitch(self, pitch: f32) -> Self {
         Self { pitch, ..self }
+    }
+    /// The same sound shaped by `effects`.
+    pub fn with_effects(self, effects: SoundEffects) -> Self {
+        Self { effects, ..self }
     }
     /// The same sound looping, `delay` ticks between its repeats.
     pub fn looping(self, delay: i32) -> Self {
@@ -714,10 +826,54 @@ pub enum ScreenOpening {
     /// `Opening.setCanceled(true)`: the current screen stays open.
     Cancel,
     /// `Opening.setNewScreen(..)`: the answering mod's own screen
-    /// (`Host::mod_screen_open`) opens instead, if it can open there (not over
-    /// the title screen, a book, a prompt or while a world loads; the
-    /// screen that was about to open does then).
+    /// (`Host::mod_screen_open`) opens instead, if it can open there (over the
+    /// world or the title's screens, not over a book, a prompt or while a
+    /// world loads; the screen that was about to open does then). Over the
+    /// title, closing it returns to the title screen.
     ModScreen,
+    /// `Opening.setNewScreen(..)` with a vanilla screen: `target` opens
+    /// instead, as it opens on its own. A target that can't open here (a
+    /// title screen in a world, a world's screen on the title or while the
+    /// world loads) keeps the screen that was about to open, and the game
+    /// logs it.
+    Vanilla(ScreenTarget),
+}
+
+/// A vanilla screen a mod's `screen_opening` answer opens in place of the one
+/// asked for (`ScreenOpening::Vanilla`): the screens that open with no
+/// arguments, named after the `ScreenView.id` they open with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub enum ScreenTarget {
+    /// In a world: the pause menu (`PauseScreen`), `paused`.
+    Pause,
+    /// In a world: the options (`OptionsScreen`), `options`.
+    Options,
+    /// In a world: the player's inventory (`InventoryScreen`; the creative
+    /// inventory in creative mode), `inventory` or `creative`.
+    Inventory,
+    /// In a world: the advancements (`AdvancementsScreen`), `advancements`.
+    Advancements,
+    /// In a world: the statistics (`StatsScreen`), `stats`.
+    Stats,
+    /// In a world: an empty chat box (`ChatScreen`), `chat`.
+    Chat,
+    /// On the title: the title screen itself (`TitleScreen`), `title`.
+    Title,
+    /// On the title: the world list (`SelectWorldScreen`; Create New World
+    /// when there is no world), `world_select`.
+    WorldSelect,
+    /// On the title: Create New World (`CreateWorldScreen`), `world_create`.
+    WorldCreate,
+    /// On the title: the server list (`JoinMultiplayerScreen`), `multiplayer`.
+    Multiplayer,
+    /// On the title: Add Server (`EditServerScreen` for a new server),
+    /// `add_server`; it returns to the server list.
+    AddServer,
+    /// On the title: Direct Connection (`DirectJoinServerScreen`),
+    /// `direct_connect`; it returns to the server list.
+    DirectConnect,
 }
 
 /// Where a mod menu's recipe-book toggle sits: `x` GUI pixels right of the menu's left edge and

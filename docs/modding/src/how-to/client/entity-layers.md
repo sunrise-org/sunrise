@@ -4,7 +4,7 @@ A client mod can draw over a living entity without replacing its model: a mod's 
 backpack, something held or worn. This is the counterpart of NeoForge 26.3's
 `EntityRenderersEvent.AddLayers` and `RenderLayer`: the mod adds a layer to a living entity type or to
 a player model, and the game draws it over every entity of that target in view, after its model and
-the layers before it. Native and wasm mods add and draw layers the same way.
+the layers before it.
 
 ## 1. Write the layer
 
@@ -82,8 +82,7 @@ carry over, so add them each time. The event also tells what renderers this load
   and the vanilla layers, and `parts` is none: the renderer's model has no vanilla parts.
 - An entity whose `render_living_pre` or `render_player_pre` a mod canceled draws none of its layers,
   as NeoForge's canceled `RenderLivingEvent.Pre` skips them.
-- `submit` returns `Ok(())` to keep what it drew. A layer that returns an `Err`, panics, or (in a wasm
-  mod) has its call refused or trapped is logged once and asked no more until the next resource load
+- `submit` returns `Ok(())` to keep what it drew. A layer that returns an `Err` or panics is logged once and asked no more until the next resource load
   adds it again; what it drew that frame is dropped.
 
 ## Where layers draw
@@ -93,8 +92,9 @@ no lookup by name and no scan over the mods; with no layer at all, it checks one
 builds nothing. A humanoid model's posed parts are kept from its draw only for a type or player model
 that has a layer (or while a mod listens to the render hook pair), so a layer on one type costs the
 other mobs nothing. The layers draw on the mobs (vanilla's and the content mods' living types) and on the players,
-this window's own in third person included. The armour stand and the ender dragon have draws of their
-own that don't run layers, so `add` refuses them.
+including this window's own in third person when it holds the camera. In the ordered body pass, layers
+submit in level join order, interleaved with general entity renderer submissions. The armour stand
+and the ender dragon have draws of their own that don't run layers, so `add` refuses them.
 
 `render_living_post` and `render_player_post` are a different moment: they are asked for every mob
 and player in view each frame, after their layers (NeoForge's `RenderLivingEvent.Post` and

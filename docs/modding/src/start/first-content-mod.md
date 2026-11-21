@@ -58,6 +58,7 @@ the file you share.
 
 ## 4. Play it
 
+<!-- quickstart-test: skip, needs the reader's game and prepared resources -->
 ```sh
 cargo sunrise-mod run --game <path to sunrise-client> -- --resources <resources folder> \
   --game-dir target/sunrise-mod/game --home target/sunrise-mod/run/home
@@ -88,7 +89,8 @@ folder is the one that holds `options.txt`; create `sunrise-mods/` if it is miss
 cargo sunrise-mod check target/sunrise-mod/glowing_blocks.smod
 ```
 
-`check` runs what the mod registry runs on a submission ([Publishing your mod](../how-to/publish.md)).
+`check` runs what the mod registry runs on a submission. Follow [Publishing your mod](../how-to/publish.md) to
+submit the `.smod` without binaries; content projects do not generate the native release workflow.
 
 ## Next
 

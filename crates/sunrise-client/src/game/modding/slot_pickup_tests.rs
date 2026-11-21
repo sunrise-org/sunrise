@@ -98,9 +98,13 @@ impl Hooks for PotMod {
 fn pot_type() -> &'static ModMenuType {
     Box::leak(Box::new(ModMenuType {
         id: MENU,
+        owner: "test",
         slots: SLOTS,
+        player_inventory: true,
         data_slots: 0,
+        owned_slots: None,
         results: vec![RESULT],
+        inputs: Vec::new(),
         crafting: None,
         links: None,
     }))
@@ -211,18 +215,21 @@ fn served(game: &crate::game::Game<'_>) -> Shown {
         .map(shown)
         .collect()
 }
-/// Puts the client's copy on the server: the pot's slots, the inventory and the cursor.
+/// Starts both sides with the same pot, inventory and cursor state.
 fn serve(game: &mut crate::game::Game<'_>, menu: &Menu) {
     let pot = game.world.block_entities.get_mut(&POS).unwrap().slots_mut();
     for (s, slot) in pot.iter_mut().enumerate() {
         *slot = menu.slot(s).cloned();
     }
-    game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
+    let hub = &mut game.lan.as_mut().unwrap().hub;
+    let window = hub.guests[0].menu.as_ref().unwrap().window;
+    hub.guests.update(0, |guest| {
         for i in 0..36 {
             guest.inventory[i] = menu.player_item(i).cloned();
         }
         guest.carried = menu.carried.clone();
     });
+    hub.resend_menu(12, window, &game.world);
 }
 
 /// A client's claim that a slot or the cursor holds `count` stone.

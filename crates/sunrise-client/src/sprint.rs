@@ -12,7 +12,7 @@ pub struct Keys {
     pub shift: bool,
     pub sprint: bool,
     /// A movement-input listener explicitly holds sprint off this local tick.
-    /// Server prediction instead replays the client's resulting sprint state.
+    /// A replayed tick (`MotionWorld::replayed_tick`) takes the sprint state it is given instead.
     pub sprint_suppressed: bool,
     /// A controller stick's move vector (`[left, forward]`, Sunrise's own),
     /// used instead of the keys' direction while it is pushed.

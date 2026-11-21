@@ -1,6 +1,6 @@
 # Attachments
 
-Declare every attachment during `Hooks::register`, for native and wasm packages:
+Declare every attachment during `Hooks::register`:
 
 ```rust,ignore
 let _ = registrar.register_attachment_type("example:counter", false);
@@ -8,11 +8,13 @@ let _ = registrar.register_attachment_type("example:counter", false);
 
 The registrar records any refusal even if the returned result is ignored.
 The boolean states whether the attachment syncs to clients. A persistence codec
-alone does not make it synced. Only the owning package may declare an id.
+alone does not make it synced. Only a package that owns the namespace (through
+its manifest or `served_by` delegation) may declare an id.
 The owner's declaration allows other packages to use that id.
 An undeclared use returns `AttachmentError::Undeclared` with the calling package
 id and attachment id. Synced declarations refuse a `side = "server"` package
-before registration is installed. Here “carries a synced attachment” means
+(or a `side = "both"` host declaring into a `side = "server"` served package's
+namespace) before registration is installed. Here “carries a synced attachment” means
 **declares** one: a server package may use A's synced attachment if A is a
 client-compared package. If A is itself a server package, A is refused.
 Load checks declaration conflicts (including foreign namespaces) first, then
@@ -62,7 +64,7 @@ keeps a copy for any holder it is asked about (see the sync paragraph below).
 without a codec) and `InvalidSyncPolicy` (sync without a codec), `HolderBusy` (storage temporarily
 unavailable; retry after the pass) and `UnsupportedHolder` (the holder family has
 no attachment storage; retrying does not help).
-Use the same typed methods in native and wasm mods. `host.attachments()` exposes
+`host.attachments()` exposes
 the host's `AttachmentStore`. Reading clones the value; copying a holder's data
 shares its stored values without cloning them.
 
@@ -96,9 +98,6 @@ can make the next live mutation copy row metadata and shared pointers once;
 retaining many batches keeps their old bindings alive. Values from an incompatible Rust type domain report `TypeMismatch` rather than
 falling back to saved decoding.
 
-
-
-For injection listeners, see [The typed API from injection listeners](injections/typed-api.md).
 
 ## Holders and persistence
 
@@ -173,7 +172,7 @@ spawn carries its synced entries).
 `event.player` UUID. During that hook, `event.original.attachment(host, &COUNTER)` reads
 the old value even when `copy_on_death` is false or the type has no codec;
 `COUNTER.get(host, Holder::Player(event.player))` reads the replacement's retained value
-or fresh default. This works on death and on return from the End, for native and wasm.
+or fresh default. This works on death and on return from the End.
 The original's `position`, `dimension`, `level`, and `inventory_slot` methods read the
 same pre-copy player. Inventory slot numbers are 0–35 for the main inventory,
 100–103 for boots through helmet, and -106 for the off hand. Every original read expires

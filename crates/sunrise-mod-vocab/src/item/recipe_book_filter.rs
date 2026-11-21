@@ -5,8 +5,7 @@ use super::RecipeBookTypeKey;
 /// [`RecipeBooksRegistrar::recipe_book_filter_look`](crate::RecipeBooksRegistrar::recipe_book_filter_look)
 /// (vanilla's `RecipeBookComponent.getFilterButtonTextures` and `getRecipeFilterName`).
 ///
-/// The four sprites are GUI sprite ids (`namespace:path`, resolved under `gui/sprites/` of that
-/// namespace) of a 26 by 16 button. The tooltip is a translation key. It names the state the
+/// The four sprites are GUI sprite ids (`namespace:path`, as the GUI atlas lists them) of a 26 by 16 button. The tooltip is a translation key. It names the state the
 /// button switches to when it is on; the off state keeps vanilla's `gui.recipebook.toggleRecipes.all`.
 /// A book without a declared look keeps the crafting book's button and tooltip.
 #[derive(Clone, Debug, Default, PartialEq, Eq, sunrise_mod_api_macros::Wire)]

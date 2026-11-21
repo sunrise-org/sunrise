@@ -514,6 +514,10 @@ impl Game<'_> {
             };
             let mut m = Mob::new(0, kind, p.position, self.yaw);
             m.head_pitch = self.pitch;
+            // The render state starts with the profile's paired default skin and model.
+            let skin = sunrise_client::tab_list::default_skin(self.own_uuid());
+            m.skin = Some(skin.into());
+            m.slim = skin.contains("/slim/");
             self.player_model = Some(m);
         }
         let pose = p.pose;
@@ -723,9 +727,8 @@ impl Game<'_> {
             .riding
             .and_then(|id| self.boats.iter().find(|b| b.id == id))
         {
-            let delta = (self.yaw - b.yaw + 180.0).rem_euclid(360.0) - 180.0;
-            let clamped = delta.clamp(-105.0, 105.0) - delta;
-            self.yaw += clamped;
+            let (yaw, clamped) = sunrise_client::camera::clamp_boat_rotation(self.yaw, b.yaw);
+            self.yaw = yaw;
             // clampRotation moves `yRotO` with the view.
             self.rope_rot_old.0 += clamped;
         }
@@ -751,20 +754,23 @@ impl Game<'_> {
             m.head_pitch = pitch;
         }
     }
-    /// `LevelExtractor`'s skip of the camera entity: the player's own body
-    /// is drawn unless the camera is in first person, or while it sleeps.
+    /// `LevelExtractor` submits the local player only when it holds the camera, and
+    /// skips the first-person body unless it is sleeping. Studio freecam draws it too.
     pub(super) fn own_body_in_view(&self) -> bool {
-        !self.camera_type.is_first_person() || self.sleeping.is_some() || self.studio.flying()
+        self.studio.flying()
+            || (self.controls_camera()
+                && (!self.camera_type.is_first_person() || self.sleeping.is_some()))
     }
     /// Whether the player's own model shows in the world view (its body or,
     /// while invisible, only its armour and held items).
     pub(super) fn player_model_shown(&self) -> bool {
         (self.own_body_in_view()
-            || shadow_pass_takes_own_model(
-                self.pack_shadow_casters.1,
-                self.pack_ids.is_some(),
-                self.spectator(),
-            ))
+            || (self.controls_camera()
+                && shadow_pass_takes_own_model(
+                    self.occlusion.shadow_casters.1,
+                    self.pack_ids.is_some(),
+                    self.spectator(),
+                )))
             && self
                 .player
                 .as_ref()
@@ -788,6 +794,25 @@ impl Game<'_> {
     pub(super) fn own_body_visible(&self) -> bool {
         body_visible(self.own_invisible(), self.own_team())
     }
+    /// The local player's body in the ordered entity pass.
+    pub(super) fn local_player_geometry(
+        &self,
+        camera: glam::DVec3,
+        out: &mut Vec<sunrise_client_render::render_geometry::Vertex>,
+    ) {
+        let body_in_view = self.own_body_in_view();
+        let start = out.len();
+        self.mark_player(start, !body_in_view);
+        self.mark_motion(start, Self::MOTION_OWN_PLAYER);
+        self.player_model_geometry(camera, self.own_player_alpha(), out);
+        // A native pack's shadow pass alone gets the first-person model (no per-entity draws).
+        if self.pack_ids.is_none() && !body_in_view {
+            self.shadow_only_vertices
+                .borrow_mut()
+                .extend(out.drain(start..));
+        }
+    }
+
     /// The player's model for the entity pass in third person.
     pub(super) fn player_model_geometry(
         &self,

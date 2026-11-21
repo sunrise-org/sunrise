@@ -304,13 +304,13 @@ mod teleport_rider_tests {
             let middle = game.mob_object(61).unwrap();
             assert_eq!(middle.position, Vec3::new(10.0, 71.0, -4.0));
             assert_eq!(middle.yaw, 120.0);
-            assert_eq!(middle.velocity, Vec3::new(0.125, -0.25, 0.375));
+            assert_eq!(middle.velocity, Vec3::ZERO);
             assert_eq!(middle.fall_distance, 3.5);
             assert_eq!(middle.extra.mount, Some(60));
             let leaf = game.mob_object(62).unwrap();
             assert_eq!(leaf.position, Vec3::new(10.0, 72.0, -4.0));
             assert_eq!(leaf.yaw, 150.0);
-            assert_eq!(leaf.velocity, Vec3::new(-0.5, 0.75, -0.25));
+            assert_eq!(leaf.velocity, Vec3::ZERO);
             assert_eq!(leaf.fall_distance, 7.25);
             assert_eq!(leaf.extra.mount, Some(61));
         });

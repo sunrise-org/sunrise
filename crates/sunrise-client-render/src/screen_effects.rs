@@ -170,10 +170,13 @@ fn hand_scale(aspect: f32) -> [f32; 2] {
     [1.0 / (half * aspect), 1.0 / half]
 }
 impl ScreenEffects {
-    /// `Hud.updateVignetteBrightness` and `LocalPlayer.handlePortalTransitionEffect`.
-    pub fn tick(&mut self, eye_brightness: f32, inside_portal: bool) {
+    /// `Hud.updateVignetteBrightness`: a hundredth of the way to 1 less the eye's brightness.
+    pub fn tick_vignette(&mut self, eye_brightness: f32) {
         let target = (1.0 - eye_brightness).clamp(0.0, 1.0);
         self.vignette_brightness += (target - self.vignette_brightness) * 0.01;
+    }
+    /// `LocalPlayer.handlePortalTransitionEffect`.
+    pub fn tick_portal(&mut self, inside_portal: bool) {
         self.o_portal = self.portal;
         let step = if inside_portal {
             0.0125
@@ -380,10 +383,11 @@ mod tests {
     fn portal_intensity_ramps() {
         let mut e = ScreenEffects::default();
         for _ in 0..80 {
-            e.tick(1.0, true);
+            e.tick_portal(true);
+            e.tick_vignette(1.0);
         }
         assert!((e.portal - 1.0).abs() < 1e-5);
-        e.tick(1.0, false);
+        e.tick_portal(false);
         assert!((e.portal - 0.95).abs() < 1e-5);
         // Vignette fades towards 1 - brightness at 1% per tick.
         assert!(e.vignette_brightness < 1.0);

@@ -29,24 +29,29 @@ pub const DEPENDENCY_PATH: &str = "../../native-shared/registry";
 #[derive(Debug, PartialEq, Eq)]
 pub struct Shared {
     crates: BTreeSet<Used>,
+    pub logs: BTreeSet<Used>,
     pub users: BTreeSet<String>,
 }
 
 impl Shared {
-    /// From what each mod links at run time ([`super::registry_inventory::Metadata::runtime_uses`]):
-    /// nothing when one mod or none links such packages, since no mod can then reach one twice.
     /// Every package of every user is shared, not only those two mods have in common: a mod using
     /// only `serde_json` and another using only `serde` would otherwise both carry `serde`.
-    pub fn select(uses: BTreeMap<String, BTreeSet<Used>>) -> Option<Self> {
-        let mut crates = BTreeSet::new();
+    /// Use the same library for the log facade even in a one-mod build: the forwarder needs to
+    /// name that exact crate directly, even if the mod only reaches it through a dependency.
+    pub fn select(uses: BTreeMap<String, BTreeSet<Used>>, logs: BTreeSet<Used>) -> Option<Self> {
+        let mut crates = logs.clone();
         let mut users = BTreeSet::new();
         for (id, used) in uses {
-            if !used.is_empty() {
+            if !used.is_empty() || !logs.is_empty() {
                 crates.extend(used);
                 users.insert(id);
             }
         }
-        (users.len() >= 2).then_some(Self { crates, users })
+        (users.len() >= 2 || !logs.is_empty()).then_some(Self {
+            crates,
+            logs,
+            users,
+        })
     }
 
     /// Refuses a staged crate that already takes the shared library's package name: cargo would
@@ -114,8 +119,20 @@ impl Shared {
         let mut source = String::from(
             "//! Registry crates the mods of this build link, linked once (written by the launcher).\n",
         );
-        for position in 0..self.crates.len() {
-            source.push_str(&format!("pub extern crate {};\n", alias(position)));
+        let mut installs = String::new();
+        for (position, used) in self.crates.iter().enumerate() {
+            let alias = alias(position);
+            source.push_str(&format!("pub extern crate {alias};\n"));
+            if self.logs.contains(used) {
+                let forwarder = include_str!("native_log_forwarder.rs.template");
+                source.push_str(&format!(
+                    "mod log_{position} {{\nuse crate::{alias} as facade;\n{forwarder}\n}}\n"
+                ));
+                installs.push_str(&format!("log_{position}::install();\n"));
+            }
+        }
+        if !installs.is_empty() {
+            source.push_str(&format!("pub fn install_loggers() {{\n{installs}}}\n"));
         }
         source
     }
@@ -264,7 +281,11 @@ mod tests {
         graph.edge("right", "itoa", None, None);
         graph.edge("left", "rand08", None, None);
         graph.edge("right", "rand09", None, None);
-        let shared = Shared::select(graph.uses(&[("left", &left), ("right", &right)])).unwrap();
+        let shared = Shared::select(
+            graph.uses(&[("left", &left), ("right", &right)]),
+            BTreeSet::new(),
+        )
+        .unwrap();
         assert_eq!(
             shared.crates,
             BTreeSet::from([
@@ -342,7 +363,38 @@ mod tests {
         graph.edge("right", "itoa", None, None);
         let uses = graph.uses(&[("left", &left), ("right", &right)]);
         assert!(uses["left"].is_empty(), "{:?}", uses["left"]);
-        assert_eq!(Shared::select(uses), None);
+        assert_eq!(Shared::select(uses, BTreeSet::new()), None);
+    }
+
+    #[test]
+    fn stages_only_the_runtime_facade_at_its_resolved_version() {
+        let mut graph = Graph::new();
+        let root = graph.member("root", "native-api/root");
+        graph.registry("helper", "helper", "1.0.0", "lib");
+        graph.registry("runtime-log", "log", "0.4.34", "lib");
+        graph.registry("dev-log", "log", "0.4.11", "lib");
+        graph.local("local-log", "log", "native-api/root/local-log", "lib");
+        graph.packages.last_mut().unwrap()["version"] = "0.4.12".into();
+        graph.edge("root", "local-log", None, None);
+        graph.edge("root", "helper", None, None);
+        graph.edge("helper", "runtime-log", None, None);
+        graph.edge("root", "dev-log", Some("dev"), None);
+        let shared = Shared::select(
+            graph.uses(&[("root", &root)]),
+            graph.metadata().runtime_logs().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(shared.users, BTreeSet::from(["root".to_owned()]));
+        assert_eq!(shared.logs, BTreeSet::from([used("log", "0.4.34")]));
+        let manifest = shared.manifest();
+        let logs: Vec<_> = manifest["dependencies"]
+            .as_table()
+            .unwrap()
+            .values()
+            .filter(|dep| dep["package"].as_str() == Some("log"))
+            .collect();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0]["version"].as_str(), Some("=0.4.34"));
     }
 
     /// A staged crate already named like the shared library is refused, naming its mod.
@@ -356,7 +408,11 @@ mod tests {
         graph.edge("left", "taken", None, None);
         graph.edge("taken", "itoa", None, None);
         graph.edge("right", "itoa", None, None);
-        let shared = Shared::select(graph.uses(&[("left", &left), ("right", &right)])).unwrap();
+        let shared = Shared::select(
+            graph.uses(&[("left", &left), ("right", &right)]),
+            BTreeSet::new(),
+        )
+        .unwrap();
         let error = shared
             .check_name(&graph.metadata().packages, graph.stage.path())
             .unwrap_err();
@@ -371,6 +427,7 @@ mod tests {
         let out = tempfile::tempdir().unwrap();
         let shared = Shared {
             crates: BTreeSet::from([used("itoa", "1.0.18")]),
+            logs: BTreeSet::new(),
             users: BTreeSet::from(["left".to_owned(), "right".to_owned()]),
         };
         shared.write(out.path()).unwrap();

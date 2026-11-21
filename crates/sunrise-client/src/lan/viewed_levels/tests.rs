@@ -14,7 +14,7 @@ use sunrise_protocol::{
     buf::{Reader, Writer},
     ids::play::clientbound as ids,
     packets::play::Clientbound as C,
-    viewed_levels::{self, Answer, CHANNEL, Level, Message},
+    viewed_levels::{self, Answer, CHANNEL, Level, Message, ScopedPacket},
 };
 
 const NETHER: &str = "minecraft:the_nether";
@@ -161,6 +161,7 @@ fn in_ctx<R>(world: &mut World, f: impl FnOnce(&mut TickCtx) -> R) -> R {
         next_entity: &mut next_entity,
         spawn: [0.5, 64.0, 0.5],
         spawn_angle: [0.0; 2],
+        spawn_dimension: "minecraft:overworld",
         difficulty: 2,
         difficulty_locked: false,
         clock_rate: 1.0,
@@ -210,13 +211,16 @@ fn got(rx: &Receiver<Out>) -> Vec<Got> {
         match Message::decode_in(&payload.data, viewed_levels::REVISION_3).unwrap() {
             Message::Open { level, .. } => out.push(Got::Open(level.number())),
             Message::Close { level } => out.push(Got::Close(level.number())),
-            Message::Run { level, packets } => {
-                out.extend(packets.into_iter().map(|(id, body)| Got::Wrapped {
+            Message::Run { level, packets } => out.extend(packets.into_iter().map(|packet| {
+                let ScopedPacket::Play(id, body) = packet else {
+                    panic!("expected a vanilla packet");
+                };
+                Got::Wrapped {
                     level: level.number(),
                     id,
                     body: body.to_vec(),
-                }))
-            }
+                }
+            })),
             Message::Swap { .. } => unreachable!("no swap below revision 4"),
         }
     }
@@ -615,9 +619,29 @@ fn a_column_too_large_to_wrap_is_not_counted_as_sent() {
     let mut oversized = Writer::new();
     oversized.varint(ids::LEVEL_CHUNK_WITH_LIGHT);
     oversized.bytes(&vec![0; 1 << 21]);
-    let taken = [(3, ()), (5, ()), (8, ())];
+    // The rejected column has a valid section payload. It must not escape
+    // into the next accepted column's run.
+    use sunrise_protocol::connection_groups::{self, Cell, Entry, Section};
+    let group = || {
+        C::CustomPayload(sunrise_protocol::packets::custom_payload::CustomPayload {
+            channel: connection_groups::CHANNEL.into(),
+            data: Section {
+                pos: [9, 4, 1],
+                entries: vec![Entry {
+                    cell: Cell::of([0, 0, 0]),
+                    group: Some(30),
+                }],
+            }
+            .encode()
+            .unwrap(),
+        })
+        .encode()
+    };
+    let taken = [(3, false), (5, true), (8, false)];
     let bodies = [body((0, 0)), oversized.data.clone(), body((1, 0))];
-    let (payloads, sent) = batch_runs(Level::Index(NETHER_INDEX), &taken, &bodies);
+    let (payloads, sent) = batch_runs(Level::Index(NETHER_INDEX), &taken, &bodies, |grouped| {
+        if *grouped { vec![group()] } else { Vec::new() }
+    });
     assert_eq!(sent, vec![3, 8], "the queue places of the columns sent");
     let mut columns = Vec::new();
     for payload in &payloads {
@@ -632,7 +656,10 @@ fn a_column_too_large_to_wrap_is_not_counted_as_sent() {
             panic!("not a run");
         };
         assert_eq!(level, Level::Index(NETHER_INDEX));
-        for (id, body) in packets {
+        for packet in packets {
+            let ScopedPacket::Play(id, body) = packet else {
+                panic!("expected a vanilla packet");
+            };
             let Ok(C::LevelChunkWithLight(c)) = C::decode(id, body) else {
                 panic!("not a chunk");
             };
@@ -640,7 +667,12 @@ fn a_column_too_large_to_wrap_is_not_counted_as_sent() {
         }
     }
     assert_eq!(columns, vec![(0, 0), (1, 0)]);
-    let (payloads, sent) = batch_runs(Level::Index(NETHER_INDEX), &[(0, ())], &[oversized.data]);
+    let (payloads, sent) = batch_runs(
+        Level::Index(NETHER_INDEX),
+        &[(0, ())],
+        &[oversized.data],
+        |_| vec![group()],
+    );
     assert!(payloads.is_empty() && sent.is_empty(), "no empty batch");
 }
 
@@ -938,6 +970,8 @@ fn a_viewed_sound_reaches_a_viewer_holding_its_chunk_within_its_distance() {
             source: 5,
             entity: Some(40),
             except_entity: None,
+            seed: 0,
+            particles_before: 0,
         },
         None,
     );
@@ -1187,7 +1221,15 @@ fn got_bound(rx: &Receiver<Out>) -> Vec<Bound> {
                 }
                 Message::Run { level, packets } => {
                     let (slot, epoch) = binding(level);
-                    let ids = packets.iter().map(|(id, _)| *id).collect();
+                    let ids = packets
+                        .iter()
+                        .map(|packet| match packet {
+                            ScopedPacket::Play(id, _) => *id,
+                            ScopedPacket::ConnectionGroups(_) => {
+                                panic!("expected a vanilla packet")
+                            }
+                        })
+                        .collect();
                     Bound::Run { slot, epoch, ids }
                 }
                 Message::Close { level } => {

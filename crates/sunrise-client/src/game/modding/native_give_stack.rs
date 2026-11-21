@@ -53,7 +53,7 @@ impl Game<'_> {
         {
             return None;
         }
-        let stack = sunrise_items::item_nbt::item_from_nbt(&tag)?;
+        let stack = sunrise_items::item_nbt::item_from_persistent_nbt(&tag)?;
         self.items().get(&stack.item).is_some().then_some(stack)
     }
 }

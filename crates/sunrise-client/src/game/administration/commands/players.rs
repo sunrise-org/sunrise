@@ -158,12 +158,12 @@ impl Game<'_> {
     /// The guests a selector looks at, in join order (`PlayerList.getPlayers`),
     /// the one in place as `Target::Player`: all of them, or those in the
     /// source's level when it limits the search to a place
-    /// (`isWorldLimited`); `@e` and `@n` skip the dead (`Entity::isAlive`).
-    pub(super) fn player_candidates(&self, s: &Selector) -> Vec<Target> {
+    /// (`isWorldLimited`); with only the `Entity::isAlive` ones when
+    /// `alive_only` (the built-in `@e` and `@n`).
+    pub(super) fn player_candidates(&self, s: &Selector, alive_only: bool) -> Vec<Target> {
         let limited = s.distance.is_some()
             || s.pos.iter().any(Option::is_some)
             || s.delta.iter().any(Option::is_some);
-        let alive = matches!(s.kind, 'e' | 'n');
         let here = self.dim.id();
         let in_place = self.lan_acting.filter(|_| self.player.is_some());
         self.lan
@@ -171,7 +171,7 @@ impl Game<'_> {
             .flat_map(|h| h.hub.online_players())
             .filter(|g| self.native_command_player_available(g))
             .filter(|g| !limited || g.dimension == here || Some(g.conn) == in_place)
-            .filter(|g| !alive || (!g.dead && g.health > 0.0))
+            .filter(|g| !alive_only || (!g.dead && g.health > 0.0))
             .map(|g| {
                 if Some(g.conn) == in_place {
                     Target::Player

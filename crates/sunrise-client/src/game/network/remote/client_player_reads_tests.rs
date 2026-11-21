@@ -53,6 +53,12 @@ fn client_player_reads_answer_from_the_local_players_copy() {
         assert_eq!(player.is_creative(game), Some(false));
         assert_eq!(player.is_spectator(game), Some(false));
         assert_eq!(player.may_build(game), Some(false));
+        // The parameter rounds (Mth.floor(param + 0.5F)): 0.6 is creative, 1.6 adventure again.
+        for (param, mode) in [(0.6, GameMode::Creative), (1.6, GameMode::Adventure)] {
+            game.handle_packet(C::GameEvent(play::GameEvent { event: 3, param }))
+                .unwrap();
+            assert_eq!(player.game_mode(game), Some(mode), "{param}");
+        }
         game.handle_packet(C::PlayerAbilities(play::PlayerAbilities {
             flags: 4 | 2,
             flying_speed: 0.1,
@@ -63,6 +69,16 @@ fn client_player_reads_answer_from_the_local_players_copy() {
         assert!(abilities.may_fly && abilities.flying && !abilities.invulnerable);
         assert!(!abilities.may_build);
         assert_eq!((abilities.fly_speed, abilities.walk_speed), (0.1, 0.2));
+
+        // An invalid game mode falls back to Survival in the game and its remote snapshot.
+        game.handle_packet(C::GameEvent(play::GameEvent {
+            event: 3,
+            param: 4.0,
+        }))
+        .unwrap();
+        assert_eq!(game.mode_id(), 0);
+        assert_eq!(game.remote.as_ref().unwrap().game_mode, 0);
+        assert_eq!(player.game_mode(game), Some(GameMode::Survival));
 
         // Food from SetHealth; the client keeps no exhaustion.
         game.handle_packet(C::SetHealth(play::SetHealth {

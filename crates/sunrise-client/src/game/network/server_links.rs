@@ -190,9 +190,9 @@ impl Game<'_> {
         batch.sprite_scaled(
             atlas,
             if wh {
-                "gui/sprites/dialog/warning_button_highlighted"
+                "dialog/warning_button_highlighted"
             } else {
-                "gui/sprites/dialog/warning_button"
+                "dialog/warning_button"
             },
             wx,
             wy,

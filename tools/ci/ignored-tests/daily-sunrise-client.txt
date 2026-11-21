@@ -3,6 +3,8 @@
 sunrise-client game::advancements::icons::tests::advancement_icons_reach_local_and_remote_ui_surfaces lib daily game-boot
 sunrise-client game::api_values::loot_values::query_tests::queried_ability_parts_grant_and_deny lib daily game-boot
 sunrise-client game::api_values::read_stack_tests::draw_consumers_render_nonresident_stacks lib daily game-boot
+sunrise-client game::boarding::tests::the_own_player_boards_behind_a_guest_and_a_pig lib daily resources
+sunrise-client game::boarding::tests::the_own_player_in_the_third_seat_of_a_happy_ghast_sits_there lib daily resources
 sunrise-client game::commands::modprofile::tests::modprofile_state_and_report_side_effects lib daily child-process
 sunrise-client game::commands::selector_bounds_tests::actual_selector_uses_body_overlap_but_distance_stays_at_the_origin lib daily game-boot
 sunrise-client game::commands::world_cmds::allay_owner_damage_tests::allay_owner_adapters_compare_the_actual_player_uuid lib daily game-boot
@@ -43,11 +45,19 @@ sunrise-client game::gui_clips::dispatch_tests::a_hook_call_clips_what_its_mod_d
 sunrise-client game::gui_entity::tests::a_screen_draws_a_mob_by_type_once_and_refuses_what_it_cant_draw lib daily game-boot
 sunrise-client game::host::draw::tests::a_wrapped_label_measures_and_draws_its_own_height lib daily resources
 sunrise-client game::host::draw::tests::scaled_text_is_the_text_scaled_about_its_corner lib daily game-boot
+sunrise-client game::lan_actions::tick::equipment_tick_tests::a_new_slot_takes_its_items_attributes_at_the_guests_tick lib daily resources
+sunrise-client game::lan_actions::tick::equipment_tick_tests::gear_swapped_and_swapped_back_before_the_tick_keeps_its_modifiers lib daily resources
 sunrise-client game::launch_api::tests::developer_offline_never_consumes_inherited_sessions lib daily child-process
 sunrise-client game::maps::tests::map_on_banner_in_adventure_mode_honours_can_place_on lib daily game-boot
 sunrise-client game::mods::tests::a_shared_missing_jar_stops_native_load_and_refuses_each_content_mod_row lib daily child-process
 sunrise-client game::mods::tests::content_overlay_validates_dependencies_and_orders_layers lib daily child-process
 sunrise-client game::mods::tests::native_content_follows_the_build_and_misplaced_content_follows_its_selection lib daily child-process
+sunrise-client game::mounts::ride_dismount_tests::a_click_on_a_full_happy_ghast_seats_no_fifth_rider lib daily resources
+sunrise-client game::mounts::ride_dismount_tests::a_click_on_a_harnessed_ghast_keeps_the_players_view lib daily resources
+sunrise-client game::mounts::ride_dismount_tests::a_mob_on_a_ghastling_sits_at_the_scaled_seat lib daily resources
+sunrise-client game::mounts::ride_dismount_tests::a_mob_that_boards_a_happy_ghast_after_its_player_takes_the_next_seat lib daily resources
+sunrise-client game::mounts::ride_dismount_tests::a_ride_mount_keeps_the_players_view lib daily resources
+sunrise-client game::mounts::sneak_dismount_tests::a_destroyed_vehicle_asks_once_to_let_its_local_rider_go lib daily resources
 sunrise-client game::mounts::tests::a_camel_husk_keeps_itself_once_clicked lib daily game-boot
 sunrise-client game::mounts::tests::a_chest_on_a_donkey_or_mule_plays_its_own_sound_at_full_volume lib daily game-boot
 sunrise-client game::mounts::tests::feeding_a_mount_draws_from_its_own_random_and_posts_eat lib daily game-boot
@@ -55,7 +65,6 @@ sunrise-client game::mounts::tests::saddling_and_armouring_play_at_pitch_one_fro
 sunrise-client game::native_block_entity_transform_tests::structure_transform_placement_rotations_mirrors_unset_and_refusal lib daily child-process
 sunrise-client game::native_chat_recipients_tests::a_chat_line_hidden_from_one_receiver_reaches_the_others lib daily resources
 sunrise-client game::native_chat_recipients_tests::say_and_me_are_asked_per_receiver_and_a_whisper_is_not lib daily resources
-sunrise-client game::native_config_files::tests::compiled_wasm_bulk_files_use_actual_game_filesystem_roots lib daily wasm-fixture
 sunrise-client game::native_config_files::tests::world_bulk_files_survive_save_reload_backup_and_world_deletion lib daily game-boot
 sunrise-client game::native_datafix_tests::a_mods_host_upgrades_old_data_and_refuses_by_name lib daily game-boot
 sunrise-client game::native_disconnect_tests::a_client_mod_leaves_at_the_end_of_the_frame_with_its_reason lib daily resources
@@ -170,7 +179,6 @@ sunrise-client game::remote::interaction_event_tests::mapping_press_tests::input
 sunrise-client game::remote::interaction_event_tests::mapping_press_tests::opening_a_screen_releases_mod_holds lib daily resources
 sunrise-client game::remote::interaction_event_tests::mapping_press_tests::the_host_presses_by_name_and_refuses_the_others lib daily resources
 sunrise-client game::remote::interaction_event_tests::predicted_use_tests::native_client_prediction_owns_the_hand_loop lib daily game-boot
-sunrise-client game::remote::interaction_event_tests::predicted_use_tests::wasm_client_prediction_owns_the_hand_loop lib daily wasm-fixture
 sunrise-client game::remote::tests::predicted_block_notice_tests::applied_placement_carries_predicted_true lib daily game-boot
 sunrise-client game::remote::tests::predicted_block_notice_tests::confirmed_prediction_has_no_duplicate lib daily game-boot
 sunrise-client game::remote::tests::predicted_block_notice_tests::denied_prediction_notifies_predicted_to_server_once lib daily game-boot
@@ -237,3 +245,5 @@ sunrise-client game::wind::wind_charged_tests::a_mobs_burst_leaves_vehicles_alon
 sunrise-client game::wind::wind_charged_tests::a_silent_wind_charge_bursts_without_a_sound lib daily game-boot
 sunrise-client game::wind::wind_charged_tests::a_wind_charged_mob_bursts_with_the_breezes_sound_unless_it_is_silent lib daily game-boot
 sunrise-client game::wither_star_tests::a_withers_nether_star_lives_12000_ticks lib daily game-boot
+sunrise-client game::beacon_cull_tests::a_beam_draws_inside_the_render_distance_only_and_leaves_with_its_column lib daily resources
+sunrise-client game::mod_raycast_tests::mod_raycasts_hit_loaded_blocks_only_with_far_terrain_on_or_off lib daily resources

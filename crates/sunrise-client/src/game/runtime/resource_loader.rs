@@ -189,7 +189,33 @@ pub(super) struct Loaded {
 /// ready, then the core bundle with a handle to the rest worker.
 pub(super) enum LoaderMsg {
     Ui(UiResources, PathBuf),
-    Done(std::result::Result<Loaded, String>),
+    Done(std::result::Result<Loaded, LoaderFailure>),
+}
+
+impl LoaderMsg {
+    pub(super) fn done(result: Result<Loaded>) -> Self {
+        Self::Done(result.map_err(
+            |error| match error.downcast::<mods::DeclarationFailures>() {
+                Ok(refusals) => LoaderFailure::Declarations(*refusals),
+                Err(error) => LoaderFailure::Other(error.to_string()),
+            },
+        ))
+    }
+}
+
+/// Only the startup report needs its error type preserved across threads.
+pub(super) enum LoaderFailure {
+    Declarations(mods::DeclarationFailures),
+    Other(String),
+}
+
+impl From<LoaderFailure> for Box<dyn std::error::Error> {
+    fn from(error: LoaderFailure) -> Self {
+        match error {
+            LoaderFailure::Declarations(refusals) => refusals.into(),
+            LoaderFailure::Other(message) => message.into(),
+        }
+    }
 }
 
 pub(super) enum PendingWorldEntry {

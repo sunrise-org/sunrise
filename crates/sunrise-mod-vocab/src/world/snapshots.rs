@@ -1,5 +1,5 @@
 //! Owned placement and loot data; none of these snapshots borrows an engine context.
-use crate::{BlockPos, Direction, ItemKey};
+use crate::{BlockPos, Direction, ItemKey, PlayerRef};
 use sunrise_core::nbt::Tag;
 
 /// Inputs to selecting a block's placement state.
@@ -45,6 +45,36 @@ impl PlacementContext {
             item,
             replace_clicked: false,
         }
+    }
+}
+
+/// Vanilla's `BlockPlaceContext.getPlayer()` and the placer's eyes at the time of the click.
+/// The engine reads the acting or locally predicted player's eyes before borrowing the level.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct PlacementPlacer {
+    player: PlayerRef,
+    eye_position: [f64; 3],
+}
+
+impl PlacementPlacer {
+    // hidden: only the engine constructs the snapshot of the acting player.
+    #[doc(hidden)]
+    pub fn new(player: PlayerRef, eye_position: [f64; 3]) -> Self {
+        Self {
+            player,
+            eye_position,
+        }
+    }
+
+    /// The placing player on this logical side.
+    pub fn player(self) -> PlayerRef {
+        self.player
+    }
+
+    /// World-space eye position when this placement was attempted.
+    pub fn eye_position(self) -> [f64; 3] {
+        self.eye_position
     }
 }
 

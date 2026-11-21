@@ -430,6 +430,7 @@ impl Game<'_> {
                 if p.owner == Some(Who::Player) {
                     self.remember_mob_player_credit(id);
                 }
+                self.settle_mob_hurt(id);
                 if hurt {
                     self.shot_post_attack(p, who, p.kind.id(), "minecraft:wind_charge");
                 }
@@ -569,7 +570,7 @@ impl Game<'_> {
             spared: None,
         };
         let source = self.creatures.wind_source;
-        let done = self.ordered.done;
+        let (done, announced) = (self.ordered.done, self.ordered.announced);
         let mut late = Vec::new();
         let mut entities = self.take_entities();
         for_each_entity_mut!(entities, entity => {
@@ -594,11 +595,14 @@ impl Game<'_> {
             // ServerLevel ticks entities in the order they joined. One that
             // joined before the charge has ticked by now in vanilla, so the
             // push is for its next tick; here its kind ticks after the
-            // projectiles, so the push waits for that tick to run.
-            // Joined before the charge and not ticked yet: the push is for its next tick.
+            // projectiles, so the push waits for that tick to run. An orb
+            // can advance the early cursor past an unannounced TNT or falling
+            // block; that entity still waits for the late pass.
+            let joined = entity.join_seq();
             let waiting = entity.ticks_after_projectiles()
-                && done.is_none_or(|d| entity.join_seq() > d);
-            if push_waits_for_tick(waiting, entity.join_seq(), source) {
+                && (done.is_none_or(|d| joined > d)
+                    || (joined >= announced && entity.waits_for_spawn_packet()));
+            if push_waits_for_tick(waiting, joined, source) {
                 late.push((entity.id(), push));
             } else {
                 entity.push_from_explosion(push);
@@ -999,7 +1003,7 @@ mod tests {
             velocity: Vec3::ZERO,
             fuse: 80,
             ticks: 0,
-            on_ground: false,
+            ground: Default::default(),
             fall_distance: 0.0,
             stuck: Vec3::ZERO,
             in_water: false,
@@ -1015,6 +1019,71 @@ mod tests {
         let arrow = Projectile::new(ProjectileKind::Snowball, Vec3::ZERO, None);
         assert!(!Entity::ticks_after_projectiles(&arrow));
     }
+    #[test]
+    #[ignore = "daily"]
+    fn a_wind_push_waits_for_fresh_tnt_even_after_a_later_orb_ticked() {
+        use std::sync::Arc;
+        use sunrise_client::{chunk::Chunk, join_seq::JoinSeq};
+        use sunrise_core::position::ChunkPos;
+
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            game.build_registries();
+            game.set_allow_commands(true);
+            let stone = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:stone")
+                .unwrap();
+            let mut chunk = Chunk::empty(0, 0);
+            chunk.set(4, 70, 8, stone.0);
+            game.world.chunks.insert((0, 0), Arc::new(chunk));
+            game.block_ticks
+                .add_empty_chunk(ChunkPos::new(0, 0))
+                .unwrap();
+            assert!(game.run_command("forceload add 0 0"));
+            game.tickets.update(None);
+
+            game.ordered.announced = JoinSeq::upcoming();
+            assert!(
+                game.run_command(
+                    "summon tnt 8.25 70.5 8.5 {fuse:80,Motion:[0d,0d,0d],NoGravity:1b}"
+                )
+            );
+            assert!(game.run_command("summon experience_orb 12.5 70.5 12.5 {Value:1}"));
+            let at = Vec3::new(5.0, 70.5, 8.5);
+            game.add_projectile(Projectile::new(ProjectileKind::BreezeWindCharge, at, None));
+            let charge = game.creatures.projectiles[0].clone();
+            game.begin_ordered_ticks();
+            game.run_ordered_ticks(charge.join_seq(), false).unwrap();
+            assert_eq!(game.ordered.done, Some(game.orbs[0].join_seq()));
+            assert_eq!(game.orbs[0].age, 1);
+            assert_eq!(game.tnts[0].fuse, 80);
+
+            game.wind_charge_hit(
+                &charge,
+                Hit::Block {
+                    pos: [4, 70, 8],
+                    at,
+                    face: [1, 0, 0],
+                },
+            )
+            .unwrap();
+            game.run_ordered_ticks(JoinSeq::MAX, true).unwrap();
+            assert_eq!(game.tnts[0].fuse, 79);
+            assert_eq!(game.tnts[0].position.x, 8.25);
+            game.apply_late_wind_pushes();
+            // Three blocks from the centre, unobstructed: (1 - 3 / 6) due east.
+            assert_eq!(game.tnts[0].velocity.x, 0.5);
+
+            game.ordered.announced = JoinSeq::upcoming();
+            game.begin_ordered_ticks();
+            game.run_ordered_ticks(charge.join_seq(), false).unwrap();
+            assert_eq!(game.tnts[0].fuse, 78);
+            assert_eq!(game.tnts[0].position.x, 8.75);
+        });
+    }
+
     #[test]
     fn a_deflected_projectile_turns_around_at_half_speed() {
         let mut p = Projectile::new(ProjectileKind::Snowball, Vec3::ZERO, None);

@@ -2,7 +2,9 @@
 //! progress (`PlayerAdvancements`) and the predicates criteria test
 //! (`EntityPredicate`, `ItemPredicate`, `LocationPredicate`, the loot
 //! conditions advancements use).
+mod data;
 mod state_ranges;
+use data::parse;
 
 use serde_json::Value;
 use std::{
@@ -140,6 +142,30 @@ pub fn facts_asked_in(v: &Value) -> FactsAsked {
         }
     }
     asked
+}
+/// Whether a predicate, a list of conditions or an item modifier may read an
+/// entity's scores: it holds an `entity_scores` leaf, or a `minecraft:reference`
+/// to a predicate file that may.
+pub fn asks_scores(v: &Value) -> bool {
+    let mut todo = vec![v];
+    while let Some(v) = todo.pop() {
+        match v {
+            Value::Array(list) => todo.extend(list),
+            Value::Object(o) => {
+                let kind = (o.get("condition").or_else(|| o.get("type")))
+                    .or_else(|| o.get("function"))
+                    .and_then(Value::as_str);
+                if kind.is_some_and(|k| {
+                    matches!(&*full(k), "minecraft:entity_scores" | "minecraft:reference")
+                }) {
+                    return true;
+                }
+                todo.extend(o.values());
+            }
+            _ => {}
+        }
+    }
+    false
 }
 fn frame(v: &Value) -> Frame {
     match v.as_str() {
@@ -432,67 +458,6 @@ impl InventoryIndex {
         out.dedup();
         out
     }
-}
-fn parse(id: &str, v: &Value) -> Option<Advancement> {
-    let criteria: Vec<Criterion> = v["criteria"]
-        .as_object()?
-        .iter()
-        .map(|(name, c)| Criterion {
-            name: name.clone(),
-            trigger: c["trigger"]
-                .as_str()
-                .map_or(String::new(), |t| full(t).into_owned()),
-            conditions: LazyJson::new(&c["conditions"]),
-        })
-        .collect();
-    let requirements = match v["requirements"].as_array() {
-        Some(r) => r
-            .iter()
-            .map(|group| {
-                group
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|s| s.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .collect(),
-        // AdvancementRequirements.allOf: every criterion.
-        None => criteria.iter().map(|c| vec![c.name.clone()]).collect(),
-    };
-    let d = &v["display"];
-    let display = d.is_object().then(|| Display {
-        icon: crate::crafting::recipe_result(&d["icon"])
-            .unwrap_or_else(|| crate::items::ItemStack::new("minecraft:air", 1)),
-        title: d["title"].clone(),
-        description: d["description"].clone(),
-        frame: frame(&d["frame"]),
-        background: d["background"].as_str().map(str::to_owned),
-        show_toast: d["show_toast"].as_bool().unwrap_or(true),
-        announce: d["announce_to_chat"].as_bool().unwrap_or(true),
-        hidden: d["hidden"].as_bool().unwrap_or(false),
-    });
-    let r = &v["rewards"];
-    let strings = |v: &Value| -> Vec<String> {
-        v.as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|s| s.as_str().map(str::to_owned))
-            .collect()
-    };
-    Some(Advancement {
-        id: id.to_owned(),
-        parent: v["parent"].as_str().map(|p| full(p).into_owned()),
-        display,
-        criteria,
-        requirements,
-        rewards: Rewards {
-            recipes: strings(&r["recipes"]),
-            experience: r["experience"].as_i64().unwrap_or(0) as i32,
-            loot: strings(&r["loot"]),
-            function: r["function"].as_str().map(|id| full(id).into_owned()),
-        },
-    })
 }
 
 /// `CriterionProgress`'s date as saved, "yyyy-MM-dd HH:mm:ss Z", in UTC.
@@ -946,6 +911,33 @@ pub fn block(v: &Value, pos: [i32; 3], w: &dyn World) -> bool {
     }
     true
 }
+/// Where `LocationCheck.test` looks: the block centre of `block_pos` (else
+/// `origin`) plus the check's offsets.
+pub fn location_check_position(
+    v: &Value,
+    block_pos: Option<[i32; 3]>,
+    origin: [f64; 3],
+) -> [f64; 3] {
+    let base = block_pos.map_or(origin, |b| b.map(|c| f64::from(c) + 0.5));
+    [
+        base[0] + v["offsetX"].as_f64().unwrap_or(0.0),
+        base[1] + v["offsetY"].as_f64().unwrap_or(0.0),
+        base[2] + v["offsetZ"].as_f64().unwrap_or(0.0),
+    ]
+}
+/// `LocationCheck.test`: [`location`] at [`location_check_position`].
+pub fn location_check(
+    v: &Value,
+    block_pos: Option<[i32; 3]>,
+    origin: [f64; 3],
+    w: &dyn World,
+) -> bool {
+    location(
+        &v["predicate"],
+        location_check_position(v, block_pos, origin),
+        w,
+    )
+}
 /// `LocationPredicate`.
 pub fn location(v: &Value, p: [f64; 3], w: &dyn World) -> bool {
     if v.is_null() {
@@ -1306,6 +1298,8 @@ pub fn killed_by_arrow(
             origin: me.position,
             tool: None,
             block_pos: None,
+            target: None,
+            interacting: None,
         }
     }
     if !conditions(&c["player"], &ctx(me, me), w) {
@@ -1341,6 +1335,8 @@ pub fn killed(
         origin: me.position,
         tool: None,
         block_pos: None,
+        target: None,
+        interacting: None,
     };
     let ectx = Entities {
         this: Some(target),
@@ -1433,6 +1429,23 @@ pub struct Entities<'a> {
     pub origin: [f64; 3],
     pub tool: Option<&'a ItemView>,
     pub block_pos: Option<[i32; 3]>,
+    /// `LootContextParams.TARGET_ENTITY`.
+    pub target: Option<&'a EntityView>,
+    /// `LootContextParams.INTERACTING_ENTITY`.
+    pub interacting: Option<&'a EntityView>,
+}
+impl<'a> Entities<'a> {
+    /// A `LootContext.EntityTarget` of this context; the targets a context
+    /// does not carry (`attacker`, `direct_attacker`, `attacking_player`)
+    /// select nothing.
+    fn entity(&self, name: &str) -> Option<&'a EntityView> {
+        match name {
+            "this" => self.this,
+            "target_entity" => self.target,
+            "interacting_entity" => self.interacting,
+            _ => None,
+        }
+    }
 }
 /// Conditions shared by item/entity interactions and thrown-item pickups.
 pub fn item_entity(
@@ -1447,6 +1460,8 @@ pub fn item_entity(
         origin: player.position,
         tool: None,
         block_pos: None,
+        target: None,
+        interacting: None,
     };
     let ectx = Entities {
         this: Some(target),
@@ -1595,8 +1610,10 @@ fn condition_leaf(v: &Value, ctx: &Entities, w: &dyn World) -> bool {
             match &*full(ty) {
                 // EntityHasScoreCondition.test/hasScore: missing objective or
                 // score fails; this bounded path supports constant integer ranges.
-                "minecraft:entity_scores" if v["entity"].as_str() == Some("this") => {
-                    let scores = ctx.this.and_then(|e| e.scores.as_ref());
+                "minecraft:entity_scores" => {
+                    let scores = ctx
+                        .entity(v["entity"].as_str().unwrap_or("this"))
+                        .and_then(|e| e.scores.as_ref());
                     v["scores"].as_object().is_some_and(|tests| {
                         scores.is_some_and(|scores| {
                             tests.iter().all(|(objective, range)| {
@@ -1618,27 +1635,9 @@ fn condition_leaf(v: &Value, ctx: &Entities, w: &dyn World) -> bool {
                     })
                 }
                 "minecraft:entity_properties" => ctx
-                    .this
+                    .entity(v["entity"].as_str().unwrap_or("this"))
                     .is_some_and(|e| entity(&v["predicate"], e, w, ctx.origin)),
-                "minecraft:location_check" => {
-                    let base = ctx.block_pos.map_or(ctx.origin, |b| {
-                        [
-                            f64::from(b[0]) + 0.5,
-                            f64::from(b[1]) + 0.5,
-                            f64::from(b[2]) + 0.5,
-                        ]
-                    });
-                    let off = [
-                        v["offsetX"].as_f64().unwrap_or(0.0),
-                        v["offsetY"].as_f64().unwrap_or(0.0),
-                        v["offsetZ"].as_f64().unwrap_or(0.0),
-                    ];
-                    location(
-                        &v["predicate"],
-                        [base[0] + off[0], base[1] + off[1], base[2] + off[2]],
-                        w,
-                    )
-                }
+                "minecraft:location_check" => location_check(v, ctx.block_pos, ctx.origin, w),
                 "minecraft:match_block" => ctx.block_pos.is_some_and(|b| block(v, b, w)),
                 "minecraft:block_state_property" => ctx.block_pos.is_some_and(|b| {
                     let mut pred = serde_json::Map::new();
@@ -1988,7 +1987,7 @@ mod tests {
         let off = Tree::shared(&data, &sunrise_world::loot::PackOverlay::NONE);
         let on_overlay = sunrise_world::loot::PackOverlay {
             conditions: &enabled,
-            ..sunrise_world::loot::PackOverlay::NONE
+            ..sunrise_world::loot::PackOverlay::default()
         };
         let on = Tree::shared(&data, &on_overlay);
         assert!(off.get("demo:entry").is_none());
@@ -2213,6 +2212,8 @@ mod tests {
             origin: [0.0; 3],
             tool: None,
             block_pos: None,
+            target: None,
+            interacting: None,
         };
         for (mut predicate, expected) in [
             (serde_json::json!({}), true),
@@ -2727,6 +2728,8 @@ mod tests {
             origin: [0.0; 3],
             tool: None,
             block_pos: Some([0; 3]),
+            target: None,
+            interacting: None,
         };
         let stone = serde_json::json!({"type":"minecraft:match_block","blocks":"minecraft:stone"});
         let wheat = serde_json::json!({"type":"minecraft:match_block","blocks":"minecraft:wheat"});
@@ -2737,6 +2740,61 @@ mod tests {
             ..ctx
         };
         assert!(!conditions(&stone, &absent, &Flat));
+    }
+    /// `LootContext.EntityTarget`: `entity_properties` and `entity_scores`
+    /// select `target_entity` and `interacting_entity`, never `this` by default.
+    #[test]
+    fn entity_conditions_select_the_named_target() {
+        let view = |kind: &str, score: i32| EntityView {
+            kind: kind.into(),
+            scores: Some([("points".to_owned(), score)].into()),
+            ..Default::default()
+        };
+        let (source, target, actor) = (
+            view("minecraft:player", 1),
+            view("minecraft:cow", 2),
+            view("minecraft:zombie", 3),
+        );
+        let ctx = Entities {
+            this: Some(&source),
+            origin: [0.0; 3],
+            tool: None,
+            block_pos: None,
+            target: Some(&target),
+            interacting: Some(&actor),
+        };
+        let props = |who: &str, kind: &str| {
+            serde_json::json!({"condition":"minecraft:entity_properties","entity":who,
+                "predicate":{"minecraft:entity_type":kind}})
+        };
+        assert!(conditions(
+            &props("target_entity", "minecraft:cow"),
+            &ctx,
+            &Flat
+        ));
+        assert!(!conditions(
+            &props("target_entity", "minecraft:player"),
+            &ctx,
+            &Flat
+        ));
+        assert!(conditions(
+            &props("interacting_entity", "minecraft:zombie"),
+            &ctx,
+            &Flat
+        ));
+        assert!(conditions(&props("this", "minecraft:player"), &ctx, &Flat));
+        assert!(!conditions(
+            &props("attacker", "minecraft:player"),
+            &ctx,
+            &Flat
+        ));
+        let score = |who: &str, n: i32| {
+            serde_json::json!({"condition":"minecraft:entity_scores","entity":who,
+                "scores":{"points":n}})
+        };
+        assert!(conditions(&score("target_entity", 2), &ctx, &Flat));
+        assert!(conditions(&score("interacting_entity", 3), &ctx, &Flat));
+        assert!(!conditions(&score("target_entity", 1), &ctx, &Flat));
     }
     /// Data pack ids, tags and registry keys written without a namespace are
     /// `minecraft:` ones (`Identifier.parse`), wherever a predicate reads one.
@@ -2759,6 +2817,8 @@ mod tests {
             origin: player.position,
             tool: None,
             block_pos: None,
+            target: None,
+            interacting: None,
         };
         let arrow = DamageView {
             kind: "minecraft:arrow".into(),
@@ -2936,6 +2996,8 @@ mod tests {
             origin: player.position,
             tool: None,
             block_pos: None,
+            target: None,
+            interacting: None,
         };
         assert!(conditions(&cond, &ctx, &w));
         let mut p = Progress::default();
@@ -3603,6 +3665,8 @@ mod tests {
             origin: [0.0; 3],
             tool: None,
             block_pos: None,
+            target: None,
+            interacting: None,
         };
         for line in include_str!("../../../docs/parity/random-chance-seeded.jsonl").lines() {
             let row: Value = serde_json::from_str(line).unwrap();
@@ -3629,6 +3693,8 @@ mod tests {
             origin: [0.0; 3],
             tool: None,
             block_pos: None,
+            target: None,
+            interacting: None,
         };
         let z = json!({"type":"minecraft:random_chance","chance":0});
         let o = json!({"type":"minecraft:random_chance","chance":1});
@@ -3666,6 +3732,8 @@ mod tests {
             origin: [0.0; 3],
             tool: None,
             block_pos: None,
+            target: None,
+            interacting: None,
         };
         let mut draws = 0;
         for v in [

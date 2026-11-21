@@ -33,6 +33,7 @@ mod bundle;
 pub mod container_items;
 pub use container_items::fits_inside_container_items;
 mod click;
+pub use click::{ClickContinuation, SlotTake};
 mod storage;
 pub use storage::{MutationStamp, Snapshot};
 mod asked;
@@ -404,8 +405,12 @@ pub struct AnvilUndo {
 pub struct Stonecutter {
     /// `recipesForInput`: indices into `StationRecipes.stonecutting`.
     pub recipes: Vec<usize>,
-    /// The item the list was made for (`input`; None for nothing).
-    pub input: Option<Arc<str>>,
+    /// The item the local or client list was made for (`input`; None for nothing).
+    input: Option<Arc<str>>,
+    /// The full stack checked by the projected server menu's ingredient predicates.
+    server_input: Option<ItemStack>,
+    /// The button map sent to the guest of this server menu, pinned until close.
+    pub server_buttons: Option<Arc<crate::lan::recipes::StonecutterButtons>>,
     /// `ResultContainer.recipeUsed`.
     pub used: Option<usize>,
 }
@@ -566,7 +571,9 @@ impl Menu {
                         },
                     },
                 }));
-                player(&mut slots);
+                if t.player_inventory {
+                    player(&mut slots);
+                }
             }
             Kind::Crafter | Kind::CrafterBlock => {
                 containers[MAIN] = vec![None; 9];
@@ -815,6 +822,7 @@ impl Menu {
                 item_smelted: Vec::new(),
                 item_smithed_hook: false,
                 item_smithed: Vec::new(),
+                takes: None,
                 output_removed: 0,
                 equipped: Vec::new(),
                 merchant: None,
@@ -886,11 +894,13 @@ impl Menu {
             if self.state.data[0] == id {
                 return false;
             }
-            if id >= 0 && (id as usize) < self.state.stone.recipes.len() {
+            if let Some(recipe) = self.stone_recipe(env, id) {
                 self.state.data[0] = id;
-                self.stone_setup_result(env, id);
+                self.stone_setup_result(env, Some(recipe));
+                return true;
             }
-            return true;
+            // A projected-but-ineligible button is not a recipe selection.
+            return self.state.stone.server_buttons.is_none();
         }
         if self.state.kind != Kind::Loom || id < 0 || id as usize >= self.state.loom_patterns.len()
         {
@@ -944,7 +954,7 @@ impl Menu {
     /// Container slot `slot` of a mod menu type is left out by its screen.
     pub fn hide_slot(&mut self, slot: usize) {
         self.touch();
-        if matches!(self.state.kind, Kind::Mod(_)) && slot < self.state.slots.len() - 36 {
+        if matches!(self.state.kind, Kind::Mod(kind) if slot < kind.slots) {
             self.state.slots[slot].role = Role::Hidden;
         }
     }
@@ -1051,9 +1061,30 @@ impl Menu {
     /// (`setupRecipeList`), with none selected and no result.
     fn stone_changed(&mut self, env: &Env) {
         self.touch();
-        let input = self.state.containers[MAIN][0]
-            .as_ref()
-            .map(|s| s.item.clone());
+        let input = self.state.containers[MAIN][0].as_ref();
+        if self.state.stone.server_buttons.is_some() {
+            let before = self.state.stone.server_input.as_ref();
+            if input == before {
+                return;
+            }
+            // The selected recipe's index is valid until this server generation closes.
+            // A count change can refill it, but still has to pass the full predicate.
+            let recipe = input.zip(before).and_then(|(input, before)| {
+                self.state.stone.used.filter(|&index| {
+                    input.same_item_same_components(before)
+                        && env.station_recipes.stonecutting[index]
+                            .input
+                            .test_in(env.loop_context, input)
+                })
+            });
+            self.state.stone.server_input = input.cloned();
+            if recipe.is_none() {
+                self.state.data[0] = -1;
+            }
+            self.stone_setup_result(env, recipe);
+            return;
+        }
+        let input = input.map(|s| s.item.clone());
         if input == self.state.stone.input {
             return;
         }
@@ -1073,8 +1104,20 @@ impl Menu {
         };
     }
 
+    fn stone_recipe(&self, env: &Env, button: i32) -> Option<usize> {
+        let index = usize::try_from(button).ok()?;
+        if let Some(buttons) = &self.state.stone.server_buttons {
+            let stack = self.state.containers[MAIN][0].as_ref()?;
+            let id = buttons.recipe(&stack.item, index)?;
+            return env.station_recipes.stonecutting.iter().position(|recipe| {
+                recipe.id == id && recipe.input.test_in(env.loop_context, stack)
+            });
+        }
+        self.state.stone.recipes.get(index).copied()
+    }
+
     /// `StonecutterMenu.setupResultSlot`.
-    fn stone_setup_result(&mut self, env: &Env, index: i32) {
+    fn stone_setup_result(&mut self, env: &Env, recipe: Option<usize>) {
         self.touch();
         // A client's SelectableRecipe entries carry no recipe (`entry.recipe().recipe()` is empty off the
         // server): its result stays empty until the server's slot update, and a take refills nothing.
@@ -1083,9 +1126,6 @@ impl Menu {
             self.state.containers[RESULT][0] = None;
             return;
         }
-        let recipe = usize::try_from(index)
-            .ok()
-            .and_then(|i| self.state.stone.recipes.get(i).copied());
         self.state.stone.used = recipe;
         self.state.containers[RESULT][0] =
             recipe.map(|r| env.station_recipes.stonecutting[r].result.clone());
@@ -1311,15 +1351,17 @@ impl Menu {
             return None;
         }
         if take.xp < 0 {
-            self.state.ground = Some(crate::stations::grindstone_xp_base(
-                env.enchantments,
-                take.top.as_ref(),
-                take.bottom.as_ref(),
-            ));
+            self.state.ground = Some(take.vanilla_amount(env));
         }
+        let xp = (take.xp >= 0).then_some(take.xp);
+        self.grindstone_take_inputs(env, take);
+        xp
+    }
+
+    /// Replace the inputs and run `slotsChanged`, after the server has awarded experience.
+    pub fn grindstone_take_inputs(&mut self, env: &Env, take: GrindstoneTake) {
         self.put(env, 0, take.new_top);
         self.put(env, 1, take.new_bottom);
-        (take.xp >= 0).then_some(take.xp)
     }
 
     /// `AnvilMenu.setItemName` (`ServerboundRenameItemPacket`): false when
@@ -1393,10 +1435,7 @@ impl Menu {
     pub fn rename(&mut self, env: &Env, name: &str) -> bool {
         self.touch();
         // StringUtil.filterText, then validateName's length limit.
-        let name: String = name
-            .chars()
-            .filter(|&c| c != '\u{a7}' && c >= ' ' && c != '\u{7f}')
-            .collect();
+        let name = crate::clipboard::filter_text(name, false);
         if self.state.kind != Kind::Anvil
             || name.encode_utf16().count() > 50
             || self.state.anvil.name.as_deref() == Some(&name)
@@ -1404,7 +1443,7 @@ impl Menu {
             return false;
         }
         if let Some(result) = self.state.containers[RESULT][0].as_mut() {
-            result.data_mut().custom_name = (!name.trim().is_empty())
+            result.data_mut().custom_name = (!sunrise_core::java_character::is_blank(&name))
                 .then(|| sunrise_core::nbt::Tag::String(name.as_str().into()));
             result.tidy();
         }
@@ -1543,7 +1582,7 @@ impl Menu {
     pub fn load_container(&mut self, env: &Env, items: &[Option<ItemStack>]) {
         self.touch();
         let result = self.mod_crafting().map(|c| c.result);
-        for (k, stack) in items.iter().enumerate().take(self.state.slots.len() - 36) {
+        for (k, stack) in items.iter().enumerate().take(self.container_slot_count()) {
             if Some(k) != result {
                 self.put(env, k, stack.clone());
             }
@@ -1555,9 +1594,16 @@ impl Menu {
     /// crafting result's left empty.
     pub fn container_items(&self) -> Vec<Option<ItemStack>> {
         let result = self.mod_crafting().map(|c| c.result);
-        (0..self.state.slots.len() - 36)
+        (0..self.container_slot_count())
             .map(|k| (Some(k) != result).then(|| self.slot(k).cloned()).flatten())
             .collect()
+    }
+
+    fn container_slot_count(&self) -> usize {
+        match self.state.kind {
+            Kind::Mod(kind) => kind.slots,
+            _ => self.state.slots.len() - 36,
+        }
     }
 
     pub fn player_item(&self, i: usize) -> Option<&ItemStack> {
@@ -2826,6 +2872,11 @@ impl Menu {
 impl Menu {
     /// `MerchantContainer.updateSellItem`.
     pub fn merchant_update(&mut self, env: &Env) {
+        self.merchant_update_result(env.items);
+    }
+
+    /// Update a detached menu after an accepted edit of its live offer.
+    pub fn merchant_update_result(&mut self, items: &Items) {
         self.touch();
         let Some(m) = self.state.merchant.as_mut() else {
             return;
@@ -2843,7 +2894,7 @@ impl Menu {
         }
         if !m.offers.is_empty() {
             let (active, result) =
-                crate::merchant::sell_item(&m.offers, env.items, a, b, Some(m.selection_hint));
+                crate::merchant::sell_item(&m.offers, items, a, b, Some(m.selection_hint));
             m.active = active;
             m.future_xp = if result.is_some() {
                 active.map_or(0, |i| m.offers[i].xp)
@@ -3092,6 +3143,70 @@ pub(crate) mod tests {
         let mut menu = Menu::new(kind);
         menu.creative = true;
         test(&env, &mut menu);
+    }
+
+    #[test]
+    fn a_handled_replacement_goes_through_the_clicked_slots_rules() {
+        bare_env(|env| {
+            let mut menu = Menu::new(Kind::Grindstone);
+            let handled = |clicked| StackedOutcome {
+                canceled: true,
+                handled: true,
+                clicked: Some(clicked),
+                ..StackedOutcome::default()
+            };
+            // The result slot's onTake would not run: nothing goes in, nothing is taken out.
+            menu.set_slot(env, 2, stack("dirt", 1));
+            for clicked in [None, stack("stone", 1)] {
+                let outcome = handled(clicked);
+                let env = Env {
+                    stacked: Some(&outcome),
+                    ..*env
+                };
+                menu.click(&env, 2, 0, Input::Pickup).unwrap();
+                assert!(outcome.refused.get());
+                assert_eq!(menu.slot(2), stack("dirt", 1).as_ref());
+            }
+            // An input takes a damageable item the slot's own rules admit, and only that.
+            let outcome = handled(stack("dirt", 1));
+            let env = Env {
+                stacked: Some(&outcome),
+                ..*env
+            };
+            menu.click(&env, 0, 0, Input::Pickup).unwrap();
+            assert!(outcome.refused.get());
+            assert_eq!(menu.slot(0), None);
+        });
+    }
+
+    #[test]
+    fn a_handled_replacement_cannot_skip_a_potion_slots_take_effects() {
+        bare_env(|env| {
+            let mut menu = Menu::new(Kind::Brewing);
+            menu.brewed_potion_hook = true;
+            let potion = stack("potion", 1);
+            menu.set_slot(env, 0, potion.clone());
+            let answer = StackedOutcome {
+                canceled: true,
+                handled: true,
+                clicked: Some(None),
+                carried: Some(potion.clone()),
+                ..StackedOutcome::default()
+            };
+            let handled = Env {
+                stacked: Some(&answer),
+                ..*env
+            };
+            menu.click(&handled, 0, 0, Input::Pickup).unwrap();
+            assert_eq!(menu.slot(0), potion.as_ref());
+            assert_eq!(menu.carried, None);
+            assert!(menu.brewed_potion_takes.is_empty());
+
+            menu.click(env, 0, 0, Input::Pickup).unwrap();
+            assert_eq!(menu.slot(0), None);
+            assert_eq!(menu.carried, potion);
+            assert_eq!(menu.brewed_potion_takes, [stack("potion", 1).unwrap()]);
+        });
     }
 
     #[test]
@@ -3620,6 +3735,29 @@ pub(crate) mod tests {
         });
     }
 
+    #[test]
+    fn an_anvil_rename_uses_vanillas_definition_of_blank() {
+        bare_env(|env| {
+            let renamed = |name| {
+                let mut menu = Menu::new(Kind::Anvil);
+                menu.set_slot(env, 0, stack("iron_sword", 1));
+                menu.anvil_created();
+                assert!(menu.rename(env, name));
+                menu
+            };
+            let menu = renamed("\u{85}");
+            assert_eq!(
+                menu.slot(2).unwrap().custom_name().as_deref(),
+                Some("\u{85}")
+            );
+            assert_eq!(menu.data[0], 1);
+
+            let menu = renamed("\u{a0}\u{2007}\u{202f}");
+            assert!(menu.slot(2).is_none());
+            assert_eq!(menu.data[0], 0);
+        });
+    }
+
     /// A rename beside a right input the anvil can't use changes neither
     /// the (empty) result nor the cost, but `createResult` ran: the mods
     /// are asked, and their output is the result.
@@ -4031,9 +4169,13 @@ pub(crate) mod tests {
     fn slot_rules_are_told_the_player_the_block_and_the_other_slots() {
         let kind = Kind::Mod(Box::leak(Box::new(crate::containers::ModMenuType {
             id: "test:context",
+            owner: "test",
             slots: 2,
+            player_inventory: true,
             data_slots: 0,
+            owned_slots: None,
             results: vec![],
+            inputs: Vec::new(),
             links: None,
             crafting: None,
         })));
@@ -4066,9 +4208,13 @@ pub(crate) mod tests {
         STILL_VALID_ASKED.set(0);
         let kind = Kind::Mod(Box::leak(Box::new(crate::containers::ModMenuType {
             id: "test:rules",
+            owner: "test",
             slots: 1,
+            player_inventory: true,
             data_slots: 0,
+            owned_slots: None,
             results: vec![],
+            inputs: Vec::new(),
             links: None,
             crafting: None,
         })));
@@ -4191,24 +4337,30 @@ pub(crate) mod tests {
         };
         assert!(!trapdoor_ladder(&before));
         assert!(trapdoor_ladder(&after));
-        // A block's friction reads it too; an answer that is NaN or outside 0..=2 keeps the
-        // block's own.
+        // A block's friction reads it too; an answer that is NaN keeps the block's own
+        // and a finite one is used as given.
         let friction = |context: &LoopContext, kind: &str| {
-            let mut friction = 0.6;
-            crate::motion::native_friction(
-                context,
-                1,
-                kind,
+            use sunrise_world::registry::BlockStateId;
+            let world = crate::world::World::new(BlockStateId(0), 0);
+            crate::motion::read_friction(
+                crate::motion::FrictionLevel {
+                    context,
+                    world: &world,
+                    registry: crate::test_fixtures::air_registry(),
+                    side: crate::motion::dry_side(),
+                    coefficient: &|_| Some(0.6),
+                },
+                Some((1, kind)),
                 sunrise_core::position::BlockPos::new(0, 0, 0),
-                sunrise_world::registry::BlockStateId(0),
-                &mut friction,
-            );
-            friction
+                BlockStateId(0),
+                0.6,
+            )
+            .unwrap()
         };
         assert_eq!(friction(&before, "minecraft:player"), 0.6);
         assert_eq!(friction(&after, "minecraft:player"), 0.98);
         assert_eq!(friction(&after, "minecraft:cow"), 0.6);
-        assert_eq!(friction(&after, "minecraft:item"), 0.6);
+        assert_eq!(friction(&after, "minecraft:item"), 3.0);
         // The edge backoff and the fluid current read it too.
         let movement = |context: &LoopContext| {
             let (mut staying, mut flow) = (false, [0.25, 0.0, 0.0]);
@@ -4254,7 +4406,7 @@ pub(crate) mod tests {
         assert_eq!(step(&after, "minecraft:player", Step), answered);
         assert_eq!(step(&after, "minecraft:cow", Step), own);
         assert_eq!(step(&after, "minecraft:player", Place), own);
-        // Fall, trample, jump and the ender teleport read it as well.
+        // Fall, jump and the ender teleport read it as well.
         let landing = |context: &LoopContext| {
             let (mut distance, mut multiplier, mut cancel) = (3.0, 1.0, false);
             crate::landing::native_living_fall(
@@ -4265,8 +4417,6 @@ pub(crate) mod tests {
                 &mut multiplier,
                 &mut cancel,
             );
-            let mut trample = false;
-            crate::landing::native_farmland_trample(context, 1, [0, 0, 0], 0, 1.0, &mut trample);
             let (mut target, mut teleport) = ([1.0, 2.0, 3.0], false);
             crate::mobs::enderman::native_ender_entity_teleport(
                 context,
@@ -4277,30 +4427,15 @@ pub(crate) mod tests {
                 &mut teleport,
             );
             crate::motion::native_living_jump(context, 1, "minecraft:cow", [0.0, 0.42, 0.0]);
-            (distance, multiplier, cancel, trample, target, teleport)
+            (distance, multiplier, cancel, target, teleport)
         };
-        assert_eq!(
-            landing(&before),
-            (3.0, 1.0, false, false, [1.0, 2.0, 3.0], false)
-        );
-        assert_eq!(
-            landing(&after),
-            (4.0, 2.0, false, true, [1.0, 3.0, 3.0], true)
-        );
+        assert_eq!(landing(&before), (3.0, 1.0, false, [1.0, 2.0, 3.0], false));
+        assert_eq!(landing(&after), (4.0, 2.0, false, [1.0, 3.0, 3.0], true));
         assert_eq!(JUMPS.get(), 2);
-        // Heal, breathe and drown read it as well.
+        // Heal and drown read it as well.
         let health = |context: &LoopContext| {
             let (mut amount, mut cancel) = (2.0, false);
             crate::hunger::native_living_heal(context, 1, &mut amount, &mut cancel);
-            let (mut can_breathe, mut consume, mut refill) = (true, 1, 4);
-            crate::breathing::native_living_breathe(
-                context,
-                1,
-                "minecraft:zombie",
-                &mut can_breathe,
-                &mut consume,
-                &mut refill,
-            );
             let (mut drowning, mut damage, mut cancel_drown) = (false, 2.0, false);
             crate::breathing::native_living_drown(
                 context,
@@ -4311,18 +4446,10 @@ pub(crate) mod tests {
                 &mut 8,
                 &mut cancel_drown,
             );
-            (amount, cancel, can_breathe, consume, drowning, damage)
+            (amount, cancel, drowning, damage)
         };
-        assert_eq!(health(&before), (2.0, false, true, 1, false, 2.0));
-        assert_eq!(health(&after), (3.0, true, false, 5, true, 3.0));
-        // A listener that lets a cod breathe: on land for 300 ticks it keeps
-        // full air and takes no damage.
-        let mut air = 300;
-        for _ in 0..300 {
-            let hurt = crate::breathing::own_air(&after, 1, "minecraft:cod", &mut air, false, 300);
-            assert_eq!(hurt, None);
-        }
-        assert_eq!(air, 300);
+        assert_eq!(health(&before), (2.0, false, false, 2.0));
+        assert_eq!(health(&after), (3.0, true, true, 3.0));
         // A listener that sets `bubble_count` to 0: a drowning player takes the
         // damage and shows no bubbles (`drown_bubbles` sends nothing for 0).
         let gasp = crate::breathing::Breath {
@@ -4349,21 +4476,30 @@ pub(crate) mod tests {
             ),
             (0, true)
         );
-        let mut air = -19;
-        let hurt = crate::breathing::own_air(&after, 4, "minecraft:salmon", &mut air, false, 300);
-        assert_eq!((hurt, air), (Some(3.0), 0));
-        let mut air = -19;
-        let hurt = crate::breathing::own_air(&after, 4, "minecraft:dolphin", &mut air, false, 4800);
-        assert_eq!((hurt, air), (Some(3.0), 0));
+        // Water animals out of water: the mods' damage comes back and the air is zero.
+        let out_of_water = |kind: &str, max: i32| {
+            let mut air = -19;
+            let step = crate::breathing::AirStep::own(air, max, false);
+            let hurt = step
+                .finish(&after, 4, kind, &mut air, step.vanilla)
+                .and_then(|drowning| drowning.damage);
+            (hurt, air)
+        };
+        assert_eq!(out_of_water("minecraft:salmon", 300), (Some(3.0), 0));
+        assert_eq!(out_of_water("minecraft:dolphin", 4800), (Some(3.0), 0));
         // A server's block menu: the game's `stillValid` answer arrives first and
         // the parts on its mod menu type may change it; a vanilla menu type never
         // asks them, and a menu whose block entity is gone closes without asking.
         let mod_type: &'static crate::containers::ModMenuType =
             Box::leak(Box::new(crate::containers::ModMenuType {
                 id: "test:rules",
+                owner: "test",
                 slots: 27,
+                player_inventory: true,
                 data_slots: 0,
+                owned_slots: None,
                 results: vec![],
+                inputs: Vec::new(),
                 links: None,
                 crafting: None,
             }));
@@ -4389,12 +4525,14 @@ pub(crate) mod tests {
                 sent: Vec::new(),
                 drag: None,
                 sent_data: Vec::new(),
+                blockless_data: Vec::new(),
                 hidden: Vec::new(),
                 mod_type,
                 registry_id: registry_id.into(),
                 craft: None,
                 links: Vec::new(),
                 asks_still_valid: crate::lan::menu::asks_still_valid(mod_type, registry_id),
+                opening_item: None,
             };
             menu.still_valid(context, &world, &guest)
         };
@@ -4441,6 +4579,39 @@ pub(crate) mod tests {
             false
         ));
         assert_eq!(asked(), 2);
+        // A mod menu with no backing block (`Slots::Native`) is asked too, with no position even
+        // though its opener supplied a screen position, and the part's answer decides.
+        let blockless = |context: &LoopContext| {
+            let world = crate::world::World::new(sunrise_world::registry::BlockStateId(0), 0);
+            let guest = crate::lan::menu::tests::guest();
+            let menu = crate::lan::menu::Menu {
+                window: 1,
+                kind: 2,
+                pos: Some(far),
+                slots: crate::lan::menu::Slots::Native,
+                size: 27,
+                state: 0,
+                sent: Vec::new(),
+                drag: None,
+                sent_data: Vec::new(),
+                blockless_data: Vec::new(),
+                hidden: Vec::new(),
+                mod_type: Some(mod_type),
+                registry_id: "test:rules".into(),
+                craft: None,
+                links: Vec::new(),
+                asks_still_valid: crate::lan::menu::asks_still_valid(Some(mod_type), "test:rules"),
+                opening_item: None,
+            };
+            menu.still_valid(context, &world, &guest)
+        };
+        assert!(blockless(&after));
+        assert!(!blockless(&before));
+        assert_eq!(asked(), 4);
+        assert_eq!(
+            crate::native_client_hooks::test_hooks::STILL_VALID_POS.get(),
+            None
+        );
         std::fs::remove_dir_all(&settings).unwrap();
     }
 
@@ -4528,9 +4699,13 @@ pub(crate) mod tests {
     fn mod_menu() -> Kind {
         Kind::Mod(Box::leak(Box::new(crate::containers::ModMenuType {
             id: "test:press",
+            owner: "test",
             slots: 4,
+            player_inventory: true,
             data_slots: 0,
+            owned_slots: None,
             results: vec![3],
+            inputs: Vec::new(),
             links: None,
             crafting: None,
         })))
@@ -4635,9 +4810,13 @@ pub(crate) mod tests {
     pub(crate) fn mod_crafting_table() -> Kind {
         Kind::Mod(Box::leak(Box::new(crate::containers::ModMenuType {
             id: "test:station",
+            owner: "test",
             slots: 10,
+            player_inventory: true,
             data_slots: 0,
+            owned_slots: None,
             results: vec![],
+            inputs: Vec::new(),
             links: None,
             crafting: Some(crate::containers::ModCrafting {
                 grid: 1,
@@ -4737,6 +4916,7 @@ pub(crate) mod tests {
 
     mod crafted_stat_tests;
     mod mod_grid_tests;
+    mod server_stonecutter_tests;
 
     /// Extra sources (`native_recipe_sources`) count as more inventory: the
     /// grid fills as the table's does when the player holds what the sources

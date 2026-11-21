@@ -38,6 +38,23 @@ fn equipment_seed(m: &Mob) -> Vec<sunrise_core::nbt::Tag> {
         .collect()
 }
 
+pub(super) fn modifier_invalidation_undo(
+    catalog: &Arc<Catalog>,
+    mob: &Mob,
+) -> Option<ModifierChanges> {
+    match mob
+        .extra
+        .live
+        .modifier_invalidation_undo(catalog, &mob.kind.id, || equipment_seed(mob))
+    {
+        Ok(undo) => undo,
+        Err(error) => {
+            warn_failed(mob.id, &mob.kind.id, Err(error));
+            None
+        }
+    }
+}
+
 pub(super) fn undo_mob_modifiers(catalog: &Arc<Catalog>, m: &mut Mob, changes: ModifierChanges) {
     let mut live = std::mem::take(&mut m.extra.live);
     let result = live.undo_modifier_changes(catalog, &m.kind.id, changes, || equipment_seed(m));

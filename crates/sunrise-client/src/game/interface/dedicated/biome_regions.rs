@@ -19,8 +19,11 @@ fn parse(text: &str) -> Result<Settings, String> {
 
 /// Records `server.toml`'s choices in `world`'s biome regions before it opens. A section that
 /// does not read stops the start.
-pub(super) fn choose(world: &std::path::Path) -> sunrise_client::Result<()> {
-    let settings = match std::fs::read_to_string("server.toml") {
+pub(in crate::game) fn choose(
+    world: &std::path::Path,
+    config: &std::path::Path,
+) -> sunrise_client::Result<()> {
+    let settings = match std::fs::read_to_string(config) {
         Ok(text) => parse(&text).map_err(|e| format!("server.toml: {e}"))?,
         Err(why) if why.kind() == std::io::ErrorKind::NotFound => Settings::default(),
         Err(why) => return Err(format!("server.toml: {why}").into()),

@@ -117,22 +117,6 @@ struct RaycastBlockCache<'b> {
     section_uniform_air: bool,
 }
 
-impl<'a> MobWorld<'a> {
-    /// Creates a lightweight view for creature despawn evaluation without entity collections.
-    pub fn despawn_view(&self) -> MobWorld<'a> {
-        MobWorld {
-            others: &[],
-            others_grid: None,
-            others_index: None,
-            others_villagers: None,
-            others_solid: None,
-            player: None,
-            teams: std::sync::Arc::clone(&self.teams),
-            ..self.clone()
-        }
-    }
-}
-
 /// Single non-spectator player position helper for creature ticking despawn checks.
 pub fn single_player_pos(players: impl IntoIterator<Item = (Vec3, bool)>) -> Option<Option<Vec3>> {
     let mut non_spec = players.into_iter().filter(|(_, spec)| !*spec);
@@ -687,17 +671,44 @@ impl MobWorld<'_> {
                 creative: p.creative,
                 passenger: p.passenger,
             }),
-            Who::Mob(id) => self.seen(id).map(|s| TargetInfo {
-                position: s.position,
-                eye_y: s.eye_y,
-                bounds: s.bounds,
-                hitbox: s.hitbox,
-                alive: s.alive,
-                can_be_seen_as_enemy: !s.playing_dead,
-                is_player: false,
-                creative: false,
-                passenger: s.passenger,
-            }),
+            Who::Mob(id) => self
+                .seen(id)
+                .map(|s| TargetInfo {
+                    position: s.position,
+                    eye_y: s.eye_y,
+                    bounds: s.bounds,
+                    hitbox: s.hitbox,
+                    alive: s.alive,
+                    can_be_seen_as_enemy: !s.playing_dead,
+                    is_player: false,
+                    creative: false,
+                    passenger: s.passenger,
+                })
+                .or_else(|| {
+                    self.armor_stands.iter().find(|s| s.id == id).map(|s| {
+                        let (width, height, eye) = s.probe_dimensions();
+                        let half = width / 2.0;
+                        let bounds = Aabb::new(
+                            Vec3::new(s.position.x - half, s.position.y, s.position.z - half),
+                            Vec3::new(
+                                s.position.x + half,
+                                s.position.y + height,
+                                s.position.z + half,
+                            ),
+                        );
+                        TargetInfo {
+                            position: s.position,
+                            eye_y: s.position.y + eye,
+                            bounds,
+                            hitbox: bounds,
+                            alive: s.health > 0.0,
+                            can_be_seen_as_enemy: false,
+                            is_player: false,
+                            creative: false,
+                            passenger: false,
+                        }
+                    })
+                }),
         }
     }
     /// The other mobs whose boxes may meet `area` (callers test the boxes),
@@ -788,9 +799,9 @@ impl MobWorld<'_> {
 
 /// Level.clip with VISUAL shapes and no fluids: the block the segment first
 /// hits, None inside when it hits nothing and outside when the segment is
-/// too long to walk. Glass and copper grates (`TransparentBlock`) and bars and panes
-/// (`IronBarsBlock`) have no visual shape; mud, soul sand and powder snow
-/// look like full blocks.
+/// too long to walk. Glass and copper grates (`TransparentBlock`), bars and panes
+/// (`IronBarsBlock`) and powder snow have no visual shape; mud and soul sand
+/// look like full blocks; fences and snow layers use their outline.
 pub fn visual_clip<W: DynamicCollisionWorld>(
     facts: &BlockFacts,
     collision: &BlockCollisionRegistry,
@@ -800,31 +811,50 @@ pub fn visual_clip<W: DynamicCollisionWorld>(
     to: Vec3,
 ) -> Option<Option<[i32; 3]>> {
     let full = Aabb::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0));
-    let result = traverse_blocks(from, to, 512, |p: BlockPos| {
-        let id = state(p.x, p.y, p.z);
-        if facts.is_air(id) {
-            return None;
-        }
-        let name = facts.get(id).name.trim_start_matches("minecraft:");
-        if name.ends_with("glass")
-            || name.ends_with("glass_pane")
-            || name.ends_with("_bars")
-            || name.ends_with("copper_grate")
-        {
-            return None;
-        }
-        if matches!(name, "mud" | "soul_sand" | "powder_snow") {
-            return full
-                .move_by(Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z)))
-                .clip(from, to)
+    let result =
+        traverse_blocks(from, to, 512, |p: BlockPos| {
+            let id = state(p.x, p.y, p.z);
+            if facts.is_air(id) {
+                return None;
+            }
+            let name = facts.get(id).name.trim_start_matches("minecraft:");
+            if name.ends_with("glass")
+                || name.ends_with("glass_pane")
+                || name.ends_with("_bars")
+                || name.ends_with("copper_grate")
+                || name == "powder_snow"
+            {
+                return None;
+            }
+            // FenceBlock and SnowLayerBlock: their outline (a fence's collision shape is 24 px tall).
+            let vanilla_fence = facts
+                .get(id)
+                .name
+                .strip_prefix("minecraft:")
+                .is_some_and(|n| n.ends_with("_fence"));
+            if name == "snow" || vanilla_fence {
+                return VoxelShape::clip_boxes(
+                    facts.get(id).outline.iter().map(|b| {
+                        Aabb::new(Vec3::new(b[0], b[1], b[2]), Vec3::new(b[3], b[4], b[5]))
+                    }),
+                    from,
+                    to,
+                    p,
+                )
                 .map(|_| [p.x, p.y, p.z]);
-        }
-        if let Ok(Some(shape)) = collision.static_shape(id) {
-            return shape.clip(from, to, p).map(|_| [p.x, p.y, p.z]);
-        }
-        let shape = collision.collision_shape(scene, id, [p.x, p.y, p.z]).ok()?;
-        shape.clip(from, to, p).map(|_| [p.x, p.y, p.z])
-    });
+            }
+            if matches!(name, "mud" | "soul_sand") {
+                return full
+                    .move_by(Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z)))
+                    .clip(from, to)
+                    .map(|_| [p.x, p.y, p.z]);
+            }
+            if let Ok(Some(shape)) = collision.static_shape(id) {
+                return shape.clip(from, to, p).map(|_| [p.x, p.y, p.z]);
+            }
+            let shape = collision.collision_shape(scene, id, [p.x, p.y, p.z]).ok()?;
+            shape.clip(from, to, p).map(|_| [p.x, p.y, p.z])
+        });
     result.ok()
 }
 
@@ -980,6 +1010,7 @@ fn run_test_world(
     build(&mut world, registry);
     let lid_openers = std::collections::HashMap::new();
     let w = MobWorld {
+        side: sunrise_client::motion::dry_side(),
         mob_maps: sunrise_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
         goal_host: None,
         teams: Default::default(),
@@ -1002,6 +1033,7 @@ fn run_test_world(
         others,
         live_mobs: None,
         dragon: None,
+        armor_stands: &[],
         leash_boats: &[],
         who_lookup: None,
         others_grid: None,
@@ -1110,6 +1142,57 @@ mod scaffolding_sight_tests {
                 let above = Vec3::new(0.5, 66.0 + 1.62, 0.5);
                 assert!(w.line_of_sight_for(Some(64.0), below, above));
                 assert!(!w.line_of_sight_for(Some(66.0), above, below));
+            },
+        );
+        assert!(ran, "vanilla data is missing");
+    }
+
+    /// `ClipContext.Block.VISUAL` (Creaking's `isLookingAtMe`): a fence and a snow layer use their
+    /// outline, not the 24 px / one-layer-shorter collision shape; powder snow has none.
+    #[test]
+    #[ignore = "daily"]
+    fn visual_sight_uses_the_fence_outline_and_skips_powder_snow() {
+        use sunrise_core::nbt::Tag;
+        let ran = super::with_built_test_world(
+            &[],
+            |world, registry| {
+                world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(crate::chunk::Chunk::empty(0, 0)),
+                );
+                let snow4 = registry
+                    .saved_state_id(&Tag::compound([
+                        ("id", Tag::String("minecraft:snow".into())),
+                        (
+                            "properties",
+                            Tag::compound([("layers", Tag::String("4".into()))]),
+                        ),
+                    ]))
+                    .unwrap();
+                for (x, name) in [(0, "oak_fence"), (2, "powder_snow")] {
+                    let id = registry
+                        .default_state(&format!("minecraft:{name}"))
+                        .unwrap();
+                    world.set(x, 65, 0, id).unwrap();
+                }
+                world.set(4, 65, 0, snow4).unwrap();
+            },
+            |w, _| {
+                let see = |x: f64, y0: f64, y1: f64| {
+                    w.visual_clear_between(Vec3::new(x, y0, 0.5), Vec3::new(x, y1, 0.5))
+                };
+                // Fence: outline top 66.0, collision top 66.5.
+                assert!(see(0.5, 67.0, 66.2));
+                assert!(!see(0.5, 67.0, 65.5));
+                // Enters the fence's cell below its outline top, crosses the collider above it and
+                // misses the outline.
+                assert!(
+                    w.visual_clear_between(Vec3::new(0.1, 65.9, 0.5), Vec3::new(0.5, 66.3, 0.5))
+                );
+                // Powder snow never blocks a visual ray.
+                assert!(see(2.5, 66.5, 65.1));
+                // Four layers: outline top 65.5, collision top 65.375.
+                assert!(!see(4.5, 66.0, 65.45));
             },
         );
         assert!(ran, "vanilla data is missing");

@@ -338,7 +338,7 @@ pub static HOOKS: OnceLock<Hooks> = OnceLock::new();
 pub struct RestitutionHooks {
     pub listens: fn(BlockStateId) -> bool,
     /// Change `factor`, the restitution of `Contact`'s block, for the entity landing on it.
-    pub restitution: fn(&mut DamageLevel<'_>, Contact<'_>, &mut f32),
+    pub restitution: fn(crate::motion::FrictionLevel<'_>, Contact<'_>, &mut f32),
 }
 
 pub static RESTITUTION_HOOKS: OnceLock<RestitutionHooks> = OnceLock::new();
@@ -518,18 +518,15 @@ pub fn bounce(
     accepted_movement(answer, movement)
 }
 
-/// Whether a part of the block `state` answers `bounce_restitution`.
-pub fn restitution_listens(state: BlockStateId) -> bool {
-    RESTITUTION_HOOKS
-        .get()
-        .is_some_and(|hooks| (hooks.listens)(state))
-}
-
 /// `Entity.getBlockBounciness`' `Block.getBounceRestitution` for the entity landing on
 /// `contact`'s block, whose own restitution is `own`, after any part of that block changed it
 /// (`IBlockExtension.getBounceRestitution`) in `level`, on either side. A non-finite answer is
 /// ignored: it would make the entity's velocity not a number.
-pub fn bounce_restitution(level: &mut DamageLevel<'_>, contact: Contact<'_>, own: f32) -> f32 {
+pub fn bounce_restitution(
+    level: crate::motion::FrictionLevel<'_>,
+    contact: Contact<'_>,
+    own: f32,
+) -> f32 {
     let Some(hooks) = RESTITUTION_HOOKS.get() else {
         return own;
     };

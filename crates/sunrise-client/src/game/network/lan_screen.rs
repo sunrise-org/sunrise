@@ -832,16 +832,7 @@ impl Game<'_> {
         );
         let p = Popup::lock_question(&atlas.font, o.difficulty, (w, h));
         let (fx, fy, fw, fh) = p.frame;
-        ui::nine_slice(
-            batch,
-            atlas,
-            "gui/sprites/popup/background",
-            fx,
-            fy,
-            fw,
-            fh,
-            u32::MAX,
-        );
+        ui::nine_slice(batch, atlas, "popup/background", fx, fy, fw, fh, u32::MAX);
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);
         for (line, x, y) in &p.lines {
             batch.text_styled(atlas, line, *x, *y, u32::MAX, true);
@@ -1000,20 +991,18 @@ impl Game<'_> {
                     (true, true) => "_highlighted",
                     (true, false) => "",
                 };
-                let sprite = format!("gui/sprites/widget/{lock}_button{state}");
+                let sprite = format!("widget/{lock}_button{state}");
                 batch.sprite_scaled(atlas, &sprite, bx, by, 20.0, 20.0, u32::MAX);
                 continue;
             }
             ui::button_as(
                 batch,
                 atlas,
-                bx,
-                by,
-                bw,
-                20.0,
+                [bx, by, bw, 20.0],
                 &o.label(b),
                 active,
                 hover,
+                None,
                 |rect| o.narration(b, rect, tr),
             );
             if b == Button::Lan {

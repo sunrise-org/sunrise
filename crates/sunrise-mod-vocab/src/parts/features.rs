@@ -17,9 +17,9 @@ impl dyn Registrar + '_ {
     /// loads and refuses one that doesn't fit, naming it. A `Reference` field is refused; name
     /// other entries with `Identifier`.
     ///
-    /// The type's id is in a namespace owned by the calling mod's manifest; another mod's
-    /// namespace (vanilla's included), an empty name, an id registered twice, an invalid schema
-    /// and a wasm mod's type refuse the mods at startup, naming the mod.
+    /// The type's ID must be in a namespace owned by the calling mod's manifest. An unowned
+    /// namespace (including vanilla's), an empty name, a duplicate ID or an invalid schema
+    /// refuses registration at startup and names the mod.
     pub fn register_feature_type<T: crate::FeatureType>(
         &mut self,
         name: &str,
@@ -33,8 +33,7 @@ impl dyn Registrar + '_ {
 /// Registrar operations for features.
 pub trait FeaturesRegistrar {
     /// Register feature type `name` with its config schema and `ty`; mods reach it through
-    /// `register_feature_type`. Native only: a wasm mod's registration is refused, because
-    /// feature calls run on the worldgen workers, which a wasm group's store lock can't serve.
+    /// `register_feature_type`. Feature calls run on the worldgen workers.
     fn add_feature_type(
         &mut self,
         name: &str,

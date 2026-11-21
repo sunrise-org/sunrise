@@ -4,73 +4,14 @@
 mod constants;
 pub use constants::{GUEST_STACK_BYTES, HOST_HEADROOM};
 
-/// How the guest's code runs, which decides what a thread that may enter it must reserve.
-/// The runtime reads it from the engine it configures; this crate only follows it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GuestEngine {
-    /// Native code: guest frames use the calling thread's own stack.
-    Native,
-    /// An interpreter (Pulley): the guest's stack is a heap allocation the engine bounds, so
-    /// the calling thread needs no more than an ordinary stack.
-    Interpreter,
-}
-
-/// A guest-capable thread's stack under [`GuestEngine::Interpreter`]: std's own default.
-const ORDINARY_STACK_BYTES: usize = 2 * 1024 * 1024;
-
-impl GuestEngine {
-    /// What a guest-capable thread reserves for its stack.
-    pub const fn reservation(self) -> usize {
-        match self {
-            Self::Native => GUEST_STACK_BYTES + HOST_HEADROOM,
-            Self::Interpreter => ORDINARY_STACK_BYTES,
-        }
-    }
-
-    /// The bound the runtime puts on the guest's own stack: the thread's reservation less
-    /// headroom for native code, the interpreter's heap stack otherwise, smaller where the
-    /// address space is 32 bits wide.
-    pub const fn wasm_stack(self) -> usize {
-        match self {
-            Self::Native => GUEST_STACK_BYTES,
-            Self::Interpreter => interpreter_stack(usize::BITS),
-        }
-    }
-}
-
-/// The interpreter's heap stack on a host whose address space is `pointer_bits` wide. Each
-/// store allocates it in full, and a 32-bit process cannot spare [`GUEST_STACK_BYTES`] for
-/// every group, so it gets 8 MiB (about 4,000 of the 1.8 KB frames [`GUEST_STACK_BYTES`] was
-/// sized from, a clean stack-overflow trap beyond them).
-const fn interpreter_stack(pointer_bits: u32) -> usize {
-    if pointer_bits <= 32 {
-        8 * 1024 * 1024
-    } else {
-        GUEST_STACK_BYTES
-    }
-}
-
-static ENGINE: std::sync::OnceLock<GuestEngine> = std::sync::OnceLock::new();
-
-/// Decides the policy for the whole process, before any guest-capable thread is started. Native
-/// code is the policy of a process that never decides. It refuses a second, different answer: a
-/// thread already started under the first would have the wrong reservation.
-pub fn set_engine(engine: GuestEngine) -> Result<(), &'static str> {
-    if *ENGINE.get_or_init(|| engine) == engine {
-        Ok(())
-    } else {
-        Err("GuestStackUnavailable: the guest engine was decided differently earlier")
-    }
-}
-
-/// The process's policy; reading it before [`set_engine`] settles it as native code.
-pub fn engine() -> GuestEngine {
-    *ENGINE.get_or_init(|| GuestEngine::Native)
+/// Stack reservation used by game threads that call mods.
+pub const fn reservation() -> usize {
+    GUEST_STACK_BYTES + HOST_HEADROOM
 }
 
 /// Spawn guarantees the reservation even on platforms without a stack-size query.
 pub fn builder() -> std::thread::Builder {
-    std::thread::Builder::new().stack_size(engine().reservation())
+    std::thread::Builder::new().stack_size(reservation())
 }
 
 /// Starts a thread that may enter a guest: guest-sized and named `name`, and in debug builds it
@@ -102,7 +43,7 @@ pub fn run_on_guest_stack(test: impl FnOnce() + Send + 'static) {
     }
 }
 
-/// Must run before compiler-child handling or any game initialization.
+/// Must run before game initialization.
 pub fn prepare_main() {
     if let Err(error) = prepare() {
         let error = error.to_string();
@@ -123,9 +64,6 @@ fn prepare() -> std::io::Result<()> {
 #[cfg(target_os = "linux")]
 fn prepare() -> std::io::Result<()> {
     use std::os::unix::process::CommandExt;
-    if engine() == GuestEngine::Interpreter {
-        return Ok(());
-    }
     let required = (GUEST_STACK_BYTES + HOST_HEADROOM) as libc::rlim_t;
     let mut limit = libc::rlimit {
         rlim_cur: 0,
@@ -228,10 +166,6 @@ impl std::fmt::Display for StackError {
 }
 
 fn inspect_current() -> Result<(), StackError> {
-    // An interpreter's guest stack is on the heap: any thread's own stack will do.
-    if engine() == GuestEngine::Interpreter {
-        return Ok(());
-    }
     let size = current_stack_size()?;
     if !fits(size, THREAD_STRUCTURE_ALLOWANCE) {
         return Err(StackError::Small(size));
@@ -382,28 +316,7 @@ fn audited_guest_workers_use_the_stack_policy() {
 
 #[cfg(test)]
 mod tests {
-    use super::{GUEST_STACK_BYTES, GuestEngine, HOST_HEADROOM, fits, interpreter_stack};
-
-    #[test]
-    fn native_keeps_the_136_mib_reservation() {
-        assert_eq!(GuestEngine::Native.reservation(), 136 * 1024 * 1024);
-        assert_eq!(GuestEngine::Native.wasm_stack(), 128 * 1024 * 1024);
-    }
-
-    #[test]
-    fn interpreter_workers_keep_ordinary_stacks_and_a_smaller_heap_stack_on_32_bits() {
-        assert_eq!(GuestEngine::Interpreter.reservation(), 2 * 1024 * 1024);
-        assert_eq!(interpreter_stack(32), 8 * 1024 * 1024);
-        assert_eq!(interpreter_stack(64), 128 * 1024 * 1024);
-    }
-
-    #[test]
-    fn a_second_different_decision_is_refused() {
-        // Nothing in this test binary decides before this, and readers settle on native code.
-        assert_eq!(super::engine(), GuestEngine::Native);
-        assert!(super::set_engine(GuestEngine::Native).is_ok());
-        assert!(super::set_engine(GuestEngine::Interpreter).is_err());
-    }
+    use super::{GUEST_STACK_BYTES, HOST_HEADROOM, fits};
 
     #[test]
     fn the_thread_structure_allowance_covers_a_few_kib_and_no_more() {

@@ -1,18 +1,20 @@
 //! Callbacks into the executable for native trait mods' client-library hooks.
-use crate::items::ItemStack;
-use mod_api::{BlockSoundCause, BlockSoundType};
+use crate::{items::ItemStack, motion::FrictionLevel};
+use mod_api::{BlockSoundCause, BlockSoundType, MenuOpeningItem};
 use std::sync::OnceLock;
 use sunrise_core::position::BlockPos;
 use sunrise_world::native_load_context::LoopContext;
 use sunrise_world::registry::BlockStateId;
 
+type MenuValidity =
+    fn(&LoopContext, u128, &str, Option<[i32; 3]>, [f64; 3], Option<MenuOpeningItem>, &mut bool);
+
 /// Client-library hooks, installed before any menu, entity or recipe is used.
 pub struct NativeClientHooks {
-    pub menu_still_valid: fn(&LoopContext, u128, &str, [i32; 3], [f64; 3], &mut bool),
+    pub menu_still_valid: MenuValidity,
     pub menu_still_valid_listens: fn(&str) -> bool,
     pub living_heal: fn(&LoopContext, u32, &mut f32, &mut bool),
-    pub living_breathe: fn(&LoopContext, u32, &str, &mut bool, &mut i32, &mut i32),
-    pub farmland_trample: fn(&LoopContext, u32, [i32; 3], u32, f64, &mut bool),
+    pub living_breathe_heard: fn() -> bool,
     pub has_mods: fn() -> bool,
     pub player_name_format: fn(&LoopContext, &crate::text::Text, &mut crate::text::Text),
     pub player_tab_list_name_format: fn(&LoopContext, u128, &str, &mut Option<crate::text::Text>),
@@ -27,7 +29,8 @@ pub struct NativeClientHooks {
     pub is_ladder: fn(&LoopContext, u32, BlockPos, BlockStateId, &mut bool),
     pub makes_open_trapdoor_above_climbable:
         fn(&LoopContext, BlockStateId, BlockPos, BlockStateId, &mut bool),
-    pub friction: fn(&LoopContext, u32, &str, BlockPos, BlockStateId, &mut f32),
+    pub friction:
+        fn(FrictionLevel<'_>, Option<(u32, &str)>, BlockPos, BlockStateId, &mut f32) -> bool,
     /// `BlockPart::collision_shape` of the state's block, for one collision query; `shape`
     /// arrives `None` and leaves checked.
     pub collision_shape: fn(
@@ -63,6 +66,31 @@ pub struct NativeClientHooks {
 
 static HOOKS: OnceLock<NativeClientHooks> = OnceLock::new();
 
+#[cfg(feature = "test-menu-validity")]
+mod menu_validity_fixture {
+    use super::MenuValidity;
+    use std::{cell::Cell, marker::PhantomData, rc::Rc};
+
+    type MenuValidityHooks = (MenuValidity, fn(&str) -> bool);
+    thread_local! {
+        pub(super) static HOOKS: Cell<Option<MenuValidityHooks>> = const { Cell::new(None) };
+    }
+
+    struct Restore(Option<MenuValidityHooks>, PhantomData<Rc<()>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            HOOKS.set(self.0);
+        }
+    }
+
+    /// Use these callbacks on this thread until the returned guard is dropped.
+    pub fn scoped_menu_validity_hooks(ask: MenuValidity, listens: fn(&str) -> bool) -> impl Drop {
+        Restore(HOOKS.replace(Some((ask, listens))), PhantomData)
+    }
+}
+#[cfg(feature = "test-menu-validity")]
+pub use menu_validity_fixture::scoped_menu_validity_hooks;
+
 #[cfg(test)]
 #[path = "native_client_hooks_tests.rs"]
 pub(crate) mod test_hooks;
@@ -78,17 +106,27 @@ pub(crate) fn menu_still_valid(
     context: &LoopContext,
     player: u128,
     menu: &str,
-    pos: [i32; 3],
+    pos: Option<[i32; 3]>,
     eye: [f64; 3],
+    opening_item: Option<MenuOpeningItem>,
     valid: &mut bool,
 ) {
+    #[cfg(feature = "test-menu-validity")]
+    if let Some((ask, _)) = menu_validity_fixture::HOOKS.get() {
+        ask(context, player, menu, pos, eye, opening_item, valid);
+        return;
+    }
     if let Some(hooks) = HOOKS.get() {
-        (hooks.menu_still_valid)(context, player, menu, pos, eye, valid);
+        (hooks.menu_still_valid)(context, player, menu, pos, eye, opening_item, valid);
     }
 }
 
 /// Whether a part on the menu type `menu` answers `menu_still_valid`.
 pub(crate) fn menu_still_valid_listens(menu: &str) -> bool {
+    #[cfg(feature = "test-menu-validity")]
+    if let Some((_, listens)) = menu_validity_fixture::HOOKS.get() {
+        return listens(menu);
+    }
     HOOKS
         .get()
         .is_some_and(|hooks| (hooks.menu_still_valid_listens)(menu))
@@ -100,30 +138,10 @@ pub(crate) fn living_heal(context: &LoopContext, entity: u32, amount: &mut f32, 
     }
 }
 
-pub(crate) fn living_breathe(
-    context: &LoopContext,
-    entity: u32,
-    kind: &str,
-    can_breathe: &mut bool,
-    consume: &mut i32,
-    refill: &mut i32,
-) {
-    if let Some(hooks) = HOOKS.get() {
-        (hooks.living_breathe)(context, entity, kind, can_breathe, consume, refill);
-    }
-}
-
-pub(crate) fn farmland_trample(
-    context: &LoopContext,
-    entity: u32,
-    pos: [i32; 3],
-    state: u32,
-    distance: f64,
-    cancel: &mut bool,
-) {
-    if let Some(hooks) = HOOKS.get() {
-        (hooks.farmland_trample)(context, entity, pos, state, distance, cancel);
-    }
+pub(crate) fn living_breathe_heard() -> bool {
+    HOOKS
+        .get()
+        .is_some_and(|hooks| (hooks.living_breathe_heard)())
 }
 
 pub(crate) fn has_mods() -> bool {
@@ -247,16 +265,15 @@ pub(crate) fn makes_open_trapdoor_above_climbable(
 }
 
 pub(crate) fn friction(
-    context: &LoopContext,
-    entity: u32,
-    kind: &str,
+    level: FrictionLevel<'_>,
+    entity: Option<(u32, &str)>,
     pos: BlockPos,
     state: BlockStateId,
     friction: &mut f32,
-) {
-    if let Some(hooks) = HOOKS.get() {
-        (hooks.friction)(context, entity, kind, pos, state, friction);
-    }
+) -> bool {
+    HOOKS
+        .get()
+        .is_none_or(|hooks| (hooks.friction)(level, entity, pos, state, friction))
 }
 
 pub(crate) fn collision_shape(

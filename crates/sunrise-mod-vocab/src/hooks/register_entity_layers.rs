@@ -8,14 +8,17 @@ pub trait Hooks {
     /// `has_mod_renderer` tell what renderers this load built. A target that is no living entity
     /// type is refused by name. Asked on the client on every resource load, the first one and each
     /// reload, after the renderers resolve (`register_entity_renderers`): layers don't carry over
-    /// from one load to the next, so add them again each time.
+    /// from one load to the next, so add them again each time. In the ordered body pass,
+    /// layers submit in level join order, interleaved with general entity renderer submissions.
     #[notes = r#"## Entity layers
 
 An entity layer (NeoForge's `EntityRenderersEvent.AddLayers` and `RenderLayer`) draws over a living entity
 renderer: armour of a mod's own, a glow, something held or worn. `Hooks::register_entity_layers` is asked on
 every resource load, after the entity renderers resolve, since a reload builds the renderers again and the
 layers don't carry over; the game resolves each target's layers to the slot its draw reads, so a frame
-hands an entity to its target's layers only.
+hands an entity to its target's layers only. In the ordered body pass the layers submit in level join
+order, including the local player at its own slot when its body is submitted, interleaved with
+submissions from general entity renderers.
 
 ```rust,ignore
 struct Halo;
@@ -64,13 +67,13 @@ draw in the order they were added, after the entity's model and its vanilla laye
 frame (at its feet, turned with its body, as `render_living_pre` draws). `entity.yaw` is the body's turn
 and `entity.pitch` the head's; `parts` has a humanoid model's posed parts, to attach to an arm or the
 head; they are kept from the model's draw only for a type or player model with a layer (or while a mod
-listens to the render hook pair). A layer that returns an `Err`, panics, or (in a wasm mod) has its call
-refused or trapped is logged once with the error and asked no more until the next resource load adds it
-again; what it drew that frame is dropped. The layers draw on the mobs (vanilla's and the content mods'
+listens to the render hook pair). A layer that returns an `Err` or panics is logged once with the error
+and asked no more until the next resource load adds it again; what it drew that frame is dropped. The layers draw on the mobs (vanilla's and the content mods'
 living types) and the players; the armour stand and the ender dragon take them once their own draws run
 layers, in a follow-up of #860, which lifts their refusal."#]
     #[hook(
         side = "client",
+        version = 3,
         contract = "listen",
         context = "registration",
         neoforge = "EntityRenderersEvent.AddLayers"

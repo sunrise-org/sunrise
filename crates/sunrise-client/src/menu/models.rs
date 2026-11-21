@@ -1,5 +1,5 @@
 //! Engine menu records and slot access.
-use super::ItemStack;
+use super::{Env, ItemStack};
 /// Operations on the clicked slot, including its placement and take rules.
 pub trait SlotView {
     /// Run against staged owner state; commit all changes only when accepted.
@@ -36,6 +36,10 @@ pub struct StackedOutcome {
     pub carried: Option<Option<ItemStack>>,
     /// The clicked slot after a cancelled, handled click.
     pub clicked: Option<Option<ItemStack>>,
+    /// Set by the click when the clicked slot's own rules refuse `clicked` (it changes a slot
+    /// whose `onTake` would not run, takes what `mayPickup` keeps, or puts in what `mayPlace` or
+    /// the slot's size refuses): the click changed nothing and its decision is undone.
+    pub refused: std::cell::Cell<bool>,
 }
 /// Who and where a `menu_slot_rules` ask is about: the player whose menu it is, the menu's
 /// block, the container the asked slot indexes, and the menu's own containers' slots as they
@@ -169,6 +173,18 @@ pub struct GrindstoneTake {
     pub new_top: Option<ItemStack>,
     pub new_bottom: Option<ItemStack>,
 }
+
+impl GrindstoneTake {
+    /// `GrindstoneMenu.getExperienceAmount`, before the server rolls Level.random.
+    pub fn vanilla_amount(&self, env: &Env<'_>) -> i32 {
+        crate::stations::grindstone_xp_base(
+            env.enchantments,
+            self.top.as_ref(),
+            self.bottom.as_ref(),
+        )
+    }
+}
+
 /// An anvil craft as `AnvilCraftEvent` reports it: the inputs and the result
 /// taken, before the crafting changed anything.
 #[derive(Clone, Debug, PartialEq)]

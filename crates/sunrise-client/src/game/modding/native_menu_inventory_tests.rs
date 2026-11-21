@@ -8,7 +8,19 @@ use sunrise_core::nbt::Tag;
 struct Listener;
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for Listener {
-    fn menu_clicked(&self, host: &mut dyn ServerHost, event: &mut mod_api::MenuClickedEvent) {
+    fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+        r.menu_part("minecraft:generic_9x1", InventoryPart);
+    }
+}
+
+struct InventoryPart;
+#[mod_api::sunrise_part]
+impl mod_api::MenuPart for InventoryPart {
+    fn menu_clicked(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::MenuClickedEvent<'_>,
+    ) -> mod_api::Flow {
         assert_eq!(event.uuid, 12);
         assert_eq!(
             ItemPlace::PlayerSlot {
@@ -55,117 +67,132 @@ impl mod_api::Hooks for Listener {
             Ok::<_, ()>(())
         })
         .unwrap();
+        mod_api::Flow::Cancel
     }
 }
 
-fn exercise(reopen: bool) {
-    mod_platform::testing::with_mods(
-        vec![mod_api::ModEntry::new("inventory", Box::new(Listener))].into(),
-        || {
-            with_guests(|game| {
-                let root = tempfile::tempdir().unwrap();
-                game.lan
-                    .as_mut()
-                    .unwrap()
-                    .hub
-                    .update_guest(12, |g| {
-                        g.inventory[0] = Some(ItemStack::new("minecraft:stone", 3));
-                        g.inventory[9] = Some(ItemStack::new("minecraft:stone", 10));
-                        g.inventory[11] = Some(ItemStack::new("minecraft:ender_pearl", 12));
-                        if reopen {
-                            let mut level = sunrise_client::save::Level {
-                                player_uuid: Some(playerdata::uuid_ints(g.uuid)),
-                                ..Default::default()
-                            };
-                            playerdata::store(g, &mut level, None);
-                            level.write(root.path(), &Default::default()).unwrap();
-                            playerdata::save_now(g, root.path(), &Default::default()).unwrap();
-                            g.inventory.fill(None);
-                            let reopened = sunrise_client::save::Level::read(root.path()).unwrap();
-                            assert!(playerdata::load_owner(g, root.path(), Some(&reopened)));
-                            assert_eq!(g.uuid, 12);
-                        }
-                    })
-                    .unwrap();
-                let window = game
-                    .lan
-                    .as_mut()
-                    .unwrap()
-                    .hub
-                    .open_native_menu(12, 1, Tag::String("inventory".into()), vec![None; 9])
-                    .unwrap();
-                let player = game.player(12).unwrap();
-                let menu = player.container_menu(game).unwrap();
-                let stone = mod_api::ItemResource::of(
-                    &ItemStack::new("minecraft:stone", 1).try_into_api().unwrap(),
-                );
-                let dirt = mod_api::ItemResource::of(
-                    &ItemStack::new("minecraft:dirt", 1).try_into_api().unwrap(),
-                );
-                let take = ItemPlace::MenuSlot { menu, slot: 9 };
-                let give = ItemPlace::MenuSlot { menu, slot: 10 };
-                let partial = ItemPlace::MenuSlot { menu, slot: 11 };
-                // The hook runs without a guest swapped in; use that same Host state.
-                assert!(game.lan_acting.is_none());
-                let hand = ItemPlace::PlayerHand {
-                    player: 12,
-                    hand: mod_api::Hand::Main,
-                };
-                assert_eq!(hand.stack(game).unwrap().count(), 3);
-                let direct = ItemPlace::PlayerSlot {
-                    player: 12,
-                    slot: 9,
-                };
-                assert_eq!(direct.stack(game).unwrap().count(), 10);
-                let foreign_player = mod_api::__private::game::player_ref(player.entity(), 13);
-                let foreign = mod_api::__private::game::menu_ref(
-                    foreign_player,
-                    window,
-                    menu.fields().generation,
-                );
-                let foreign = ItemPlace::MenuSlot {
-                    menu: foreign,
-                    slot: 9,
-                };
-                (game as &mut dyn ServerHost)
-                    .transaction(|host, tx| {
-                        assert_eq!(foreign.extract(host, tx, &stone, 4), 0);
-                        assert_eq!(foreign.insert(host, tx, &dirt, 5), 0);
-                        Ok::<_, ()>(())
-                    })
-                    .unwrap();
-                game.native_menu_clicked(12, window, 9, 0, 0);
-                assert_eq!(take.stack(game).unwrap().count(), 6);
-                assert_eq!(give.stack(game).unwrap().count(), 5);
-                assert_eq!(partial.stack(game).unwrap().count(), 16);
-                let aborted: Result<(), ()> =
-                    (game as &mut dyn ServerHost).transaction(|host, tx| {
-                        assert_eq!(give.insert(host, tx, &dirt, 3), 3);
-                        Err(())
-                    });
-                assert!(aborted.is_err());
-                assert_eq!(give.stack(game).unwrap().count(), 5);
-                game.lan
-                    .as_mut()
-                    .unwrap()
-                    .hub
-                    .open_native_menu(12, 1, Tag::String("replacement".into()), vec![None; 9])
-                    .unwrap();
-                (game as &mut dyn ServerHost)
-                    .transaction(|host, tx| {
-                        assert_eq!(take.extract(host, tx, &stone, 4), 0);
-                        assert_eq!(give.insert(host, tx, &dirt, 5), 0);
-                        Ok::<_, ()>(())
-                    })
-                    .unwrap();
-                assert_ne!(
-                    player.container_menu(game).unwrap().container_id(game),
-                    Some(window)
-                );
-                assert_eq!(direct.stack(game).unwrap().count(), 6);
-            });
-        },
+fn click(game: &mut super::Game<'_>, window: i32) {
+    use sunrise_protocol::packets::play::{ContainerClick, Serverbound};
+    game.lan_guest_packet(
+        12,
+        Serverbound::ContainerClick(ContainerClick {
+            container: window,
+            state: 0,
+            slot: 9,
+            button: 0,
+            input: 0,
+            changed: Vec::new(),
+            carried: None,
+        }),
     );
+}
+
+fn exercise(reopen: bool) {
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new("inventory", Box::new(Listener))].into();
+    mod_platform::testing::with_mods(mods.clone(), || {
+        crate::game::api_values::install_parts(&mods).unwrap();
+        with_guests(|game| {
+            let root = tempfile::tempdir().unwrap();
+            game.lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .update_guest(12, |g| {
+                    g.inventory[0] = Some(ItemStack::new("minecraft:stone", 3));
+                    g.inventory[9] = Some(ItemStack::new("minecraft:stone", 10));
+                    g.inventory[11] = Some(ItemStack::new("minecraft:ender_pearl", 12));
+                    if reopen {
+                        let mut level = sunrise_client::save::Level {
+                            player_uuid: Some(playerdata::uuid_ints(g.uuid)),
+                            ..Default::default()
+                        };
+                        playerdata::store(g, &mut level, None);
+                        level.write(root.path(), &Default::default()).unwrap();
+                        playerdata::save_now(g, root.path(), &Default::default()).unwrap();
+                        g.inventory.fill(None);
+                        let reopened = sunrise_client::save::Level::read(root.path()).unwrap();
+                        assert!(playerdata::load_owner(g, root.path(), Some(&reopened)));
+                        assert_eq!(g.uuid, 12);
+                    }
+                })
+                .unwrap();
+            let window = game
+                .lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .open_native_menu(12, 1, Tag::String("inventory".into()), vec![None; 9])
+                .unwrap();
+            let player = game.player(12).unwrap();
+            let menu = player.container_menu(game).unwrap();
+            let stone = mod_api::ItemResource::of(
+                &ItemStack::new("minecraft:stone", 1).try_into_api().unwrap(),
+            );
+            let dirt = mod_api::ItemResource::of(
+                &ItemStack::new("minecraft:dirt", 1).try_into_api().unwrap(),
+            );
+            let take = ItemPlace::MenuSlot { menu, slot: 9 };
+            let give = ItemPlace::MenuSlot { menu, slot: 10 };
+            let partial = ItemPlace::MenuSlot { menu, slot: 11 };
+            // The hook runs without a guest swapped in; use that same Host state.
+            assert!(game.lan_acting.is_none());
+            let hand = ItemPlace::PlayerHand {
+                player: 12,
+                hand: mod_api::Hand::Main,
+            };
+            assert_eq!(hand.stack(game).unwrap().count(), 3);
+            let direct = ItemPlace::PlayerSlot {
+                player: 12,
+                slot: 9,
+            };
+            assert_eq!(direct.stack(game).unwrap().count(), 10);
+            let foreign_player = mod_api::__private::game::player_ref(player.entity(), 13);
+            let foreign = mod_api::__private::game::menu_ref(
+                foreign_player,
+                window,
+                menu.fields().generation,
+            );
+            let foreign = ItemPlace::MenuSlot {
+                menu: foreign,
+                slot: 9,
+            };
+            (game as &mut dyn ServerHost)
+                .transaction(|host, tx| {
+                    assert_eq!(foreign.extract(host, tx, &stone, 4), 0);
+                    assert_eq!(foreign.insert(host, tx, &dirt, 5), 0);
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+            click(game, window);
+            assert_eq!(take.stack(game).unwrap().count(), 6);
+            assert_eq!(give.stack(game).unwrap().count(), 5);
+            assert_eq!(partial.stack(game).unwrap().count(), 16);
+            let aborted: Result<(), ()> = (game as &mut dyn ServerHost).transaction(|host, tx| {
+                assert_eq!(give.insert(host, tx, &dirt, 3), 3);
+                Err(())
+            });
+            assert!(aborted.is_err());
+            assert_eq!(give.stack(game).unwrap().count(), 5);
+            game.lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .open_native_menu(12, 1, Tag::String("replacement".into()), vec![None; 9])
+                .unwrap();
+            (game as &mut dyn ServerHost)
+                .transaction(|host, tx| {
+                    assert_eq!(take.extract(host, tx, &stone, 4), 0);
+                    assert_eq!(give.insert(host, tx, &dirt, 5), 0);
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+            assert_ne!(
+                player.container_menu(game).unwrap().container_id(game),
+                Some(window)
+            );
+            assert_eq!(direct.stack(game).unwrap().count(), 6);
+        });
+    });
 }
 
 #[test]
@@ -193,7 +220,19 @@ mod owner {
     struct Owner;
     #[mod_api::__subscriptions]
     impl mod_api::Hooks for Owner {
-        fn menu_clicked(&self, host: &mut dyn ServerHost, event: &mut mod_api::MenuClickedEvent) {
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            r.menu_part("minecraft:generic_9x5", OwnerPart);
+        }
+    }
+
+    struct OwnerPart;
+    #[mod_api::sunrise_part]
+    impl mod_api::MenuPart for OwnerPart {
+        fn menu_clicked(
+            &self,
+            host: &mut dyn ServerHost,
+            event: &mut mod_api::MenuClickedEvent<'_>,
+        ) -> mod_api::Flow {
             let menu = host.menu(event.uuid, event.window).unwrap();
             let diamond = mod_api::ItemResource::of(
                 &ItemStack::new("minecraft:diamond", 1)
@@ -219,43 +258,43 @@ mod owner {
             })
             .unwrap();
             SEEN.with(|s| *s.borrow_mut() = seen);
+            mod_api::Flow::Cancel
         }
     }
 
     #[test]
     #[ignore = "daily"]
     fn menu_clicked_moves_the_owners_hotbar_slot_and_cursor() {
-        mod_platform::testing::with_mods(
-            vec![mod_api::ModEntry::new("owner", Box::new(Owner))].into(),
-            || {
-                with_guests(|game| {
-                    game.level.player_uuid = Some(playerdata::uuid_ints(12));
-                    game.lan
-                        .as_mut()
-                        .unwrap()
-                        .hub
-                        .update_guest(12, |g| {
-                            g.inventory[0] = Some(ItemStack::new("minecraft:diamond", 2));
-                        })
-                        .unwrap();
-                    let window = game
-                        .lan
-                        .as_mut()
-                        .unwrap()
-                        .hub
-                        .open_native_menu(12, 5, Tag::String("owner".into()), vec![None; 45])
-                        .unwrap();
-                    game.native_menu_clicked(12, window, 9, 0, 0);
-                    // Each extract takes 1, the own slot and the cursor take 1; then 0 left
-                    // in the first slot's pair of reads (2 - 1 - 1).
-                    assert_eq!(SEEN.with(|s| s.borrow().clone()), [1, 1, 1, 1, 0, 0]);
-                    let guest = &game.lan.as_ref().unwrap().hub.guests[0];
-                    assert!(guest.inventory[0].is_none());
-                    assert_eq!(guest.carried.as_ref().map(|s| s.count), Some(1));
-                    assert_eq!(guest.native_menu[9].as_ref().map(|s| s.count), Some(1));
-                });
-            },
-        );
+        let mods: mod_api::Mods = vec![mod_api::ModEntry::new("owner", Box::new(Owner))].into();
+        mod_platform::testing::with_mods(mods.clone(), || {
+            crate::game::api_values::install_parts(&mods).unwrap();
+            with_guests(|game| {
+                game.level.player_uuid = Some(playerdata::uuid_ints(12));
+                game.lan
+                    .as_mut()
+                    .unwrap()
+                    .hub
+                    .update_guest(12, |g| {
+                        g.inventory[0] = Some(ItemStack::new("minecraft:diamond", 2));
+                    })
+                    .unwrap();
+                let window = game
+                    .lan
+                    .as_mut()
+                    .unwrap()
+                    .hub
+                    .open_native_menu(12, 5, Tag::String("owner".into()), vec![None; 45])
+                    .unwrap();
+                click(game, window);
+                // Each extract takes 1, the own slot and the cursor take 1; then 0 left
+                // in the first slot's pair of reads (2 - 1 - 1).
+                assert_eq!(SEEN.with(|s| s.borrow().clone()), [1, 1, 1, 1, 0, 0]);
+                let guest = &game.lan.as_ref().unwrap().hub.guests[0];
+                assert!(guest.inventory[0].is_none());
+                assert_eq!(guest.carried.as_ref().map(|s| s.count), Some(1));
+                assert_eq!(guest.native_menu[9].as_ref().map(|s| s.count), Some(1));
+            });
+        });
     }
 
     /// A hook running in another level than the owner's reaches the owner's own inventory,

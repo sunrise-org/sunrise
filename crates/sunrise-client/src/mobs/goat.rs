@@ -575,7 +575,7 @@ fn finish_ram(m: &mut Mob, events: &mut Vec<MobEvent>) {
 /// `Goat.addAdditionalSaveData` and the `GoatAi` brain memory Sunrise writes
 /// with it: the screaming flag, the missing horns and the long jump cooldown
 /// (`LONG_JUMP_COOLDOWN_TICKS`, an integer memory in the brain).
-pub fn write_nbt(m: &Mob, map: &mut sunrise_core::nbt::Compound) {
+pub fn write_nbt(m: &Mob, map: &mut crate::entity_nbt::EntityTagWriter) {
     use sunrise_core::nbt::Tag;
     map.insert(
         "IsScreamingGoat".into(),

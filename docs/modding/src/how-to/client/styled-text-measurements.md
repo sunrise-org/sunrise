@@ -2,7 +2,7 @@
 
 Measure styled text without a draw context. Use `ClientHost::text_width(&Text)` and `text_split(&Text, width)`:
 these are reads of the client's active font in unscaled GUI pixels, also usable
-in client setup. Native and wasm mods use the same methods.
+in client setup.
 
 | Method on `ClientHost` | Result |
 | --- | --- |
@@ -34,11 +34,14 @@ methods. These reads use that same role—the active client font—without passi
 an engine font object or requiring a `DrawContext`. They do not draw anything
 and do not expose a full rendering context.
 
+Chat and signs can [substitute inline images](dynamic-textures.md#inline-images-in-chat-and-signs) before their own
+layout. The reads above measure the component you pass, without running that presentation hook.
+
 ## Resolved strings
 
 For vanilla `Component.getString()` behavior, use
 `host.text_string(&Text) -> Result<String, TextFormError>` on either side,
-including setup, on native and wasm. It uses the same component conversion as
+including setup. It uses the same component conversion as
 measurement: translation arguments, keybinds and siblings resolve on each call.
 Styles do not add characters; literal legacy `§` formatting codes remain in the
 string. Invalid components return the same boundary errors as the other text reads.
@@ -77,8 +80,7 @@ Each API-owned Wire record contains a Unicode scalar (`scalar`), its full
 resolved `TextStyle`, and the sink's `source_index`. Characters are already in
 visual order, including Arabic shaping and mirrored punctuation; do not apply
 bidi a second time. This read uses the engine's existing language and bidi
-pipeline, is available outside drawing including client setup, and is identical
-on native and wasm.
+pipeline, is available outside drawing, including client setup.
 
 Sink indices are UTF-16 offsets local to a constant-style substring within a
 directional run, not global component positions. For example, `A😀B` yields

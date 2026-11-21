@@ -145,7 +145,7 @@ impl Game<'_> {
         }
     }
 
-    /// The box of a boat, minecart, armor stand, item frame or painting, and
+    /// The box of a boat, minecart, armor stand, item frame, painting or general row, and
     /// the point an interact packet's location is measured from (the
     /// client's `remote_object_hit` uses the same points).
     pub(super) fn object_target(&self, id: i32) -> Option<([f64; 3], [f64; 3], [f64; 3])> {
@@ -179,9 +179,13 @@ impl Game<'_> {
             let (lo, hi) = f.bounds();
             return Some((lo, hi, centre(f.pos)));
         }
-        let p = self.paintings.iter().find(|p| p.id == id)?;
-        let (lo, hi) = p.bounds();
-        Some((lo, hi, centre(p.pos)))
+        if let Some(p) = self.paintings.iter().find(|p| p.id == id) {
+            let (lo, hi) = p.bounds();
+            return Some((lo, hi, centre(p.pos)));
+        }
+        let row = self.general_row(id)?;
+        let (lo, hi) = corners(super::entity::Entity::bounds(row));
+        Some((lo, hi, at(row.position)))
     }
 
     /// The vehicles the server's players ride: they move with their riders,
@@ -217,11 +221,11 @@ impl Game<'_> {
         let Some(host) = self.lan.as_ref() else {
             return;
         };
-        let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
+        let Some(gi) = host.hub.guests.connection_index(conn) else {
             return;
         };
         let g = &host.hub.guests[gi];
-        let Some(vehicle) = g.vehicle else {
+        let Some(vehicle) = g.vehicle.filter(|_| host.hub.here(g)) else {
             return;
         };
         if self.persist.removed_vehicles.contains_key(&vehicle) {
@@ -252,24 +256,6 @@ impl Game<'_> {
             // `Entity.ejectPassengers`: every player in the boat must see
             // the request; the common boat tick clears it once nobody rides.
             ejected = self.boats[i].eject_riders;
-        }
-        // ServerGamePacketListenerImpl.tick: the vehicle's last good position
-        // is where it is now, so a move the server made (a piston, a push)
-        // is not held against the rider's next move, which would fail, be
-        // sent back, and fail again on every answer.
-        let at = boat.map(|i| self.boats[i].position).or_else(|| {
-            self.mobs
-                .iter()
-                .find(|m| m.id == vehicle && equine::moved_by_client(m))
-                .map(|m| m.position)
-        });
-        if let Some(p) = at {
-            {
-                let value = Some([p.x, p.y, p.z]);
-                host.hub
-                    .guests
-                    .update(gi, |guest| guest.vehicle_good = value);
-            }
         }
         // Getting out goes through leave_guest, which tells the client and
         // teleports it (ServerPlayer.dismountTo).
@@ -317,6 +303,38 @@ impl Game<'_> {
                 g.previous_position = g.position;
                 g.position = at;
             });
+        }
+    }
+
+    /// ServerGamePacketListenerImpl.tickPlayer records the vehicle's last good
+    /// position after doTick, so movement by the server is not held against the
+    /// rider's next packet.
+    pub(super) fn guest_vehicle_movement_baseline(&mut self, conn: u32) {
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        let Some(gi) = host.hub.guests.connection_index(conn) else {
+            return;
+        };
+        let guest = &host.hub.guests[gi];
+        let Some(vehicle) = guest.vehicle.filter(|_| host.hub.here(guest)) else {
+            return;
+        };
+        let at = self
+            .boats
+            .iter()
+            .find(|b| b.id == vehicle)
+            .map(|b| b.position)
+            .or_else(|| {
+                self.mobs
+                    .iter()
+                    .find(|m| m.id == vehicle && equine::moved_by_client(m))
+                    .map(|m| m.position)
+            });
+        if let Some(p) = at {
+            host.hub
+                .guests
+                .update(gi, |g| g.vehicle_good = Some([p.x, p.y, p.z]));
         }
     }
 
@@ -461,7 +479,7 @@ impl Game<'_> {
                 b.velocity,
                 b.bounds(),
                 0.0,
-                b.on_ground,
+                b.ground.on_ground,
             )
         } else if let Some(i) = mount {
             let m = &self.mobs[i];
@@ -618,13 +636,40 @@ impl Game<'_> {
                     Some(&self.pack.block_registries),
                     &self.damage_hooks,
                 );
-                m.client_moved_fall(&w, &mut level, delta, p.on_ground, &mut events);
+                m.client_moved_fall(&w, &mut level, delta, p.on_ground, &mut events)
             }));
             lent.give_back(&mut self.world);
-            if let Err(panic) = outcome {
-                std::panic::resume_unwind(panic);
-            }
+            let trample = outcome.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            let (id, join) = (m.id, m.join);
             self.mobs[i] = m;
+            if let Some(trample) = trample {
+                self.trample_farmland(id, false, trample);
+                if let Some(i) = self
+                    .mobs
+                    .iter()
+                    .position(|mob| mob.id == id && mob.join == join && !mob.removed)
+                {
+                    let mut m = self.mobs[i].clone();
+                    let mut lent = sunrise_client::health::LentLevel::take(&mut self.world);
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let w = self.mob_world_base(&[]);
+                        let mut level = sunrise_client::health::DamageLevel::lent(
+                            &self.world,
+                            self.pack.assets.registry,
+                            &mut lent,
+                            Some(self.items()),
+                            Some(&self.pack.block_registries),
+                            &self.damage_hooks,
+                        );
+                        m.finish_trample_fall(&w, &mut level, &mut events, trample);
+                    }));
+                    lent.give_back(&mut self.world);
+                    if let Err(panic) = outcome {
+                        std::panic::resume_unwind(panic);
+                    }
+                    self.mobs[i] = m;
+                }
+            }
             // propagateFallToPassengers reaches the guests through `host`: it is out
             // of `self.lan` while their packet is handled.
             let falls: Vec<(u32, f64, f32)> = events
@@ -681,7 +726,7 @@ impl Game<'_> {
             b.position = target;
             b.previous_yaw = b.yaw;
             b.yaw = p.yaw;
-            b.on_ground = p.on_ground;
+            b.ground.on_ground = p.on_ground;
         });
         // handleMoveVehicle's `vehicle.move` counts the fall
         // (AbstractBoat.checkFallDamage); the server's baseTick resets it in

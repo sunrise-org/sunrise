@@ -10,8 +10,6 @@ pub trait Hooks {
     /// state vanilla or an earlier addition already gives to a different type; the rest
     /// of a mod's additions still apply. A state added to the type it already has is a
     /// no-op. A tag predicate is refused: additions name blocks.
-    /// Wasm subscriptions refuse at load, naming the borrowed metadata capability;
-    /// this hook is not silently skipped when its context cannot cross Wire.
     #[notes = r#"## Extend POI types
 
 `extend_poi_types` runs once the block registry is resolved, before any world's point of
@@ -32,10 +30,7 @@ There are no new POI types: a mod extends vanilla's, as NeoForge's event does.
 
 The extension table is process-wide, like the loaded mod set: re-collecting replaces
 classification for every simultaneously live resource set. Villagers cache only vanilla
-classification and consult the current extension table, just as saves and locate do.
-Wasm subscriptions to this hook currently refuse at load with a reason naming
-`PoiTypeExtensions::metadata`: its borrowed `BlockMetadata` accessor cannot yet cross
-Wire. No wasm registration runs partially or silently omits metadata."#]
+classification and consult the current extension table, just as saves and locate do."#]
     #[hook(
         side = "server",
         contract = "collect",

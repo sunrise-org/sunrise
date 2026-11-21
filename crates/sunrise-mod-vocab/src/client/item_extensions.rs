@@ -1,5 +1,4 @@
 //! Item-owned client behaviour for worn equipment. Registered anew at resource load.
-use crate::wire::{Reader, Wire, WireError, Writer};
 use crate::{ClientHost, ItemKey, ItemStack, ModelPart};
 use std::sync::Arc;
 
@@ -100,10 +99,9 @@ impl EquipmentLayer {
 
 /// The single provider attached to one item for worn equipment rendering.
 /// Only visible equipped pieces which pass the equippable slot/asset gate are queried.
-/// Native and wasm use these same methods and reload-issued references; geometry never
-/// crosses Wire during a frame. Register trees and textures through the reload registrar.
-/// A panicking native callback or refused/trapped wasm callback discards every layer of
-/// the piece, draws it with vanilla behaviour, and disables the provider until reload.
+/// Register trees and textures through the reload registrar and use the references it returns.
+/// If the callback panics, the game discards every layer of the piece, draws it with vanilla
+/// behaviour, and disables the provider until reload.
 pub trait ClientItemExtensions: Send + Sync + 'static {
     /// Choose the tree for one material layer, after its nonzero tint and texture resolve.
     /// Humanoid pose and slot visibility are copied onto the registered tree.
@@ -176,7 +174,6 @@ pub trait ClientItemExtensions: Send + Sync + 'static {
         default
     }
 }
-crate::wire::wire_handlers::handler!(dyn ClientItemExtensions, "ClientItemExtensions");
 
 /// Client resource-load registration. Models, textures and item providers refresh together.
 /// No registration carries over to the next resource load.

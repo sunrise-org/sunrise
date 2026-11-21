@@ -108,7 +108,11 @@ fn client_menu_click_refuses_a_host_without_its_backend() {
 #[test]
 fn level_family_accepts_empty_doubles() {
     struct Empty;
-    impl LevelHost for Empty {}
+    impl LevelHost for Empty {
+        fn block_entity_data(&self, _: mod_api::BlockEntityRef) -> Option<mod_api::Compound> {
+            None
+        }
+    }
     impl LevelRandomHost for Empty {}
     impl LevelTicksHost for Empty {}
     impl LevelWriteHost for Empty {}
@@ -184,6 +188,9 @@ fn render_hand_chains_pose_and_draw_until_cancelled() {
         fn push(&mut self) {
             self.0 += 1;
         }
+    }
+    impl crate::HandDrawContext for Draw {
+        fn render_arm(&mut self, _: crate::MainHand) {}
     }
     #[mod_api::__subscriptions]
     impl Hooks for HandMod {

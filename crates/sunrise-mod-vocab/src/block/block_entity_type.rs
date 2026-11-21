@@ -47,14 +47,14 @@ impl From<(crate::Identifier, String)> for TransformRefusal {
     }
 }
 
-/// Saved-data transform, shared by native and wasm declarations.
+/// Saved-data transform.
 /// Runs on the server during structure placement, possibly on worldgen worker threads.
 /// Its only inputs are saved data, rotation and mirror. Determinism is the mod's
 /// obligation, not enforced: any matching `Send + Sync` closure is accepted.
 /// The engine preserves the original `id` and any original `x`, `y`, `z` fields.
 /// Return a refusal to keep the original data. Output must fit standard NBT limits
 /// (64 MiB, one million nodes, depth 512); invalid output keeps the original.
-/// Do not panic: native unwinds are caught, and wasm traps refuse the call.
+/// Do not panic: unwinds are caught and refuse the call.
 pub trait BlockEntityTransform: Send + Sync + 'static {
     /// Transform saved data; no Host or world handle is supplied.
     fn transform(
@@ -119,7 +119,7 @@ impl fmt::Display for BlockEntityPartError {
 impl std::error::Error for BlockEntityPartError {}
 
 // no wire: borrowed host or registrar backend; access stays scoped to the owning call.
-/// Builds one mod block entity type during registration on native and wasm.
+/// Builds one mod block entity type during registration.
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct BlockEntityTypeBuilder<'a> {
     pub(crate) registrar: &'a mut dyn crate::Registrar,

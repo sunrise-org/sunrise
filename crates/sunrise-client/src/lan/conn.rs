@@ -8,6 +8,8 @@
 //! keep-alive schedule on their own so a long tick never times a client out.
 mod configuration_tasks;
 mod payloads;
+#[path = "transaction_packets.rs"]
+pub mod transaction_packets;
 use super::config_payloads::ConfigIo;
 use super::{
     Body, Joined, NetEvent, Out, Shared,
@@ -280,6 +282,8 @@ pub struct PlayerSender {
     pub undrained: Arc<Undrained>,
     /// The bytes of the bodies sent and not framed yet.
     pub pending: Arc<AtomicUsize>,
+    /// Bytes a network client may leave queued before it is closed ([`io_pool::MAX_PENDING`]).
+    cap: usize,
     held: Arc<Mutex<Vec<Body>>>,
     framing: sunrise_protocol::connection::Framing,
     to: To,
@@ -358,6 +362,7 @@ impl PlayerSender {
         Self {
             undrained: Arc::default(),
             pending,
+            cap: io_pool::MAX_PENDING,
             held: Arc::default(),
             framing: sunrise_protocol::connection::Framing::Network(None),
             to: To::Channel(tx),
@@ -392,6 +397,7 @@ impl PlayerSender {
             payload_transport: transport,
             undrained: Arc::default(),
             pending,
+            cap: io_pool::MAX_PENDING,
             held: Arc::default(),
             framing: sunrise_protocol::connection::Framing::Memory,
             to: To::Pool(
@@ -414,6 +420,7 @@ impl PlayerSender {
         Self {
             undrained: Arc::default(),
             pending: Arc::default(),
+            cap: io_pool::MAX_PENDING,
             held: Arc::default(),
             framing: sunrise_protocol::connection::Framing::Network(None),
             to: To::Disabled,
@@ -451,9 +458,21 @@ impl PlayerSender {
     fn reserve(&self, cost: usize) -> bool {
         self.pending
             .try_update(Ordering::AcqRel, Ordering::Relaxed, |n| {
-                n.checked_add(cost).filter(|n| *n <= io_pool::MAX_PENDING)
+                n.checked_add(cost).filter(|n| *n <= self.cap)
             })
             .is_ok()
+    }
+    /// Count a packet's bytes as queued. A network connection is refused (false) past its
+    /// cap, where the caller closes it. A memory connection counts the bytes but never
+    /// refuses: its reader is this process, and a join sends its whole first view in one
+    /// burst. `pending` may then exceed [`io_pool::MAX_PENDING`] until it drains, and
+    /// `prepare_payload` can answer `Backpressure` meanwhile.
+    fn reserve_queued(&self, cost: usize) -> bool {
+        if matches!(self.framing, sunrise_protocol::connection::Framing::Memory) {
+            self.pending.fetch_add(cost, Ordering::AcqRel);
+            return true;
+        }
+        self.reserve(cost)
     }
     /// Prepare a whole encoded packet without publishing it. The channel is diagnostic only;
     /// its wire identifier must already be included in `body`.
@@ -505,10 +524,17 @@ impl PlayerSender {
         if matches!(self.to, To::Disabled) {
             return;
         }
-        if !self.reserve(io_pool::charge(body.retained())) {
+        let cost = io_pool::charge(body.retained());
+        let Err(body) = transaction_packets::capture(self, body, cost) else {
+            return;
+        };
+        if !self.reserve_queued(cost) {
             self.close();
             return;
         }
+        self.publish_reserved(body);
+    }
+    fn publish_reserved(&self, body: Body) {
         if HOLDING.get() {
             self.held().push(body);
         } else {
@@ -540,7 +566,7 @@ impl PlayerSender {
         if matches!(self.to, To::Disabled) {
             return;
         }
-        if !HOLDING.get() {
+        if !HOLDING.get() || transaction_packets::active() {
             bodies
                 .into_iter()
                 .for_each(|body| self.send_body(body.into()));
@@ -549,11 +575,49 @@ impl PlayerSender {
         let mut held = self.held();
         for body in bodies {
             let body = body.into();
-            if !self.reserve(io_pool::charge(body.retained())) {
+            if !self.reserve_queued(io_pool::charge(body.retained())) {
                 self.close();
                 return;
             }
             held.push(body);
+        }
+    }
+    /// Queue a bundle (including both delimiters) without interleaving output.
+    pub(super) fn send_batch<B: Into<Body>>(&self, bodies: impl IntoIterator<Item = B>) {
+        if matches!(self.to, To::Disabled) {
+            return;
+        }
+        let bodies = bodies.into_iter().map(Into::into).collect::<Vec<_>>();
+        if bodies.is_empty() {
+            return;
+        }
+        let cost = bodies
+            .iter()
+            .map(|body| io_pool::charge(body.retained()))
+            .sum();
+        let Err(bodies) = transaction_packets::capture(self, bodies, cost) else {
+            return;
+        };
+        if !self.reserve_queued(cost) {
+            self.close();
+            return;
+        }
+        self.publish_reserved_many(bodies);
+    }
+
+    fn publish_reserved_many(&self, bodies: Vec<Body>) {
+        if bodies.is_empty() {
+            return;
+        }
+        if HOLDING.get() {
+            self.held().extend(bodies);
+        } else {
+            self.flush();
+            match &self.to {
+                To::Disabled => {}
+                To::Channel(tx) => drop(tx.send(unshared(bodies))),
+                To::Pool(outbox, _) => outbox.send(bodies, None),
+            }
         }
     }
     /// Hand the held packets to the network thread.
@@ -578,7 +642,7 @@ impl PlayerSender {
             To::Pool(outbox, _) => {
                 let body = play::Clientbound::Disconnect(cfg::Disconnect { reason }).encode();
                 let body = Body::from(body);
-                if !self.reserve(io_pool::charge(body.retained())) {
+                if !self.reserve_queued(io_pool::charge(body.retained())) {
                     self.close();
                     return;
                 }
@@ -1193,10 +1257,10 @@ fn login_and_configure(
     let mut payload_negotiation = sunrise_protocol::payload_negotiation::Negotiation::new(
         payload_transport.local.manifest.clone(),
     );
-    // Only a mod's declaration opens negotiation before the client is known, as
-    // the client does: with the engine's alone a vanilla client is sent nothing
-    // vanilla's server would not send it. A Sunrise client is asked once it names
-    // itself, and answers before the barrier at its known-packs reply.
+    // Only a mod's declaration opens negotiation before the client is known: with the
+    // engine's alone a vanilla client is sent nothing vanilla's server would not send it.
+    // A Sunrise client is asked once it names itself, and answers before the barrier at its
+    // known-packs reply.
     if payload_transport.local.has_mod_declarations()
         && let Some(control) = payload_negotiation.initial()
     {
@@ -1920,6 +1984,14 @@ fn play(
             return;
         }
     };
+    if let Some(queue) = parts
+        .payload_transport
+        .connection
+        .as_ref()
+        .and_then(|connection| connection.droppable())
+    {
+        outbox.attach_droppable(queue.clone());
+    }
     let latency = Arc::new(AtomicI32::new(0));
     let watch = Arc::new(KeepAliveWatch {
         start: Instant::now(),
@@ -1929,6 +2001,7 @@ fn play(
     let sender = PlayerSender {
         undrained: undrained.clone(),
         pending,
+        cap: io_pool::MAX_PENDING,
         held: Arc::default(),
         framing: c.writer.framing(),
         to: To::Pool(outbox.clone(), watch.clone()),
@@ -3670,6 +3743,7 @@ mod outgoing_budget_tests {
             payload_transport: Transport::empty(),
             undrained: Arc::default(),
             pending,
+            cap: io_pool::MAX_PENDING,
             held: Arc::default(),
             framing,
             to: To::Pool(
@@ -3752,6 +3826,27 @@ mod outgoing_budget_tests {
         let reserved = s.prepare_payload(vec![1; 400], &id).unwrap();
         assert!(s.pending.load(Ordering::Relaxed) > before + 20000);
         drop(reserved);
+    }
+    /// #3423: a join's first view can queue more than the limit in one burst; a memory
+    /// connection (single player) outlasts it, a network client past it is closed.
+    #[test]
+    fn a_memory_connection_outlasts_a_burst_past_the_limit() {
+        let queue = |framing| {
+            let mut s = sender(framing);
+            s.cap = 4096;
+            for _ in 0..6 {
+                s.send(vec![0; 1024]);
+            }
+            s
+        };
+        let To::Pool(outbox, _) = &queue(Framing::Memory).to else {
+            unreachable!()
+        };
+        assert!(outbox.alive());
+        let To::Pool(outbox, _) = &queue(Framing::Network(None)).to else {
+            unreachable!()
+        };
+        assert!(!outbox.alive());
     }
     #[test]
     fn network_refuses_before_queueing_and_empty_messages_cost_space() {

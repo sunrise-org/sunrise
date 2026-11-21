@@ -142,6 +142,7 @@ impl Renderer {
                 encoder,
                 surface: surface_frame,
                 after,
+                lost: Some(self.device_lost.clone()),
             };
             match self.queue.submit_later(job) {
                 Ok(()) => {
@@ -165,12 +166,16 @@ impl Renderer {
             self.first_frame = FirstFrame::Drawn;
         }
         let submission = crate::spans::time("submit", || self.queue.submit([commands]));
+        // The submission is often where a loss shows: no readbacks, screenshot or present
+        // after it (the acquired surface texture is dropped undrawn).
+        if self.device_lost() {
+            return Err(super::in_flight::LOST.into());
+        }
         if let Some(read) = after.or_else(|| self.after_submit()) {
             read();
         }
         if let Some(timer) = &mut self.gpu_timer {
             timer.submitted(&self.queue);
-            timer.collect(&self.device, &mut self.gpu_times);
         }
         if let Some(Some(timer)) = Self::pass_timer(&mut self.pack_post, &mut self.native) {
             timer.submitted(&self.queue);
@@ -182,6 +187,11 @@ impl Renderer {
             && let Some(read) = post.submitted()
         {
             read();
+        }
+        // A loss found since the frame began (by its submission, or another thread's poll):
+        // no screenshot wait and no present on the lost device.
+        if self.device_lost() {
+            return Err(super::in_flight::LOST.into());
         }
         let failed = checks.and_then(GpuChecks::pop);
         if let Some((request, buffer)) = readback {
@@ -198,6 +208,7 @@ impl Renderer {
                 self.screenshot_halvings = 0;
                 let reader = screenshot_readback::Reader {
                     device: self.device.clone(),
+                    device_lost: self.device_lost.clone(),
                     config: self.config.clone(),
                 };
                 if request.background {
@@ -218,6 +229,10 @@ impl Renderer {
         }
         if self.screenshot_result.is_none() {
             self.screenshot_result = self.screenshot_readbacks.poll();
+        }
+        // The screenshot's synchronous wait can itself find the loss: nothing is presented.
+        if self.device_lost() {
+            return Err(super::in_flight::LOST.into());
         }
         // The frame's own waits for the submit thread (its queue writes and passes).
         self.last_wait += self.queue.take_waited();

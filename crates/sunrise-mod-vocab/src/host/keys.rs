@@ -53,8 +53,9 @@ pub trait KeysHost {
     #[access(Metadata)]
     fn item_keys(&self) -> Vec<ItemKey>;
     /// Side: both.
-    /// Every built-in entity-type key in registry order (`BuiltInRegistries.ENTITY_TYPE`
-    /// order): vanilla's first, then mod types in the order they registered.
+    /// Every entity-type key: built-in and content types in registry order
+    /// (`BuiltInRegistries.ENTITY_TYPE`), then native general types ordered by
+    /// declaring mod and type id.
     #[access(Metadata)]
     fn entity_type_keys(&self) -> Vec<EntityTypeKey>;
     /// Side: both.
@@ -102,7 +103,7 @@ pub trait KeysBackend {
     fn game_event_key_id(&self, key: GameEventKey) -> Result<String, GameEventKeyError>;
     /// Side: both.
     /// The canonical block id retained by the load-owned registration slot. An invalid slot
-    /// is a boundary error, including when a wasm guest supplies it.
+    /// is a boundary error.
     #[access(Metadata)]
     fn block_key_id(&self, key: BlockKey) -> String;
     /// Side: both.
@@ -121,7 +122,7 @@ pub trait KeysBackend {
     fn effect_category(&self, key: EffectKey) -> Option<EffectCategory>;
     /// Side: both.
     /// The canonical fluid id of a key from the completed registry, `minecraft:water`. An
-    /// invalid slot is a boundary error, including when a wasm guest supplies it.
+    /// invalid slot is a boundary error.
     #[access(Metadata)]
     fn fluid_key_id(&self, key: FluidKey) -> String;
     /// Side: both.

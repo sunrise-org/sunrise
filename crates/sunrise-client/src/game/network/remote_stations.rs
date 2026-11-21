@@ -21,10 +21,7 @@ impl Game<'_> {
         title: sunrise_client::text::Text,
         pos: [i32; 3],
     ) {
-        if let Some(r) = self.remote.as_mut() {
-            r.menu.set(Some((container, menu)));
-            r.set_menu_title(Some(title));
-        }
+        self.remote_set_menu(Some((container, menu)), Some(title));
         self.craft_size = 2;
         self.container = None;
         self.station = Some(Station::new_kind(kind, pos));

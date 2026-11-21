@@ -292,23 +292,15 @@ impl Game<'_> {
                 }
                 TrialEvent::TrialOmen(uuid) => self.bad_omen_to_trial_omen(uuid),
                 TrialEvent::Discard(uuid) => {
-                    let (at, dropped) = {
-                        let id = self.persist.uuids.iter().find(|(_, u)| **u == uuid);
-                        if let Some((id, _)) = id
-                            && let Some(m) = self.mobs.iter_mut().find(|m| m.id == *id)
-                        {
-                            let at = m.position;
-                            let dropped = sunrise_client::mobs::drops::drop_preserved_equipment(m);
-                            m.removed = true;
-                            (Some(at), dropped)
-                        } else {
-                            (None, Vec::new())
-                        }
-                    };
-                    if let Some(at) = at {
-                        for stack in dropped {
+                    if let Some((&id, _)) = self.persist.uuids.iter().find(|(_, u)| **u == uuid)
+                        && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id && !m.removed)
+                    {
+                        let at = m.position;
+                        let drops = sunrise_client::mobs::drops::drop_preserved_equipment(m);
+                        for stack in drops {
                             self.spawn_at_location(at, 0.0, stack);
                         }
+                        self.remove_mob_now(id, false);
                     }
                 }
                 TrialEvent::SoundAt(name, at, pitch) => self.audio.play(
@@ -425,5 +417,57 @@ mod omen_tests {
         );
         assert_eq!(omen_of(&e), Some(Omen::Trial));
         assert!(!transform_bad_omen(&mut e));
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn ominous_item_target_uses_the_reloaded_player_table() {
+        use crate::game::{
+            native_entity_refs::tests::with_game, native_living_flags::tests::guest_server,
+            native_sound_refs::tests::guest,
+        };
+        use std::sync::Arc;
+        use sunrise_client::chunk::Chunk;
+        use sunrise_core::nbt::parse_snbt;
+
+        with_game(|game| {
+            guest_server(game, false, false);
+            game.world
+                .chunks
+                .insert((-1, 0), Arc::new(Chunk::empty(-1, 0)));
+            game.load_server_loot();
+            game.level.seed = 0;
+            game.world.game_time = 1;
+            let (mut left, _left_rx) = guest(16, 16, [-1.5, 0.0, 0.5]);
+            let (mut right, _right_rx) = guest(1, 1, [2.5, 0.0, 0.5]);
+            for player in [&mut left, &mut right] {
+                player.loaded = true;
+                player.dimension = game.dim.id().to_owned();
+            }
+            game.lan.as_mut().unwrap().hub.guests.extend([left, right]);
+
+            let ids = (32..45)
+                .map(|id| format!("[I;0,0,0,{id}]"))
+                .collect::<Vec<_>>();
+            let warmup = parse_snbt(&format!("{{registered_players:[{}]}}", ids.join(",")))
+                .unwrap()
+                .0;
+            let previous = TrialSpawner::load(&warmup, None);
+            let data = parse_snbt(
+                r#"{registered_players:[[I;0,0,0,1],[I;0,0,0,16]],spawn_data:{entity:{id:"minecraft:zombie"}},next_mob_spawns_at:100L}"#,
+            ).unwrap().0;
+            // Vanilla's fresh and grown-table positions for seed 13 (trial_spawner parity).
+            for (previous, expected) in
+                [(None, [-1.5, 2.5, 0.5]), (Some(&previous), [2.5, 2.5, 0.5])]
+            {
+                let mut spawner = TrialSpawner::load(&data, previous);
+                let count = game.ominous_spawners.len();
+                game.world.random = LevelRandom::for_level(LegacyRandom::new(13));
+                game.server_tick_trial_spawner((0, 0, 0), &mut spawner, TrialState::Active, true)
+                    .unwrap();
+                assert_eq!(game.ominous_spawners.len(), count + 1);
+                assert_eq!(game.ominous_spawners.last().unwrap().position, expected);
+            }
+        });
     }
 }

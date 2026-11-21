@@ -177,9 +177,9 @@ pub trait RecipesClientHost {
     /// whether or not the player's recipe book holds it. For a viewer's "+",
     /// to mark the inputs it lacks. The first call for a recipe asks and
     /// returns None; the answer comes a moment later and is kept for that
-    /// recipe while the menu, the inventory and the grid stay as they were;
-    /// while it is still wanted it is asked again every two seconds, at most
-    /// fifteen times for one state of the menu. None outside a screen that
+    /// recipe while the menu, the inventory and the grid stay as they were.
+    /// On a remote server, while the answer is wanted, the client asks again
+    /// once the cached answer is one second old. None outside a screen that
     /// takes `transfer_recipe_id` and on a server that doesn't answer it.
     #[access(WorldOnly)]
     fn transfer_recipe_check(&mut self, recipe: &str) -> Option<RecipeTransferCheck>;

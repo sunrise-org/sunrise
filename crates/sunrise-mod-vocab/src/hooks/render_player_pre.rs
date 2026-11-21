@@ -2,17 +2,20 @@
 
 pub trait Hooks {
     /// Before a player is drawn (NeoForge's `RenderPlayerEvent.Pre`): once a frame for each other
-    /// player in view and for this window's player in third person (and F5 front view), before its
-    /// `render_living_pre`. `player` is its render state, `who` its profile name and whether it is
+    /// player in view and for this window's player in third person (including front view) when it
+    /// holds the camera, before its `render_living_pre`. `player` is its render state, `who` its profile name and whether it is
     /// this window's own player, and `draw` the frame `render_living_pre` gets. Set `canceled` to
     /// skip all of the player's drawing this frame, `render_living_pre`, `render_living_post` and
     /// `render_player_post` included. Left uncanceled, `hidden.hide(part)` (or
     /// `hidden.hide_named(name)`) leaves only that part out of the vanilla model this frame (after
     /// Skin Customization), as a mod drawing its own outer skin layer does: a hidden part takes its
     /// children with it (the hat goes with the head), while its armour, held items and other
-    /// layers, the cape among them, keep every part.
+    /// layers, the cape among them, keep every part. In the ordered body pass, the pair wraps
+    /// this player's living hooks at its slot in level join order, interleaved with general
+    /// entity renderer submissions, for local and remote players alike.
     #[hook(
         side = "client",
+        version = 4,
         contract = "cancel",
         out = "canceled",
         neoforge = "RenderPlayerEvent.Pre",

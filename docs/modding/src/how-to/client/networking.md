@@ -21,11 +21,14 @@ and drops the unsent tail.
 
 Disconnect, a protocol incarnation change, or an aborted dimension crossing discards the hold;
 its id then returns `Unknown`. Starting without a joined physical play connection returns `NoWorld`.
-Network-thread keep-alives, chunk batch acknowledgements, configuration packets, cookies and
-resource-pack answers bypass holds. The network thread answers each chunk batch as it arrives, as
-vanilla's `ClientPacketListener` does, so `client_packet` hears neither the batch's start nor its
-finish (it does hear the chunks between them), and `client_packet_send` neither sees nor can cancel
-the acknowledgement.
+Keep-alives, chunk batch acknowledgements, configuration packets, cookies and resource-pack
+answers bypass holds. Standalone cookies and transfers run on the main thread. While the receive
+queue has room, the receiver answers standalone keep-alives and chunk batches without waiting for
+queued bundle handlers. Inside a bundle, each handler runs inline on the main thread in member
+order, including registered NETWORK payload handlers.
+Those handlers still cannot borrow a host directly; use queued work for that. In either case,
+`client_packet` hears neither the batch's start nor its finish (it does hear the chunks between
+them), and `client_packet_send` neither sees nor can cancel the acknowledgement.
 No packet inspection or editing beyond the existing `ClientPacket` view is provided.
 
 ## Configuration tasks before play
@@ -92,12 +95,11 @@ fn register(r: &mut dyn Registrar) {
 
 - **Registration.** `play_to_server_typed`, `play_to_client_typed` and `play_bidirectional_typed`,
   and their `configuration_*` and `common_*` forms, sit beside the raw methods on the same
-  registrar and take its version, `optional()` and `executes_on(...)`. The handler receives the
+  registrar and take its version, `optional()`, `droppable()` and `executes_on(...)`. The handler receives the
   decoded value and the connection's `IPayloadContext`. A typed id has one declaration: the same
   id in another protocol refuses load.
 - **Tokens.** Registration returns a `ToServer<T>` (client to server) or `ToClient<T>` (server to
-  client), both for a bidirectional one. Keep it and send with it; it has a Wire form, so a wasm
-  mod keeps it the same way. A token grants nothing on its own: each send checks it.
+  client), both for a bidirectional one. Keep it and send with it. A token grants nothing on its own: each send checks it.
 - **Sending and replying.** `ToServer::send(host, &value)` sends from the client
   (`ClientHost::send_payload_to_server`), `ToClient::send(host, player, &value)` from the server
   (`PlayerRef::send_payload`), and `reply(cx, &value)` on either answers on the connection a
@@ -139,8 +141,69 @@ fn register(r: &mut dyn Registrar) {
   handler does not run. A handler that panics is disabled: its transaction rolls back, nothing it
   staged is sent, the session closes, and it is not called again.
 - **Raw channel failures stay local.** A raw channel (`play_raw`) carries bytes from any client,
-  so a declaring mod's handler that returns `Failed`, or stays busy past its deadline, does not
-  close the session: the game logs the mod and the channel, rolls back that delivery's staged
+  so a declaring mod's handler that returns `Failed` does not close the session: the game logs the mod and the channel, rolls back that delivery's staged
   work (a staged disconnect included), and still delivers the other declaring mods' copies. A
   handler that succeeds and asks to disconnect still disconnects, and so does a refusal by the
   main thread's work queue. A typed payload's failure closes the session as above.
+
+## Syncing remote item cooldowns
+
+Vanilla sends an item cooldown to the affected player, not to players tracking
+that player. To display a remote shield's cooldown, register a clientbound play
+payload on both ends and have the server send the authoritative state. For
+example, read `PlayerRef::item_cooldowns(host)` after the change has committed;
+`player_shield_disable` is a pre-cooldown notification, not proof that it started.
+A subsequent `player_item_cooldown` listener can still veto the start.
+
+Send changes (including an early end) with `ToClient::send_tracking_entity` and
+send the current snapshot directly to each new observer in
+`player_start_tracking`. Key the client state by the holder's entity ID in the
+current level, so [held-item tinting](model-drawing.md#third-person-held-items)
+can look it up. Your mod owns expiry, interpolation and cleanup when an entity
+stops being tracked or when the client leaves the level or session. Without an
+authoritative snapshot or update, the remote cooldown is unknown; leave the
+model's tint unchanged rather than guessing from its pose or combat animation.
+
+## Droppable delivery: audio, live data
+
+A payload channel is `Reliable` by default: a queued send is delivered, in order, or the connection
+fails. Declare `registrar.droppable()` for data that is worthless when late (voice, a live
+position). The packets are the same vanilla `minecraft:custom_payload`; only what happens to a send
+that cannot go out yet changes.
+
+**Use it when** a newer message replaces an older one, or a gap is better than a delay. **Don't** for
+anything a handler counts on (inventories, state changes): keep those `Reliable`.
+
+**Rules.**
+- Play channels only (a configuration or common declaration refuses load). The delivery is part of
+  the negotiated version: a peer declaring the other delivery is refused like another version.
+- A send waits in the engine's own queue, before framing, compression and encryption, and moves to
+  the connection when its writer has room. It is dropped, and counted, when it has waited more
+  than 250 ms, when more than 64 KiB wait (the oldest goes), at the switch from configuration to
+  play, and when it is over the byte budget. A packet that was handed to the connection is never
+  taken back, and a `Droppable` payload is never put in a bundle. The send still returns `Queued`:
+  that was never a delivery acknowledgement.
+- **Budgets** per connection: 256 KiB/s clientbound and 16 KiB/s serverbound by default, with one
+  second of burst. The server's operator raises or lowers them with `droppable_clientbound` and
+  `droppable_serverbound` under `[engine]` in `server.toml` ([hosting](https://github.com/sunrise-org/sunrise/blob/main/docs/hosting.md#droppable-mod-payloads-droppable_clientbound-and-droppable_serverbound)); 0 turns
+  `Droppable` delivery off in that direction. A client sending over the serverbound budget loses those
+  sends, and the server counts them as budget drops; nobody is kicked and `Reliable` traffic is never
+  dropped. Over budget, stale sends go first, oldest first, then the new send.
+- **Counts:** `payload_drop_counts(&id)` reads the drops of a channel by cause (`stale`,
+  `watermark`, `budget`, `switch`) over this game's connections.
+- **Ordering:** per channel within one sending thread. A `Network`-thread `send_to` and a
+  main-thread send on one channel have no order relative to each other. Vanilla packets are never
+  reordered by this.
+- **Group send from a network handler:** `IPayloadContext::send_to(players, id, bytes)` on the server
+  for `Droppable` channels (others refuse with `NotDroppable`), so a relay forwards a frame without
+  waiting for the main tick. `players` is your own snapshot: a `PlayerRef` is a plain value, so keep a
+  list in the handler's state behind a lock and replace it from a tick or join hook on the main
+  thread. A player who left, or whose connection is not in play, is skipped. A network-thread send is published at once, not with the handler's staged replies.
+- **Vanilla's packet-rate limit** (`rate-limit`, off by default) counts every packet, `Droppable`
+  payloads included. Voice at 20 ms frames is 50 payloads a second: a mod may pack two frames into
+  one payload.
+- **Known limit:** the game connection is TCP. Under packet loss a lost segment stalls everything
+  behind it (head-of-line blocking), including chunks and `Droppable` payloads already on the wire; the
+  watermark and the 250 ms limit bound what piles up behind it, not what is stuck in it. The
+  engine adds no loss concealment: carry a sequence number in your payload and let your codec
+  conceal gaps.

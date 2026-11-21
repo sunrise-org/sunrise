@@ -85,6 +85,20 @@ pub fn encode_item(
 pub fn item_to_nbt(stack: &crate::items::ItemStack, items: &crate::items::Items) -> Tag {
     Tag::compound(encode_item(stack, items))
 }
+/// A stack from a command or data file: a `components` patch naming a transient
+/// component (`DataComponentPatch.PatchKey`'s codec) makes no stack.
+pub fn item_from_persistent_nbt(tag: &Tag) -> Option<crate::items::ItemStack> {
+    if let Some(components) = tag.get("components") {
+        sunrise_world::item_defaults::validate_component_map_tag(components).ok()?;
+    }
+    item_from_nbt(tag)
+}
+/// A stack read from a save. Earlier Sunrise saves can hold transient components
+/// (`creative_slot_lock`, `additional_trade_cost`, `map_post_processing`), so only
+/// those entries are dropped and the stack stays; commands and data files use
+/// [`item_from_persistent_nbt`]. Cost: one pass over the component keys; the
+/// patch is cloned only when it holds a transient entry.
+///
 /// ItemStack.CODEC's count range is independent of the item's stack limit;
 /// an out-of-range count uses the field's default of one. The id is read as an
 /// `Identifier`: `stone` is `minecraft:stone` (a summoned display's or a
@@ -100,7 +114,18 @@ pub fn item_from_nbt(tag: &Tag) -> Option<crate::items::ItemStack> {
         .or_else(|| number(tag.get("Count")))
         .filter(|count| (1..=99).contains(count))
         .unwrap_or(1) as u32;
-    let (damage, extra) = crate::item_data::decode_components(tag.get("components"));
+    let mut persistent = None;
+    let components = match tag.get("components") {
+        Some(components)
+            if sunrise_world::item_defaults::validate_component_map_tag(components).is_err() =>
+        {
+            let mut stripped = components.clone();
+            sunrise_world::item_defaults::strip_transient_component_map_tag(&mut stripped);
+            Some(&*persistent.insert(stripped))
+        }
+        components => components,
+    };
+    let (damage, extra) = crate::item_data::decode_components(components);
     Some(crate::items::ItemStack {
         item: Arc::from(id.as_str()),
         count,
@@ -244,6 +269,30 @@ mod tests {
             number(item_to_nbt(&stack, &Default::default()).get("count")),
             Some(1000)
         );
+    }
+
+    /// Items as Sunrise saved them before transient components were filtered out of saves.
+    #[test]
+    fn a_save_with_a_transient_component_keeps_its_item_and_drops_only_that_entry() {
+        for (snbt, transient) in [
+            (
+                r#"{id:"minecraft:emerald",count:5,components:{"minecraft:additional_trade_cost":3,"minecraft:repair_cost":2}}"#,
+                "minecraft:additional_trade_cost",
+            ),
+            (
+                r#"{id:"minecraft:diamond_pickaxe",count:1,components:{"minecraft:creative_slot_lock":{},"minecraft:repair_cost":2}}"#,
+                "minecraft:creative_slot_lock",
+            ),
+        ] {
+            let (saved, _) = sunrise_core::nbt::parse_snbt(snbt).unwrap();
+            let stack = item_from_nbt(&saved).expect("the stack survives");
+            assert_eq!(stack.count, if transient.ends_with("cost") { 5 } else { 1 });
+            let live = crate::item_data::components_tag(stack.damage, stack.data()).unwrap();
+            assert_eq!(live.get(transient), None);
+            assert_eq!(live.get("minecraft:repair_cost"), Some(&Tag::Int(2)));
+            // Commands and data files keep the strict refusal.
+            assert!(item_from_persistent_nbt(&saved).is_none());
+        }
     }
 }
 

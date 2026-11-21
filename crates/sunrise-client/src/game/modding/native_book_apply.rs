@@ -1,8 +1,10 @@
 //! Authoritative placement: detached calculation, journaled writes, then publication.
+use super::api_values::TryIntoApi;
 use super::{
     Game, native_book_backings::Backings, native_book_grid::Session,
     native_book_scope::MenuSnapshot,
 };
+use mod_api::{HostTransaction, ItemPlace, ItemResource, MenuSlotBacking, ServerHost};
 use sunrise_client::{
     lan::menu::ModCraft,
     menu::{
@@ -151,10 +153,14 @@ impl Game<'_> {
                     .position(|guest| guest.conn == before.conn)
             })
             .ok_or(R::Changed)?;
-        let sunrise_client::lan::menu::Slots::Block(pos) = before.slots else {
-            return Err(R::Unavailable);
+        let block_pos = match before.slots {
+            sunrise_client::lan::menu::Slots::Block(pos) => Some(pos),
+            sunrise_client::lan::menu::Slots::Native => None,
+            _ => return Err(R::Unavailable),
         };
-        let sources = self.lan_recipe_sources(gi, before.kind, pos);
+        let sources = block_pos.map_or_else(Vec::new, |pos| {
+            self.lan_recipe_sources(gi, before.kind, pos)
+        });
         if !self.mod_book_placement_context(before, selection) || !graph.unchanged(self) {
             return Err(R::Changed);
         }
@@ -206,7 +212,7 @@ impl Game<'_> {
                 ..self.menu_env()
             };
             menu.place_custom_recipe(&env, plan, use_max, before.game_mode == 1, || {
-                self.mod_book_placement_context(before, selection) && graph.unchanged(self)
+                self.mod_book_placement_context(before, selection) && graph.unchanged_blocks(self)
             })
             .map_err(refusal)?
         };
@@ -215,7 +221,7 @@ impl Game<'_> {
             self.native_prepare_item_craft(
                 before.uuid,
                 &name,
-                Some([pos.0, pos.1, pos.2]),
+                block_pos.map(|pos| [pos.0, pos.1, pos.2]),
                 &mut result,
             );
             if !self.mod_book_placement_context(before, selection) || !graph.unchanged(self) {
@@ -231,11 +237,11 @@ impl Game<'_> {
             return Err(R::Changed);
         }
         let changes = graph.changes(&mut menu);
-        for key in changes.keys() {
+        for key in changes.blocks.keys() {
             self.journal_block_entity(key.pos);
         }
         let mut changed = std::collections::BTreeSet::new();
-        for (key, stack) in changes {
+        for (key, stack) in changes.blocks {
             let entity = self
                 .world
                 .block_entities
@@ -258,23 +264,83 @@ impl Game<'_> {
                 .collect(),
             result: menu.slot(crafting.result).cloned(),
         });
+        {
+            let host = self.lan.as_mut().ok_or(R::Changed)?;
+            let gi = host
+                .hub
+                .guests
+                .iter()
+                .position(|guest| guest.conn == before.conn)
+                .ok_or(R::Changed)?;
+            // Publish the guest's detached inventory before writing a backing held in one of
+            // its item stacks, so this copy cannot overwrite the transactional place write.
+            menu.sources.clear();
+            host.hub.guests.update(gi, |guest| {
+                super::lan_crafting::store_player(&mut menu, guest);
+                if let Some(opened) = &mut guest.menu {
+                    opened.craft = craft;
+                }
+            });
+        }
+        self.mod_book_write_native_changes(before, &changes.native)?;
         let host = self.lan.as_mut().ok_or(R::Changed)?;
-        let gi = host
-            .hub
-            .guests
-            .iter()
-            .position(|guest| guest.conn == before.conn)
-            .ok_or(R::Changed)?;
-        // No callbacks or fallible work follow these live-cache assignments.
-        menu.sources.clear();
-        host.hub.guests.update(gi, |guest| {
-            super::lan_crafting::store_player(&mut menu, guest);
-            if let Some(opened) = &mut guest.menu {
-                opened.craft = craft;
-            }
-        });
         *host.menus.entry(before.conn).or_default().crafting.machine = Some((before.window, menu));
         Ok(post)
+    }
+
+    fn mod_book_write_native_changes(
+        &mut self,
+        before: &MenuSnapshot,
+        changes: &[super::native_book_backings::NativeChange],
+    ) -> Result<(), sync::Refusal> {
+        use sync::Refusal as R;
+        if changes.is_empty() {
+            return Ok(());
+        }
+        let menu = self.menu(before.uuid, before.window).ok_or(R::Changed)?;
+        if changes.iter().any(|change| {
+            self.native_menu_place(before.conn, before.window, change.slot) != Some(change.place)
+        }) {
+            return Err(R::Changed);
+        }
+        let writes = changes
+            .iter()
+            .map(|change| {
+                let after = change
+                    .after
+                    .as_ref()
+                    .map(TryIntoApi::try_into_api)
+                    .transpose()
+                    .map_err(|_| R::Changed)?;
+                Ok((change.slot, change.place, change.before.clone(), after))
+            })
+            .collect::<Result<Vec<_>, R>>()?;
+        let host: &mut dyn ServerHost = self;
+        host.transaction(|host, tx| {
+            for (slot, backing, before, after) in &writes {
+                if menu.slot_backing(host, *slot) != Some(MenuSlotBacking::Place(*backing)) {
+                    return Err(());
+                }
+                let place = ItemPlace::MenuSlot { menu, slot: *slot };
+                if place.stack(host).as_ref() != before.as_ref() {
+                    return Err(());
+                }
+                if let Some(stack) = before {
+                    let resource = ItemResource::of(stack);
+                    if place.extract(host, tx, &resource, stack.count()) != stack.count() {
+                        return Err(());
+                    }
+                }
+                if let Some(stack) = after {
+                    let resource = ItemResource::of(stack);
+                    if place.insert(host, tx, &resource, stack.count()) != stack.count() {
+                        return Err(());
+                    }
+                }
+            }
+            Ok(())
+        })
+        .map_err(|_| R::Changed)
     }
 }
 #[cfg(test)]

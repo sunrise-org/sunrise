@@ -1,10 +1,11 @@
 # Drawing an entity type with your own renderer
 
 You can draw content-defined thrown entities, living entity types (mobs, vanilla's or a content
-mod's), primed TNT, experience orbs, paintings and item frames with your own renderer. This is the counterpart of
+mod's), primed TNT, experience orbs, paintings, item frames and your own general entity types with
+your own renderer. This is the counterpart of
 NeoForge 26.3's `EntityRenderersEvent.RegisterRenderers` (`registerEntityRenderer`): the mod
 registers one renderer per entity type at start, and the game hands each entity of that type in
-view to it, once a frame. Native and wasm mods register and draw the same way.
+view to it, once a frame.
 
 ## Write the renderer
 
@@ -48,9 +49,40 @@ impl EntityRenderer for Bolt {
 The pose stack starts at the entity's interpolated position, in blocks, and is not turned. `draw`
 also has the partial tick, the game time and the entity's light. What `submit` draws replaces the
 type's own drawing; the glowing outline draws around it. Every entity of the type shares the
-one renderer, so keep per-entity values out of it: read them from the state. A renderer has no
-`Host`; one that needs the world reads it in a hook and keeps what it read. A frame is drawn afresh,
-so `draw.keep()` does nothing here.
+one renderer, so keep per-entity values out of it: read them from the state. `submit` has no
+`Host`; a renderer that needs the world reads it in a hook and keeps what it read. A general entity
+type's renderer is the exception (below). A frame is drawn afresh, so `draw.keep()` does nothing
+here.
+
+### A general entity's frame
+
+A general entity type (`declare_general_entity`) has no vanilla look. Its render state carries the
+row's identity, age, pose and a frozen snapshot of its synced attachments
+([attachments](../../concepts/attachments.md)).
+
+```rust,ignore
+static FUEL: AttachmentType<i32> = /* declared with sync: true */;
+
+struct Missile;
+impl EntityRenderer for Missile {
+    fn submit(
+        &self,
+        entity: &EntityRenderState,
+        draw: &mut dyn BlockEntityDrawContext,
+    ) -> Result<(), String> {
+        let attachments = entity.attachments.as_ref().ok_or("expected a general entity")?;
+        let fuel = attachments.get(&FUEL).map_err(|error| format!("{error:?}"))?;
+        draw.translate([0.0, fuel.copied().unwrap_or_default() as f32, 0.0]);
+        // Submit the missile's model at this pose.
+        Ok(())
+    }
+}
+```
+
+A row is eligible for extraction after its first attachment snapshot arrives. A field that could
+not fit into the bounded render snapshot reads as `None`; it does not stop the row from being
+submitted. `yaw`, `pitch` and `age` are interpolated to the frame. The pose stack starts at the row's
+interpolated position.
 
 ### A living entity's frame
 
@@ -133,12 +165,15 @@ scan over the mods.
 - A later registration for a type replaces the earlier one silently, whichever mod made it, as in
   NeoForge, also for a vanilla type.
 - A type the game does not know is logged with its id and left out; nothing panics.
-- `submit` returns `Ok(())` to keep what it drew. A renderer that returns an `Err`, panics, or (in a
-  wasm mod) has its call refused or trapped is logged once and asked no more until the next resource
+- `submit` returns `Ok(())` to keep what it drew. A renderer that returns an `Err` or panics is logged once and asked no more until the next resource
   load (a reload resolves it again); what it drew that frame is dropped, and until then its type draws
   as it would without one.
 
 ## What draws through registered renderers
+
+In the ordered body pass, general, living, primed TNT and experience orb renderers submit at
+each entity's slot in level join order. The ender dragon and end crystals keep their own renderers
+at their slots.
 
 Registered renderers draw these routes:
 
@@ -159,6 +194,10 @@ Registered renderers draw these routes:
   `painting`. `age` is the unsaved `Entity.tickCount` plus the partial tick. Yaw is
   `Direction.get2DDataValue * 90` and pitch is 0, not interpolated (it has no previous rotation).
   Without a renderer, the quads are unchanged.
+- your general entity types (`declare_general_entity`): the renderer is their only look, asked
+  through `submit` with each visible row's frozen attachment snapshot. A general type with no
+  renderer draws nothing, which is logged once a resource load, naming the type; a failed
+  renderer draws nothing until the next resource load.
 - item frames and glow item frames (`minecraft:item_frame`, `minecraft:glow_item_frame`): the
   renderer draws instead of the frame model and the item or map on its face, and reads
   `item_frame`. `age` is the unsaved `Entity.tickCount` plus the partial tick. Yaw and pitch

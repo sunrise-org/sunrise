@@ -112,6 +112,103 @@ fn a_post_write_placement_reads_the_stack_without_loading_its_data() {
 
 #[test]
 #[ignore = "daily"]
+fn a_code_placement_notifies_only_the_blocks_part_with_its_stack() {
+    use crate::game::api_values::TryIntoApi;
+    use mod_api::{EntityRef, HostTransaction, LevelRef, ServerHost, SetPlacedByEvent};
+    use std::sync::{Arc, Mutex};
+    use sunrise_client::items::ItemStack;
+
+    #[derive(Debug, PartialEq)]
+    struct Notice {
+        level: LevelRef,
+        pos: [i32; 3],
+        placer: Option<EntityRef>,
+        stack: Option<(String, u32)>,
+    }
+
+    const POS: [i32; 3] = [2, 70, 2];
+    const ABOVE: [i32; 3] = [2, 71, 2];
+    const OTHER: [i32; 3] = [3, 70, 2];
+
+    #[derive(Clone, Default)]
+    struct Probe(Arc<Mutex<Vec<Notice>>>);
+
+    #[mod_api::sunrise_part]
+    impl mod_api::BlockPart for Probe {
+        fn set_placed_by(&self, host: &mut dyn ServerHost, event: &mut SetPlacedByEvent<'_>) {
+            self.0.lock().unwrap().push(Notice {
+                level: event.level,
+                pos: event.pos,
+                placer: event.placer,
+                stack: event
+                    .stack
+                    .map(|stack| (stack.item().id(host), stack.count())),
+            });
+            let [x, y, z] = event.pos;
+            event
+                .level
+                .set_block(host, [x, y + 1, z], event.state, BlockUpdateFlags::NONE)
+                .unwrap();
+        }
+    }
+
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for Probe {
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            let wool = r.block_key("minecraft:white_wool");
+            r.block_part(wool, self.clone());
+        }
+    }
+
+    let probe = Probe::default();
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+        "placement_probe",
+        Box::new(probe.clone()),
+    )]
+    .into();
+    crate::game::api_values::install_parts(&mods).unwrap();
+    mod_platform::testing::with_mods(mods, || {
+        with_game(|game| {
+            let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+            loaded(game);
+            let level = game.level(game.dim.id()).unwrap();
+            let wool = state(game, "minecraft:white_wool");
+            let stone = state(game, "minecraft:stone");
+            game.level_set_block(level, POS, wool, BlockUpdateFlags::NONE)
+                .unwrap();
+            game.level_set_block(level, OTHER, stone, BlockUpdateFlags::NONE)
+                .unwrap();
+            // The caller's stack is unrelated to the placed block. Route by the block, not the stack.
+            let stack = ItemStack::new("minecraft:stone", 7).try_into_api().unwrap();
+            assert_eq!(level.set_placed_by(game, OTHER, Some(&stack)), Ok(true));
+            assert!(probe.0.lock().unwrap().is_empty());
+
+            let before = level.block_state(game, ABOVE);
+            let aborted: Result<(), ()> = (game as &mut dyn ServerHost).transaction(|host, _| {
+                assert_eq!(level.set_placed_by(host, POS, Some(&stack)), Ok(true));
+                assert_eq!(
+                    level.block_state(host, ABOVE),
+                    Some(wool.try_into_api().unwrap())
+                );
+                Err(())
+            });
+            assert_eq!(aborted, Err(()));
+            assert_eq!(level.block_state(game, ABOVE), before);
+            assert_eq!(
+                *probe.0.lock().unwrap(),
+                [Notice {
+                    level,
+                    pos: POS,
+                    placer: None,
+                    stack: Some(("minecraft:stone".into(), 7)),
+                }]
+            );
+        });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn a_command_block_placement_callback_saves_updated_entity_data() {
     use sunrise_client::containers::BlockEntity;
 

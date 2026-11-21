@@ -1,9 +1,0 @@
-# The general entity types' wasm crossing, #792 stage 4b: the four game tests that load the
-# compiled wasm fixture into a real game (they guard-skip without SUNRISE_WASM_FIXTURE, and the
-# legs that have the fixture run them for real), and the generator test that pins the crossing's
-# surface. Each game test runs in a fresh child process (the content registry is process-global).
-sunrise-client game::general::tick_tests::wasm_counter_advances_one_per_tick lib daily wasm-fixture # #792 stage 4b
-sunrise-client game::general::tick_tests::wasm_two_rows_share_the_part_but_not_their_counters lib daily wasm-fixture # #792 stage 4b
-sunrise-client game::general::tick_tests::wasm_and_native_parts_tick_in_install_order lib daily wasm-fixture # #792 stage 4b
-sunrise-client game::general::tick_tests::a_trapping_wasm_row_rolls_back_and_the_next_tick_proceeds lib daily wasm-fixture # #792 stage 4b
-sunrise-mod-api-gen wire::tests::entity_part_crosses_to_wasm_with_tick_and_rider_decision lib daily slow # #792 stage 4b

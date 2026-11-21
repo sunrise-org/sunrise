@@ -50,7 +50,8 @@ impl Game<'_> {
                 hit(
                     object.id as u32,
                     object.distance,
-                    !self.interactions.contains_key(&object.id),
+                    !self.interactions.contains_key(&object.id)
+                        && Self::has_pick_result(self.level_entity(object.id)),
                 )
             }),
             self.mob_hit()

@@ -287,59 +287,6 @@ fn villager_no_mods_world_retains_farmer_composter_and_five_levels() {
     });
 }
 
-fn wasm_engineer() -> mod_api::ModEntry {
-    wasm_profession(definition(), "wasm_engineer")
-}
-fn wasm_profession(value: ProfessionDefinition, owner: &str) -> mod_api::ModEntry {
-    use mod_api::wire::Writer;
-    fn data(bytes: &[u8]) -> String {
-        bytes.iter().map(|byte| format!("\\{byte:02x}")).collect()
-    }
-    let mut subscriptions = Writer::new();
-    subscriptions.put(&vec![(
-        "register_villager_professions".to_owned(),
-        0i32,
-        false,
-    )]);
-    let subscriptions = subscriptions.into_bytes();
-    let mut declaration = Writer::new();
-    declaration.put(&value);
-    let declaration = declaration.into_bytes();
-    let operation = sunrise_mod_wasm::fixture_import_id("VillagerProfessions", "register").unwrap();
-    let hook =
-        sunrise_mod_wasm::fixture_export_id("Hooks", "register_villager_professions").unwrap();
-    let std = wat::parse_str(
-        r#"(module (@custom "dylink.0" "\01\04\00\00\00\00") (import "env" "memory" (memory 1)))"#,
-    )
-    .unwrap();
-    let module = wat::parse_str(format!(r#"(module
-        (@custom "dylink.0" "\01\04\00\00\00\00")
-        (import "env" "memory" (memory 1))
-        (import "env" "__indirect_function_table" (table 1 funcref))
-        {imports}
-        (data (i32.const 2048) "{subscriptions}")
-        (data (i32.const 4096) "{declaration}")
-        (func (export "sunrise_in") (param i32) (result i32) i32.const 512)
-        (func (export "sunrise_hook") (param i64) (result i64)
-            local.get 0 i64.const {subscribed} i64.eq if (result i64)
-                i64.const {sub_reply}
-            else local.get 0 i64.const {hook} i64.eq if (result i64)
-                i32.const {operation} i32.const 4096 i32.const {length} i32.const 0 i32.const 0 call $host
-                i32.const 0 i32.ne if unreachable end
-                i64.const 0
-            else i64.const 0 end end))"#,
-            subscriptions=data(&subscriptions), declaration=data(&declaration), imports=sunrise_mod_wasm::fixture::wat_imports(), subscribed=sunrise_mod_wasm::fixture_subscribed_id(),
-            sub_reply=(2048u64<<32)|subscriptions.len() as u64, length=declaration.len())).unwrap();
-    let manifest = sunrise_mod_package::manifest::Manifest::parse(&format!("id = '{owner}'\nname = 'Wasm engineer'\nversion = '1.0.0'\napi = '0.2'\ncapabilities = ['registries']\n[wasm]\nsha512 = '{}'\ntoolchain = 'test'\nbuilt_with = 'test'\n", "a".repeat(128))).unwrap();
-    let mut loaded = sunrise_mod_wasm::load(
-        &std,
-        vec![sunrise_mod_wasm::WasmPackage { manifest, module }],
-    );
-    assert!(loaded.refused.is_empty(), "{:?}", loaded.refused);
-    loaded.initialize(&[]).unwrap();
-    assert_eq!(loaded.mods.len(), 1);
-    loaded.mods.remove(0)
-}
 struct TradeFiles;
 #[mod_api::__subscriptions]
 impl Hooks for TradeFiles {
@@ -352,22 +299,6 @@ impl Hooks for TradeFiles {
         event.files.push(("villager_trade/test:engineer_offer".into(), br#"{"gives":{"id":"minecraft:iron_ingot","count":2},"wants":{"id":"minecraft:emerald","count":3},"max_uses":12,"xp":7}"#.to_vec()));
     }
 }
-#[test]
-#[ignore = "daily"]
-fn villager_wasm_engineer_declaration_resolves_with_assembler() {
-    // Instantiate and invoke the real wasm guest on the production-sized stack.
-    crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
-        fixture(
-            vec![
-                ModEntry::new("trade_files", Box::new(TradeFiles)),
-                wasm_engineer(),
-            ]
-            .into(),
-            assert_engineer_acquisition,
-        );
-    });
-}
-
 fn assert_engineer_acquisition(game: &mut Game<'_>) {
     let table = game.stations().professions.clone();
     assert_eq!(table.entries().len(), 16);
@@ -713,41 +644,4 @@ fn villager_native_slots_ignore_declaring_mod_order() {
             );
         });
     }
-}
-
-#[test]
-#[ignore = "daily"]
-fn villager_wasm_slots_ignore_declaring_mod_order() {
-    // Instantiate and invoke the real wasm guest on the production-sized stack.
-    crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
-        for reverse in [false, true] {
-            let mut mechanic = definition();
-            mechanic.key = ProfessionKey(Identifier::parse("test:mechanic").unwrap());
-            let bench = PoiKey(Identifier::parse("other:bench").unwrap());
-            mechanic.workstations = vec![ProfessionWorkstation {
-                poi: bench.clone(),
-                block: Identifier::parse("minecraft:furnace").unwrap(),
-                properties: vec![],
-            }];
-            mechanic.held_poi = vec![bench.clone()];
-            mechanic.acquirable_poi = vec![bench];
-            let mut mods = vec![
-                wasm_profession(definition(), "z_engineer"),
-                wasm_profession(mechanic, "a_mechanic"),
-            ];
-            if reverse {
-                mods.reverse();
-            }
-            mods.insert(0, ModEntry::new("trade_files", Box::new(TradeFiles)));
-            fixture(mods.into(), |game| {
-                let table = &game.stations().professions;
-                assert_eq!(table.resolve("test:engineer"), Some(15));
-                assert_eq!(table.resolve("test:mechanic"), Some(16));
-                assert_eq!(
-                    table.pois.resolve("test:assembler"),
-                    Some(sunrise_world::poi::PoiIdentity::Custom(1))
-                );
-            });
-        }
-    });
 }

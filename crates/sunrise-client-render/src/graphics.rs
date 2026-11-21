@@ -802,7 +802,7 @@ pub struct Graphics {
     /// How finely far terrain is drawn; Full unless the player picks Reduced.
     pub far_detail: FarDetail,
     /// Far terrain from servers' BlueMap web maps; no server has one unless
-    /// the player names it (`blueMap:` lines) or turns on auto-detect.
+    /// the player names it (`blueMap:` lines).
     pub blue_map: crate::bluemap::Settings,
     /// Skip sections hidden behind closed ones (vanilla's occlusion graph).
     pub cave_culling: bool,
@@ -1078,7 +1078,6 @@ impl Graphics {
                         g.blue_map.radius = radius;
                     }
                 }
-                "blueMapAutoDetect" => g.blue_map.auto_detect = flag(g.blue_map.auto_detect),
                 "caveCulling" => g.cave_culling = flag(g.cave_culling),
                 "gpuCulling" => g.gpu_culling = GpuCullingMode::parse(value, g.gpu_culling),
                 "entityCulling" => g.entity_culling = EntityCullingMode::parse(value),
@@ -1559,7 +1558,6 @@ mod tests {
             far_detail: FarDetail::Reduced,
             blue_map: crate::bluemap::Settings {
                 radius: 40,
-                auto_detect: true,
                 // In their own file (`bluemap::SERVERS_FILE`).
                 servers: Vec::new(),
             },
@@ -1901,15 +1899,15 @@ mod tests {
     #[test]
     fn lod_distance_is_opt_in_and_bounded() {
         assert_eq!(Graphics::default().lod_distance, 0);
-        for distance in [0, 64, 128, 256, 512, 1024, 65_536, crate::lod::MAX_CHUNKS] {
+        for distance in [0, 64, 128, 256, 512, 1024] {
             let g = Graphics::parse(&format!("lodDistance:{distance}\n"));
             assert_eq!(g.lod_distance, distance);
             assert_eq!(Graphics::parse(&g.serialize()), g);
         }
-        assert_eq!(
-            Graphics::parse("lodDistance:99999999\n").lod_distance,
-            crate::lod::MAX_CHUNKS
-        );
+        for old in ["4194304", "99999999"] {
+            let g = Graphics::parse(&format!("lodDistance:{old}\n"));
+            assert_eq!(g.lod_distance, 1024);
+        }
         assert_eq!(Graphics::parse("lodDistance:-1\n").lod_distance, 0);
         assert_eq!(Graphics::parse("lodDistance:invalid\n").lod_distance, 0);
     }

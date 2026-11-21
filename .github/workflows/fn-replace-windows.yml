@@ -43,7 +43,6 @@ jobs:
       # signed with a throwaway key whose public half only a debug-assertions launcher trusts.
       - name: Assemble the SDK release folder, signed with a throwaway key
         run: |
-          rustup target add wasm32-unknown-unknown
           commit=$(git rev-parse HEAD)
           python tools/prebuilt_game.py pack prebuilt legs/sdk-leg-windows-server --with-tool
           python tools/prebuilt_game.py gather legs dist

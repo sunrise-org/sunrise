@@ -30,12 +30,16 @@ impl Game<'_> {
     }
 
     pub(super) fn guest_drop_carried(&mut self, gi: usize) {
-        let carried = self
-            .lan
-            .as_mut()
-            .and_then(|host| host.hub.guests.update(gi, |g| g.carried.take()));
-        if let Some(c) = carried {
-            self.drop_guest_items(gi, vec![c]);
+        let carried = self.with_own_record(gi, |host, _| {
+            let conn = host.hub.guests[gi].conn;
+            let mut stacks = host.hub.take_closed_menu_cursors(conn).collect::<Vec<_>>();
+            host.hub
+                .guests
+                .update(gi, |g| stacks.extend(g.take_menu_cursors()));
+            Some(stacks)
+        });
+        if let Some(carried) = carried.filter(|stacks| !stacks.is_empty()) {
+            self.drop_guest_items(gi, carried);
         }
     }
 
@@ -354,9 +358,7 @@ impl Game<'_> {
             return refused.map_or(Ok(consumed), Err);
         };
         for pos in [hit.pos, hit.beside()] {
-            let state = self.world.block(pos[0], pos[1], pos[2]).0 as i32;
-            host.hub
-                .send_to(conn, &C::BlockUpdate(play::BlockUpdate { pos, state }));
+            host.hub.send_authoritative_block(conn, &self.world, pos);
         }
         refused.map_or(Ok(consumed), Err)
     }
@@ -642,9 +644,19 @@ impl Game<'_> {
         };
         let (old_yaw, old_pitch) = (host.hub.guests[gi].yaw, host.hub.guests[gi].pitch);
         let boat = self.boats.iter().position(|boat| boat.id as i32 == id);
-        // A packet names its target already. Keep the attacker's actual yaw
-        // for the boat's knockback instead of aiming a ray at its center.
-        if boat.is_none() && self.look_at_entity(gi, id, None).is_none() {
+        let general = match u32::try_from(id).ok().and_then(|id| self.general_row(id)) {
+            Some(row) => {
+                let catalog = crate::game::general::general_type_catalog();
+                if !catalog.pickable(row.type_slot) {
+                    return Ok(false);
+                }
+                Some((row.id, catalog.key(row.type_slot)))
+            }
+            None => None,
+        };
+        // A packet names its target already. Boats and general rows use that target
+        // with the attacker's actual aim instead of casting a new ray at its center.
+        if boat.is_none() && general.is_none() && self.look_at_entity(gi, id, None).is_none() {
             return Err(ActionRefused::InvalidTarget);
         }
         // A mace's smash sets the attacker's velocity and sends it at once, before the
@@ -658,6 +670,8 @@ impl Game<'_> {
                 if let Some(index) = boat {
                     g.strike_boat(index);
                     g.swing_arm();
+                } else if let Some((id, kind)) = general {
+                    g.strike_general_row(id, kind);
                 } else {
                     g.attack();
                 }
@@ -668,6 +682,10 @@ impl Game<'_> {
             .ok()
             .flatten();
         self.send_guest_motion(conn, sent);
+        if general.is_some() {
+            // The plain row refused damage, even though the attack spent its charge.
+            return Ok(false);
+        }
         // The mob now answers to this guest (game/network/lan_mobs.rs).
         let Some(host) = self.lan.as_mut() else {
             return Err(ActionRefused::Stale);

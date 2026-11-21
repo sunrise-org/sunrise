@@ -276,6 +276,83 @@ fn terrain_source_cpu_multipart_and_waterlogged_faces_keep_their_owner() {
 }
 
 #[test]
+fn a_folder_without_connected_texture_rules_meshes_exactly_as_before() {
+    let (scratch, assets, mut render, tables, biomes) = fixture();
+    let mut chunk = Chunk::with_layout(3, -2, crate::chunk::ColumnLayout::new(0, 16).unwrap());
+    chunk.set(2, 3, 4, 1);
+    chunk.set(3, 3, 4, 1);
+    chunk.set(6, 3, 4, 2);
+    let region = [
+        [None, None, None],
+        [None, Some(&chunk), None],
+        [None, None, None],
+    ];
+    let bytes = |render: &RenderAssets| {
+        let mut mesher = Mesher {
+            hidden_states: &[],
+            part_tables: Default::default(),
+            nether_shading: false,
+            shader_pack_lighting: false,
+            separate_ao: false,
+            shader_pack: false,
+            assets: &assets,
+            render,
+            tables: &tables,
+            biomes: &biomes,
+            visibility: FaceVisibility::empty(),
+            zoom: BiomeZoom::new(0),
+            blend_radius: 0,
+            smooth_lighting: false,
+            cutout_leaves: true,
+            opaque_ice: false,
+            translucent_layers: &[],
+            leaf_culling: LeafCullingMode::Off,
+        };
+        let mesh = mesher.mesh(&region, 0);
+        let both = [&mesh.solid, &mesh.translucent];
+        both.map(|v| bytemuck::cast_slice::<_, u8>(v).to_vec())
+    };
+    let before = bytes(&render);
+    assert!(!before[0].is_empty());
+    let source = sunrise_assets::resource_source::ResourceSource::directory(scratch.0.clone());
+    render.connected = crate::connected::ConnectedTextures::load(
+        &source,
+        crate::connected::read_rules(&source),
+        assets.registry,
+        &mut crate::sprites::Sprites::default(),
+        |_, _| None,
+        |_| false,
+    );
+    assert!(render.connected.is_empty(), "nothing declares a rule here");
+    assert_eq!(bytes(&render), before);
+    // A rule that matches another block leaves the mesh the same.
+    let sheet = sunrise_connected::TableSheet {
+        sprite: "fixture:block/low".into(),
+        table: std::sync::Arc::new(
+            sunrise_connected::Table::new(Vec::new(), false, (1, 1), vec![0]).unwrap(),
+        ),
+    };
+    let mut other = sunrise_connected::Rule::table("other.json".into(), sheet);
+    other.method = sunrise_connected::Method::Fixed;
+    other.table = None;
+    other.tiles = vec![sunrise_connected::Tile::Default];
+    other.match_blocks = vec![sunrise_connected::BlockSel {
+        id: "fixture:other".into(),
+        states: Vec::new(),
+    }];
+    render.connected = crate::connected::ConnectedTextures::load(
+        &source,
+        vec![other],
+        assets.registry,
+        &mut crate::sprites::Sprites::default(),
+        |_, _| None,
+        |_| false,
+    );
+    assert!(!render.connected.is_empty());
+    assert_eq!(bytes(&render), before);
+}
+
+#[test]
 fn terrain_source_cpu_partial_metadata_never_inherits_a_previous_face() {
     let mut mesh = SectionMesh::default();
     let quad = |y| {

@@ -3,7 +3,6 @@ exclude = ["crates/sunrise-telemetry-server", "crates/sunrise-mod-registry", "th
 members = [
     "crates/sunrise-guest-stack",
     "crates/sunrise-mod-vocab",
-    "crates/sunrise-wasmtime",
     "crates/sunrise-game-discovery",
     "crates/sunrise-telemetry",
     "crates/sunrise-hooks",
@@ -24,15 +23,16 @@ members = [
     "crates/sunrise-hdr",
     "crates/sunrise-world",
     "crates/sunrise-client",
-    "crates/sunrise-engine-slots",
-    "crates/sunrise-mod-points",
     "crates/sunrise-internals",
     "crates/sunrise-client-lib",
     "crates/sunrise-gameplay",
     "crates/sunrise-client-gameplay",
     "crates/sunrise-client-core",
     "crates/sunrise-client-input",
+    "crates/sunrise-border",
     "crates/sunrise-client-render",
+    "crates/sunrise-render-core",
+    "crates/sunrise-render-shaderpack",
     "crates/sunrise-command",
     "crates/sunrise-items",
     "crates/sunrise-server-files",
@@ -56,23 +56,20 @@ members = [
     "crates/sunrise-friends",
     "crates/sunrise-relay",
     "crates/sunrise-mod-package",
-    "crates/sunrise-mod-wasm",
     "crates/sunrise-mod-api-gen",
     "crates/sunrise-mod-api",
     "crates/sunrise-mod-dimension-game",
     "crates/sunrise-hot-paths-game",
     "crates/sunrise-mod-api-macros",
-    "crates/sunrise-mod-point-shape",
     "crates/sunrise-mod-source",
-    "crates/sunrise-mod-call",
     "crates/sunrise-mod-surface",
-    "crates/sunrise-mod-point-emit",
     "crates/sunrise-native-build",
     "crates/sunrise-mod-api-gen/dispatch-tests",
-    "crates/sunrise-mod-wasm/wire-loopback",
     "crates/cargo-sunrise-mod",
     "crates/sunrise-port-pack",
+    "crates/sunrise-proxy",
     "crates/sunrise-shaders",
+    "crates/sunrise-connected",
     "crates/sunrise-optifine",
     "crates/sunrise-polytone",
     "crates/sunrise-shader-api",
@@ -123,20 +120,6 @@ debug = "line-tables-only"
 # Likewise, the API generator repeatedly parses the game's sources with syn.
 # These dependencies stay cached in CI, unlike workspace test binaries.
 [profile.dev.package.sha2]
-opt-level = 3
-
-# Fixture tests compile real wasm modules with Cranelift at runtime. Keep the
-# compiler optimized without optimizing (or weakening) the tests themselves.
-[profile.dev.package.wasmtime]
-opt-level = 3
-[profile.dev.package.cranelift-codegen]
-opt-level = 3
-
-# Packaging validates each real module repeatedly. Optimize the validator, not
-# the fixture or guest code (which use their separate sunrise-wasm profile).
-[profile.dev.package.sunrise-mod-package]
-opt-level = 3
-[profile.dev.package.wasmparser]
 opt-level = 3
 
 [profile.dev.package.sunrise-mod-api-gen]

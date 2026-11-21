@@ -67,7 +67,7 @@ impl LevelKey {
     }
 }
 
-/// The level's `namespace:path`: how a key crosses the wasm interface.
+/// The level's `namespace:path`.
 impl From<&LevelKey> for String {
     fn from(key: &LevelKey) -> Self {
         key.0.to_owned()

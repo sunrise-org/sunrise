@@ -24,7 +24,8 @@ pub trait PlayerFakesBackendMut {
     /// part in (a menu, sleep, a ride, another dimension) is stopped where it would start, and
     /// the answer says which; the action's own side effects (the swing, the hooks before it,
     /// vanilla's result) have still happened then. The fake is found once, and its turn
-    /// starts at that place in the list.
+    /// starts at that place in the list. The acting fake's body can obstruct its
+    /// own block placement, just as a connected player's can.
     #[access(WorldOnly)]
     fn player_perform_action(
         &mut self,
@@ -34,6 +35,8 @@ pub trait PlayerFakesBackendMut {
     /// Side: server.
     /// A machine's one use on the persistent actor, with its private state put back even
     /// when the action refuses. Only the existing guest turn runs gameplay and its hooks.
+    /// For placement, choose an eye position that keeps the temporary standing body
+    /// clear of the block's collision shape.
     #[access(WorldOnly)]
     fn player_perform_action_scoped(
         &mut self,

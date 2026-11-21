@@ -19,7 +19,7 @@ client process still sees `Dist::Client`.
 ## From a host
 
 The `Host` gives the same distribution and versions on both sides, and `game_tests_enabled()` on a server host. All
-values are captured once, before mods register, and are the same for native and WebAssembly mods.
+values are captured once, before mods register.
 
 `server_data_version() -> i32` is also available from `Host` on both sides, before any world is open. It returns
 the engine's constant `DataVersion` written into level data and chunks (`sunrise_core::version::DATA_VERSION`),

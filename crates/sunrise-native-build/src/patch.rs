@@ -210,22 +210,27 @@ pub fn build(
     }))
 }
 
-/// The SDK libraries a patch crate compiles against: the game crate and the facade crates.
+/// The crates a patch crate links: the game crate and the facade crates.
+fn sdk_extern_names(sdk: &Identity) -> impl Iterator<Item = &str> {
+    std::iter::once("sunrise_client").chain(
+        sdk.facade_crates()
+            .filter(|krate| *krate != "sunrise_client"),
+    )
+}
+
+/// The SDK libraries a patch crate compiles against: [`sdk_extern_names`], with their files.
 pub fn sdk_externs(game: &Path, sdk: &Identity) -> Result<Vec<(String, PathBuf)>, String> {
     let deps = game.join("deps");
-    let mut externs = vec![(
-        "sunrise_client".to_owned(),
-        super::prebuilt::library(&deps, "sunrise_client")?,
-    )];
-    for krate in sdk.facade_crates() {
-        if krate != "sunrise_client" {
-            externs.push((
-                krate.to_owned(),
-                super::prebuilt::facade_library(&deps, krate, sdk)?,
-            ));
-        }
-    }
-    Ok(externs)
+    sdk_extern_names(sdk)
+        .map(|krate| {
+            let library = if krate == "sunrise_client" {
+                super::prebuilt::library(&deps, krate)?
+            } else {
+                super::prebuilt::facade_library(&deps, krate, sdk)?
+            };
+            Ok((krate.to_owned(), library))
+        })
+        .collect()
 }
 
 impl Prepared<'_> {
@@ -450,6 +455,7 @@ pub fn prepare<'a>(
     // The generator refuses targets the staged game cannot replace.
     let mut extras = extras(&bundles)?;
     extras.loops = loops;
+    extras.linked = sdk_extern_names(sdk).map(str::to_owned).collect();
     let generated = api_gen::patch::generate(&source, CRATE, &targets, &extras, &index);
     let refusals: Vec<String> = match &generated {
         Ok(_) => Vec::new(),
@@ -553,6 +559,8 @@ pub fn prepare<'a>(
     // With no rows (only modules or bridges), the crate compiles as generated.
     let patched = if let Some(tool) = &tool {
         let patched = out.join("patch-applied");
+        // The tool refuses an output folder that exists on macOS and Windows.
+        remove_previous_output(&patched)?;
         // The tool plans against what the patch library compiles: this computer's cfg set under the
         // flags it is compiled with (the prebuilt game's target is this computer's,
         // `check_identity`), and the features the game was built with.
@@ -617,6 +625,33 @@ pub fn prepare<'a>(
     }))
 }
 
+/// Removes the last build's output at `path`: a folder, a file, or a link in its place, never what
+/// a link points at. A link is unlinked: a file symlink with `remove_file`, a directory symlink or
+/// a Windows junction with `remove_dir`. Nothing there is fine; any other failure stops the build
+/// with its own error. `path`'s folder is the build's own ([`super::prebuilt`] refuses a link
+/// there), so nothing outside the build is reached through it.
+fn remove_previous_output(path: &Path) -> Result<(), String> {
+    let removed = match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => unlink(path, meta.file_type()),
+        Ok(meta) if meta.is_file() => fs::remove_file(path),
+        Ok(_) => fs::remove_dir_all(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    };
+    removed.map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Unlinks the link at `path`: on Windows a directory symlink or junction with `remove_dir` and a
+/// file symlink with `remove_file`; elsewhere every link with `remove_file`.
+fn unlink(path: &Path, kind: fs::FileType) -> std::io::Result<()> {
+    #[cfg(windows)]
+    if std::os::windows::fs::FileTypeExt::is_symlink_dir(&kind) {
+        return fs::remove_dir(path);
+    }
+    let _ = kind;
+    fs::remove_file(path)
+}
+
 /// The game's features as the `--cfg` flags the patch library is compiled with. The compile and
 /// the `--print cfg` that the tool plans against both take them from here, so they cannot drift.
 fn game_cfg(cmd: &mut std::process::Command, sdk: &Identity) {
@@ -640,6 +675,59 @@ fn build_cfg(printed: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod refusal_tests {
+    /// A rebuild in the same folder starts with no applied-patch output, whether the last build
+    /// left a folder, a file or a link there; a link's target is untouched.
+    #[test]
+    fn the_last_builds_applied_output_is_removed_and_a_links_target_kept() {
+        use super::remove_previous_output;
+        use std::fs;
+        use std::path::Path;
+        let build = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let applied = build.path().join("patch-applied");
+        fs::create_dir_all(applied.join("crate/src")).unwrap();
+        fs::write(applied.join("crate/src/lib.rs"), "stale").unwrap();
+        remove_previous_output(&applied).unwrap();
+        assert!(fs::symlink_metadata(&applied).is_err());
+        remove_previous_output(&applied).unwrap();
+        fs::write(&applied, "stale").unwrap();
+        remove_previous_output(&applied).unwrap();
+        assert!(fs::symlink_metadata(&applied).is_err());
+
+        let target = outside.path().join("patch-applied");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("keep"), "kept").unwrap();
+        let file = outside.path().join("file");
+        fs::write(&file, "kept").unwrap();
+        #[cfg(unix)]
+        let (link_dir, link_file) = (
+            |to: &Path, at: &Path| std::os::unix::fs::symlink(to, at),
+            |to: &Path, at: &Path| std::os::unix::fs::symlink(to, at),
+        );
+        #[cfg(windows)]
+        let (link_dir, link_file) = (
+            |to: &Path, at: &Path| std::os::windows::fs::symlink_dir(to, at),
+            |to: &Path, at: &Path| std::os::windows::fs::symlink_file(to, at),
+        );
+        // Windows grants symlinks only to developer mode or an administrator: a link it refuses
+        // for that is skipped, and any other failure fails the test.
+        let made = |link: std::io::Result<()>| match link {
+            Ok(()) => true,
+            Err(e) if cfg!(windows) && e.raw_os_error() == Some(1314) => false,
+            Err(e) => panic!("{e}"),
+        };
+        if made(link_dir(&target, &applied)) {
+            remove_previous_output(&applied).unwrap();
+            assert!(fs::symlink_metadata(&applied).is_err());
+        }
+        if made(link_file(&file, &applied)) {
+            remove_previous_output(&applied).unwrap();
+            assert!(fs::symlink_metadata(&applied).is_err());
+        }
+        assert_eq!(fs::read_to_string(target.join("keep")).unwrap(), "kept");
+        assert_eq!(fs::read_to_string(&file).unwrap(), "kept");
+    }
+
     #[test]
     fn the_build_cfg_is_the_printed_set() {
         assert_eq!(

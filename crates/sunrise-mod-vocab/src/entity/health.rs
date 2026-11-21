@@ -1,6 +1,5 @@
 //! API-owned health and damage values.
-/// How a modifier changes what a reduction took (NeoForge's `IReductionsModifier`, as plain
-/// data so it also crosses into a wasm mod).
+/// How a modifier changes what a reduction took (NeoForge's `IReductionsModifier` as data).
 // no wire: preserves a u8 change tag followed by f32, rather than the structural enum derive u32 tag.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -36,9 +35,8 @@ pub enum Reduction {
     /// What the entity's own kind resists: a witch's magic resistance.
     InnateResistance,
 }
-/// A hit's damage sequence as plain values, field for field: the form it crosses into a wasm
-/// mod as. Reduction storage is crate-visible only for the generated wasm codec; mods use
-/// the reduction accessors so future reduction kinds do not expose a fixed array layout.
+/// A hit's damage sequence as plain values, field for field. Use the reduction accessors
+/// rather than relying on a fixed array layout.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]

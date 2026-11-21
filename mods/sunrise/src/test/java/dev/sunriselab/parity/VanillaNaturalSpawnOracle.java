@@ -542,7 +542,8 @@ public final class VanillaNaturalSpawnOracle {
     /**
      * TrialSpawner.tickServer `ticks` times from game time `t0` at `spos`, on a
      * trial spawner block in state `state` (ominous when `ominous=1`) loaded
-     * from `snbt` (base64 SNBT). Every `kill` ticks the mobs it spawned die.
+     * from `snbt` (base64 SNBT). `warmup_snbt`, if provided, is loaded first
+     * on the same spawner. Every `kill` ticks the mobs it spawned die.
      */
     static void trialCase(Lvl level, Map<String, String> c, RegistryAccess access, HolderLookup<net.minecraft.world.level.block.Block> blockLookup,
                           RandomSource mainRandom, List<String> log) throws Exception {
@@ -553,12 +554,15 @@ public final class VanillaNaturalSpawnOracle {
         BlockState block = net.minecraft.commands.arguments.blocks.BlockStateParser.parseForBlock(blockLookup,
             "minecraft:trial_spawner[trial_spawner_state=" + c.getOrDefault("state", "waiting_for_players") + ",ominous=" + c.getOrDefault("ominous", "0").equals("1") + "]", false).blockState();
         level.blocks.add(Map.entry(new Box(at.getX(), at.getY(), at.getZ(), at.getX(), at.getY(), at.getZ()), block));
-        var nbt = net.minecraft.nbt.TagParser.parseCompoundFully(new String(Base64.getDecoder().decode(c.get("snbt")), StandardCharsets.UTF_8));
         var entity = new net.minecraft.world.level.block.entity.TrialSpawnerBlockEntity(at, block);
         entity.setLevel(level);
         level.trial = entity;
         level.trialMobs = 0;
-        entity.getTrialSpawner().load(net.minecraft.world.level.storage.TagValueInput.create(net.minecraft.util.ProblemReporter.DISCARDING, access, nbt));
+        var spawner = entity.getTrialSpawner();
+        for (String data : c.containsKey("warmup_snbt") ? List.of(c.get("warmup_snbt"), c.get("snbt")) : List.of(c.get("snbt"))) {
+            var nbt = net.minecraft.nbt.TagParser.parseCompoundFully(new String(Base64.getDecoder().decode(data), StandardCharsets.UTF_8));
+            spawner.load(net.minecraft.world.level.storage.TagValueInput.create(net.minecraft.util.ProblemReporter.DISCARDING, access, nbt));
+        }
         int ticks = Integer.parseInt(c.getOrDefault("ticks", "1"));
         long t0 = Long.parseLong(c.getOrDefault("t0", "0"));
         int kill = Integer.parseInt(c.getOrDefault("kill", "0"));
@@ -568,7 +572,7 @@ public final class VanillaNaturalSpawnOracle {
                 level.tick = t;
                 level.time = t0 + t;
                 BlockState state = level.getBlockState(at);
-                entity.getTrialSpawner().tickServer(level, at, state.getValue(net.minecraft.world.level.block.TrialSpawnerBlock.OMINOUS));
+                spawner.tickServer(level, at, state.getValue(net.minecraft.world.level.block.TrialSpawnerBlock.OMINOUS));
                 // Mobs discarded as the spawner turned ominous leave the level.
                 level.entities.removeIf(Entity::isRemoved);
                 if (kill > 0 && t % kill == kill - 1) {
@@ -584,7 +588,7 @@ public final class VanillaNaturalSpawnOracle {
             level.spawnerRandom = null;
         }
         var out = net.minecraft.world.level.storage.TagValueOutput.createWithContext(net.minecraft.util.ProblemReporter.DISCARDING, access);
-        entity.getTrialSpawner().store(out);
+        spawner.store(out);
         CompoundTag saved = out.buildResult();
         String next = saved.getCompound("spawn_data").flatMap(d -> d.getCompound("entity")).flatMap(e -> e.getString("id")).orElse("-");
         log.add("end state=" + level.getBlockState(at).getValue(net.minecraft.world.level.block.TrialSpawnerBlock.STATE).getSerializedName()

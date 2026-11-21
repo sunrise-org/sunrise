@@ -12,8 +12,8 @@ copy of Minecraft 26.3, as everywhere else ([hosting.md](hosting.md), step 2).
 | `sunrise-client` | The game and `sunrise-ctl` | Linux, macOS |
 
 ```sh
-nix run github:horizon-rust/horizon#sunrise-server -- --version
-nix profile install github:horizon-rust/horizon#sunrise-server
+nix run github:sunrise-org/sunrise#sunrise-server -- --version
+nix profile install github:sunrise-org/sunrise#sunrise-server
 ```
 
 `overlays.default` adds them to `pkgs`; on Linux, `nix develop` gives the build environment of the workspace.
@@ -36,7 +36,7 @@ sunrise-prepare --prepare --server-jar ~/Downloads/server.jar --output ~/sunrise
 
 ```nix
 {
-  inputs.sunrise.url = "github:horizon-rust/horizon";
+  inputs.sunrise.url = "github:sunrise-org/sunrise";
 
   outputs = { nixpkgs, sunrise, ... }: {
     nixosConfigurations.box = nixpkgs.lib.nixosSystem {

@@ -209,7 +209,7 @@ mod tests {
         let loaded = load(
             &sunrise_world::loot::PackOverlay {
                 files: &files,
-                ..sunrise_world::loot::PackOverlay::NONE
+                ..sunrise_world::loot::PackOverlay::default()
             },
             |_| None,
             |_, id| id.starts_with("minecraft:") || id == "test:wraith",
@@ -260,7 +260,7 @@ mod tests {
         let loaded = load(
             &sunrise_world::loot::PackOverlay {
                 files: &files,
-                ..sunrise_world::loot::PackOverlay::NONE
+                ..sunrise_world::loot::PackOverlay::default()
             },
             |_| None,
             |_, _| true,
@@ -326,7 +326,7 @@ mod tests {
         let loaded = load(
             &sunrise_world::loot::PackOverlay {
                 files: &files,
-                ..sunrise_world::loot::PackOverlay::NONE
+                ..sunrise_world::loot::PackOverlay::default()
             },
             |directory| match directory {
                 "villager_profession" => Some(&professions),

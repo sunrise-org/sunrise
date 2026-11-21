@@ -28,7 +28,7 @@ impl Game<'_> {
             None => {
                 let own = self.translate_with_fallback(&tab.title, &tab.title);
                 self.translate_with_fallback(
-                    &format!("itemGroup.{}", tab.id.replace(':', ".")),
+                    &sunrise_client::creative::mod_item_group_key(&tab.id),
                     &own,
                 )
             }
@@ -93,7 +93,7 @@ impl Game<'_> {
         };
         let tab_sprite = |t: &sunrise_client::creative::Tab, on: bool| {
             format!(
-                "gui/sprites/container/creative_inventory/tab_{}_{}_{}",
+                "container/creative_inventory/tab_{}_{}_{}",
                 if t.top { "top" } else { "bottom" },
                 if on { "selected" } else { "unselected" },
                 t.column + 1
@@ -236,9 +236,9 @@ impl Game<'_> {
             }
             let scrollable = self.creative_screen.rows(&self.pack.names) > 5;
             let scroller = if scrollable {
-                "gui/sprites/container/creative_inventory/scroller"
+                "container/creative_inventory/scroller"
             } else {
-                "gui/sprites/container/creative_inventory/scroller_disabled"
+                "container/creative_inventory/scroller_disabled"
             };
             batch.sprite(
                 &self.gui.atlas,
@@ -337,11 +337,11 @@ impl Game<'_> {
             let page = self.creative_screen.page as i64 + step;
             let active = (0..pages as i64).contains(&page);
             let sprite = match (active, hover) {
-                (false, _) => "gui/sprites/widget/button_disabled",
-                (true, true) => "gui/sprites/widget/button_highlighted",
-                (true, false) => "gui/sprites/widget/button",
+                (false, _) => "widget/button_disabled",
+                (true, true) => "widget/button_highlighted",
+                (true, false) => "widget/button",
             };
-            sunrise_client::ui::blit_sprite(batch, atlas, sprite, x, y, 20.0, 20.0, u32::MAX);
+            sunrise_client::ui::nine_slice(batch, atlas, sprite, x, y, 20.0, 20.0, u32::MAX);
             let color = if active {
                 u32::MAX
             } else {

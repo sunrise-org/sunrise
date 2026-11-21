@@ -1,7 +1,7 @@
 //! Ownership bookkeeping for constructed, nonresident spawn outputs.
 //!
 //! The engine moves its actual objects here; this module never clones them or publishes
-//! residency. Native and wasm adapters must use the same instance and validate species,
+//! residency. Native adapters must use the same instance and validate species,
 //! coordinates and world membership before calling mutation methods. The caller supplies
 //! the parent/read-set verdict after dispatch; refusal never reruns construction.
 //!
@@ -85,16 +85,14 @@ pub enum Error {
     Budget,
     Invalid,
     Stale,
-    Failed,
 }
 
-/// Trusted engine verdict after guest dispatch and parent/read-set validation.
+/// Trusted engine verdict after mod dispatch and parent/read-set validation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Decision {
     Accept,
     Cancel,
     Stale,
-    Failed,
 }
 
 struct Slot<T> {
@@ -213,11 +211,11 @@ impl<T> PendingChildren<T> {
     }
 
     /// Dispatch through a shared engine-owned arena without holding a `RefCell` borrow
-    /// across guest code. Host reads and edits take short borrows of the same arena;
+    /// across mod code. Host reads and edits take short borrows of the same arena;
     /// nested actions use this entry point again, invalidating outer callback leases.
     ///
     /// The scope guard closes the action on native unwind (including a nested callback
-    /// failure). A caught wasm trap must return `Decision::Failed`. This only owns child
+    /// failure). This only owns child
     /// cleanup: the caller still coordinates Host-write rollback and parent/RNG journals.
     pub fn run_scoped(
         arena: &RefCell<Self>,
@@ -292,7 +290,6 @@ impl<T> PendingChildren<T> {
             }
             match decision {
                 Decision::Stale => return Err(Error::Stale),
-                Decision::Failed => return Err(Error::Failed),
                 Decision::Accept | Decision::Cancel => {}
             }
             if !frame
@@ -363,7 +360,7 @@ impl<T> PendingChildren<T> {
         Ok(())
     }
 
-    /// A different scoped editor is entering guest code. No outer child borrow survives it.
+    /// A different scoped editor is entering mod code. No outer child borrow survives it.
     pub fn suspend(&mut self) -> Result<(), Error> {
         if let Some(frame) = self.frames.last_mut() {
             frame.renew()?;

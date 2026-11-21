@@ -1,6 +1,8 @@
 //! The persistent `CustomData.CODEC`, shared by recipes and live stack boundaries.
 use std::borrow::Cow;
-use sunrise_core::nbt::{Compound, JavaString, Tag, parse_snbt_utf16, snbt_whitespace};
+use sunrise_core::nbt::{
+    Compound, JavaString, Tag, discard_tag, parse_snbt_utf16, snbt_whitespace,
+};
 
 /// `CustomData.COMPOUND_TAG_CODEC`: compounds or fully parsed flattened SNBT.
 /// Compound payloads are opaque NBT, including unknown keys and Java UTF-16.
@@ -14,7 +16,10 @@ pub fn decode(value: Tag) -> Result<Tag, String> {
 
 /// Validate a borrowed payload without copying opaque compound trees.
 pub fn validate(value: &Tag) -> Result<(), String> {
-    borrow(value).map(|_| ())
+    if let Cow::Owned(compound) = borrow(value)? {
+        discard_tag(Tag::Compound(compound));
+    }
+    Ok(())
 }
 
 /// Borrow an ordinary compound, decoding only the flattened SNBT representation.
@@ -33,10 +38,14 @@ fn flattened(text: &JavaString) -> Result<Compound, String> {
         .copied()
         .all(|unit| snbt_whitespace(u32::from(unit)))
     {
+        discard_tag(value);
         return Err("argument.nbt.trailing".into());
     }
     match value {
         Tag::Compound(value) => Ok(value),
-        _ => Err("Expected compound tag".into()),
+        invalid => {
+            discard_tag(invalid);
+            Err("Expected compound tag".into())
+        }
     }
 }

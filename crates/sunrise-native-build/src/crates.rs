@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use sunrise_mod_package::native_route::{API_PACKAGE, INTERNALS_PACKAGE, PACKAGES};
 
 /// Where the launcher stages the mods' crates.
 pub const DIR: &str = "native-api";
@@ -62,8 +63,7 @@ pub fn check_game_graph_names(
                     .filter_map(toml::Value::as_str)
                 {
                     let dep = dep.split_whitespace().next().unwrap_or(dep);
-                    if dep == super::api::API_PACKAGE || facades.get(dep) == Some(&current.as_str())
-                    {
+                    if dep == API_PACKAGE || facades.get(dep) == Some(&current.as_str()) {
                         continue;
                     }
                     let first = if current == *name {
@@ -84,6 +84,31 @@ pub fn check_game_graph_names(
         }
     }
     Ok(())
+}
+
+// Cargo still reads the underscore spellings before edition 2024.
+pub(super) const DEPENDENCY_KINDS: [&str; 5] = [
+    "dependencies",
+    "dev-dependencies",
+    "build-dependencies",
+    "dev_dependencies",
+    "build_dependencies",
+];
+
+pub(super) fn dependency_tables(manifest: &toml::Table) -> impl Iterator<Item = &toml::Table> {
+    std::iter::once(manifest)
+        .chain(
+            manifest
+                .get("target")
+                .and_then(toml::Value::as_table)
+                .into_iter()
+                .flat_map(|targets| targets.values().filter_map(toml::Value::as_table)),
+        )
+        .flat_map(|table| {
+            DEPENDENCY_KINDS
+                .into_iter()
+                .filter_map(|kind| table.get(kind).and_then(toml::Value::as_table))
+        })
 }
 
 /// A crate a mod's crate asks for in its `Cargo.toml`: under its own name or `package`, in any
@@ -119,25 +144,7 @@ pub fn wanted(
                 return Err(format!("{}: [{section}] is refused", manifest.display()));
             }
         }
-        let mut tables: Vec<&toml::Value> = Vec::new();
-        // Cargo still reads the underscore spellings before edition 2024.
-        let kinds = [
-            "dependencies",
-            "dev-dependencies",
-            "build-dependencies",
-            "dev_dependencies",
-            "build_dependencies",
-        ];
-        tables.extend(kinds.iter().filter_map(|k| value.get(*k)));
-        for target in value
-            .get("target")
-            .and_then(|t| t.as_table())
-            .into_iter()
-            .flat_map(|t| t.values())
-        {
-            tables.extend(kinds.iter().filter_map(|k| target.get(*k)));
-        }
-        for (key, dep) in tables.iter().filter_map(|t| t.as_table()).flatten() {
+        for (key, dep) in dependency_tables(&value).flatten() {
             if dep.get("package").is_some_and(|package| !package.is_str()) {
                 return Err(format!(
                     "{}: dependency {key} has a non-string package name",
@@ -191,8 +198,8 @@ pub fn wanted(
                 {
                     continue;
                 }
-                if super::api::PACKAGES.iter().any(|(game, _)| {
-                    *game != super::api::INTERNALS_PACKAGE
+                if PACKAGES.iter().any(|(game, _)| {
+                    *game != INTERNALS_PACKAGE
                         && package == *game
                         && path == format!("../../crates/{game}")
                 }) {

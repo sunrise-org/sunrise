@@ -3,7 +3,8 @@ pub trait Hooks {
     /// Add discoverable resource or data packs before a repository selects its
     /// packs (`AddPackFindersEvent`). The builder reports the repository's pack
     /// type. Runs at startup and whenever that repository is rediscovered; no
-    /// world state is available during startup registration.
+    /// world state is available during startup registration. Disabled native
+    /// mods' listeners are skipped from the first startup discovery onwards.
     #[notes = r##"## Discoverable bundled packs
 
 `Hooks::add_pack_finders` receives a typed `HostSide` and an
@@ -11,7 +12,9 @@ pub trait Hooks {
 `PackType::ClientResources` from `PackType::ServerData`. Register a
 `PackRegistration` with `event.packs.add_pack_finders(...)`; registrations for
 the other repository type are ignored. This hook contributes whole packs, while
-resource-file hooks and reload listeners retain their separate roles.
+resource-file hooks and reload listeners retain their separate roles. Native
+mods disabled in `sunrise-mods.txt` are skipped before their listener is
+entered, from the first startup discovery onwards.
 
 A location such as `example:assets/example/resourcepacks/high_contrast` names a
 loaded mod and a directory inside its package, containing `pack.mcmeta` and the

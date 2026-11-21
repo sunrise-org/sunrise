@@ -43,7 +43,6 @@ impl From<(crate::Identifier, String)> for StructureError {
 /// found: the start's position (vanilla's `Structure.findGenerationPoint`
 /// answer) and its pieces (`Structure.generatePieces`), at least one.
 // exhaustive: mods build it themselves as find_generation_point's answer
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct FoundStructure {
     /// Where the start sits, in world blocks.
     pub position: [i32; 3],

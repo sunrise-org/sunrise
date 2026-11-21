@@ -161,7 +161,7 @@ fn wrappers_nest_far_deeper_than_any_stack_would_recurse() {
 }
 
 #[test]
-fn the_wasm_boundary_refuses_wrappers_nested_past_its_depth() {
+fn wire_decode_refuses_wrappers_nested_past_its_depth() {
     // `Strict` `wrappers` deep around a player slot, as the wire writes it.
     let wrapped = |wrappers: usize| {
         let mut bytes = Vec::new();

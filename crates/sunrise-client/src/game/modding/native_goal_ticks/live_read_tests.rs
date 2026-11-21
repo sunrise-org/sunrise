@@ -13,6 +13,50 @@ impl mobs::LiveMobs for OneMob<'_> {
     }
 }
 
+/// Run the public target getter with the actor and the other mob outside `Game`.
+pub(in crate::game) fn read_borrowed_target(
+    game: &mut Game<'_>,
+    warden: MobRef,
+    other: u32,
+    tick_conn: u32,
+) -> Option<LivingRef> {
+    let (_, view) = game
+        .lan_guest_views()
+        .into_iter()
+        .find(|(conn, _)| *conn == tick_conn)
+        .unwrap();
+    let identity = game.guest_identity(tick_conn).unwrap();
+    let mut loan = game.mobs.lift();
+    let index = loan
+        .iter()
+        .position(|mob| mob.id == warden.entity().id())
+        .unwrap();
+    let result = loan
+        .with_one_and_rest(index, |actor, before, after| {
+            let live = OneMob(
+                before
+                    .iter()
+                    .chain(after)
+                    .find(|mob| mob.id == other)
+                    .unwrap(),
+            );
+            let mut world = game.mob_world_base(&[]);
+            world.goal_host = Some(game);
+            world.live_mobs = Some(&live);
+            world.player = Some(view);
+            world.player_identity = Some(identity);
+            warden.target(&GoalCx {
+                m: actor,
+                w: &world,
+                host: game,
+            })
+        })
+        .unwrap();
+    game.mobs
+        .restore(loan, sunrise_client::join_seq::RestoreOrder::SurvivorsFirst);
+    result
+}
+
 #[test]
 #[ignore = "daily"]
 fn scoped_host_reads_live_other_mob_before_stale_snapshot() {

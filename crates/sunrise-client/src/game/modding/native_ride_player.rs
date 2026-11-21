@@ -52,7 +52,9 @@ impl Game<'_> {
     pub(in crate::game) fn vehicle_of_any(&self, id: u32) -> Option<u32> {
         match self.player_vehicle(id) {
             Some(player) => self.native_player_vehicle_id(player),
-            None => self.mob_object(id).filter(|m| !m.removed)?.extra.mount,
+            None => self
+                .native_vehicle_id(Target::Mob(id))
+                .or_else(|| self.native_vehicle_id(Target::General(id))),
         }
     }
 
@@ -173,7 +175,7 @@ impl Game<'_> {
     /// Whether `player` rides the mob `rider`, through any number of vehicles.
     fn player_rides(&self, player: Target, rider: u32) -> bool {
         let mut current = self.native_player_vehicle_id(player);
-        for _ in 0..=self.mobs.len() + self.persist.off_level.len() + 1 {
+        for _ in 0..=self.riding_link_limit() {
             let Some(id) = current else {
                 return false;
             };

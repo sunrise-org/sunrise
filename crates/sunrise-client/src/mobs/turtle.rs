@@ -21,7 +21,6 @@ use sunrise_core::{
     geometry::{Vec3, trig},
     random::RandomSource,
 };
-use sunrise_world::move_gate::MoveGate;
 
 /// `Turtle.registerGoals`, and the path maluses and navigation `Turtle` and
 /// `TurtlePathNavigation` give it.
@@ -156,23 +155,21 @@ pub fn move_control(m: &mut Mob) {
 /// `Turtle.travelInWater`: swims at 0.1 move speed with 0.9 drag, and sinks
 /// slowly unless it has a target or is going home and near its home. On
 /// land the usual travel.
-pub fn travel(
+pub(super) fn travel(
     m: &mut Mob,
     w: &MobWorld,
     level: &mut DamageLevel<'_>,
     input: Vec3,
     events: &mut Vec<MobEvent>,
-) -> bool {
-    if !m.fluids.in_water {
-        return false;
-    }
+    pause: bool,
+) -> Result<(), super::living::TravelTrample> {
     m.move_relative(0.1, input);
-    m.do_move(w, level, events, &mut MoveGate::new());
-    m.velocity = m.velocity.scale(0.9);
-    if m.ai.target.is_none() && (!going_home(m) || !close_to_home(m, 20.0)) {
-        m.velocity.y -= 0.005;
-    }
-    true
+    m.travel_move(w, level, events, pause, |m, _, _, _| {
+        m.velocity = m.velocity.scale(0.9);
+        if m.ai.target.is_none() && (!going_home(m) || !close_to_home(m, 20.0)) {
+            m.velocity.y -= 0.005;
+        }
+    })
 }
 /// `Turtle.aiStep`: while digging, sand crumbs fly every fifth tick.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {

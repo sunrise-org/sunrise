@@ -953,7 +953,9 @@ pub fn post_target_declarations(manifest: &crate::manifest::Manifest) -> String 
 
 /// The WGSL of the stage `kind` whose own file is `file`: the prelude, the
 /// pack's shared files in order, the file, then the entry points, all of the pack's line.
-pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
+/// `entry` is the stage's place among its kind's entries (only `[[post]]` has several, and may
+/// reuse a file: each entry has its own `files`); the other kinds ignore it.
+pub fn compose(pack: &Pack, kind: StageKind, file: &str, entry: usize) -> Composed {
     let api = pack.manifest.api;
     let mut composed = Composed {
         text: String::new(),
@@ -984,7 +986,7 @@ pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
         StageKind::Material => m.material.as_ref(),
         StageKind::Vertex => m.vertex.as_ref(),
         StageKind::Weather => m.weather.as_ref(),
-        StageKind::Post => m.post.iter().find(|s| s.file == file),
+        StageKind::Post => m.post.get(entry),
         StageKind::Tonemap => m.tonemap.as_ref(),
         StageKind::Entity => m.entity.as_ref(),
     };

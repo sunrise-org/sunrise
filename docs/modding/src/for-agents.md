@@ -55,7 +55,7 @@ the hooks use. A build server uses the plan contract in
   it from nothing and never write a commit into it by hand. To change what it declares (name, description,
   capabilities, dependencies) edit that one field in the generated file. To move to a newer game build run
   `cargo sunrise-mod update`.
-- Ids are `[a-z0-9_]`, at most 64 characters. A mod is `[native]` or `[wasm]`, never both. Unknown manifest fields
+- Ids are `[a-z0-9_]`, at most 64 characters. A code mod declares `[native]`. Unknown manifest fields
   are refused.
 - Hook names follow NeoForge 26.3. An event is `&mut`. A write to the world needs a `ServerHost`; a client hook
   gets a `ClientHost`, so the wrong side does not compile.

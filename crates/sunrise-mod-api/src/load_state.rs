@@ -22,11 +22,60 @@ pub fn current_phase() -> ModPhase {
     PHASE.with(|cell| cell.get().phase)
 }
 
-static PACKAGES: OnceLock<Arc<[PackageInfo]>> = OnceLock::new();
+struct PackageInventory {
+    entries: Arc<[PackageInfo]>,
+    authority: Arc<mod_vocab::__private::NamespaceAuthority>,
+}
+
+impl PackageInventory {
+    fn from_vec(packages: Vec<PackageInfo>) -> Self {
+        let entries: Arc<[PackageInfo]> = packages.into();
+        let authority = Arc::new(mod_vocab::__private::NamespaceAuthority::from_packages(
+            &entries,
+        ));
+        Self { entries, authority }
+    }
+}
+
+static PACKAGES: OnceLock<PackageInventory> = OnceLock::new();
+static DEPENDENCIES: OnceLock<Arc<mod_vocab::__private::EffectiveDependencies>> = OnceLock::new();
+
+/// Install the host's dependency graph projection before any registration.
+pub fn install_dependencies(effective: mod_vocab::__private::EffectiveDependencies) {
+    assert!(
+        DEPENDENCIES.set(Arc::new(effective)).is_ok(),
+        "package dependencies already installed"
+    );
+}
+
+pub(crate) fn effective_dependencies() -> Arc<mod_vocab::__private::EffectiveDependencies> {
+    #[cfg(any(test, feature = "testing"))]
+    if let Some(effective) = TEST_DEPENDENCIES.with_borrow(Clone::clone) {
+        return effective;
+    }
+    DEPENDENCIES.get().cloned().unwrap_or_default()
+}
 
 #[cfg(any(test, feature = "testing"))]
 thread_local! {
-    static TEST_PACKAGES: std::cell::RefCell<Option<Arc<[PackageInfo]>>> = const { std::cell::RefCell::new(None) };
+    static TEST_DEPENDENCIES: std::cell::RefCell<Option<Arc<mod_vocab::__private::EffectiveDependencies>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run a fixture with explicitly resolved dependency rows.
+#[cfg(any(test, feature = "testing"))]
+pub fn with_test_dependencies<R>(
+    effective: mod_vocab::__private::EffectiveDependencies,
+    f: impl FnOnce() -> R,
+) -> R {
+    let previous = TEST_DEPENDENCIES.replace(Some(Arc::new(effective)));
+    let result = f();
+    TEST_DEPENDENCIES.set(previous);
+    result
+}
+
+#[cfg(any(test, feature = "testing"))]
+thread_local! {
+    static TEST_PACKAGES: std::cell::RefCell<Option<Arc<PackageInventory>>> = const { std::cell::RefCell::new(None) };
 }
 /// Runs `f` with only the packages `ids` installed, for tests.
 #[cfg(any(test, feature = "testing"))]
@@ -50,9 +99,20 @@ pub fn with_test_packages<R>(ids: &[&str], f: impl FnOnce() -> R) -> R {
 /// Runs `f` with exactly these packages installed, dependencies included, for tests.
 #[cfg(any(test, feature = "testing"))]
 pub fn with_test_package_inventory<R>(packages: Vec<PackageInfo>, f: impl FnOnce() -> R) -> R {
-    let previous = TEST_PACKAGES.replace(Some(packages.into()));
+    // Default fixtures model an unmodified installation of these declarations.
+    let mut effective = mod_vocab::__private::EffectiveDependencies::default();
+    for package in &packages {
+        for dependency in package.dependencies() {
+            match dependency.kind() {
+                DependencyKind::Optional => effective.insert(package.id(), dependency.id(), true),
+                DependencyKind::Required => effective.insert(package.id(), dependency.id(), false),
+                _ => {}
+            }
+        }
+    }
+    let previous = TEST_PACKAGES.replace(Some(Arc::new(PackageInventory::from_vec(packages))));
     let _ = crate::__private::initialize();
-    let result = f();
+    let result = with_test_dependencies(effective, f);
     TEST_PACKAGES.set(previous);
     result
 }
@@ -64,7 +124,7 @@ fn inventory(native: &[PackageInfo], content: &[PackageInfo]) -> Vec<PackageInfo
             packages.push(selected.clone());
         }
     }
-    // The code inventory follows the one installed native/wasm dispatch slice;
+    // The code inventory follows the one installed native dispatch slice;
     // content-only packages remain after it in their selected layer order.
     packages.sort_by_key(|p| {
         crate::__private::mods()
@@ -79,17 +139,11 @@ fn inventory(native: &[PackageInfo], content: &[PackageInfo]) -> Vec<PackageInfo
 pub fn install_packages(native: &[PackageInfo], content: &[PackageInfo]) {
     let _ = crate::__private::initialize();
     assert!(
-        PACKAGES.set(inventory(native, content).into()).is_ok(),
+        PACKAGES
+            .set(PackageInventory::from_vec(inventory(native, content)))
+            .is_ok(),
         "package inventory already installed"
     );
-}
-
-/// Install the host's ordered package inventory in a guest at initialization.
-// hidden: the guest runtime installs this once before dispatching hooks.
-#[doc(hidden)]
-pub fn install_guest_packages(packages: Vec<PackageInfo>) {
-    let _ = crate::__private::initialize();
-    let _ = PACKAGES.set(packages.into());
 }
 
 static REGISTRATION_DATA: OnceLock<RegistrationData> = OnceLock::new();
@@ -128,10 +182,40 @@ pub fn install_registration_data(data: RegistrationData) {
 
 pub(crate) fn current_packages() -> Arc<[PackageInfo]> {
     #[cfg(any(test, feature = "testing"))]
-    if let Some(packages) = TEST_PACKAGES.with_borrow(Clone::clone) {
+    if let Some(packages) =
+        TEST_PACKAGES.with_borrow(|slot| slot.as_ref().map(|p| p.entries.clone()))
+    {
         return packages;
     }
-    PACKAGES.get().cloned().unwrap_or_else(|| Arc::from([]))
+    PACKAGES
+        .get()
+        .map(|p| p.entries.clone())
+        .unwrap_or_else(|| Arc::from([]))
+}
+
+pub(crate) fn current_namespace_authority() -> Arc<mod_vocab::__private::NamespaceAuthority> {
+    #[cfg(any(test, feature = "testing"))]
+    if let Some(authority) =
+        TEST_PACKAGES.with_borrow(|slot| slot.as_ref().map(|p| p.authority.clone()))
+    {
+        return authority;
+    }
+    PACKAGES
+        .get()
+        .map(|p| p.authority.clone())
+        .unwrap_or_default()
+}
+
+pub(crate) fn owns_namespace(owner: &str, namespace: &str) -> bool {
+    #[cfg(any(test, feature = "testing"))]
+    if let Some(owns) =
+        TEST_PACKAGES.with_borrow(|slot| slot.as_ref().map(|p| p.authority.owns(owner, namespace)))
+    {
+        return owns;
+    }
+    PACKAGES
+        .get()
+        .map_or(owner == namespace, |p| p.authority.owns(owner, namespace))
 }
 pub(crate) fn phase_snapshot() -> PhaseState {
     PHASE.with(std::cell::Cell::get)
@@ -481,7 +565,7 @@ mod tests {
             )
         };
         let entries = inventory(&native, &[package("1"), package("2")]);
-        TEST_PACKAGES.set(Some(entries.into()));
+        TEST_PACKAGES.set(Some(Arc::new(PackageInventory::from_vec(entries))));
         let view = RegistrationContext::new().mods().clone();
         TEST_PACKAGES.set(None);
         assert_eq!(view.ids().collect::<Vec<_>>(), ["runtime", "plain"]);

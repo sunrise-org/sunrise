@@ -64,7 +64,7 @@ impl Trader {
             let missed = 2 - self.restocks_today;
             if missed > 0 {
                 for o in &mut self.offers {
-                    o.uses = 0;
+                    o.reset_uses();
                 }
             }
             for _ in 0..missed {
@@ -80,7 +80,7 @@ impl Trader {
     pub fn restock(&mut self, game_time: i64) {
         self.update_demand();
         for o in &mut self.offers {
-            o.uses = 0;
+            o.reset_uses();
         }
         self.last_restock = game_time;
         self.restocks_today += 1;
@@ -95,12 +95,13 @@ pub fn update_special_prices(offers: &mut [MerchantOffer], reputation: i32, hero
     for offer in offers {
         offer.special_price_diff = 0;
         if reputation != 0 {
-            offer.special_price_diff -= (reputation as f32 * offer.price_multiplier).floor() as i32;
+            let change = (reputation as f32 * offer.price_multiplier).floor() as i32;
+            offer.add_special_price_diff(change.wrapping_neg());
         }
         if hero_modifier > 0.0 {
             let reduction =
                 (hero_modifier * f64::from(offer.base_cost_a.stack.count)).floor() as i32;
-            offer.special_price_diff -= reduction.max(1);
+            offer.add_special_price_diff(-reduction.max(1));
         }
     }
 }
@@ -267,7 +268,7 @@ impl Session {
         let Some(offer) = self.offers.get_mut(index) else {
             return false;
         };
-        offer.uses += 1;
+        offer.uses = offer.uses.wrapping_add(1);
         // ClientSideMerchant.notifyTrade: increaseUses alone.
         if self.client_side {
             return false;
@@ -279,7 +280,7 @@ impl Session {
         let mut prices = false;
         if self.villager {
             let mut pop = 3 + self.random.next_int_bound(4).unwrap_or(0);
-            self.xp += offer.xp;
+            self.xp = self.xp.wrapping_add(offer.xp);
             self.last_traded = true;
             if can_level_up(self.level) && self.xp >= max_xp(self.level) {
                 self.level += 1;
@@ -972,6 +973,93 @@ mod tests {
         assert_eq!(o.cost_a_count(&items), 13);
         o.special_price_diff = -20;
         assert_eq!(o.cost_a_count(&items), 1);
+    }
+
+    #[test]
+    fn extreme_offer_arithmetic_matches_vanilla_26_3() {
+        // Values observed from offer_int i0..i3 in VanillaTradingOracle on 26.3.
+        let items = items();
+        for (base, uses, max, demand, multiplier, special, delta, xp, start, expected) in [
+            (
+                3,
+                i32::MAX,
+                i32::MIN,
+                i32::MAX,
+                1.0,
+                i32::MAX,
+                1,
+                i32::MAX,
+                1,
+                [1, -3, i32::MIN, 1, i32::MIN, 0, i32::MAX, i32::MIN],
+            ),
+            (
+                1,
+                i32::MIN,
+                i32::MAX,
+                i32::MIN,
+                -1.0,
+                i32::MIN,
+                -1,
+                i32::MIN,
+                -1,
+                [1, 1, i32::MAX, 1, i32::MIN + 1, 0, i32::MIN, i32::MAX],
+            ),
+            (
+                7,
+                i32::MAX,
+                i32::MAX,
+                i32::MIN,
+                f32::MAX,
+                100,
+                i32::MIN,
+                i32::MAX,
+                i32::MAX,
+                [64, -1, i32::MIN + 100, 1, i32::MIN, 0, i32::MAX, -2],
+            ),
+            (
+                12,
+                5,
+                3,
+                i32::MAX,
+                1.0,
+                0,
+                -i32::MAX,
+                i32::MIN,
+                i32::MIN,
+                [12, i32::MIN + 6, -i32::MAX, 1, 6, 0, i32::MIN, 0],
+            ),
+        ] {
+            let mut o = offer(base, None);
+            o.uses = uses;
+            o.max_uses = max;
+            o.demand = demand;
+            o.price_multiplier = multiplier;
+            o.special_price_diff = special;
+            o.xp = xp;
+            let before = o.cost_a_count(&items);
+            o.update_demand();
+            o.add_special_price_diff(delta);
+            let mut session = Session::new(vec![o], true);
+            session.level = 5;
+            session.xp = start;
+            session.notify_trade(0, None, &items);
+            let o = &mut session.offers[0];
+            let used = o.uses;
+            o.reset_uses();
+            assert_eq!(
+                [
+                    before as i32,
+                    o.demand,
+                    o.special_price_diff,
+                    o.cost_a_count(&items) as i32,
+                    used,
+                    o.uses,
+                    o.xp,
+                    session.xp
+                ],
+                expected,
+            );
+        }
     }
 
     #[test]

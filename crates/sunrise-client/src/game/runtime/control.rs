@@ -47,7 +47,7 @@ const HELP: &[&str] = &[
     "hotbar 1-9                     select a hotbar slot",
     "give ITEM [COUNT]              add items to the inventory",
     "render-distance N              chunks, 2..128",
-    "lod-distance N                 far surface chunks, 0 disables, up to1024",
+    "lod-distance N                 far surface chunks, 0 disables, up to 1024",
     "time TICKS                     set the time of day",
     "summon KIND [X Y Z] [baby]     spawn a mob (in front of the player without a position)",
     "mobs [RADIUS]                  list mobs near the player with their AI state",
@@ -181,7 +181,7 @@ impl Game<'_> {
     }
 
     fn add_async_occlusion_stats(&self, summary: &mut Value) {
-        if let Some(culler) = &self.async_occlusion_culler {
+        if let Some(culler) = &self.occlusion.async_culler {
             summary["async_occlusion_culling"] = culler.stats_value();
         }
     }
@@ -205,7 +205,7 @@ impl Game<'_> {
     }
     fn reset_frame_stats(&mut self) {
         self.frame_stats.reset();
-        if let Some(culler) = &self.async_occlusion_culler {
+        if let Some(culler) = &self.occlusion.async_culler {
             culler.reset_stats();
         }
     }

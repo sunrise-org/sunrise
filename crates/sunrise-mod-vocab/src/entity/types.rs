@@ -40,7 +40,7 @@ pub enum AttributeRegistrationError {
 }
 
 /// An effect requested once through [`Registrar::effect_key`](EffectsRegistrar::effect_key). The registry is fixed until restart.
-// no wire: decoding validates the u32 slot with EffectKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+// no wire: decoding validates the u32 slot with EffectKey::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: its field is private, so only registration creates a key
 pub struct EffectKey(pub(crate) u32);
@@ -49,7 +49,7 @@ pub struct EffectKey(pub(crate) u32);
 /// registration order. Returned by `EntityRef::kind`; Copy/Eq comparisons do not
 /// allocate. Request `key.id(host)` for its namespaced name (an owned diagnostic
 /// string). A key stays valid until the game exits.
-// The derived scalar codec validates host slots; wasm carries the host-issued token.
+// The derived scalar codec validates host slots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
 #[wire(via = u32)]
 // exhaustive: incoming scalar slots are checked against the host's registry
@@ -63,21 +63,14 @@ impl From<&EntityTypeKey> for u32 {
 impl TryFrom<u32> for EntityTypeKey {
     type Error = &'static str;
     fn try_from(slot: u32) -> Result<Self, Self::Error> {
-        // A guest transports the host-issued identity; only the host can validate it.
-        #[cfg(target_arch = "wasm32")]
-        {
-            Ok(Self(slot))
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            Self::from_slot(slot)
-        }
+        Self::from_slot(slot)
     }
 }
 
 /// A playing sound's channel, for `play_sound_source` and
 /// `play_streaming_source`: an id only, to tell sounds apart across the two
-/// hooks. It gives no control over the channel.
+/// hooks. It gives no control over the channel: a sound's effects are set through
+/// `play_sound` (`SoundPlay::effects`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
@@ -1165,6 +1158,37 @@ impl OriginalPlayerRef {
     }
 }
 
+/// The collision flags left by a player's last `Entity.move`.
+#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CollisionFlags {
+    /// Movement hit a wall or another horizontal obstruction.
+    pub horizontal: bool,
+    /// The horizontal collision only slightly changed the movement direction.
+    pub minor_horizontal: bool,
+    /// Movement was stopped vertically, by a floor or a ceiling.
+    pub vertical: bool,
+    /// The vertical collision stopped downward movement.
+    pub vertical_below: bool,
+}
+
+impl CollisionFlags {
+    /// Build a snapshot of the collision flags retained by a move.
+    pub const fn new(
+        horizontal: bool,
+        minor_horizontal: bool,
+        vertical: bool,
+        vertical_below: bool,
+    ) -> Self {
+        Self {
+            horizontal,
+            minor_horizontal,
+            vertical,
+            vertical_below,
+        }
+    }
+}
+
 /// A player's food data.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -1227,25 +1251,39 @@ impl ProfileProperty {
     }
 }
 
+// no wire: An in-process result of a native menu open, not a transported payload.
 /// Why [`PlayerRef::open_mod_menu`] opened nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum OpenMenuError {
     /// The menu type is not a content mod's (`data/<id>/sunrise/menu/`).
     NotModMenu,
-    /// The player is stale, not connected (a fake player), or their client lacks Sunrise's
-    /// menu types (a vanilla client); also a host without a game.
+    /// A menu with `owned_slots` also declares a take-only or crafting result.
+    OwnedSlotsWithResults,
+    /// Opening a new window is not possible during the active menu click action.
+    ClickInProgress,
+    /// The player is stale, dead, disconnecting, has no supported client, or their turn
+    /// is unavailable for the open veto. Also returned by a host without a game.
     PlayerUnavailable,
     /// The extra data is past the 32 KiB a menu may carry.
     TooLarge,
     /// The title could not cross to the game.
     Title(crate::text::TextFormError),
+    /// The initial data must contain exactly the menu type's `data_slots` values.
+    DataCountMismatch,
+    /// The title cannot be encoded as vanilla network NBT.
+    TitleNotEncodable,
 }
 
 impl From<crate::text::TextFormError> for OpenMenuError {
     fn from(error: crate::text::TextFormError) -> Self {
         Self::Title(error)
+    }
+}
+
+impl crate::AccessRefusal for OpenMenuError {
+    fn unavailable() -> Self {
+        Self::PlayerUnavailable
     }
 }
 
@@ -1298,6 +1336,8 @@ pub enum MenuItemsRefusal {
     /// One of the stacks was refused at the game's item conversion boundary: an item the world
     /// lacks, a count or damage the item does not allow.
     Stack(StackWriteError),
+    /// The window owns its slots. Write them through [`ItemPlace::MenuSlot`](crate::ItemPlace::MenuSlot).
+    OwnedSlots,
 }
 
 impl From<StackWriteError> for MenuItemsRefusal {
@@ -1538,6 +1578,46 @@ impl MoveCause {
     ];
 }
 
+/// The `LivingEntity.travel` branch a living body is about to run. Replacing
+/// the travel input or velocity does not change the branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum TravelMode {
+    /// `LivingEntity.travelInAir`: the ordinary ground-and-air branch.
+    Air,
+    /// `LivingEntity.travelInFluid` with water: swimming.
+    Water,
+    /// `LivingEntity.travelInFluid` with lava.
+    Lava,
+    /// `LivingEntity.travelFallFlying`: gliding.
+    Glide,
+    /// The flying branch (`Player` abilities flying or a mob's flight).
+    Flying,
+    /// Move using the existing velocity alone, as squid do in and out of water.
+    VelocityOnly,
+}
+
+/// Check each replaced vector against its own budget, without applying mod-output
+/// limits to untouched game values. Bit comparisons preserve signed zero and NaN payloads.
+pub(crate) fn refused_travel_output(
+    accepted_input: &[f64; 3],
+    accepted_velocity: &[f64; 3],
+    input: &[f64; 3],
+    velocity: &[f64; 3],
+) -> Result<(), &'static str> {
+    for (accepted, proposed, limit, field) in [
+        (accepted_input, input, 1.0, "input"),
+        (accepted_velocity, velocity, 64.0, "velocity"),
+    ] {
+        if accepted.map(f64::to_bits) != proposed.map(f64::to_bits)
+            && !proposed.iter().all(|v| v.abs() <= limit)
+        {
+            return Err(field);
+        }
+    }
+    Ok(())
+}
+
 /// How a declared attribute's modifier lines read on item tooltips: NeoForge's
 /// `RangedAttribute`, `PercentageAttribute` and `BooleanAttribute`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1585,5 +1665,50 @@ pub enum WantedPositionError {
 impl NoBackend for WantedPositionError {
     fn no_backend() -> Self {
         Self::Unavailable
+    }
+}
+
+#[cfg(test)]
+mod travel_tests {
+    use super::refused_travel_output;
+
+    #[test]
+    fn a_travel_output_is_refused_by_the_first_field_outside_its_budget() {
+        let ok = [0.0; 3];
+        assert_eq!(
+            refused_travel_output(&ok, &ok, &[-1.0, 1.0, 0.0], &[64.0, -64.0, 0.0]),
+            Ok(())
+        );
+        for bad in [1.01, f64::NAN, f64::INFINITY] {
+            assert_eq!(
+                refused_travel_output(&ok, &ok, &[0.0, bad, 0.0], &ok),
+                Err("input")
+            );
+        }
+        for bad in [64.5, -65.0, f64::NAN, f64::NEG_INFINITY] {
+            assert_eq!(
+                refused_travel_output(&ok, &ok, &ok, &[0.0, 0.0, bad]),
+                Err("velocity")
+            );
+        }
+    }
+
+    #[test]
+    fn an_untouched_vector_is_exempt_from_the_replacement_budget() {
+        let input = [0.0; 3];
+        let velocity = [65.0, f64::from_bits(0x7ff8_0000_0000_0001), -0.0];
+        assert_eq!(
+            refused_travel_output(&input, &velocity, &input, &velocity),
+            Ok(())
+        );
+        assert_eq!(
+            refused_travel_output(&input, &velocity, &[1.0, 0.0, 0.0], &velocity),
+            Ok(())
+        );
+        assert_eq!(
+            refused_travel_output(&input, &velocity, &input, &[65.0, velocity[1], 0.0]),
+            Err("velocity"),
+            "changing only the sign bit still proposes a replacement"
+        );
     }
 }

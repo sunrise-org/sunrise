@@ -23,7 +23,7 @@ pub trait Hooks {
     /// dragon or crystal. Heard only when a mod also sets
     /// `hears_projectile_impacts`. Server-side. Version 2 adds bobbers and rockets;
     /// listeners retaining the earlier family set filter out `minecraft:fishing_bobber`
-    /// and `minecraft:firework_rocket`. Named injections request `hook_version = 2`.
+    /// and `minecraft:firework_rocket`.
     #[hook(
         side = "server",
         version = 2,
@@ -52,9 +52,11 @@ pub trait Hooks {
     /// where they were, a mob does not board, a `/ride` fails, and a rider whose dismount is
     /// canceled keeps riding. Players hear boarding and dismounts by input, `/ride`, hits,
     /// bucking, teleport or spectator mode; mobs hear boarding and dismounts (jockeys,
-    /// ravager raiders, `/ride`, hits), including removal cleanup. A Mob's canceled
-    /// dismount keeps its relationship even when a boat or cart is destroyed; the
-    /// removed vehicle is not a valid handle or query result. Each later dismount asks again.
+    /// ravager raiders, `/ride`, hits), including removal cleanup. The departing rider's own
+    /// dismount is asked first, then its direct passengers in passenger-list order. The
+    /// removed vehicle is no longer a valid handle or query result during these callbacks. A Mob's
+    /// canceled dismount keeps the relationship with a removed boat, cart or mob; each later
+    /// dismount asks again.
     /// A resident Mob retries immediately before its next eligible entity tick:
     /// its chunk must be entity-ticking and its tick must not have been canceled.
     /// A server player retries on its next vehicle tick. Either can be later in the

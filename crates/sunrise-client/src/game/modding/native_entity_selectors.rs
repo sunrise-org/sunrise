@@ -52,10 +52,20 @@ impl Game<'_> {
                 };
                 let host: &mut dyn mod_api::ServerHost = self;
                 // A panicking type keeps nothing, as an unanswered predicate.
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    selector.matches(host, &source, entity)
-                }))
-                .unwrap_or(false)
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    mod_api::__private::contain_refusal(
+                        mod_api::content::crash::current_native_mod().unwrap_or("unknown"),
+                        || selector.matches(host, &source, entity),
+                    )
+                })) {
+                    Ok(Ok(matched)) => matched,
+                    Ok(Err(refusal)) => {
+                        refusal.report();
+                        log::warn!("entity selector {token} refused: {refusal}");
+                        false
+                    }
+                    Err(_) => false,
+                }
             })
             .collect()
     }

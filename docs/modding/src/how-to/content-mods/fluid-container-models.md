@@ -75,11 +75,9 @@ impl Hooks for MyMod {
   registered fluid with no look draws the missing texture through the mask, so the missing file shows.
 - Leaving `event.fluid` at `None` draws the stack as holding none: the model's declared `fluid`, untinted, or no
   fluid layer when that is `minecraft:empty`.
-- Registration returns keys for registered fluids, and the wasm boundary checks fluid keys. An unregistered key
+- Registration returns keys for registered fluids. An unregistered key
   draws the same as `None` and produces a log message once per item.
 - It is asked on the client each time such a stack is drawn, so answer from the stack alone and keep it cheap. Only
   items outside `minecraft:` are asked: a part on a vanilla item is not.
 - It is the client's picture only. What the stack holds for gameplay (filling, emptying, pipes) stays in the stack's
   own data and the `ITEM_FLUIDS` capability.
-
-The same part works in a native and a wasm mod.

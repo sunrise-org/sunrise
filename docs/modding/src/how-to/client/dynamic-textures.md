@@ -28,7 +28,7 @@ fn gui_render_post(&self, _: &dyn ClientHost, event: &mut GuiRenderPostEvent<'_>
 }
 ```
 
-The four calls are on the client host, the same for native and wasm mods (the pixels cross as bytes). They change
+The four calls are on the client host. They change
 the game's atlas, so they take `&mut dyn ClientHost`: call them from a hook that has it, such as `client_tick_post`,
 not from inside a draw.
 
@@ -44,8 +44,8 @@ not from inside a draw.
 
 ## Names
 
-The id is in the calling mod's namespace (`mymod:...`); the path is the mod's to choose. No mod can update or free
-another's image: an id in another namespace is `NotOwned`. An id that already names one of the mod's images, or a GUI
+The id is in a namespace owned by the calling mod (`mymod:...`, its extra manifest namespaces, or a content package it serves via `served_by`); the path is the mod's to choose. No mod can update or free
+another's image: an id outside the calling mod's owned namespaces (or created by another mod) is `NotOwned`, and textures created under served namespaces share the calling host's per-mod budget. An id that already names one of the mod's images, or a GUI
 sprite of the packs (`mymod:gui/panel`), is `NameTaken`.
 
 ## Slots and size classes
@@ -66,7 +66,7 @@ textures of their own, for larger images, are not part of this API.
 An update re-patches the slot the image holds, so a size of another class is `ClassChange`: free the image and create
 it again at the new size.
 
-The pool exists only when a client mod is loaded, native or wasm: a game without mods has no slot and its atlas does
+The pool exists only when a client mod is loaded; a game without mods has no slot and its atlas does
 not grow. Where there is no pool (a server, or no client mod loaded) every call is `Unavailable`.
 
 ## Budgets
@@ -100,8 +100,57 @@ Every call answers `Result<_, DynamicTextureError>`, and a refused call changes 
 
 Match `DynamicTextureError` non-exhaustively.
 
+## Inline images in chat and signs
+
+Implement `Hooks::substitute_inline_images` to display atlas sprites in chat history and on
+both sign faces. Each call sees one translated, styled `event.run` with legacy formatting already applied. The hook
+runs before wrapping, width measurement and bidi reordering, not for each glyph as it is painted.
+
+```rust
+use mod_api::prelude::*;
+use mod_api::{Identifier, InlineImageReplacement, SubstituteInlineImagesEvent};
+
+fn substitute_inline_images(&self, _: &dyn ClientHost, event: &mut SubstituteInlineImagesEvent<'_>) {
+    let sprite = Identifier::parse("mymod:dynamic/star").unwrap();
+    for (start, matched) in event.run.match_indices(":star:") {
+        let (Ok(start), Ok(end)) = (u32::try_from(start), u32::try_from(start + matched.len())) else {
+            continue;
+        };
+        event.images.push(InlineImageReplacement { start, end, sprite: sprite.clone() });
+    }
+}
+```
+
+Each half-open UTF-8 byte range must stay within the run and must not include a newline. The first valid proposal in
+hook dispatch order wins over overlapping proposals. A missing sprite or invalid range leaves the text alone unless
+another valid proposal covers it. Each replacement occupies one 8×8 `minecraft:gui` glyph. Chat clicks and hovers keep
+the span's style; signing, search and copy still use the original message. On a sign, an image uses its
+span's colour, or white if the span has none; the sign's dye does not tint it. Sign data and the editor keep
+the original text. Name tags and the chat input field do not use this hook.
+
+Give the hook the id of a pack sprite or an existing dynamic texture. Keep the listener a cheap match: it may run
+again when text, resources, sprite geometry or the enabled mods change. Create or free the texture in a mutable client
+hook, not during substitution. For an animation, keep one image id and update its same-sized pixels as frames change;
+there is no need to rebuild the text layout.
+
+A trusted native mod downloading images can use a pinned Cargo HTTP dependency on a background worker. Keep the
+network and decoding off the game thread, and hand the decoded RGBA to a mutable client hook for upload. The image
+hook neither fetches data nor provides a network service.
+
 ## Resource reloads
 
 A resource pack change rebuilds the GUI atlas. Every image keeps its name, class and slot, and the game puts its last
 pixels into the new atlas by itself: there is nothing to upload again. Sampling is the atlas's: nearest, as GUI
 sprites.
+
+## Sprites made at load instead
+
+An image that does not change while the game runs belongs in a sprite source, not in a live texture: register a type
+with `register_sprite_sources`, list an entry of it in the GUI atlas's definition
+(`assets/minecraft/atlases/gui.json`) and answer it in `sprite_source` with `SpriteSourceOutput::Pixels` for the id you
+want (`mymod:panel`, or `minecraft:container/slot` to replace a vanilla sprite). The GUI atlas publishes it by that id:
+`gui_sprite`, `DrawContext::sprite` and the GUI's own draws find it there, with the animation and nine-slice metadata
+of the file it names when an entry is an alias (a generated sprite has none), and it is made again each time the
+resources load. A GUI id its list has a sprite for is the list's: `create_dynamic_texture` refuses it as taken, and a
+sprite the list removed draws the missing sprite, never a model's sprite of the same id. After each load, ask
+`gui_sprite` again (`texture_atlas_stitched` for the GUI atlas): a region from before a reload may have moved.

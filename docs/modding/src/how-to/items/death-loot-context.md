@@ -5,8 +5,7 @@ Non-death drops have no source. Environmental deaths retain their type, with 0 f
 absent or unknown IDs. `player` is remembered kill credit, not necessarily the attacker.
 
 `context.weapon_item(host)` is the death-loot read corresponding to vanilla's
-`DamageSource.getWeaponItem`. Native and wasm listeners use the same read and retain
-all stack components, including custom names, enchantments and durability.
+`DamageSource.getWeaponItem`. The snapshot retains all stack components, including custom names, enchantments and durability.
 
 | Death source | Weapon returned |
 | --- | --- |

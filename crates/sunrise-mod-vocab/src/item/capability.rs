@@ -5,8 +5,8 @@
 //! it keeps its state where the game keeps the block entity's (its slots, its saved compound, its
 //! attachments).
 use crate::{
-    Direction, Host, ItemResource, LevelRef, ResourceHandler, ServerHost, Transaction,
-    backend_mut_of, backend_of,
+    Direction, Host, ItemResource, LevelRef, Overanswered, ResourceHandler, ServerHost,
+    Transaction, backend_mut_of, backend_of,
 };
 use std::{fmt::Debug, marker::PhantomData, ops::Deref};
 
@@ -68,6 +68,115 @@ impl<T: ?Sized> Capability<T> {
     }
 }
 
+// Keep a provider's specialised slot-less operations and queries when it is used as a handler.
+impl<R> ResourceHandler<R> for Capability<dyn ResourceHandler<R>> {
+    fn set_max_stack_size(&self, host: &mut dyn ServerHost, tx: &Transaction, limit: u32) -> bool {
+        self.handler.set_max_stack_size(host, tx, limit)
+    }
+
+    fn size(&self, host: &mut dyn ServerHost) -> usize {
+        self.handler.size(host)
+    }
+
+    fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<R> {
+        self.handler.resource(host, index)
+    }
+
+    fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
+        self.handler.amount(host, index)
+    }
+
+    fn amount_int(&self, host: &mut dyn ServerHost, index: usize) -> i32 {
+        self.handler.amount_int(host, index)
+    }
+
+    fn capacity(&self, host: &mut dyn ServerHost, index: usize, resource: Option<&R>) -> u32 {
+        self.handler.capacity(host, index, resource)
+    }
+
+    fn capacity_int(&self, host: &mut dyn ServerHost, index: usize, resource: Option<&R>) -> i32 {
+        self.handler.capacity_int(host, index, resource)
+    }
+
+    fn is_valid(&self, host: &mut dyn ServerHost, index: usize, resource: &R) -> bool {
+        self.handler.is_valid(host, index, resource)
+    }
+
+    fn insert_at(
+        &self,
+        host: &mut dyn ServerHost,
+        tx: &Transaction,
+        index: usize,
+        resource: &R,
+        amount: u32,
+    ) -> u32 {
+        let answer = self.handler.insert_at(host, tx, index, resource, amount);
+        // Keep the raw answer so the caller knows to abort; this boundary knows whom to warn about.
+        let _ = self.checked(answer, amount, &index);
+        answer
+    }
+
+    fn extract_at(
+        &self,
+        host: &mut dyn ServerHost,
+        tx: &Transaction,
+        index: usize,
+        resource: &R,
+        amount: u32,
+    ) -> u32 {
+        let answer = self.handler.extract_at(host, tx, index, resource, amount);
+        let _ = self.checked(answer, amount, &index);
+        answer
+    }
+
+    fn insert(
+        &self,
+        host: &mut dyn ServerHost,
+        tx: &Transaction,
+        resource: &R,
+        amount: u32,
+    ) -> Result<u32, Overanswered> {
+        self.check_resource_transfer(
+            self.handler.insert(host, tx, resource, amount),
+            amount,
+            "insert",
+        )
+    }
+
+    fn extract(
+        &self,
+        host: &mut dyn ServerHost,
+        tx: &Transaction,
+        resource: &R,
+        amount: u32,
+    ) -> Result<u32, Overanswered> {
+        self.check_resource_transfer(
+            self.handler.extract(host, tx, resource, amount),
+            amount,
+            "extract",
+        )
+    }
+}
+
+impl<R> Capability<dyn ResourceHandler<R>> {
+    fn check_resource_transfer(
+        &self,
+        answer: Result<u32, Overanswered>,
+        amount: u32,
+        operation: &str,
+    ) -> Result<u32, Overanswered> {
+        answer
+            .and_then(|answer| crate::content::resource::checked_transfer(answer, amount))
+            .map_err(|mut error| {
+                if error.owner.is_none() {
+                    crate::block::item_place::warn_broken(self.owner, &operation);
+                    error.owner = Some(self.owner());
+                }
+                error
+            })
+    }
+}
+
 impl<T: ?Sized + 'static> CapabilityKey<T> {
     /// A mod's own capability, answered only by the parts registered for it.
     pub const fn new(name: &'static str) -> Self {
@@ -126,12 +235,17 @@ impl ResourceHandler<ItemResource> for GameItems {
             .and_then(|backend| backend.container_stack(self.0, index))
             .map_or(0, |stack| stack.count())
     }
-    fn capacity(&self, host: &mut dyn ServerHost, index: usize, resource: &ItemResource) -> u32 {
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
         backend_of(&*host).map_or(0, |backend| {
-            backend.container_capacity(self.0, index, resource.as_stack())
+            backend.container_capacity(self.0, index, resource.map(ItemResource::as_stack))
         })
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -150,7 +264,7 @@ impl ResourceHandler<ItemResource> for GameItems {
         };
         amount - rest.map_or(0, |rest| rest.count().min(amount))
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,

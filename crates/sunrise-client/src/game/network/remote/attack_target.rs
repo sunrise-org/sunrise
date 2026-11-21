@@ -40,6 +40,9 @@ impl Game<'_> {
                 if !living {
                     self.remote_object_attack();
                 }
+            } else if let Some(row) = self.shown_remote_general(id) {
+                // A row reaches Player.attack but hurtClient is false.
+                self.remote_sweep_event(row.kind(), false);
             }
         }
         self.reset_attack_strength();

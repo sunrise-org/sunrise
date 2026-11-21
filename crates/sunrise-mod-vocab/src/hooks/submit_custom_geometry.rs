@@ -24,7 +24,7 @@ tint (the same convention as `WorldQuad::color`) and `LightCoords` block and sky
 0 to 15, in vanilla's own convention. The engine converts tint and light to the frame format;
 mods never assume that format or supply a packed light word. The view holds 16,384 instances,
 counted by `usage().instances_used` against `instances_capacity`. A refused batch draws nothing.
-A model with a translucent face returns `InstanceError::Translucent` and is not drawn as solid.
+`ModelInstance::color` (`0xAARRGGBB`, white by default) multiplies every face's colour; with alpha below `0xFF`, or for a model with a translucent face, the copy is drawn in the sorted translucent material (vanilla's `translucent_moving_block`), its quads far to near. `ModelInstance::hidden_faces` leaves out faces whose `cull` side is set.
 Copies outside the frustum are omitted and do not count. Shader packs and any route that cannot
 take GPU instances bake the same prepared geometry on the CPU instead of dropping the model; a
 `shaders/` pack shades those copies as block entities, as it shades `BlockEntityDrawContext::model`.

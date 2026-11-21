@@ -116,6 +116,34 @@ fn mod_menus_are_slot_grids_and_furnaces() {
     assert_eq!(mod_menu("hopper"), None);
 }
 
+#[test]
+fn block_containers_cannot_bind_an_owned_menu_type() {
+    let menu = |id: &str, limits| {
+        (
+            id.into(),
+            "test".into(),
+            1,
+            0,
+            vec![],
+            vec![],
+            None,
+            None,
+            true,
+            limits,
+        )
+    };
+    sunrise_client::containers::with_mod_menu_types(
+        [
+            menu("test:block", None),
+            menu("test:transient", Some(vec![1])),
+        ],
+        || {
+            assert_eq!(super::mod_menu("test:block"), Some(("test:block", 1)));
+            assert_eq!(super::mod_menu("test:transient"), None);
+        },
+    );
+}
+
 /// The config folder is `config/` beside `options.txt`, made when
 /// missing.
 #[test]

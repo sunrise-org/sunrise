@@ -7,7 +7,7 @@ use mod_api::{
     CreativeTabEditError, CreativeTabList, CreativeTabPermissions, CreativeTabPlacement,
     CreativeTabReadError, CreativeTabVisibility,
 };
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::sync::atomic::{AtomicU64, Ordering};
 use sunrise_items::creative_catalog::{
     Catalog, Holders, Kind, Parameters, TabContents, normalize_components,
@@ -40,7 +40,7 @@ impl BuildKey {
 struct Published {
     key: BuildKey,
     lists: Contents,
-    api: Option<Arc<CreativeModeTabs>>,
+    api: OnceCell<Arc<CreativeModeTabs>>,
     holders: Arc<Holders>,
     items: Arc<Items>,
 }
@@ -184,7 +184,7 @@ impl Game<'_> {
         self.creative_contents.published = Some(Published {
             key,
             lists: lists.clone(),
-            api: None,
+            api: OnceCell::new(),
             holders: Arc::new(holders),
             items,
         });
@@ -233,12 +233,34 @@ impl Game<'_> {
         let published = self
             .creative_contents
             .published
-            .as_mut()
+            .as_ref()
             .expect("complete creative build");
         Ok(published
             .api
-            .get_or_insert_with(|| snapshot(catalog, permissions, &lists))
+            .get_or_init(|| snapshot(catalog, permissions, &lists))
             .clone())
+    }
+
+    /// The last completed build's catalog, for a reader that cannot build: unavailable outside
+    /// a live world's phase, and `None` before the side has built once.
+    pub(in crate::game) fn built_creative_tabs(
+        &self,
+    ) -> Result<Option<Arc<CreativeModeTabs>>, CreativeTabReadError> {
+        if current_phase() != ModPhase::World || self.native_lifecycle.epoch().is_none() {
+            return Err(CreativeTabReadError::Unavailable);
+        }
+        Ok(self.creative_contents.published.as_ref().map(|published| {
+            published
+                .api
+                .get_or_init(|| {
+                    snapshot(
+                        self.creative_screen.catalog(),
+                        published.key.permissions,
+                        &published.lists,
+                    )
+                })
+                .clone()
+        }))
     }
 
     /// The search tab's canonical display list (not the client-only UI additions).
@@ -419,12 +441,26 @@ fn snapshot(
             CreativeModeTabInfo::new(
                 tab.id.clone(),
                 tab.kind == Kind::Category,
+                display_name(&tab.id, &tab.title),
                 api_stacks(&stacks.display),
                 api_stacks(&stacks.search),
             )
         })
         .collect();
     Arc::new(CreativeModeTabs::new(permissions, tabs))
+}
+
+/// `CreativeModeTab.getDisplayName`: the tab's `itemGroup.*` key with its title as fallback.
+fn display_name(id: &str, title: &str) -> mod_api::Text {
+    let key = sunrise_client::creative::item_group_key(id).map_or_else(
+        || sunrise_client::creative::mod_item_group_key(id),
+        str::to_owned,
+    );
+    mod_api::Text::new(mod_api::text::TextContent::Translatable {
+        key,
+        fallback: Some(title.to_owned()),
+        arguments: Vec::new(),
+    })
 }
 
 // Comparison ignores count and resident maxima, but damage must fit the component codec.

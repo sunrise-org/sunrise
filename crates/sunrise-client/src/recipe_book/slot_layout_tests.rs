@@ -107,21 +107,6 @@ fn malformed_layouts_are_refused_before_indexing() {
     ));
 }
 #[test]
-fn geometry_must_include_each_mapped_slot_and_be_finite() {
-    let mut geometry = vec![Some([0.0, 0.0]); 12];
-    assert_eq!(grid().validate_geometry(&geometry), Ok(()));
-    geometry[6] = None;
-    assert_eq!(
-        grid().validate_geometry(&geometry),
-        Err(LayoutError::MissingGeometry(6))
-    );
-    geometry[6] = Some([f32::NAN, 0.0]);
-    assert_eq!(
-        grid().validate_geometry(&geometry),
-        Err(LayoutError::MissingGeometry(6))
-    );
-}
-#[test]
 fn named_station_roles_and_fuel_occupancy_are_not_grid_guesses() {
     let furnace = CheckedSlotLayout::new(
         SlotLayout::Furnace {

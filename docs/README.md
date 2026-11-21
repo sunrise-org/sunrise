@@ -50,6 +50,7 @@ To play, use [the launcher](https://github.com/sunrise-org/sunrise-launcher/blob
 
 - [The launcher's mod browser](mod-browser.md): searching Modrinth and the Sunrise registry for mods, modpacks, resource packs and shader packs, compatibility checks before install, and checksum verification.
 - [Launcher commands](https://github.com/sunrise-org/sunrise-launcher/blob/main/docs/launcher-commands.md): every command of `sunrise-launcher`, CLI arguments, and the tools `sunrise-launcher mcp` offers for driving launcher actions.
+- [Install a local unsigned game build](developer-install.md): package a checkout as a developer base.
 - [Launcher resource preparation](launcher-preparation.md): compiling Java exporter classes into release bundles, verifying local Minecraft assets against `research-lock.json`, and multi-lane export workflows.
 - [Microsoft account sign-in](microsoft-account.md): signing players in with their Microsoft account in the launcher, joining online-mode servers, the owner gate, and the OAuth device-code flow.
 - [Windows allocators](windows-allocators.md): mimalloc defaults, the optional `windows-segment-heap` Cargo feature for Win32 heap APIs, and how to validate the executable manifest.
@@ -75,7 +76,6 @@ To play, use [the launcher](https://github.com/sunrise-org/sunrise-launcher/blob
 - [Linear light for HDR and shader packs](design/hdr-linear-light.md): the proposed shader API 0.2 colour contract and frame format for HDR output.
 - [The shader API 0.2 frame](design/shader-api-frame.md): proposed: where a 0.2 pack's stages, post chain and tone curve run, who owns anti-aliasing and coverage, and room for clouds, mods, LabPBR and ray tracing.
 - [Live mod reloading](design/mod-hotload.md): loading, enabling and updating mods from inside the game without a restart.
-- [Wasm group faults](design/wasm-group-faults.md): what a wasm dependency group does after a trap or an interruption, and how interruption counts guest work.
 - [Mod registry v2](design/registry-v2.md): project kinds, metadata, installation locations and the registry rollout.
 - [Scoped whole-stack rollback](design/stack-snapshot.md): transaction-scoped, same-place savepoints for internals mods; the real transaction lifetime must be confirmed before implementation, and provider-owned places are initially refused.
 - [Modularizing gfx.rs](design/gfx-modularization.md): the move-only extractions out of the renderer's 13,837-line module, what each phase took, and the blocks still in `gfx.rs`.

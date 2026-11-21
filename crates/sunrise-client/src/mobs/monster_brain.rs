@@ -1444,16 +1444,6 @@ fn act_of(activity: mod_api::Activity) -> Result<Act, mod_api::BehaviorRefusal> 
     })
 }
 
-/// The list's `(prio, activity, is a mod's)` keys, in `Brain.tick`'s start
-/// order — the inspection the goal selector's `entries` gives goals' tests.
-pub fn entry_keys(m: &Mob) -> Option<Vec<(i32, Act, bool)>> {
-    brain(m).map(|b| {
-        b.list
-            .iter()
-            .map(|e| (e.prio, e.act, matches!(e.b, B::Mod(_))))
-            .collect()
-    })
-}
 fn run_one(seed: i64, kids: Vec<(B, i32)>) -> B {
     B::RunOne(Box::new(RunOne {
         running: false,

@@ -1,9 +1,0 @@
-[package]
-name = "fnr-wasmtime"
-version = "0.1.0"
-edition = "2024"
-publish = false
-
-[dependencies]
-sunrise-mod-api = { path = ".sunrise/sdk/api/crates/sunrise-mod-api" }
-sunrise-wasmtime = { path = ".sunrise/sdk/api/crates/sunrise-wasmtime" }

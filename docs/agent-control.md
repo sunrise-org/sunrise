@@ -64,8 +64,12 @@ left alone.
 
 ## Protocol revisions
 
-All three servers share one implementation, `crates/sunrise-mcp`, so they advertise and answer
-the same revisions. There are two of them.
+`sunrise-ctl mcp` and [`sunrise-server mcp`](server.md#8-control-api-and-mcp) share the
+implementation in `crates/sunrise-mcp`. The separate launcher has its own MCP implementation.
+Its `game_*` tools depend on the stdio wire contract with the installed game's `sunrise-ctl mcp`,
+not on this crate.
+
+The shared implementation serves two revisions:
 
 - `2026-07-28` is stateless: there is no handshake, and every request carries its version and
   its capabilities in `_meta` (`io.modelcontextprotocol/protocolVersion`,

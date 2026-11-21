@@ -1,5 +1,5 @@
 //! Engine attachment declaration validation.
-// hidden: the generated guest registry lookup; authors bind typed keys and snapshots.
+// hidden: the engine's registry lookup; authors bind typed keys and snapshots.
 #[doc(hidden)]
 pub use crate::parts::AttachmentDeclarations;
 mod __private {

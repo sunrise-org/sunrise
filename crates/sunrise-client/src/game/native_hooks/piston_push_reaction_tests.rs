@@ -42,7 +42,7 @@ impl BlockPart for ReactionPart {
                 _ => unreachable!(),
             });
         }
-        self.reaction.clone().or_else(|| {
+        self.reaction.or_else(|| {
             Some(if event.state.ordinal() == 0 {
                 PushReaction::Immoveable
             } else {
@@ -84,10 +84,10 @@ impl Hooks for User {
             .state_properties
             .insert("locked".into(), BlockStateProperty::Boolean);
         block.default_state.insert("locked".into(), "false".into());
-        event.blocks.push(block);
+        event.register(block).unwrap();
         let mut fixed = Block::new("test:fixed", "minecraft:stone");
         fixed.properties.push_reaction = Some(PushReaction::Immoveable);
-        event.blocks.push(fixed);
+        event.register(fixed).unwrap();
     }
 }
 struct Level {
@@ -399,7 +399,7 @@ struct PayloadPart {
 #[mod_api::sunrise_part]
 impl BlockPart for PayloadPart {
     fn piston_push_reaction(&self, _: &mut PistonPushReactionEvent) -> Option<PushReaction> {
-        Some(self.reaction.clone())
+        Some(self.reaction)
     }
     fn piston_carries_block_entity(
         &self,
@@ -428,7 +428,7 @@ impl Hooks for PayloadUser {
             r.block_part(
                 key,
                 PayloadPart {
-                    reaction: self.reaction.clone(),
+                    reaction: self.reaction,
                     carry: self.carry,
                     asks: self.asks.clone(),
                 },
@@ -863,7 +863,7 @@ fn piston_push_reaction_position_state_opens_ticks_and_saves() {
                         &game.options.resources,
                         &sunrise_world::loot::PackOverlay {
                             files: &files,
-                            ..sunrise_world::loot::PackOverlay::NONE
+                            ..sunrise_world::loot::PackOverlay::default()
                         },
                         game.res.item_defaults(),
                     )

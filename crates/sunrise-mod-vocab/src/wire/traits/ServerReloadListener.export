@@ -1,1 +1,0 @@
-A server-side `SimplePreparableReloadListener`: prepare reads the new pack view without changing live state; its returned apply publishes the result.

@@ -44,7 +44,19 @@ pub(super) fn mesh_section(
         biomes: &context.biomes,
         visibility,
     };
-    let mut mesh = mesher.mesh_reusing(&borrow(region), sy, recycled, scratch);
+    let region = borrow(region);
+    let mut mesh = if let Some(prepared) = &settings.visibility {
+        mesher.mesh_planned(
+            &region,
+            sy,
+            recycled,
+            scratch,
+            prepared.plan.as_ref(),
+            super::section_visibility::REQUEST_BYTES,
+        )
+    } else {
+        mesher.mesh_reusing(&region, sy, recycled, scratch)
+    };
     mesh.sort_solid();
     *faces = Some((context.tables.clone(), mesher.visibility));
     mesh
@@ -65,6 +77,7 @@ impl Streaming {
             opaque_ice: self.opaque_ice,
             translucent_layers: self.translucent_layers.clone(),
             leaf_culling: self.leaf_culling,
+            visibility: None,
         }
     }
 }

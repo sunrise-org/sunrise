@@ -223,6 +223,26 @@ impl Metadata {
         Ok(uses)
     }
 
+    /// The facade copies in the target graph, including ones reached only through other crates.
+    /// The older 0.3 facade forwards to its dependency on 0.4.
+    pub fn runtime_logs(&self) -> Result<BTreeSet<Used>, String> {
+        let runtime = self.reachable(true)?;
+        Ok(self
+            .packages
+            .iter()
+            .filter(|package| {
+                package.name == "log"
+                    && package.version.starts_with("0.4.")
+                    && package.source.as_deref() == Some(sunrise_addresses::CARGO_CRATES_IO_SOURCE)
+                    && runtime.contains(package.id.as_str())
+            })
+            .map(|package| Used {
+                name: package.name.clone(),
+                version: package.version.clone(),
+            })
+            .collect())
+    }
+
     pub fn runtime_packages(&self) -> Result<BTreeSet<String>, String> {
         self.reachable(true)
             .map(|ids| ids.into_iter().map(str::to_owned).collect())

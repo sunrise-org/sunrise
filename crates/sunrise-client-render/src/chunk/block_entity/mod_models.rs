@@ -1,7 +1,10 @@
 //! Engine-owned mod block entity storage and revision tracking.
 use super::published_shapes::{PublishedShapes, SHAPES_KEY};
 use std::sync::{Arc, LazyLock};
-use sunrise_client_core::block_entity_nbt::saved_item_slot;
+use sunrise_client_core::{
+    block_entity_nbt::saved_item_slot,
+    block_entity_types::{self, RegisteredBlockEntityType},
+};
 use sunrise_core::nbt::{Compound, JavaString, Tag};
 use sunrise_items::items::ItemStack;
 
@@ -16,11 +19,9 @@ static ITEMS: LazyLock<JavaString> = LazyLock::new(|| "Items".into());
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct ModBlockEntity {
     pub(crate) id: String,
-    /// `id`'s numeric wire ID (`block_entity_types::numeric_id`), looked up once when the entity is
-    /// made, so a published loop's slot compares types by integer; `None` for an id the table
-    /// does not have, or one made before the table is installed. The table is frozen for the
-    /// process, so the ID never goes stale.
-    pub(crate) numeric_id: Option<u32>,
+    /// Looked up once when the entity is made. `None` for an unknown type or before the
+    /// process's type table is installed. Both the numeric id and keyed Parts are frozen.
+    registered_type: Option<RegisteredBlockEntityType>,
     pub(crate) fields: ModBlockEntityFields,
     pub(crate) revision: ModRevision,
     /// What its block's collision and outline are while it holds some
@@ -48,7 +49,7 @@ impl ModBlockEntityFields {
     /// The retained `Items` rows are their own ownership record. A modeled
     /// stack taking a slot drops its pending saved row from the same snapshot.
     fn claim_modeled_item_rows(&mut self) {
-        if let Some(Tag::List(rows)) = self.nbt.get_mut(&*ITEMS) {
+        if let Some(Tag::List(rows)) = self.nbt.get_mut(&ITEMS) {
             rows.retain(|row| {
                 saved_item_slot(row)
                     .is_none_or(|slot| self.items.get(slot).is_none_or(Option::is_none))
@@ -86,7 +87,7 @@ impl ModBlockEntity {
     }
 
     pub fn has_opaque_item_slot(&self, slot: usize) -> bool {
-        matches!(self.nbt.get(&*ITEMS), Some(Tag::List(rows)) if
+        matches!(self.nbt.get(&ITEMS), Some(Tag::List(rows)) if
             rows.iter().any(|row| saved_item_slot(row) == Some(slot)))
     }
 
@@ -95,7 +96,7 @@ impl ModBlockEntity {
         if slot >= self.items.len() {
             return None;
         }
-        if let Some(Tag::List(rows)) = self.fields.nbt.get_mut(&*ITEMS) {
+        if let Some(Tag::List(rows)) = self.fields.nbt.get_mut(&ITEMS) {
             rows.retain(|row| saved_item_slot(row) != Some(slot));
         }
         self.items.get_mut(slot)
@@ -103,13 +104,17 @@ impl ModBlockEntity {
 
     pub fn new(id: String, mut fields: ModBlockEntityFields) -> Self {
         fields.claim_modeled_item_rows();
-        let numeric_id = sunrise_client_core::block_entity_types::numeric_id(&id);
-        Self::with_numeric_id(id, numeric_id, fields)
+        let registered_type = block_entity_types::registered(&id);
+        Self::with_type(id, registered_type, fields)
     }
-    fn with_numeric_id(id: String, numeric_id: Option<u32>, fields: ModBlockEntityFields) -> Self {
+    fn with_type(
+        id: String,
+        registered_type: Option<RegisteredBlockEntityType>,
+        fields: ModBlockEntityFields,
+    ) -> Self {
         Self {
             id,
-            numeric_id,
+            registered_type,
             fields,
             revision: ModRevision {
                 born: sunrise_mod_runtime::block_entities::new_identity(),
@@ -172,7 +177,12 @@ impl ModBlockEntity {
     /// The type's numeric wire ID, resolved from [`Self::id`] when the entity was made; `None`
     /// for a type the game has not registered.
     pub fn numeric_id(&self) -> Option<u32> {
-        self.numeric_id
+        self.registered_type.map(|kind| kind.numeric_id)
+    }
+
+    /// Whether the registered type has a Part listening to its server tick.
+    pub fn has_tick_part(&self) -> bool {
+        self.registered_type.is_some_and(|kind| kind.has_tick_part)
     }
     pub fn revision(&self) -> ModRevision {
         self.revision
@@ -225,12 +235,12 @@ impl Drop for ModBlockEntity {
 /// The empty placeholder a tick leaves in a mod block entity's place: no type, nothing looked up.
 impl Default for ModBlockEntity {
     fn default() -> Self {
-        Self::with_numeric_id(String::new(), None, ModBlockEntityFields::default())
+        Self::with_type(String::new(), None, ModBlockEntityFields::default())
     }
 }
 impl Clone for ModBlockEntity {
     fn clone(&self) -> Self {
-        let mut copy = Self::with_numeric_id(self.id.clone(), self.numeric_id, self.fields.clone());
+        let mut copy = Self::with_type(self.id.clone(), self.registered_type, self.fields.clone());
         copy.shapes.clone_from(&self.shapes);
         copy.shapes_cleared = self.shapes_cleared;
         copy

@@ -1,4 +1,5 @@
-//! The GPU tests' `wgpu::Instance` and adapters.
+// The GPU tests' `wgpu::Instance` and adapters (shared: the shader pack crate's
+// `test_gpu` includes this file, which is why it is not an inner doc comment).
 
 use std::sync::{Mutex, MutexGuard};
 

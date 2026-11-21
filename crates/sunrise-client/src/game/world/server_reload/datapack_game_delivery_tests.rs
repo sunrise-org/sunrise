@@ -1,4 +1,5 @@
 use super::*;
+use crate::game::native_entity_refs::tests::run_fresh_cases;
 use sunrise_client::{datapack_net, lan::Out};
 use sunrise_protocol::{buf::Reader, packets::play::Clientbound};
 
@@ -41,6 +42,14 @@ fn apply_packets(rx: &std::sync::mpsc::Receiver<Out>) -> usize {
 #[test]
 #[ignore = "daily"]
 fn datapack_game_reload_delivers_only_successful_generations_and_disconnects_refused_guests() {
+    // Both peers use process-wide snapshots; another fixture must not replace either one.
+    if run_fresh_cases(
+        "game::server_reload::tests::datapack_publication_tests::datapack_game_delivery_tests::datapack_game_reload_delivers_only_successful_generations_and_disconnects_refused_guests",
+        "SUNRISE_DATAPACK_RELOAD_DELIVERY_CHILD",
+        &["delivery"],
+    ) {
+        return;
+    }
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
     let pack = root.join("datapacks/base");

@@ -190,25 +190,33 @@ impl Game<'_> {
         let _ = key;
         Ok(())
     }
-    /// A creaking bound to the heart at `home` was hurt (`creakingHurt`).
-    pub(super) fn creaking_hurt(&mut self, home: [i32; 3], _id: u32, by_player: bool) {
-        if !by_player {
-            return;
-        }
+    /// After `Creaking.hurtServer` posts ENTITY_ACTION, check the live protector, let
+    /// a player-credited hit reach the heart, then play the mob's hurt sound.
+    pub(super) fn creaking_hurt(&mut self, home: [i32; 3], id: u32, by_player: bool) {
         let key = (home[0], home[1], home[2]);
-        let Some((lease, BlockEntity::CreakingHeart(mut heart))) =
-            self.world.block_entities.take(&key)
-        else {
+        let Some((lease, entity)) = self.world.block_entities.take(&key) else {
             return;
         };
-        let _ = self.with_heart(key, &mut heart, true, |h, w, lr, host, out| {
-            if let Some(w) = w {
+        let BlockEntity::CreakingHeart(mut heart) = entity else {
+            // ENTITY_ACTION may have replaced the heart with a different block entity.
+            self.world.block_entities.put(lease, entity);
+            return;
+        };
+        let mut protects = false;
+        let _ = self.with_heart(key, &mut heart, by_player, |h, w, lr, host, out| {
+            protects = creaking_heart::protector(h, host) == Some(id);
+            if protects && let Some(w) = w {
                 creaking_heart::creaking_hurt(h, home, w, lr, host, out);
             }
         });
         self.world
             .block_entities
             .put(lease, BlockEntity::CreakingHeart(heart));
+        if protects && let Some(mob) = self.mobs.iter_mut().find(|m| m.id == id && !m.removed) {
+            let mut events = Vec::new();
+            sunrise_client::mobs::creaking::sway(mob, &mut events);
+            let _ = self.handle_mob_events(events);
+        }
     }
     /// `Creaking.tearDown`: the crumble particles.
     pub(super) fn creaking_tear_down(&mut self, center: [f64; 3], spread: [f64; 3]) {

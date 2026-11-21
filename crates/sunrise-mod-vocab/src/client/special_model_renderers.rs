@@ -6,7 +6,6 @@
 //! (`mymod:skillet`). Its geometry is resource models: from the stack, the renderer answers which
 //! models draw, each posed and tinted, and the game draws them as it draws any item model, with
 //! the special model's `base` display transforms, particle and GUI light.
-use crate::wire::{Reader, Wire, WireError, Writer};
 use crate::{ClientHost, ItemDisplayContext, ItemStack, Tag};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -168,9 +167,8 @@ pub trait SpecialModelRenderer: Send + Sync + 'static {
     /// to the parts either way. Diverges: vanilla's renderer submits geometry; Sunrise's answers
     /// resource models, so geometry stays in the packs.
     ///
-    /// An `Err`, a panic, a wasm call that is refused or traps, more than
-    /// [`MAX_SPECIAL_MODEL_PARTS`] parts, and a transform that isn't finite all refuse the answer
-    /// whole: the special model draws the missing model, the error is logged once with the type,
+    /// An `Err`, a panic, more than [`MAX_SPECIAL_MODEL_PARTS`] parts or a non-finite
+    /// transform refuses the entire answer: the special model draws the missing model, the error is logged once with the type,
     /// and the renderer is asked no more until resources reload. A part naming a model no pack
     /// has refuses the answer too, logged once for the model.
     fn extract(
@@ -181,8 +179,6 @@ pub trait SpecialModelRenderer: Send + Sync + 'static {
         context: &SpecialModelContext,
     ) -> Result<Vec<SpecialModelPart>, String>;
 }
-
-crate::wire::wire_handlers::handler!(dyn SpecialModelRenderer, "SpecialModelRenderer");
 
 /// The special model renderer registry `register_special_model_renderer` hands out: NeoForge's
 /// `RegisterSpecialModelRendererEvent`.
@@ -199,7 +195,7 @@ pub trait SpecialModelRenderers {
     );
 }
 
-// no wire: a report the game logs at registration; it holds `&'static` mod ids and never crosses to a guest.
+// no wire: a report the game logs at registration; it holds `&'static` mod ids.
 /// A registration that replaced an earlier one of the same type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]

@@ -25,8 +25,7 @@ pub(crate) struct CapabilityPart<P> {
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct OwnProvider {
-    /// The `Arc` of the provider trait object, which a lookup of that handler type downcasts:
-    /// a wasm mod's, in the game or another group, is the game's proxy, which no lookup takes.
+    /// The `Arc` of the provider trait object, which a lookup of that handler type downcasts.
     pub(crate) provider: Arc<dyn Any + Send + Sync>,
     pub(crate) handler: Arc<str>,
 }

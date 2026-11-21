@@ -41,6 +41,7 @@ pub use buffet::State as BuffetEditor;
 pub use create_world::{DIFFICULTIES, WorldOptions};
 pub use flat::{FlatLayer, FlatSettings, State as FlatEditor};
 pub use onboarding::Onboarding;
+use preset_buttons::ADDED_IDS;
 use world_toast::WorldToast;
 
 /// SelectWorldScreen's `HeaderAndFooterLayout(8 + 9 + 8 + 20 + 4, 60)`.
@@ -378,7 +379,8 @@ pub enum Action {
     Options,
     Accessibility,
     Language,
-    /// The Mods icon of the main menu: the NeoForge-style mod list.
+    /// The Mods screen, the NeoForge-style mod list: what a title screen button opens
+    /// (`sunrise_hooks::title::Opens::Mods`).
     Mods,
     /// AccessibilityOnboardingScreen's Music & Sounds button.
     Sounds,
@@ -445,6 +447,9 @@ pub struct Title {
     credits_button: Cell<[f32; 4]>,
     /// `Minecraft.allowsMultiplayer()` once the account's attributes are known.
     pub allows_multiplayer: bool,
+    /// The packages in the mods folder (the Mods screen's rows): the main menu's added buttons
+    /// (`sunrise_hooks::title`) show by it.
+    pub mods: usize,
     /// The ban screens `Gui.addInitialScreens` queued, shown once the title is up.
     ban_queue: std::collections::VecDeque<crate::ban_notice::Notice>,
     /// A ban notice's three buttons as last drawn (`ConfirmLinkScreen`'s row).
@@ -530,29 +535,36 @@ impl Button {
     /// at the button's x plus 2, `right` at its x plus width minus the
     /// sprite's width minus 4, and `centerX` at its x plus half its width: the
     /// label slides inside that box when wider, and one that fits is moved
-    /// left until it ends where the icon's room begins. A button without an
-    /// icon has `right` 2 short of its edge, where `centerX` is the middle of
-    /// the box and nothing moves.
+    /// left until it ends where the icon's room begins. A plain button takes
+    /// its centre from the midpoint of the unreserved content bounds.
+    /// Controller glyph room narrows the fit and clip bounds, not the centre.
     fn draw_label_at(&self, batch: &mut HudBatch, atlas: &HudAtlas, color: u32, now_ms: i64) {
-        let right = match self.trailing {
-            Some((_, size)) => self.x + self.w - size - 4.0,
-            None => self.x + self.w - 2.0,
-        };
         let room = if self.action.is_some() && self.enabled {
             crate::widgets::action_glyph_room()
         } else {
             0.0
         };
+        let left = self.x + 2.0;
+        let (center_x, right) = match self.trailing {
+            Some((_, size)) => (
+                self.x + (self.w / 2.0).floor(),
+                self.x + self.w - size - 4.0,
+            ),
+            None => {
+                let right = self.x + self.w - 2.0;
+                // `acceptScrollingWithDefaultCenter`: truncate the midpoint toward zero.
+                (((left + right) / 2.0).trunc(), right)
+            }
+        };
         crate::ui::scrolling_text_around_at(
             batch,
             atlas,
             &Text::literal(&self.label),
-            self.x + (self.w / 2.0).floor(),
-            self.x + 2.0 + room,
+            center_x,
+            left + room,
             right,
             self.y,
             self.y + 20.0,
-            self.y + 6.0,
             now_ms,
             color,
         );
@@ -814,6 +826,32 @@ impl Title {
     pub fn take_requested(&mut self) -> Option<Mode> {
         self.requested.take()
     }
+    /// Opens the title screen `id` names (`title`, `world_select`,
+    /// `world_create`, `multiplayer`, `add_server`, `direct_connect`: the
+    /// ones that take no arguments) at
+    /// once, past the gate: the screen a mod's `screen_opening` answer puts in
+    /// place of another, which fires nothing again. The world list opens as
+    /// Singleplayer does; the others fresh. Any other id changes nothing.
+    pub fn open_by_id(&mut self, id: &str) {
+        let gated = std::mem::replace(&mut self.gated, false);
+        match id {
+            "title" => self.set_mode(Mode::Main),
+            "world_select" => self.enter_singleplayer(),
+            "world_create" => {
+                self.create_return_to_main = true;
+                self.set_mode(self.new_world());
+            }
+            "multiplayer" => self.set_mode(Mode::Multiplayer(crate::multiplayer::Screen::list(
+                &self.saves,
+            ))),
+            "add_server" => {
+                self.set_mode(Mode::Multiplayer(crate::multiplayer::Screen::add_server()))
+            }
+            "direct_connect" => self.open_multiplayer(crate::multiplayer::Screen::direct()),
+            _ => {}
+        }
+        self.gated = gated;
+    }
     /// Supply the installed definitions for world creation.
     pub fn set_rule_registry(&mut self, registry: std::sync::Arc<crate::gamerules::RuleRegistry>) {
         fn rebind(mode: &mut Mode, registry: &std::sync::Arc<crate::gamerules::RuleRegistry>) {
@@ -880,6 +918,7 @@ impl Title {
             warning_check: Cell::new([0.0; 4]),
             credits_button: Cell::new([0.0; 4]),
             allows_multiplayer: true,
+            mods: 0,
             ban_queue: Default::default(),
             ban_buttons: Cell::new([(0.0, 0.0); 3]),
             backup: None,
@@ -2112,7 +2151,6 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             }
         };
         let narratable = match b.id {
-            9 => icon("sunrise.mods.screen.narration"),
             5 => icon("gui.friends.open.narration"),
             6 => icon("options.language.narration"),
             7 => icon("accessibility.onboarding.accessibility.button.narration"),
@@ -2121,7 +2159,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         // TitleScreen.init adds the icon row after Minecraft Realms and before
         // Options... and Quit Game, which Sunrise draws first.
         narratable.order(match b.id {
-            5..=7 | 9 => 1,
+            5..=7 => 1,
             2 | 3 => 2,
             _ => 0,
         })
@@ -2133,7 +2171,6 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
     /// (always, for Sunrise's Join a Friend).
     fn button_tooltip(&self, id: u8) -> Option<&'static str> {
         match (&self.mode, id) {
-            (Mode::Main, 9) => Some("sunrise.pages.mods.tooltip"),
             (Mode::Main, 5) => Some("gui.friends.open.tooltip"),
             (Mode::Main, 6) | (Mode::Onboarding(_), onboarding::LANGUAGE) => {
                 Some("options.language.tooltip")
@@ -2472,7 +2509,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             }
             (Mode::Main, Some(3)) => Action::Options,
             (Mode::Main, Some(7)) => Action::Accessibility,
-            (Mode::Main, Some(9)) => Action::Mods,
+            (Mode::Main, Some(id)) if id >= ADDED_IDS => preset_buttons::added_action(id),
             (Mode::Main, Some(6)) => Action::Language,
             (Mode::Select { worlds, selected }, Some(10)) => {
                 match selected.and_then(|i| worlds.get(i)).cloned() {
@@ -3412,15 +3449,20 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             return crate::multiplayer::Outcome::None;
         };
         match screen.click(hit, x, y, size, &self.saves) {
-            crate::multiplayer::Outcome::Open(mut next) => {
-                if let crate::multiplayer::Screen::Direct { address } = &mut *next {
-                    address.clone_from(&self.last_server);
-                }
-                self.set_mode(Mode::Multiplayer(*next));
+            crate::multiplayer::Outcome::Open(next) => {
+                self.open_multiplayer(*next);
                 crate::multiplayer::Outcome::None
             }
             outcome => outcome,
         }
+    }
+    /// Opens a multiplayer screen; Direct Connection starts on the last
+    /// server joined (`lastServer`).
+    fn open_multiplayer(&mut self, mut next: crate::multiplayer::Screen) {
+        if let crate::multiplayer::Screen::Direct { address } = &mut next {
+            address.clone_from(&self.last_server);
+        }
+        self.set_mode(Mode::Multiplayer(next));
     }
     /// A left press on the game rules (they need the atlas for text): whether
     /// it lands on a button, for its sound.
@@ -3994,7 +4036,7 @@ mod classic_tests {
     }
 
     #[test]
-    fn classic_main_menu_icons_route_mods_language_and_accessibility() {
+    fn classic_main_menu_icons_route_friends_language_and_accessibility() {
         crate::net::JOINS_FRIENDS_IN_TEST.set(true);
         let mut title = Title::new(
             PathBuf::new(),
@@ -4006,10 +4048,9 @@ mod classic_tests {
             let cx = (w / 2.0).floor();
             let y = (h / 4.0).floor() + 48.0;
             for (id, x, enabled, icon) in [
-                (9, cx - 46.0, true, "icon/mods"),
-                (5, cx - 22.0, true, "friends/friends"),
-                (6, cx + 2.0, true, "icon/language"),
-                (7, cx + 26.0, true, "icon/accessibility"),
+                (5, cx - 34.0, true, "friends/friends"),
+                (6, cx - 10.0, true, "icon/language"),
+                (7, cx + 14.0, true, "icon/accessibility"),
             ] {
                 let b = buttons.iter().find(|b| b.id == id).unwrap();
                 assert_eq!(
@@ -4019,7 +4060,6 @@ mod classic_tests {
                 assert_eq!(
                     title.click(x + 10.0, y + 82.0, (w, h)),
                     match id {
-                        9 => (Action::Mods, true),
                         6 => (Action::Language, true),
                         7 => (Action::Accessibility, true),
                         _ => (Action::None, true),
@@ -4038,7 +4078,7 @@ mod classic_tests {
             }
             // The four-pixel gaps around icons must not activate a button.
             assert_eq!(
-                title.click(cx + 24.0, y + 82.0, (w, h)),
+                title.click(cx + 12.0, y + 82.0, (w, h)),
                 (Action::None, false)
             );
             assert_eq!(
@@ -4046,6 +4086,176 @@ mod classic_tests {
                 (Action::None, false)
             );
         }
+    }
+
+    #[test]
+    fn an_added_button_takes_a_full_row_below_realms_only_while_it_shows() {
+        struct ModsRow;
+        impl sunrise_hooks::title::Button for ModsRow {
+            fn label(&self) -> &'static str {
+                "sunrise.mods.screen.title"
+            }
+            fn shown(&self, title: &sunrise_hooks::title::Title) -> bool {
+                title.mods > 0
+            }
+            fn opens(&self) -> sunrise_hooks::title::Opens {
+                sunrise_hooks::title::Opens::Mods
+            }
+        }
+        static ADDED: [&dyn sunrise_hooks::title::Button; 1] = [&ModsRow];
+        preset_buttons::TEST_BUTTONS.set(Some(&ADDED));
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/sunrise-test-resources"),
+            "",
+        );
+        let (w, h) = (427.0_f32, 240.0_f32);
+        let cx = (w / 2.0).floor();
+        let at = |title: &mut Title, id: u8| {
+            let b = title.buttons(w, h).into_iter().find(|b| b.id == id);
+            b.map(|b| (b.x, b.y, b.w))
+        };
+        // No mods: vanilla's title screen, rows from height / 4 + 48 = 108.
+        assert_eq!(at(&mut title, ADDED_IDS), None);
+        assert_eq!(at(&mut title, 8), Some((cx - 100.0, 156.0, 200.0)));
+        assert_eq!(at(&mut title, 3), Some((cx - 100.0, 204.0, 98.0)));
+        assert_eq!(title.click(cx - 90.0, 190.0, (w, h)), (Action::None, false));
+        // One mod: a full-width row below Realms; the rows lift so Options... and Quit Game end
+        // 2 above the copyright line (h - 10).
+        title.mods = 1;
+        let ids: Vec<u8> = title.buttons(w, h).iter().map(|b| b.id).collect();
+        assert_eq!(ids[..4], [1, 4, 8, ADDED_IDS]);
+        assert_eq!(at(&mut title, 8), Some((cx - 100.0, 136.0, 200.0)));
+        assert_eq!(at(&mut title, ADDED_IDS), Some((cx - 100.0, 160.0, 200.0)));
+        assert_eq!(at(&mut title, 5), Some((cx - 34.0, 184.0, 20.0)));
+        assert_eq!(at(&mut title, 3), Some((cx - 100.0, 208.0, 98.0)));
+        assert_eq!(title.click(cx - 90.0, 170.0, (w, h)), (Action::Mods, true));
+        // A tall screen keeps vanilla's top.
+        let tall = title.buttons(960.0, 523.0);
+        assert_eq!(tall.iter().find(|b| b.id == 1).unwrap().y, 178.0);
+        preset_buttons::TEST_BUTTONS.set(None);
+    }
+
+    #[test]
+    fn a_press_resolves_its_registration_without_asking_shown_again() {
+        thread_local! {
+            static SHOWN: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+        }
+        struct Toggle;
+        impl sunrise_hooks::title::Button for Toggle {
+            fn label(&self) -> &'static str {
+                "sunrise.mods.screen.title"
+            }
+            fn shown(&self, _: &sunrise_hooks::title::Title) -> bool {
+                SHOWN.with(std::cell::Cell::get)
+            }
+            fn opens(&self) -> sunrise_hooks::title::Opens {
+                sunrise_hooks::title::Opens::Mods
+            }
+        }
+        static ADDED: [&dyn sunrise_hooks::title::Button; 1] = [&Toggle];
+        preset_buttons::TEST_BUTTONS.set(Some(&ADDED));
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/sunrise-test-resources"),
+            "",
+        );
+        let (w, h) = (427.0_f32, 240.0_f32);
+        let cx = (w / 2.0).floor();
+        title.mods = 1;
+        // The state turns between the row's selection and its press (a mod list changes while
+        // the title is open): the row is no longer laid out, and the press still opens the
+        // screen the selected registration names.
+        SHOWN.with(|s| s.set(false));
+        assert_eq!(title.click(cx - 90.0, 190.0, (w, h)), (Action::None, false));
+        assert_eq!(preset_buttons::added_action(ADDED_IDS), Action::Mods);
+        preset_buttons::TEST_BUTTONS.set(None);
+    }
+
+    #[test]
+    fn an_added_button_keeps_its_id_while_another_stops_showing() {
+        struct Off;
+        impl sunrise_hooks::title::Button for Off {
+            fn label(&self) -> &'static str {
+                "test.title.off"
+            }
+            fn shown(&self, _: &sunrise_hooks::title::Title) -> bool {
+                false
+            }
+            fn opens(&self) -> sunrise_hooks::title::Opens {
+                sunrise_hooks::title::Opens::Mods
+            }
+        }
+        struct ModsRow;
+        impl sunrise_hooks::title::Button for ModsRow {
+            fn label(&self) -> &'static str {
+                "sunrise.mods.screen.title"
+            }
+            fn shown(&self, title: &sunrise_hooks::title::Title) -> bool {
+                title.mods > 0
+            }
+            fn opens(&self) -> sunrise_hooks::title::Opens {
+                sunrise_hooks::title::Opens::Mods
+            }
+        }
+        static ADDED: [&dyn sunrise_hooks::title::Button; 2] = [&Off, &ModsRow];
+        preset_buttons::TEST_BUTTONS.set(Some(&ADDED));
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/sunrise-test-resources"),
+            "",
+        );
+        let (w, h) = (427.0_f32, 240.0_f32);
+        let cx = (w / 2.0).floor();
+        title.mods = 1;
+        // The ids are registrations, not places among the rows showing: the second
+        // registration keeps its own id while the first is hidden, and pressing its row opens
+        // its screen.
+        let ids: Vec<u8> = title.buttons(w, h).iter().map(|b| b.id).collect();
+        assert_eq!(ids[..4], [1, 4, 8, ADDED_IDS + 1]);
+        assert_eq!(title.click(cx - 90.0, 170.0, (w, h)), (Action::Mods, true));
+        preset_buttons::TEST_BUTTONS.set(None);
+    }
+
+    #[test]
+    fn added_rows_show_only_while_they_fit_between_banner_and_copyright() {
+        struct ModsRow;
+        impl sunrise_hooks::title::Button for ModsRow {
+            fn label(&self) -> &'static str {
+                "sunrise.mods.screen.title"
+            }
+            fn shown(&self, title: &sunrise_hooks::title::Title) -> bool {
+                title.mods > 0
+            }
+            fn opens(&self) -> sunrise_hooks::title::Opens {
+                sunrise_hooks::title::Opens::Mods
+            }
+        }
+        static ADDED: [&dyn sunrise_hooks::title::Button; 2] = [&ModsRow, &ModsRow];
+        preset_buttons::TEST_BUTTONS.set(Some(&ADDED));
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/sunrise-test-resources"),
+            "",
+        );
+        let (w, h) = (427.0_f32, 240.0_f32);
+        title.mods = 1;
+        let laid = |h: f32| title.buttons(w, h);
+        // Two shown registrations, room for one row between the logo and edition banner
+        // (bottom y 81) and the copyright line: the first shows, the second has no row...
+        assert!(laid(h).iter().any(|b| b.id == ADDED_IDS));
+        assert!(!laid(h).iter().any(|b| b.id == ADDED_IDS + 1));
+        // ...Singleplayer stays below the banner, and Options... and Quit Game end above the
+        // copyright line (h - 10).
+        assert!(laid(h).iter().find(|b| b.id == 1).unwrap().y >= 81.0);
+        assert!(laid(h).iter().find(|b| b.id == 3).unwrap().y + 20.0 <= h - 10.0);
+        // The boundary: at 233 the lifted top lands on the banner's bottom and one row still
+        // fits; at 232 none does and the rows sit where vanilla puts them.
+        assert_eq!(laid(233.0).iter().find(|b| b.id == 1).unwrap().y, 81.0);
+        assert!(laid(233.0).iter().any(|b| b.id == ADDED_IDS));
+        assert!(!laid(232.0).iter().any(|b| b.id == ADDED_IDS));
+        assert_eq!(laid(232.0).iter().find(|b| b.id == 1).unwrap().y, 106.0);
+        preset_buttons::TEST_BUTTONS.set(None);
     }
 
     #[test]
@@ -4101,17 +4311,12 @@ mod classic_tests {
             "gui/title/edition".into(),
             crate::hud::Rect { w: 128, h: 16, ..r },
         );
-        for (i, icon) in [
-            "icon/mods",
-            "friends/friends",
-            "icon/language",
-            "icon/accessibility",
-        ]
-        .into_iter()
-        .enumerate()
+        for (i, icon) in ["friends/friends", "icon/language", "icon/accessibility"]
+            .into_iter()
+            .enumerate()
         {
             atlas.sprites.insert(
-                format!("gui/sprites/{icon}"),
+                icon.to_string(),
                 crate::hud::Rect {
                     u0: 0.25 + i as f32 * 0.125,
                     w: 15,
@@ -4131,7 +4336,7 @@ mod classic_tests {
         assert_eq!(batch.vertices[6].pos, [cx - 64.0, 67.0]);
         assert_eq!(batch.vertices[8].pos, [cx + 64.0, 81.0]);
         assert_eq!(batch.vertices[8].uv, [1.0, 14.0 / 16.0]);
-        for i in 0..4 {
+        for i in 0..3 {
             let quad = batch
                 .vertices
                 .as_chunks::<6>()
@@ -4139,7 +4344,7 @@ mod classic_tests {
                 .iter()
                 .find(|quad| quad[0].uv == [0.25 + i as f32 * 0.125, 0.0])
                 .unwrap();
-            let x = cx - 46.0 + i as f32 * 24.0 + 3.0;
+            let x = cx - 34.0 + i as f32 * 24.0 + 3.0;
             let y = (batch.height / 4.0).floor() + 48.0 + 72.0 + 3.0;
             assert_eq!(quad[0].pos, [x, y]);
             assert_eq!(quad[2].pos, [x + 15.0, y + 15.0]);

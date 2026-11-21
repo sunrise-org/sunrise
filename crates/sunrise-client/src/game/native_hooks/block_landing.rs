@@ -13,8 +13,8 @@ impl HitLevel<'_> {
     }
     /// `Block.bounceOn`: entity `entity` of type `kind` bounced off `state` at `pos` and fell
     /// `fall_distance` blocks. `movement` is the movement the bounce leaves it, before
-    /// vanilla sets it: change it to change what the entity keeps. Players and mobs bounce
-    /// here; dropped items and the other entities do not yet.
+    /// vanilla sets it: change it to change what the entity keeps. The entity types that simulate a
+    /// bounce on the server use this path.
     pub(in crate::game) fn native_bounce_on(&mut self, call: super::fire::BounceOnCall<'_>) {
         self.fire_bounce_on(call);
     }

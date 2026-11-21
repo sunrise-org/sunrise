@@ -282,6 +282,10 @@ pub fn run(dir: &Path) -> Result<(), String> {
             dir,
             config.engine.low_memory,
             config.engine.parallel_tick,
+            (
+                config.engine.droppable_clientbound,
+                config.engine.droppable_serverbound,
+            ),
             transfers.as_deref(),
         )
         .map_err(|e| format!("{}: {e}", program.display()))?;
@@ -561,7 +565,9 @@ fn check_updates(shared: Arc<Shared>) {
         .spawn(move || {
             thread::sleep(Duration::from_secs(60));
             loop {
-                if let (Ok(release), Some(current)) = (update::release(None), install.current()) {
+                if let Some(current) = install.current()
+                    && let Ok(release) = update::newest(&current)
+                {
                     let newer = update::update_available(&release.tag, &current)
                         .then_some(release.tag);
                     let told = shared.update.lock().unwrap().available.clone();

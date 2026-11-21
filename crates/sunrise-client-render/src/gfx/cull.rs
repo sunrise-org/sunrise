@@ -437,9 +437,9 @@ impl Cull {
     }
 
     /// Start a frame: take in the results that came back, and tell whether
-    /// the frame culls.
-    pub fn begin(&mut self, device: &wgpu::Device) -> bool {
-        let _ = device.poll(wgpu::PollType::Poll);
+    /// the frame culls. The caller polls the device first (the frame's one poll,
+    /// `Renderer::draw_frame`).
+    pub fn begin(&mut self) -> bool {
         for i in 0..READBACKS {
             let r = &mut self.readbacks[(self.next + i) % READBACKS];
             if r.state.load(Ordering::Acquire) != MAPPED {

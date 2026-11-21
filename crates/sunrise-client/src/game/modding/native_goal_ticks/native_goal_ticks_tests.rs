@@ -1086,3 +1086,114 @@ fn a_finalize_spawn_listener_keeps_the_mod_goals() {
         );
     });
 }
+
+/// Goals run in ticks, after the thread reached World. Ticked under Setup and Reloading anyway, a
+/// goal's world read in any of its methods is a contained refusal (the goal did not answer), never
+/// the no-scope panic; in World the same goals read.
+#[test]
+#[ignore = "daily"]
+fn a_goal_tick_outside_the_world_is_refused_not_a_panic() {
+    use mod_api::__private::{ModPhase, PhaseOwner};
+    /// A goal whose methods read the world through the Host after journalling the call, so the
+    /// journal shows how far each one got. `read_in_can_use` picks whether `can_use` reads too.
+    struct Gated {
+        name: &'static str,
+        flags: GoalFlags,
+        read_in_can_use: bool,
+    }
+    impl Gated {
+        fn call(&self, cx: &mut GoalContext<'_>, call: &'static str) {
+            record(cx.mob().entity().id(), call);
+            let _ = cx.host().level("minecraft:overworld");
+            record(cx.mob().entity().id(), "read");
+        }
+    }
+    impl Goal for Gated {
+        fn flags(&self) -> GoalFlags {
+            self.flags
+        }
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn can_use(&mut self, cx: &mut GoalContext<'_>) -> bool {
+            if self.read_in_can_use {
+                self.call(cx, "can_use");
+            }
+            true
+        }
+        fn can_continue(&mut self, cx: &mut GoalContext<'_>) -> bool {
+            self.call(cx, "can_continue");
+            true
+        }
+        fn start(&mut self, cx: &mut GoalContext<'_>) {
+            self.call(cx, "start");
+        }
+        fn tick(&mut self, cx: &mut GoalContext<'_>) {
+            self.call(cx, "tick");
+        }
+        fn stop(&mut self, cx: &mut GoalContext<'_>) {
+            self.call(cx, "stop");
+        }
+    }
+    struct GatedGoals;
+    #[mod_api::sunrise_part]
+    impl EntityPart for GatedGoals {
+        fn register_goals(&self, goals: &mut GoalRegistrar<'_>) {
+            goals.add_goal(
+                4,
+                Gated {
+                    name: "ReadsInCanUse",
+                    flags: GoalFlags::MOVE,
+                    read_in_can_use: true,
+                },
+            );
+            goals.add_goal(
+                5,
+                Gated {
+                    name: "ReadsAfterCanUse",
+                    flags: GoalFlags::LOOK,
+                    read_in_can_use: false,
+                },
+            );
+        }
+    }
+    struct GatedMod;
+    #[mod_api::__subscriptions]
+    impl Hooks for GatedMod {
+        fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+            r.entity_part("minecraft:zombie", GatedGoals);
+        }
+    }
+    mod_platform::__private::install(vec![ModEntry::new("gated", Box::new(GatedMod))].into());
+    crate::game::api_values::install_parts(&[ModEntry::new("gated", Box::new(GatedMod))]).unwrap();
+    with_game(|game| {
+        zombie(game, 60, [3.5, 65.0, 3.5]);
+        game.mobs[0].ai.goals.clear();
+        mobs::part_goals::attach(&mut game.mobs[0]);
+        for reloading in [false, true] {
+            EVENTS.lock().unwrap().clear();
+            let setup = PhaseOwner::scope(ModPhase::Setup);
+            let _reload = reloading.then(|| setup.reloading().unwrap());
+            tick_goals(game, 0);
+            tick_goals(game, 0);
+            let journal = calls(60);
+            for reached in ["can_use", "start", "tick"] {
+                assert!(
+                    journal.contains(&reached),
+                    "{reached} was called: {journal:?}"
+                );
+            }
+            assert!(
+                !journal.contains(&"read"),
+                "no world read answered: {journal:?}"
+            );
+        }
+        EVENTS.lock().unwrap().clear();
+        tick_goals(game, 0);
+        assert!(
+            calls(60).contains(&"read"),
+            "in World the same goals read: {:?}",
+            calls(60)
+        );
+    });
+}

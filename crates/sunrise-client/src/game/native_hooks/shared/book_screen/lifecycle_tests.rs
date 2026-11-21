@@ -95,6 +95,7 @@ fn entering_inventory_requests_catalogue_for_preinstalled_bound_screen() {
                 window: 1,
                 menu: "bound:menu".into(),
                 block: Some("bound:block".into()),
+                mod_type: None,
                 data: Vec::new(),
                 extra: None,
                 screen: mod_api::RecipeBookLayout::registered_screen("bound:menu").unwrap(),
@@ -124,6 +125,61 @@ fn entering_inventory_requests_catalogue_for_preinstalled_bound_screen() {
         });
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn a_registered_recipe_book_screen_opens_for_a_blockless_menu() {
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new("bound", Box::new(BoundBookMod))].into();
+    sunrise_client::containers::with_mod_menu_types(
+        [(
+            "bound:menu".into(),
+            "bound".into(),
+            3,
+            0,
+            vec![1],
+            vec![0],
+            None,
+            None,
+            true,
+            None,
+        )],
+        || {
+            mod_platform::testing::with_mods(mods, || {
+                crate::game::native_entity_refs::tests::with_client_game(|game| {
+                    mod_api::__private::resolve_menus(["bound:menu"]).unwrap();
+                    game.open_native_screen(
+                        (i32::MIN, 0, 0),
+                        None,
+                        7,
+                        "bound:menu",
+                        Some(sunrise_protocol::menu_extra::Message {
+                            window: 7,
+                            pos: None,
+                            data: Vec::new(),
+                        }),
+                    );
+                    let opened = game
+                        .mod_screen
+                        .as_ref()
+                        .expect("blockless book screen opens");
+                    assert_eq!(opened.window, 7);
+                    assert_eq!(opened.menu, "bound:menu");
+                    assert_eq!(opened.block, None);
+                    assert_eq!(
+                        opened
+                            .screen
+                            .recipe_book
+                            .as_ref()
+                            .map(mod_api::RecipeBookTypeKey::as_str),
+                        Some("bound:book")
+                    );
+                    assert_eq!(game.native_hidden_slots("bound:menu", None, 3), vec![2]);
+                });
+            });
+        },
+    );
+}
+
 const STONE: &str = "minecraft:stone";
 const MENU: &str = "minecraft:generic_9x1";
 fn geometry(game: &Game<'_>) -> ((f32, f32), Vec<(usize, [f32; 4])>) {
@@ -164,6 +220,7 @@ fn authoritative_custom_book_rebuilds_cached_geometry_without_observe_screen() {
                 window: 1,
                 menu: "geometry:menu".into(),
                 block: Some("minecraft:stone".into()),
+                mod_type: None,
                 data: Vec::new(),
                 extra: None,
                 screen: mod_api::Screen {
@@ -344,6 +401,7 @@ fn a_moved_slot_takes_its_place_for_drawing_and_input_from_the_next_frame() {
                 window: 1,
                 menu: "minecraft:generic_9x1".into(),
                 block: Some("minecraft:stone".into()),
+                mod_type: None,
                 data: Vec::new(),
                 extra: None,
                 screen: mod_api::Screen {
@@ -457,6 +515,7 @@ fn a_hidden_slot_leaves_the_screen_and_comes_back_where_put() {
                 window: 1,
                 menu: MENU.into(),
                 block: Some(STONE.into()),
+                mod_type: None,
                 data: Vec::new(),
                 extra: None,
                 screen: mod_api::Screen {
@@ -491,7 +550,8 @@ fn a_hidden_slot_leaves_the_screen_and_comes_back_where_put() {
             assert_eq!(game.slot_at(&batch, 560.0, 295.0), None);
             assert!(!geometry(game).1.iter().any(|(id, _)| *id == 300));
             assert_eq!(game.native_screen_slots(), Some(vec![301]));
-            assert_eq!(game.native_screen_slot_count(), Some(1));
+            // The 36 player slots and the remaining visible container slot.
+            assert_eq!(game.slot_count(), 37);
             assert_eq!(game.native_screen_slot(0), None);
 
             // Shown again where the mod puts it.
@@ -558,6 +618,7 @@ fn a_bound_books_catalogue_survives_slot_moves_and_hides() {
                     window: 1,
                     menu: "bound:menu".into(),
                     block: Some("bound:block".into()),
+                    mod_type: None,
                     data: Vec::new(),
                     extra: None,
                     screen: mod_api::RecipeBookLayout::registered_screen("bound:menu").unwrap(),

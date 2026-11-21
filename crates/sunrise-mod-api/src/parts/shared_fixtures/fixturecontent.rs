@@ -14,11 +14,12 @@ impl Hooks for FixtureContent {
         }
     }
     fn blocks(&self, _context: &mod_api::RegistrationContext, event: &mut BlocksEvent<'_>) {
-        event.blocks.extend(
-            ["gauge", "connector", "press", "hoard", "void_bin"]
-                .into_iter()
-                .chain(CAPABILITY_TYPES.iter().copied())
-                .map(|id| mod_api::Block::new(format!("test:{id}"), "minecraft:stone")),
-        );
+        for block in ["gauge", "connector", "press", "hoard", "void_bin"]
+            .into_iter()
+            .chain(CAPABILITY_TYPES.iter().copied())
+            .map(|id| mod_api::Block::new(format!("test:{id}"), "minecraft:stone"))
+        {
+            event.register(block).unwrap();
+        }
     }
 }

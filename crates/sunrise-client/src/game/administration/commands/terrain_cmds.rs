@@ -624,6 +624,8 @@ impl Game<'_> {
                     let (tag, _) = sunrise_core::nbt::parse_snbt(&table)
                         .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
                     let json = sunrise_client::scoreboard::tag_to_json(&tag);
+                    sunrise_world::loot::validate_loot_table(&json)
+                        .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
                     // LootCommand's omitted fishing tool is EMPTY, not mainhand.
                     let held = if id == "loot.fish"
                         && (ctx.get("tool").is_some() || ctx.has("mainhand") || ctx.has("offhand"))

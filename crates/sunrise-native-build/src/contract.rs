@@ -47,7 +47,7 @@ pub struct DiscoverPlan {
     pub toolchain: Unpacked,
     /// The mod's folder.
     pub mods: PathBuf,
-    /// Where to copy the build data (`internals.json`, `points.json`), a folder that doesn't exist yet; absent, the reply lists the mod's internals.
+    /// Where to copy `internals.json`, a folder that doesn't exist yet; absent, the reply lists the mod's internals.
     #[serde(default)]
     pub catalog: Option<PathBuf>,
 }
@@ -316,7 +316,11 @@ fn compile(
         .collect();
     let declared: Vec<Vec<dependencies::Dependency>> = mods
         .iter()
-        .map(|bundle| dependencies::from_manifest(&bundle.manifest.dependencies, side))
+        .map(|bundle| {
+            dependencies::build_dependencies(&bundle.manifest, side, |id| {
+                mods.iter().any(|project| project.manifest.id == id)
+            })
+        })
         .collect();
     let inputs: Vec<_> = mods
         .iter()

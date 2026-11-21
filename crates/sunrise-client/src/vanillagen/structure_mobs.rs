@@ -165,10 +165,11 @@ impl FinalizeLevel for Level<'_> {
         finalize::is_halloween()
     }
     fn create(&mut self, kind: &str, _: Reason) -> Option<Mob> {
-        if self.difficulty == 0 && !finalize::allowed_in_peaceful(kind) {
+        let t = self.data.types.get(kind)?;
+        if self.difficulty == 0 && !t.allowed_in_peaceful() {
             return None;
         }
-        let t = self.data.types.get(kind)?.clone();
+        let t = t.clone();
         self.next_id += 1;
         Some(Mob::new(self.next_id, t, Vec3::ZERO, 0.0))
     }

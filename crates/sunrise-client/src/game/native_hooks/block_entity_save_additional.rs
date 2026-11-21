@@ -2,18 +2,35 @@
 use super::{BlockEntity, Game, GameLevel, Pos};
 use crate::game::native_level_signals::ReadLevel;
 use mod_api::{BlockEntityRef, BlockEntityTypeKey, HookId, LevelRef};
-use sunrise_client::save::block_entity_encode;
+use std::borrow::Cow;
+use sunrise_client::{
+    containers::ModBlockEntity, items::Items, save::block_entity_encode, world::World,
+};
 use sunrise_core::nbt::{Compound, JavaString, Limits, Tag};
 use sunrise_mod_runtime::attachments::ATTACHMENTS_KEY;
+use sunrise_world::registry::BlockRegistry;
+
+fn owns_slots(world: &World, registry: &BlockRegistry, block: &str) -> bool {
+    registry
+        .default_state(block)
+        .and_then(|state| world.block_entities.mod_container(state.0))
+        .is_some_and(|container| container.slots != 0)
+        // There can be a save before the first pass populates the container table.
+        || !world.block_entities.has_states()
+            && mod_api::__private::parts_installation::block_container(block)
+                .is_some_and(|container| container.slots != 0)
+}
 
 fn save_additional(
     level: LevelRef,
     pos: Pos,
     generation: Option<u64>,
-    kind: &str,
-    tag: &Compound,
+    row: &ModBlockEntity,
+    items: &Items,
+    owns_slots: impl FnOnce() -> bool,
     fire: impl FnOnce(BlockEntityTypeKey, BlockEntityRef, &mut Compound),
 ) -> Option<Compound> {
+    let kind = row.id();
     if kind.is_empty()
         || !mod_api::__private::block_entity_type_listens(HookId::BlockEntitySaveAdditional, kind)
     {
@@ -23,14 +40,18 @@ fn save_additional(
     let generation = generation?;
     let entity =
         mod_api::__private::game::block_entity_ref(level, [pos.0, pos.1, pos.2], generation);
+    let owns_slots = owns_slots();
+    let mut input = Cow::Borrowed(&row.nbt);
+    if !owns_slots && !row.items.is_empty() {
+        // Slotless rows can still have modeled stacks from decoding a save.
+        // The listener owns that field; don't normalize the resident row.
+        block_entity_encode::write_mod_items(input.to_mut(), row, items);
+    }
     // The raw attachment field stays available for the disk overlay (including
     // opaque or malformed rows), but is never part of the Part's payload.
     let key = ATTACHMENTS_KEY.into();
-    let mut output: Compound = tag
-        .iter()
-        .filter(|(name, _)| **name != key)
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect();
+    let mut output = input.as_ref().clone();
+    output.remove(&key);
     fire(id, entity, &mut output);
     // Admit the listener's output once, before any consumer sees it. Disk
     // encoding still owns the size limit for its complete record.
@@ -59,25 +80,33 @@ fn save_additional(
     }
     output.remove(&key);
     let mut output = crate::game::native_block_entity_refs::mod_payload(output);
-    if let Some(attachments) = tag.get(&key) {
+    if let Some(attachments) = input.get(&key) {
         output.insert(key, attachments.clone());
     }
-    (output != *tag).then_some(output)
+    if output == *input {
+        return None;
+    }
+    if owns_slots {
+        block_entity_encode::write_mod_items(&mut output, row, items);
+    }
+    Some(output)
 }
 
 impl Game<'_> {
     pub(in crate::game) fn capture_block_entity_payload(
         &self,
         pos: Pos,
-        kind: &str,
-        tag: &Compound,
+        block: &str,
+        row: &ModBlockEntity,
+        items: &Items,
     ) -> Option<Compound> {
         // A detached unload column still has its live slots until after capture.
         self.capture_block_entity_payload_at(
             pos,
             self.world.block_entities.generation(&pos),
-            kind,
-            tag,
+            block,
+            row,
+            items,
         )
     }
 
@@ -85,17 +114,29 @@ impl Game<'_> {
         &self,
         pos: Pos,
         generation: Option<u64>,
-        kind: &str,
-        tag: &Compound,
+        block: &str,
+        row: &ModBlockEntity,
+        items: &Items,
     ) -> Option<Compound> {
         if self.is_logical_server()
             && mod_api::__private::has_part_hook(HookId::BlockEntitySaveAdditional)
             && let Some(level) = self.level(self.dim.id())
         {
             let host = ReadLevel { game: self, level };
-            save_additional(level, pos, generation, kind, tag, |id, entity, tag| {
-                mod_api::dispatch_block_entity_save_additional(&host, id, entity, tag);
-            })
+            save_additional(
+                level,
+                pos,
+                generation,
+                row,
+                items,
+                || owns_slots(&self.world, self.pack.assets.registry, block),
+                |id, entity, tag| {
+                    let pos = [pos.0, pos.1, pos.2];
+                    mod_api::dispatch_block_entity_save_additional(
+                        &host, id, entity, pos, level, tag,
+                    );
+                },
+            )
         } else {
             None
         }
@@ -111,8 +152,8 @@ impl Game<'_> {
         block: &str,
         items: &sunrise_client::items::Items,
     ) -> Tag {
-        block_entity_encode::encode_with(pos, entity, block, items, |kind, tag| {
-            self.capture_block_entity_payload_at(pos, generation, kind, tag)
+        block_entity_encode::encode_with(pos, entity, block, Default::default(), items, |row| {
+            self.capture_block_entity_payload_at(pos, generation, block, row, items)
         })
     }
 
@@ -124,8 +165,8 @@ impl Game<'_> {
         block: &str,
         items: &sunrise_client::items::Items,
     ) -> Tag {
-        block_entity_encode::encode_with(pos, entity, block, items, |kind, tag| {
-            self.capture_block_entity_payload(pos, kind, tag)
+        block_entity_encode::encode_with(pos, entity, block, Default::default(), items, |row| {
+            self.capture_block_entity_payload(pos, block, row, items)
         })
     }
 }
@@ -138,32 +179,43 @@ impl GameLevel<'_> {
         entity: &BlockEntity,
         block: &str,
     ) -> Tag {
-        block_entity_encode::encode_with(pos, entity, block, self.items, |kind, tag| {
-            if self.native_authoritative
-                && let Some(level) = self.api_level
-            {
-                save_additional(
-                    level,
-                    pos,
-                    self.world.block_entities.generation(&pos),
-                    kind,
-                    tag,
-                    |id, entity, tag| {
-                        self.native_block_entity_save_additional(id, entity, tag);
-                    },
-                )
-            } else {
-                None
-            }
-        })
+        block_entity_encode::encode_with(
+            pos,
+            entity,
+            block,
+            Default::default(),
+            self.items,
+            |row| {
+                if self.native_authoritative
+                    && let Some(level) = self.api_level
+                {
+                    save_additional(
+                        level,
+                        pos,
+                        self.world.block_entities.generation(&pos),
+                        row,
+                        self.items,
+                        || owns_slots(self.world, self.registry, block),
+                        |id, entity, tag| {
+                            let pos = [pos.0, pos.1, pos.2];
+                            self.native_block_entity_save_additional(id, entity, pos, level, tag);
+                        },
+                    )
+                } else {
+                    None
+                }
+            },
+        )
     }
 
     pub(in crate::game) fn native_block_entity_save_additional(
         &self,
         id: mod_api::BlockEntityTypeKey,
         entity: BlockEntityRef,
+        pos: [i32; 3],
+        level: LevelRef,
         tag: &mut Compound,
     ) {
-        self.fire_block_entity_save_additional(id, entity, tag);
+        self.fire_block_entity_save_additional(id, entity, pos, level, tag);
     }
 }

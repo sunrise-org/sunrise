@@ -8,7 +8,7 @@ impl Game<'_> {
     /// The native knockback hook runs before resistance is applied, with
     /// `source`, the hit's. This short entry enters `knock_back_player_full` once.
     /// Both entries are native internals points. API access refuses `HurtSource` and
-    /// `Attack`, which have no point mirrors; wasm refuses internals at load.
+    /// `Attack`, which have no point mirrors.
     pub(in crate::game) fn knock_back_player(
         &mut self,
         power: f64,

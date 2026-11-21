@@ -26,6 +26,7 @@ pub(super) fn overlay_key(overlay: &sunrise_world::loot::PackOverlay) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     overlay.files.hash(&mut hasher);
+    overlay.priority_layers.hash(&mut hasher);
     overlay.conditions.hash(&mut hasher);
     hasher.finish()
 }
@@ -446,7 +447,7 @@ pub(in crate::game) fn preload_sync_data(item_data: &Arc<ItemData>) -> Option<Sy
     }
     let root = item_data.root().to_owned();
     let item_data = Arc::clone(item_data);
-    // Loading recipes asks mods' ingredient and recipe property set hooks, wasm mods included.
+    // Loading recipes asks mods' ingredient and recipe property set hooks.
     sunrise_guest_stack::spawn("Server data preload".into(), move || {
         let none = sunrise_world::loot::PackOverlay::NONE;
         SyncData::load(

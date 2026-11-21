@@ -19,7 +19,6 @@ pub enum LayoutError {
     DuplicateSlot(u16),
     IncompatibleDisplay,
     InvalidDisplayGrid,
-    MissingGeometry(u16),
 }
 
 impl CheckedSlotLayout {
@@ -90,21 +89,6 @@ impl CheckedSlotLayout {
             } => vec![*template, *base, *addition, *result],
             SlotLayout::Mod => Vec::new(),
         }
-    }
-
-    /// All mapped slots must have finite typed screen geometry. Called when a
-    /// screen is bound, never per frame; omitted slots cannot receive ghosts.
-    pub fn validate_geometry(&self, geometry: &[Option<[f32; 2]>]) -> Result<(), LayoutError> {
-        for slot in self.slots() {
-            if !geometry
-                .get(usize::from(slot))
-                .and_then(|p| *p)
-                .is_some_and(|p| p.into_iter().all(f32::is_finite))
-            {
-                return Err(LayoutError::MissingGeometry(slot));
-            }
-        }
-        Ok(())
     }
 
     /// Map unresolved display alternatives without changing inventory. The

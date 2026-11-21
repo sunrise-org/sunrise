@@ -37,7 +37,7 @@ impl<'g, 'a> JournalLevelWrite<'g, 'a> {
         }
     }
 
-    fn write_block(&mut self, pos: [i32; 3], state: BlockStateId, flags: i32) -> bool {
+    pub(super) fn write_block(&mut self, pos: [i32; 3], state: BlockStateId, flags: i32) -> bool {
         let [x, y, z] = pos;
         if self.game.world_debug
             || !(-30_000_000..30_000_000).contains(&x)
@@ -76,6 +76,9 @@ macro_rules! read_level {
 }
 
 impl LevelHost for JournalLevelWrite<'_, '_> {
+    fn block_states(&self) -> mod_api::BlockStates<'_> {
+        mod_api::BlockStates::of(&*self.game)
+    }
     read_level! {
         fn block_entity(&self, pos: [i32; 3]) -> Option<BlockEntityRef>;
         fn container_size(&self, at: BlockSide) -> Option<usize>;

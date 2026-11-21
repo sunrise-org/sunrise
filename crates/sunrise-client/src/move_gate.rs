@@ -117,8 +117,26 @@ pub fn arm_with<'k>(
     // Design #2308: replacement components lie in ±64 blocks and are finite;
     // a malformed result is rejected whole — like the requested delta would
     // be — never clamped.
-    if replaced.iter().all(|v| v.is_finite() && v.abs() <= 64.0) {
+    if valid_mod_move_delta(replaced) {
         gate.decide(Vec3::new(replaced[0], replaced[1], replaced[2]));
+    }
+}
+
+/// The finite, per-axis range shared by a mod's move request and a move hook's replacement.
+pub fn valid_mod_move_delta(delta: [f64; 3]) -> bool {
+    delta.iter().all(|v| v.is_finite() && v.abs() <= 64.0)
+}
+
+#[cfg(test)]
+#[test]
+fn mod_move_deltas_use_an_inclusive_finite_bound_on_every_axis() {
+    assert!(valid_mod_move_delta([-64.0, 0.0, 64.0]));
+    for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -64.5, 64.5] {
+        for axis in 0..3 {
+            let mut delta = [0.0; 3];
+            delta[axis] = invalid;
+            assert!(!valid_mod_move_delta(delta));
+        }
     }
 }
 

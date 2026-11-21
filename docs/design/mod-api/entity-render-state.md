@@ -1,5 +1,9 @@
 # Design: entity render state
 
+> Historical: this design predates the removal of WebAssembly mods.
+> See [entity rendering](../../modding/src/how-to/client/entity-renderers.md) for the current native API.
+> The proposed guest callback dispatch, failure handling and acceptance matrix below are historical.
+
 Provisional answer to [#897](https://github.com/arismoko/horizon/issues/897):
 introduce one owner-thread entity preparation operation, after complete base and
 specialized extraction and before model posing or geometry emission. All entity

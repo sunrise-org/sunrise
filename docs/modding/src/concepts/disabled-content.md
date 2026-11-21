@@ -34,7 +34,7 @@ state and loot retain their ordinary answers. Attacks, explosions, environmental
 player-initiated removal still use data and template rules: switching the owner off does not make a
 block immune to those actions. `piston_push_reaction` has no inert answer: the disabled owner's
 Part does not override the data or template reaction. Pistons may still move or break the block
-according to those rules. These rules are the same on native and wasm.
+according to those rules.
 
 Items and entities keep their registered data and default engine behaviour while their Part
 callbacks are disabled. They are not globally frozen by this block-specific policy. In particular,

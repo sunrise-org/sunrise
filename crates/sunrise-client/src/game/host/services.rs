@@ -126,18 +126,25 @@ impl RenderAssets for Game<'_> {
         );
         self.native_model(id)
     }
-    fn block_state_models(
-        &self,
-        state: mod_api::BlockStateId,
-    ) -> Result<Vec<mod_api::BakedModelKey>, ModelError> {
+    fn block_state_models(&self, state: BlockState) -> Result<Vec<BakedModelKey>, ModelError> {
         mod_api::__private::check_access(
             "block_state_models",
             mod_api::__private::LoadAccess::PublishedResources,
         );
-        self.pack.render.block_state_models(
-            sunrise_world::registry::BlockStateId(state.0),
-            self.pack.assets.registry.len(),
-        )
+        let state = state
+            .try_into_engine(&())
+            .map_err(|_| ModelError::UnknownModel)?;
+        Ok(self.pack.render.block_state_models(state))
+    }
+    fn block_state_model(&self, state: BlockState) -> Result<ModelRef, ModelError> {
+        mod_api::__private::check_access(
+            "block_state_model",
+            mod_api::__private::LoadAccess::PublishedResources,
+        );
+        let state = state
+            .try_into_engine(&())
+            .map_err(|_| ModelError::UnknownModel)?;
+        self.native_block_state_model(state)
     }
     fn baked_model(
         &self,

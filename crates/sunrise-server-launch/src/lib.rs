@@ -138,6 +138,11 @@ pub fn engine(supervisor: &Path, dir: &Path) -> Result<Engine, EngineCommandErro
         source,
     })?;
     let config = Config::load(dir).map_err(EngineCommandError::Configuration)?;
+    if let Ok(text) = std::fs::read_to_string(dir.join(config::FILE)) {
+        for key in config::retired_in(&text) {
+            eprintln!("server.toml: {key} is no longer read and can be removed");
+        }
+    }
     let install = Install::around(&supervisor);
     let program = program_near(&config, dir, install.as_ref(), Some(&supervisor))
         .map_err(EngineCommandError::Program)?;

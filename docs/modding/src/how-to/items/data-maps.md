@@ -15,7 +15,6 @@ never a rounded `Double`. Fractional/exponent tokens use the JSON parser's `f64`
 value (including an integral value written as `1.0`). A JSON `null` anywhere in a
 value also refuses the entire read as `Undecodable`; it is not an empty string.
 Empty and heterogeneous arrays preserve their elements as in-memory `List` values.
-These rules are identical for native and wasm readers.
 
 ```rust,ignore
 use mod_api::{DataMap, DataMapTypesEvent, ItemKey, ServerHost, Tag};
@@ -82,7 +81,6 @@ read sees the last load whole, never part of one, and a value a reload drops is 
 values. Reads also work in world hooks. A lookup reads the loaded map: it parses nothing and
 touches no file.
 
-Wasm mods read data maps the same way, with the same answers.
 
 ## NeoForge's built-in mob and item maps
 
@@ -171,7 +169,6 @@ reload: tokens from earlier generations or another world return
 `data`. An unavailable host returns `BiomeKeyError::Unavailable` from `id`.
 Validation uses the receiving host’s installed snapshot, so a mod retaining a
 key across reload receives an error without panicking the server.
-Native and wasm use the same generated route and installed snapshot.
 
 Game events use `GameEventKey`, resolved with `host.game_event_key("minecraft:step")`
 after startup registry completion. The key is load-owned and survives world data

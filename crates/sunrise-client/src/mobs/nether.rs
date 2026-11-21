@@ -138,7 +138,7 @@ impl Goal for BlazeAttack {
 }
 /// `Blaze.aiStep`: slow falling. The burning sound and the smoke are its
 /// `isClientSide()` branch, which the window's game makes for itself
-/// (`ambient::client_ai_step`): a server neither plays them nor draws for them.
+/// (`sunrise_client_gameplay::mob_ambient::client_ai_step`): a server neither plays them nor draws for them.
 pub fn blaze_ai_step(m: &mut Mob) {
     if !m.on_ground && m.velocity.y < 0.0 {
         m.velocity.y *= 0.6;
@@ -213,7 +213,7 @@ pub fn register_ghast(m: &mut Mob) {
 }
 /// `Ghast.addAdditionalSaveData`: `putByte("ExplosionPower", (byte)explosionPower)`,
 /// the power the blast of the fireball it shoots uses (`LargeFireball.onHit`).
-pub fn to_nbt(m: &Mob, map: &mut sunrise_core::nbt::Compound) {
+pub fn to_nbt(m: &Mob, map: &mut crate::entity_nbt::EntityTagWriter) {
     map.insert(
         "ExplosionPower".into(),
         sunrise_core::nbt::Tag::Byte(m.extra.ints[EXPLOSION_POWER] as i8),

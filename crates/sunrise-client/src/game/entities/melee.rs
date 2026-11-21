@@ -199,6 +199,7 @@ impl Game<'_> {
             || self.attack_boat()
             || self.attack_cart()
             || self.attack_dragon()
+            || self.attack_general_row()
         {
             return true;
         }
@@ -215,7 +216,59 @@ impl Game<'_> {
     }
 }
 
-impl Game<'_> {}
+impl Game<'_> {
+    /// Whether the ray picked a general row and consumed the click.
+    fn attack_general_row(&mut self) -> bool {
+        let Some((eye, direction)) = self.aim() else {
+            return false;
+        };
+        let catalog = crate::game::general::general_type_catalog();
+        let Some((id, kind, distance)) = self
+            .resident_entities
+            .general
+            .rows
+            .iter()
+            .filter(|row| catalog.pickable(row.type_slot))
+            .filter_map(|row| {
+                let hit = crate::game::ray_box(
+                    eye,
+                    direction,
+                    self.entity_reach,
+                    crate::game::entity::Entity::bounds(row),
+                )?;
+                Some((row.id, catalog.key(row.type_slot), hit))
+            })
+            .min_by(|a, b| a.2.total_cmp(&b.2))
+        else {
+            return false;
+        };
+        if !self.before_block(distance)
+            || !self.held_range_allows(distance)
+            || self.mob_hit().is_some_and(|(_, d, _)| d <= distance)
+        {
+            return false;
+        }
+        self.strike_general_row(id, kind);
+        true
+    }
+
+    /// `Player.attack` on a named general row. A plain `Entity` declines `hurtServer`,
+    /// so the blow spends the charge and plays the no-damage sound, and hurts nothing.
+    pub(super) fn strike_general_row(&mut self, id: u32, kind: &str) {
+        let ((_, scale, _, _), admitted) = self.melee_damage_with_admission(kind, false, Some(id));
+        // Player.onAttack: the blow starts the attack strength again, hurt or not.
+        self.attack_ticks = 0;
+        if admitted {
+            if self.extra_knockback(kind, scale).1 {
+                self.play_at_feet("minecraft:entity.player.attack.knockback");
+            }
+            self.sweep_decision(scale, false, kind);
+            self.play_at_feet("minecraft:entity.player.attack.nodamage");
+        }
+        self.post_piercing_attack();
+        self.swing_arm();
+    }
+}
 
 impl Game<'_> {
     /// `Player.attack` on a mob: the damage, knockback, sweep, particles and

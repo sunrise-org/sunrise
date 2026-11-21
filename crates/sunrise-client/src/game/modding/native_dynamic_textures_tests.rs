@@ -1,6 +1,6 @@
 #![cfg(test)]
 //! A client mod's dynamic textures (`ClientRenderClientHost::create_dynamic_texture`, #1343):
-//! the atlas's pool follows the loaded client mods, native or wasm, with no mixin (#4437), and
+//! the atlas's pool follows the loaded client mods, with no mixin (#4437), and
 //! an image created as the mod whose hook runs draws under its id through `native_sprite` on
 //! the real HUD pipeline, until it is freed.
 use super::resource_tables::dynamic_texture_pool;
@@ -23,7 +23,7 @@ struct ApiOnly;
 impl Hooks for ApiOnly {}
 
 #[test]
-fn the_pool_follows_the_loaded_client_mods_native_or_wasm() {
+fn the_pool_follows_the_loaded_client_mods() {
     assert!(
         !with_mods(Vec::new().into(), dynamic_texture_pool),
         "no mod"
@@ -33,8 +33,6 @@ fn the_pool_follows_the_loaded_client_mods_native_or_wasm() {
         with_mods(native.into(), dynamic_texture_pool),
         "a native mod with no mixin"
     );
-    let wasm = vec![ModEntry::wasm("wasm-mod", Box::new(ApiOnly))];
-    assert!(with_mods(wasm.into(), dynamic_texture_pool), "a wasm mod");
 }
 
 /// `f` run as mod `id`'s client tick.
@@ -85,6 +83,30 @@ fn a_mods_dynamic_texture_draws_under_its_id_until_it_is_freed() {
             as_mod("api-only", || game.free_dynamic_texture(&id)).unwrap();
             let mut batch = HudBatch::scratch(SIZE);
             assert!(!game.native_sprite(&mut batch, name, src, dst, None));
+        });
+    });
+}
+
+/// A mod's live texture at an id of another namespace is `NotOwned`, even where the GUI atlas
+/// lists the id (vanilla's `container/slot`): the owner check comes first.
+#[test]
+#[ignore = "daily"]
+fn a_foreign_id_is_not_owned_before_the_gui_atlas_is_asked() {
+    let mods = vec![ModEntry::new("api-only", Box::new(ApiOnly))];
+    with_mods(mods.into(), || {
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            let green = GREEN.repeat(16 * 16);
+            let make = |game: &mut crate::game::Game, id: &str| {
+                let id = Identifier::parse(id).unwrap();
+                as_mod("api-only", || {
+                    game.create_dynamic_texture(&id, 16, 16, &green)
+                })
+            };
+            assert_eq!(
+                make(game, "minecraft:container/slot"),
+                Err(DynamicTextureError::NotOwned)
+            );
+            assert_eq!(make(game, "api-only:dynamic/free"), Ok(()));
         });
     });
 }

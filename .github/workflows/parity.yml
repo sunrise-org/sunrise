@@ -136,6 +136,8 @@ jobs:
           # tools/parity.py keeps pass records beside .local/minecraft, which is the read-only cache and holds
           # other trees' passes: this run's records start empty, on the slot.
           echo "PARITY_SHARED=$DYNA_CI_BUILD/parity-out/shared" >> "$GITHUB_ENV"
+          # The checkout's .local symlink escapes the default datafix root check. Name the job's own private root.
+          echo "SUNRISE_DATAFIX_ROOT=$DYNA_CI_BUILD/parity-out/datafix" >> "$GITHUB_ENV"
           SUNRISE_DYNA_CACHE=true SUNRISE_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" SUNRISE_SHARED_SOURCE=/cache/sunrise-local \
             bash tools/ci/vanilla-data.sh > "$PARITY_LOG_DIR/setup.log" 2>&1
       # The game opens a window even with --offscreen, and the runner has no display: a virtual X display for every

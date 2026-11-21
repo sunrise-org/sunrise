@@ -10,7 +10,7 @@ use sunrise_client::{
     blocks::BlockFacts,
     collisions::{SceneCollisions, no_collision_empty},
     mobs::{
-        Mob, MobWorld, Species,
+        Mob, MobType, MobWorld, Species,
         data::{self, MobData},
         seen_grid::SeenGrid,
         spawn_rules::{Reason, SpawnLevel},
@@ -603,12 +603,13 @@ impl sunrise_client::mobs::finalize::FinalizeLevel for PassLevel<'_, '_, '_> {
     }
     fn create(&mut self, kind: &str, _: sunrise_client::mobs::spawn_rules::Reason) -> Option<Mob> {
         use sunrise_world::food::Difficulty;
+        let t = self.l.game.res.mob_types().get(kind)?;
         if self.l.game.world.health_rules.difficulty == Difficulty::Peaceful
-            && !sunrise_client::mobs::finalize::allowed_in_peaceful(kind)
+            && !t.allowed_in_peaceful()
         {
             return None;
         }
-        let t = self.l.game.res.mob_types().get(kind)?.clone();
+        let t = t.clone();
         Some(Mob::new(
             self.l.provisional_id(),
             t,
@@ -796,14 +797,8 @@ impl NaturalLevel for GameLevel<'_, '_> {
     fn has_ceiling(&self) -> bool {
         self.w.world.shape.has_ceiling
     }
-    fn mob_type(&self, entity: &str) -> Option<(Species, f32, f32, Category)> {
-        let t = self.game.res.mob_types().get(entity)?;
-        Some((
-            t.species,
-            t.width as f32,
-            t.height as f32,
-            Category::from_name(&t.category),
-        ))
+    fn mob_type(&self, entity: &str) -> Option<&MobType> {
+        self.game.res.mob_types().get(entity).map(|t| t.as_ref())
     }
     // The `natural_mob_spawns` attribute reads the zoomed biome
     // (fullResolutionBiomes), the spawn probability the noise cell.
@@ -1886,8 +1881,7 @@ mod tests {
             let level = game.natural_level();
             let placement = |random: &mut LegacyRandom| {
                 let ok = sunrise_client::mobs::spawn_rules::check_spawn_rules(
-                    "minecraft:sulfur_cube",
-                    Species::SulfurCube,
+                    level.mob_type("minecraft:sulfur_cube").unwrap(),
                     &level,
                     Reason::Natural,
                     random,

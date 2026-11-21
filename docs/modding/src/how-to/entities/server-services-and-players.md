@@ -1,7 +1,7 @@
 # Server services and player handles
 
 Use `ServerHost` services to run commands, send messages and find connected
-players. Native and wasm mods use the same calls.
+players.
 
 ## Services
 
@@ -44,6 +44,11 @@ Read identity through `player.uuid()`, `player.name(host)`,
 connection IP without a port. An acting player without a known connection has
 an empty address.
 
+`player.latency(host)` reads the ping the Tab list shows, in milliseconds: the keep-alive round
+trips averaged three parts old to one part new. It is 0 until the first keep-alive answer, for a fake
+player and for an acting player without a known connection. It refuses with `PlayerWorldRefusal::Client`
+on a client and `PlayerWorldRefusal::Stale` for a stale handle.
+
 The online list includes connected players during nested player turns. Name,
 permission and address reads work for connected players whose bodies are displaced
 by another player's turn; stale handles are refused. Entity and living handles
@@ -66,9 +71,11 @@ identities.
 | Method | Behavior |
 |---|---|
 | `set_nickname(host, nickname)` | Changes the name shown in chat and the Tab list; `None` restores the account name. Commands, selectors, logs and events use the real name. Validate the nickname's length, filtering and conflicts yourself. |
+| `nickname(host)` | Reads the nickname `set_nickname` set: `Ok(None)` when there is none. Refuses with `PlayerWorldRefusal::Client` on a client and `Stale` for a stale or offline player. |
 | `set_sleep_ignored(host, ignored)` | Controls exclusion from the sleep count. |
 | `disconnect(host, reason)` | Disconnects the player with a `Text` reason, as `/kick` does, also inside their own hook or a payload handler (the connection closes after it). Answers `false` for a stale or unavailable handle, the single-player owner and a player already being disconnected (the first reason stands). A fake player's kick keeps the first reason and completes at the next hub poll through the shared leave path. A reason the `Text` form checks refuse returns `TextFormError` before anything changes. |
 | `hide(host, permission)` | Hides the player from players below the supplied permission level, starting next tick; `None` restores visibility. Hidden players disappear from the world and Tab list, and their join and leave messages are suppressed for those viewers. |
+| `hidden(host)` | Reads the level `hide` set: `Ok(None)` when the player is shown. A player who rejoined hidden reads it too, and a level set before the world is opened to others reads as stored. Refuses with `PlayerWorldRefusal::Client` on a client and `Stale` for a handle of an earlier open of the world. |
 
 Nickname and sleep settings require an online player. These settings survive
 reconnections until the server stops or you change them. Visibility is stored by
@@ -83,10 +90,12 @@ hook is asked once for each placed receiver, the sender included, before any of 
 `sender`, `sender_name`, the `message` players see and the `recipient`. Set `hidden` and that one receiver is sent
 nothing, no chat index and no pending acknowledgement; the others still get the line signed as it was sent, so its
 signature verifies for them. It covers a player's chat after `server_chat` let it through and `/say` and `/me`, signed
-or not; whispers (`/msg`) are not public and are not asked. It is not a second `server_chat`: that hook is heard once
-for a typed line and cancels it for everyone, while this one is per receiver and also covers `/say` and `/me`. With no
-listener nothing is asked or allocated. A wasm listener's fault or timeout answers nothing, so the line is sent. The
-server's log keeps every line, hidden or not.
+or not. For a non-player `/say` source, such as the console or a command block, `sender` is the nil UUID (`0`) and
+`sender_name` is the source's display name. Whispers (`/msg`) are not public and are not asked. It is not a second
+`server_chat`: that hook is heard once for a typed line and cancels it for everyone, while this one is per receiver
+and also covers `/say` and `/me`. With no listener nothing is asked or allocated. A `/say` requested inside
+`chat_recipient` fails instead of reentering the hook or sending an unchecked line. The server's log keeps every
+broadcast line, hidden or not.
 
 `player.respawn(host)` presses the Respawn button for a dead player, as their client's does (`PERFORM_RESPAWN`): they
 are placed at their respawn point or the world spawn and `player_respawned` is heard. Call it outside every player's
@@ -112,7 +121,7 @@ Reads accept `Host`; writes accept `ServerHost`.
 
 A second disconnect on a guest already leaving is a no-op and keeps the first reason.
 
-Vetoing a player's movement: the `player_move` hook hears each validated movement report whose position or rotation differs from the player's last reported location, after the server's own checks and before the report is committed, with the exact `from`, `to` and both rotations. The last reported location is kept on the player's connection, apart from the accepted position: it is the position given to the listener before it runs, and the destination of every server-side teleport (a join, a teleport in the level, a level change, a respawn, the resend of an unconfirmed teleport and the correction after a veto); `from` is that location. Set `cancel` and the report is not applied; the client is sent back to the accepted position and rotation. The report was already seen by the server's own checks before the hook, so what a violation of those would have done still happens. The engine applies no threshold, so a mod that wants to ignore small moves compares the two positions itself (`(to - from).length() < 1.0 / 16.0` skips anything under 1/16 of a block). A held report is ruled on in the same tick; that player's later packets (further reports, the end of the client tick, pongs) wait in order behind it, then go on in that tick, so each later report is heard from the one before. A report is out of time at its 21st tick, counting the tick it was held at as the first: it is dropped with the correction, never committed, even when a ruling arrives after that; a disconnect, teleport or level change drops it cleanly. Not heard: the first tick in a level (the tick after a join or a level change; the second is heard), a player riding something (`vehicle_moved` hears the vehicle), any teleport (its confirmation's own position is validated from the teleport's target and committed without the hook, and so is the veto's own correction; a report that arrives while a teleport is unconfirmed is not heard either) and a passage crossing (its caller reads the position at once, so the report is committed in place). The first report after a teleport that passed validation is heard, with the teleport's destination as its `from`. With no listener nothing is held or copied; with one, the cost is a held report for each moving player a tick. A fault or an epoch timeout in a wasm listener answers nothing: it is not a veto and the report is committed, like every cancellable hook; the fault is logged, counted against the mod and stops the mod's group for the session. A native listener that never returns is out of scope: it blocks the game thread like any native code, and the 20-tick deadline covers only a report held pending across ticks.
+Vetoing a player's movement: the `player_move` hook hears each validated movement report whose position or rotation differs from the player's last reported location, after the server's own checks and before the report is committed, with the exact `from`, `to` and both rotations. The last reported location is kept on the player's connection, apart from the accepted position: it is the position given to the listener before it runs, and the destination of every server-side teleport (a join, a teleport in the level, a level change, a respawn, the resend of an unconfirmed teleport and the correction after a veto); `from` is that location. Set `cancel` and the report is not applied; the client is sent back to the accepted position and rotation. The report was already seen by the server's own checks before the hook, so what a violation of those would have done still happens. The engine applies no threshold, so a mod that wants to ignore small moves compares the two positions itself (`(to - from).length() < 1.0 / 16.0` skips anything under 1/16 of a block). A held report is ruled on in the same tick; that player's later packets (further reports, the end of the client tick, pongs) wait in order behind it, then go on in that tick, so each later report is heard from the one before. A report is out of time at its 21st tick, counting the tick it was held at as the first: it is dropped with the correction, never committed, even when a ruling arrives after that; a disconnect, teleport or level change drops it cleanly. Not heard: the first tick in a level (the tick after a join or a level change; the second is heard), a player riding something (`vehicle_moved` hears the vehicle), any teleport (its confirmation's own position is validated from the teleport's target and committed without the hook, and so is the veto's own correction; a report that arrives while a teleport is unconfirmed is not heard either) and a passage crossing (its caller reads the position at once, so the report is committed in place). The first report after a teleport that passed validation is heard, with the teleport's destination as its `from`. With or without a listener, accepted movement finishes its game effects before later packets run. Only a listening mod causes a validated report to be held before it commits. A native listener that never returns is out of scope: it blocks the game thread like any native code, and the 20-tick deadline covers only a report held pending across ticks.
 
 ## Text conversions
 
@@ -127,7 +136,9 @@ absent), `selector` a selector and `nbt` an NBT path that parse, and a style
 field that is present and wrong (`color`, `shadow_color`, the format flags,
 `click_event`, `hover_event`, `insertion`, `font`) refuses the whole component.
 Command, URL and page click actions use `command`, `url` and `page`, respectively;
-a legacy `value`-only click for those actions is refused.
+a legacy `value`-only click for those actions is refused. `open_url` requires a
+well-formed HTTP(S) URI; a malformed URI or another scheme refuses the component
+(`Ok(None)`).
 `show_item` refuses `minecraft:air`; a component removal (`!id`) requires an object value.
 A translation's `fallback` and an `nbt` component's `interpret`, `plain` and
 `separator` of the wrong kind are dropped instead. An object whose only content
@@ -192,9 +203,9 @@ sets how many players may be on. Server only.
 
 | Call | Behavior |
 |---|---|
-| `console_line` hook | Every line the server logs (what its console prints and `logs/latest.log` keeps): `level` (`INFO`, `WARN` or `ERROR`), the `thread` it names and the `message` without time or thread. Lines are collected from every thread while a mod listens and heard on the server thread at the start of the next server tick, in the order logged, so a listener may use the host. A line a `console_line` listener logs itself is not collected, so a listener that logs what it hears does not feed itself. At most 4096 lines wait between two ticks, each kept to its first 8192 bytes of `message` and 128 of `thread` (cut at a character boundary); the oldest lines are dropped with no notice, and the lines logged before the first tick a mod listens are not heard. Paper has no event for this (plugins add a Log4j appender), and neither has NeoForge. |
+| `console_line` hook | Observe operator-visible log lines on dedicated and integrated servers: `level` (`INFO`, `WARN` or `ERROR`), `thread`, and `message` without the log prefix. The tap starts on the first tick with an enabled listener; when idle it does not capture lines, allocate a queue or take the queue lock. Lines from every logging thread arrive in order on the server thread at the start of the next tick. The queue keeps the oldest 4096 lines and drops newer ones until it drains. `dropped` gives the count of those newer lines on the batch's first event, and is zero on its other events. Each line keeps up to 8192 bytes of `message` and 128 of `thread` at a character boundary. The listener cannot change the log, and its own log calls are not captured. Paper and NeoForge have no matching event. |
 | `host.commands().run_command_with_output(line)` | `run_command` with its feedback kept, on the same run path and source (the console's: one leading slash dropped, permission level 4, from the overworld's spawn): the same `CommandResult` as `entity.run_command_with_output` (see [server commands](server-commands.md)), with `success` (what `run_command` returns) and `feedback`, what the console would print as plain text, at most 256 lines of 4096 bytes each (further lines dropped, a longer one cut at a character boundary). Only the command's own feedback is kept, never lines logged meanwhile. A command that ran and failed is `success: false` with its message in `feedback`. A line run where no server is open to players, or empty once whitespace and the slash are dropped, runs nothing and is `success: false` with no feedback, as `run_command` answers `false` for it; there is no refusal type, as nothing here tells those apart from a failure that `run_command` cannot. The dedicated console's own commands (`stop`, `op`, `whitelist`, `ban`) are not reached and answer as a command that failed. A call made while another one runs captures its own feedback; the outer capture keeps what it had. |
-| `host.server_max_players()` / `host.server_set_max_players(n)` | Paper's `Server.getMaxPlayers` and `setMaxPlayers`: the limit logins are refused beyond and the server list shows, live. The read is `None` where no server is open to players, its one reason. The write takes effect from the next login and ping, changes players already on nothing, and does not write `server.properties` (a restart goes back to it, as Paper's does; the management protocol's `max_players` setting does write it). Zero is taken. Refuses, changing nothing, with `PlayerLimitRefusal::NotOpen` or `TooHigh { maximum }` for a limit above `i32::MAX`, vanilla's `int`. |
+| `host.server_max_players()` / `host.server_set_max_players(n)` | Paper's `Server.getMaxPlayers` and `setMaxPlayers`: the live cap used for logins and shown in the server list. The read is `None` where no server is open to players. The write takes effect on the next login and ping; already-connected players stay, and operators flagged `bypassesPlayerLimit` on a dedicated server still bypass the cap. Zero refuses every login without the bypass. This call does not write `server.properties` (a restart restores its value; the management protocol's `max_players` setting does write it). Refuses without changing anything with `PlayerLimitRefusal::NotOpen` or `TooHigh { maximum }` for a limit above `i32::MAX`, vanilla's `int`. |
 ## Inventory, ender chest and saved data
 
 For mods that copy or edit a player whole (a player-data sync, `/invsee`, `/endersee`). Server only, online players only: a handle for an offline player, a stale one and a client answer `None` on a read and a named `PlayerDataRefusal` on a write.

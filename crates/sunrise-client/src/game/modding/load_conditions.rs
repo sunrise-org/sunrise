@@ -248,9 +248,18 @@ pub(super) fn conditions_for_mods(
                 let mut arguments = args.as_object().cloned().expect("decoded condition object");
                 arguments.remove("type");
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    handler.test(&mod_api::serde_json::Value::Object(arguments))
+                    mod_api::__private::contain_refusal(
+                        mod_api::content::crash::current_native_mod().unwrap_or("unknown"),
+                        || handler.test(&mod_api::serde_json::Value::Object(arguments)),
+                    )
                 }))
                 .map_err(|_| format!("condition {name} (mod {owner}): handler panicked"))
+                .and_then(|contained| {
+                    contained.map_err(|refusal| {
+                        refusal.report();
+                        format!("condition {name} (mod {owner}): handler refused: {refusal}")
+                    })
+                })
                 .and_then(|answer| {
                     answer.map_err(|error| {
                         format!("condition {name} (mod {owner}): {}", error.message)

@@ -6,7 +6,7 @@
 //! and `None` for the rest, as for a stale handle. Secondary use also reads
 //! the local client's live semantic sneak state; fire and underwater reads also
 //! use the client's own cached state.
-//! Ticks lived (`Entity.tickCount`) are read for mobs, items, orbs and minecarts.
+//! Ticks lived (`Entity.tickCount`) are read for players, mobs, items, orbs and minecarts.
 use super::{Game, commands::Target};
 use mod_api::EntityRef;
 use sunrise_client::mobs::{Mob, Species, sync};
@@ -618,10 +618,20 @@ impl Game<'_> {
             _ => None,
         }
     }
-    /// Ticks the entity has lived (`Entity.tickCount`): mobs, item entities,
-    /// experience orbs and minecarts. Wraps as vanilla's `int` does.
+    /// Ticks the entity has lived (`Entity.tickCount`): players, mobs, item
+    /// entities, experience orbs and minecarts. Wraps as vanilla's `int` does.
     pub(super) fn entity_tick_count(&self, entity: EntityRef) -> Option<i32> {
         Some(match self.native_entity_target(entity)? {
+            Target::Player => self.player.as_ref()?.health.tick_count,
+            Target::Guest(conn) => {
+                let guest = self.command_guest(conn)?;
+                guest
+                    .motion
+                    .as_deref()
+                    .map(|motion| motion.health.tick_count)
+                    .or(guest.carried_tick_count)
+                    .unwrap_or(0)
+            }
             Target::Mob(id) => self.mobs.iter().find(|m| m.id == id)?.age as i32,
             Target::Item(id) => self.dropped.iter().find(|i| i.id == id)?.ticks as i32,
             Target::Orb(id) => self.orbs.iter().find(|o| o.id == id)?.ticks as i32,
@@ -808,9 +818,12 @@ mod tests {
         use sunrise_core::geometry::Vec3;
 
         with_player(|game, player| {
-            game.world
-                .chunks
-                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            // `EntityFluidInteraction.update` needs the chunks around the box loaded as well.
+            for chunk in [(-1, -1), (-1, 0), (0, -1), (0, 0)] {
+                game.world
+                    .chunks
+                    .insert(chunk, Arc::new(Chunk::empty(chunk.0, chunk.1)));
+            }
             let lava = game
                 .pack
                 .assets
@@ -820,7 +833,9 @@ mod tests {
             assert!(game.world.set_stored(0, 64, 0, lava));
             game.player.as_mut().unwrap().position = Vec3::new(0.5, 64.0, 0.5);
             let tick_lava = |game: &mut Game<'_>| {
+                let side = game_side!(game);
                 let mut world = MotionWorld {
+                    side: &side,
                     entities: &[],
                     player: game.player.as_mut().unwrap(),
                     scene: &mut game.world,
@@ -917,13 +932,36 @@ mod tests {
     #[ignore = "daily"]
     fn tick_count_reads_supported_entities_and_refuses_others() {
         use super::super::minecarts::{CartKind, Minecart};
+        use super::super::native_entity_refs::tests::bind_local_player;
+        use super::super::native_guest_turn_tests::with_guests;
         use mod_api::WorldEpoch;
         use sunrise_client::entities::ExperienceOrb;
         use sunrise_client::items::ItemStack;
+        use sunrise_client::motion::PlayerMotion;
         use sunrise_core::geometry::Vec3;
 
-        with_player(|game, player| {
-            assert_eq!(player.tick_count(game), None);
+        with_guests(|game| {
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            bind_local_player(game, 20, 123);
+            let player = game.entity(20).unwrap();
+            game.player.as_mut().unwrap().health.tick_count = i32::MAX;
+            game.player.as_mut().unwrap().health.advance_entity_clock();
+            assert_eq!(player.tick_count(game), Some(i32::MIN));
+
+            let acting_guest = game.entity(12).unwrap();
+            let parked_guest = game.entity(13).unwrap();
+            assert_eq!(parked_guest.tick_count(game), Some(0));
+            game.as_guest(13, |game| {
+                game.player.as_mut().unwrap().health.tick_count = 314;
+            })
+            .unwrap();
+            assert_eq!(parked_guest.tick_count(game), Some(314));
+
+            game.as_guest(12, |game| {
+                game.player.as_mut().unwrap().health.tick_count = 2718;
+                assert_eq!(acting_guest.tick_count(game), Some(2718));
+            })
+            .unwrap();
 
             let kind = game
                 .res
@@ -964,7 +1002,7 @@ mod tests {
                 velocity: Vec3::ZERO,
                 value: 7,
                 age: 600,
-                on_ground: true,
+                ground: sunrise_world::ground_support::GroundState::from_ground_flag(true),
                 count: 1,
                 fire_ticks: 0,
                 ticks: 21,
@@ -1060,7 +1098,7 @@ mod tests {
                 velocity: Vec3::ZERO,
                 value: 1,
                 age: 0,
-                on_ground: false,
+                ground: Default::default(),
                 count: 1,
                 fire_ticks: 0,
                 ticks: 0,
@@ -1120,7 +1158,9 @@ mod tests {
             game.next_entity += 1;
             let falling = game.next_entity;
             game.falling.push(FallingBlock {
-                on_ground: false,
+                ground: Default::default(),
+                fire_ticks: 0,
+                sync_velocity: false,
                 attachment_lifetime: Default::default(),
                 rotation: [0.0, 0.0],
                 join: Default::default(),
@@ -1299,7 +1339,9 @@ mod tests {
             game.next_entity += 1;
             let id = game.next_entity;
             game.falling.push(FallingBlock {
-                on_ground: false,
+                ground: Default::default(),
+                fire_ticks: 0,
+                sync_velocity: false,
                 attachment_lifetime: Default::default(),
                 rotation: [0.0, 0.0],
                 join: Default::default(),

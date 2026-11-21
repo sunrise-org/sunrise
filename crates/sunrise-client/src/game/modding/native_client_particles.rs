@@ -49,7 +49,9 @@ impl Game<'_> {
         {
             return false;
         }
-        self.particles.add(options, at, velocity);
+        // The limiter's roll draws the level random: inside a part's `animate_tick`, the one
+        // the part holds as `event.random`.
+        self.with_lent_level_random(|game| game.particles.add(options, at, velocity));
         true
     }
     /// `ClientLevel.createFireworks`: queue a firework's explosions in this client's loaded
@@ -76,13 +78,16 @@ impl Game<'_> {
             .map(|explosion| explosion.try_into_engine(&()))
             .collect();
         let camera = self.eye_position().unwrap_or(request.at);
-        self.particles.fireworks(
-            request.at,
-            request.velocity,
-            explosions,
-            camera,
-            request.audible,
-        );
+        // Without explosions its poofs are added at once, each with the limiter's roll.
+        self.with_lent_level_random(|game| {
+            game.particles.fireworks(
+                request.at,
+                request.velocity,
+                explosions,
+                camera,
+                request.audible,
+            );
+        });
         true
     }
 }

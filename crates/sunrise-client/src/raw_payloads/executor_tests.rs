@@ -23,6 +23,7 @@ enum Mode {
     Error,
     Panic,
     Cancel,
+    Reconfigure,
     PublicationClosed,
 }
 struct Probe {
@@ -97,6 +98,7 @@ impl IPayloadHandler for Probe {
             }
             Mode::Panic => panic!("deliberate handler panic after staging"),
             Mode::Cancel => transport.close(),
+            Mode::Reconfigure => transport.begin_configuration(),
             Mode::PublicationClosed => drop(self.receiver.lock().unwrap().take()),
             _ => {}
         }
@@ -238,7 +240,7 @@ fn provider_pressure_refuses_work_before_acceptance() {
 
 #[test]
 fn handler_error_or_epoch_cancellation_publishes_no_staged_work_or_replies() {
-    for mode in [Mode::Error, Mode::Panic, Mode::Cancel] {
+    for mode in [Mode::Error, Mode::Panic, Mode::Cancel, Mode::Reconfigure] {
         with_case(mode, 1, |probe, incoming, endpoint, out| {
             let original = Arc::downgrade(&incoming.lease);
             dispatch(incoming, endpoint.clone(), queue(&probe, &endpoint));
@@ -259,6 +261,70 @@ fn handler_error_or_epoch_cancellation_publishes_no_staged_work_or_replies() {
                 assert!(!has(b"deliberate handler error"));
             }
         });
+    }
+}
+
+#[test]
+fn main_root_blocks_later_network_delivery_and_keeps_its_ingress_charge() {
+    mod_platform::__private::initialize().unwrap();
+    for cancel in [None, Some(Mode::Reconfigure), Some(Mode::Cancel)] {
+        with_case(
+            Mode::Success,
+            3 << 20,
+            |probe, mut incoming, endpoint, out| {
+                let transport = endpoint.transport();
+                let tail = Incoming::new(
+                    transport,
+                    negotiation::Phase::Play,
+                    sunrise_protocol::packets::custom_payload::CustomPayload {
+                        channel: CHANNEL.into(),
+                        data: vec![2],
+                    },
+                )
+                .unwrap();
+                let head_lease = Arc::downgrade(&incoming.lease);
+                let tail_lease = Arc::downgrade(&tail.lease);
+                incoming.receiver.thread = HandlerThread::Main;
+                dispatch(incoming, endpoint.clone(), queue(&probe, &endpoint));
+                dispatch(tail, endpoint.clone(), queue(&probe, &endpoint));
+                let main = queue(&probe, &endpoint);
+                dispatch_pending(&endpoint, &main);
+                assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
+                assert_eq!(reply_count(&*out), 0);
+                assert_eq!(probe.events.stats().queued_items, 1);
+                assert!(matches!(
+                    transport.reserve_ingress(14 << 20),
+                    Err(PayloadSendError::Backpressure)
+                ));
+                assert!(tail_lease.upgrade().is_some());
+                match cancel {
+                    Some(Mode::Reconfigure) => transport.begin_configuration(),
+                    Some(Mode::Cancel) => transport.close(),
+                    _ => {}
+                }
+                if cancel.is_some() {
+                    assert!(tail_lease.upgrade().is_none());
+                    assert!(
+                        head_lease.upgrade().is_some(),
+                        "the main provider still owns the head"
+                    );
+                }
+                // Game consumes the root from the provider and returns its turn at completion.
+                let receiver = probe.receiver.lock().unwrap().take().unwrap();
+                drop(receiver.take_turn());
+                assert!(head_lease.upgrade().is_none());
+                dispatch_pending(&endpoint, &main);
+                assert_eq!(
+                    probe.calls.load(Ordering::SeqCst),
+                    usize::from(cancel.is_none())
+                );
+                assert_eq!(reply_count(&*out), usize::from(cancel.is_none()));
+                assert!(!transport.connection.as_ref().unwrap().payloads_pending());
+                drop(receiver.take_turn());
+                assert!(tail_lease.upgrade().is_none());
+                assert_eq!(probe.events.stats().reserved_bytes, 0);
+            },
+        );
     }
 }
 

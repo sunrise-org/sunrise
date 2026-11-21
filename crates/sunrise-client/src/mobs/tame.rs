@@ -1865,6 +1865,7 @@ mod tests {
         assert!(
             with_test_world(&seen, |w, _| {
                 let indexed = MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     others_grid: Some(&grid),
                     ..w.clone()
                 };
@@ -2316,12 +2317,14 @@ mod tests {
                 }
                 let seen = [attacker.seen(None, &crate::items::Items::empty())];
                 let world = crate::mobs::MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     others: &seen,
                     ..world
                 };
                 let mut p = p;
                 p.hurt_by = Some((Who::Mob(2), 5));
                 let world = crate::mobs::MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     player: Some(p),
                     ..world
                 };

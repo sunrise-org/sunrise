@@ -1,18 +1,37 @@
-//! Exercise the real local-player caller and the same listener through both ABIs.
+//! Exercise the real local-player movement caller with and without a native listener.
 use super::*;
 use crate::game::native_entity_refs::tests::with_client_game;
 use mod_api::{ClientHost, Hooks, MovementInputEvent};
 use sunrise_client::motion::PlayerMotion;
 use winit::keyboard::KeyCode;
 
-#[path = "../../../../../sunrise-mod-wasm/tests/fixture/src/movement.rs"]
-mod fixture;
-
 struct Native;
 #[mod_api::__subscriptions]
 impl Hooks for Native {
     fn movement_input(&self, _: &dyn ClientHost, event: &mut MovementInputEvent) {
-        fixture::movement_input(event);
+        if event.right_key {
+            event.forward_key = true;
+            event.sprint = false;
+        } else if event.left_key {
+            if !(event.forward_key && event.backward_key) {
+                event.forward = -0.5;
+            }
+            event.strafe = 0.25;
+            event.jump = !event.jump;
+            event.sneak = !event.sneak;
+            event.sprint = true;
+        } else if event.backward_key {
+            event.forward_key = true;
+            event.left_key = true;
+            event.right_key = true;
+            // Direction-key edits must win over these conflicting axis edits.
+            event.forward = 0.25;
+            event.strafe = 0.5;
+            event.sprint = true;
+        } else {
+            event.forward_key = true;
+            event.sprint = true;
+        }
     }
 }
 
@@ -105,7 +124,7 @@ fn matrix(mods: mod_api::Mods) {
             // local player; the final keys and eligible sprint reach the server.
             for food in [0, 6, 7, 20] {
                 reset_player(game, food);
-                let mut predicted = game.player.as_ref().unwrap().clone();
+                let mut replayed = game.player.as_ref().unwrap().clone();
                 tick(game);
                 let player = game.player.as_ref().unwrap();
                 assert_eq!(player.move_vector, [0.0, 1.0]);
@@ -116,13 +135,19 @@ fn matrix(mods: mod_api::Mods) {
                 assert_eq!(player.sprinting, food > 6, "food={food}");
                 assert_eq!(game.remote.as_ref().unwrap().last_input, 1 | 64);
                 assert_eq!(game.remote.as_ref().unwrap().was_sprinting, food > 6);
+                // What the client sent is enough to play its tick again: the input packet's keys
+                // and the sprint state, through `MotionWorld::replayed_tick` (the tick a mod's
+                // `native_simulate_player_move` plays), without asking the listener again, move
+                // the player as the client's own tick did.
                 let position = player.position;
                 let sprinting = player.sprinting;
-                let replay_keys =
+                let sent_keys =
                     crate::game::lan_vehicles::input_keys(game.remote.as_ref().unwrap().last_input);
+                let side = game_side!(game);
                 MotionWorld {
+                    side: &side,
                     entities: &[],
-                    player: &mut predicted,
+                    player: &mut replayed,
                     scene: &mut game.world,
                     assets: &game.pack.assets,
                     collision_binding: game.collision,
@@ -133,11 +158,11 @@ fn matrix(mods: mod_api::Mods) {
                     tag_items: None,
                     block_registries: None,
                 }
-                .replayed_tick(replay_keys, sprinting)
+                .replayed_tick(sent_keys, sprinting)
                 .unwrap();
-                assert_eq!(predicted.move_vector, [0.0, 1.0]);
-                assert_eq!(predicted.sprinting, sprinting);
-                assert!((predicted.position.z - position.z).abs() < 1.0e-10);
+                assert_eq!(replayed.move_vector, [0.0, 1.0]);
+                assert_eq!(replayed.sprinting, sprinting);
+                assert!((replayed.position.z - position.z).abs() < 1.0e-10);
             }
 
             reset_player(game, 20);
@@ -193,36 +218,6 @@ fn matrix(mods: mod_api::Mods) {
 #[ignore = "daily"]
 fn native_movement_input_keys_axes_and_sprint() {
     matrix(vec![mod_api::ModEntry::new("movement", Box::new(Native))].into());
-}
-
-#[test]
-#[ignore = "needs SUNRISE_TEST_RESOURCES, SUNRISE_WASM_FIXTURE and SUNRISE_WASM_STD"]
-fn wasm_movement_input_keys_axes_and_sprint() {
-    sunrise_guest_stack::run_on_guest_stack(|| {
-        use sunrise_mod_package::manifest::Package;
-        use sunrise_mod_wasm::{WasmPackage, load};
-        let path = std::path::PathBuf::from(std::env::var_os("SUNRISE_WASM_FIXTURE").unwrap());
-        let manifest = Package::read(&path).unwrap().manifest;
-        let info = mod_api::PackageInfo::new(
-            manifest.id.clone(),
-            manifest.version.to_string(),
-            mod_api::PackageKind::Code,
-            mod_api::Side::Both,
-            vec![manifest.id.clone()],
-            vec![],
-        );
-        let loaded = load(
-            &std::fs::read(std::env::var_os("SUNRISE_WASM_STD").unwrap()).unwrap(),
-            vec![WasmPackage {
-                manifest,
-                module: Package::read_wasm(&path).unwrap(),
-            }],
-        );
-        assert!(loaded.refused.is_empty(), "{:?}", loaded.refused);
-        assert_eq!(loaded.mods.len(), 1);
-        loaded.initialize(&[info]).unwrap();
-        matrix(loaded.mods.into());
-    });
 }
 
 #[test]

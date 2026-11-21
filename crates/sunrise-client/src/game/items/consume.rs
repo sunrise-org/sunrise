@@ -408,7 +408,9 @@ impl Game<'_> {
             return false;
         };
         let bounds = player.dimensions.bounds(at);
+        let side = game_side!(self);
         let free = sunrise_client::motion::MotionWorld {
+            side: &side,
             entities: &entities,
             player,
             scene: &mut self.world,
@@ -562,10 +564,7 @@ impl Game<'_> {
                 }
             });
         if let Some(y) = removed_y {
-            if self.native_may_leave(id) && self.riding == Some(id) {
-                self.dismount_removed_vehicle(y);
-                self.release_removed_vehicle(id);
-            }
+            self.stop_riding_from_removed_vehicle(id, y);
             return;
         }
         if let Some(i) = self.boats.iter().position(|b| b.id == id) {
@@ -578,6 +577,13 @@ impl Game<'_> {
             self.get_off_seat();
         } else {
             self.dismount_mount();
+        }
+    }
+
+    pub(super) fn stop_riding_from_removed_vehicle(&mut self, vehicle: u32, y: f64) {
+        if self.native_may_leave(vehicle) && self.riding == Some(vehicle) {
+            self.dismount_removed_vehicle(y);
+            self.release_removed_vehicle(vehicle);
         }
     }
 }

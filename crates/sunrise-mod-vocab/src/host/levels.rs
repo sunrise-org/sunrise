@@ -6,7 +6,7 @@ use crate::*;
 pub trait LevelsHost {
     /// Side: both.
     /// Whether a mod with the `sunrise-mod.toml` id `id` is installed: a
-    /// native, wasm or content package (Fabric's `FabricLoader.isModLoaded`,
+    /// native or content-only package (Fabric's `FabricLoader.isModLoaded`,
     /// NeoForge's `ModList.isLoaded`). The list is fixed at startup.
     #[access(Metadata)]
     #[static_call]

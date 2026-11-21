@@ -27,13 +27,11 @@ use crate::pad_glyph::{self, Glyph};
 
 /// The size, in GUI px, item models draw at before any scaling.
 pub const ITEM_SIZE: f32 = 16.0;
-/// Where GUI sprites sit in the atlas: `Icon::Sprite` names drop this prefix.
-pub const SPRITES: &str = "gui/sprites/";
 
 /// A small picture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
-    /// A GUI sprite, by its name under `gui/sprites/` (`statistics/item_dropped`).
+    /// A GUI sprite, by its GUI id (`statistics/item_dropped`).
     Sprite(&'static str),
     /// An item's model, by its id (`minecraft:chest`).
     Item(&'static str),
@@ -82,17 +80,14 @@ pub fn draw(
 ) -> bool {
     let start = batch.vertices.len();
     let drawn = match icon {
-        Icon::Sprite(name) => {
-            let key = format!("{SPRITES}{name}");
-            match atlas.sprites.get(&key) {
-                Some(rect) => {
-                    let [x, y, w, h] = fit(area, rect.w as f32, rect.h as f32);
-                    batch.sprite_scaled(atlas, &key, x, y, w, h, u32::MAX);
-                    true
-                }
-                None => false,
+        Icon::Sprite(name) => match atlas.gui_rect(name) {
+            Some(rect) => {
+                let [x, y, w, h] = fit(area, rect.w as f32, rect.h as f32);
+                batch.sprite_scaled(atlas, name, x, y, w, h, u32::MAX);
+                true
             }
-        }
+            None => false,
+        },
         Icon::Item(id) => painter.item(batch, id, area),
         Icon::Glyph(glyph) => {
             let [x, y, size] = area;

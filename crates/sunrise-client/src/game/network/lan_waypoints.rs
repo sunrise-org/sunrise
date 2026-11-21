@@ -1,20 +1,8 @@
 //! The locator bar of the players on a served world (lan/waypoints.rs): what
 //! each player looks like to their level's waypoint manager this tick.
 use super::{Game, commands::Target};
-use sunrise_client::{
-    items::ItemStack,
-    lan::waypoints::{self, HIDING_HEADS, PLAYER_RANGE},
-};
-
-/// `waypoint_transmit_range`: hidden by crouching, invisibility or a head worn.
-fn transmit_range(crouching: bool, invisible: bool, head: Option<&ItemStack>) -> f64 {
-    let hiding_head = head.is_some_and(|s| HIDING_HEADS.contains(&&*s.item));
-    if crouching || invisible || hiding_head {
-        0.0
-    } else {
-        PLAYER_RANGE
-    }
-}
+use sunrise_client::lan::waypoints::{self, PLAYER_RANGE};
+use sunrise_gameplay::lan::guest_rules::transmit_range;
 
 impl Game<'_> {
     /// Each level's `ServerWaypointManager` ticked with the players in that

@@ -1,5 +1,9 @@
 # Design: chunk attachment disk hooks
 
+> Historical: this design predates the removal of WebAssembly mods.
+> See [saving chunk attachments](../../modding/src/how-to/chunk-data-save.md) for the current native API.
+> The old guest adapter, registration refusals and test plan are historical.
+
 Provisional proposal for [#857](https://github.com/arismoko/horizon/issues/857); no implementation or adopted guarantee. This answers the worker Host versus server-thread snapshot question: retain the existing server-thread capture seams, but execute mod load, save and persistence codec callbacks on a chunk worker with a restricted Host. Do not pass Game to a worker or silently relocate the requested callbacks to the server thread.
 
 ## Evidence and limits

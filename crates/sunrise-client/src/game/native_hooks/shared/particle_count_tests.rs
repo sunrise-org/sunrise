@@ -18,7 +18,7 @@ fn orb(at: Vec3) -> ExperienceOrb {
         velocity: Vec3::ZERO,
         value: 1,
         age: 0,
-        on_ground: false,
+        ground: Default::default(),
         count: 1,
         fire_ticks: 0,
         ticks: 0,
@@ -130,7 +130,8 @@ fn late_gui_clear_prevents_same_frame_particle_geometry_without_a_tick() {
             );
             game.native_render_gui_pre(&mut false);
             assert_eq!(mod_api::prelude::EffectsClientHost::particle_count(game), 0);
-            let (mut after, _, _, _) = game.entity_geometry(camera, 0.0, None, Vec::new());
+            let (mut after, _, _, _) =
+                game.entity_geometry(camera, 0.0, None, Vec::new(), &mut Vec::new());
             game.client_particle_geometry(camera, 0.0, 70.0, &mut after);
             assert!(
                 after.is_empty(),

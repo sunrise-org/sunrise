@@ -128,7 +128,7 @@ impl Game<'_> {
                 use sunrise_core::nbt::Tag;
                 let mut compound = match self.persist.raw.get(&id) {
                     Some(Tag::Compound(map)) => map.clone(),
-                    _ => std::collections::BTreeMap::new(),
+                    _ => sunrise_core::nbt::Compound::new(),
                 };
                 if no_physics {
                     compound.insert("NoPhysics".into(), Tag::Byte(1));

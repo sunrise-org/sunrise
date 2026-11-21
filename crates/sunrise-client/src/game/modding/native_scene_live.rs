@@ -459,6 +459,7 @@ impl Game<'_> {
             gateway_particles: &|_, _| 0,
             thundering: false,
             ultrawarm: false,
+            block_parts: None,
         };
         for tick in first..=last {
             let seed = tick_seed(clock.id, tick);

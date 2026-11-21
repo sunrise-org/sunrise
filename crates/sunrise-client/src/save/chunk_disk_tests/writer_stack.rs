@@ -39,41 +39,6 @@ fn asynchronous_chunk_save_hook_runs_with_a_guest_stack() {
     assert_eq!(stack.get(), Some(&Ok(())));
 }
 
-#[test]
-#[ignore = "daily"]
-fn compiled_chunk_save_hook_updates_the_region_record() {
-    // Loading the fixture enters the guest too, before the real writer thread takes over.
-    sunrise_guest_stack::run_on_guest_stack(|| {
-        use sunrise_mod_package::manifest::Package;
-        let path = PathBuf::from(std::env::var_os("SUNRISE_WASM_FIXTURE").unwrap());
-        let mut manifest = Package::read(&path).unwrap().manifest;
-        // This test uses a hook, not the fixture's injection points.
-        manifest.inject.clear();
-        let info = mod_api::PackageInfo::new(
-            manifest.id.clone(),
-            manifest.version.to_string(),
-            mod_api::PackageKind::Code,
-            mod_api::Side::Both,
-            vec![manifest.id.clone()],
-            Vec::new(),
-        );
-        let std = fs::read(std::env::var_os("SUNRISE_WASM_STD").unwrap()).unwrap();
-        let loaded = sunrise_mod_wasm::load(
-            &std,
-            vec![sunrise_mod_wasm::WasmPackage {
-                manifest,
-                module: Package::read_wasm(&path).unwrap(),
-            }],
-        );
-        assert!(loaded.refused.is_empty(), "{:?}", loaded.refused);
-        loaded.initialize(&[info]).unwrap();
-        mod_platform::__private::initialize().unwrap();
-        let _registration =
-            mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::Registration);
-        assert_eq!(save_chunk(loaded.mods.into()), 8);
-    });
-}
-
 fn save_chunk(mods: mod_api::Mods) -> i32 {
     let (registry, biomes) = super::super::loot_tests::fixture();
     let registry = Box::leak(Box::new(registry));

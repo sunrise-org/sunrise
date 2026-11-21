@@ -48,6 +48,12 @@ pub(crate) fn explosion_resistance_pure(state: BlockStateId) -> bool {
 pub(super) fn clear() {
     INDEX.with_borrow_mut(|index| *index = None);
 }
+impl AsRef<[BlockState]> for Index {
+    /// Every engine state as a mod reads it, by state id.
+    fn as_ref(&self) -> &[BlockState] {
+        &self.forward
+    }
+}
 pub(super) fn snapshot() -> Result<Box<[BlockState]>, BlockStateError> {
     Ok(current()?.forward.clone().into_boxed_slice())
 }

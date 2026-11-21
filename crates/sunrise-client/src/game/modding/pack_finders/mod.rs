@@ -124,12 +124,22 @@ impl mod_api::prelude::TextHost for DiscoveryHost {
     }
 }
 impl ClientHost for DiscoveryHost {}
-mod_api::impl_client_host_areas!(DiscoveryHost);
+mod_api::impl_client_host_areas!(DiscoveryHost, except(audio));
+// Registration opens no audio stream.
+impl mod_api::prelude::AudioClientHost for DiscoveryHost {
+    fn open_audio_stream(
+        &self,
+        _: &mod_api::StreamSpec,
+    ) -> Result<mod_api::AudioStreamRef, mod_api::AudioRefusal> {
+        Err(mod_api::AudioRefusal::Unavailable)
+    }
+}
+
 impl ServerHost for DiscoveryHost {}
 mod_api::impl_server_host_areas!(DiscoveryHost);
 
 pub(super) fn discover(kind: PackType, mods: &ModsState) -> Vec<Pack> {
-    if !mod_api::__private::listened(HookId::AddPackFinders) {
+    if !mod_api::__private::enabled_listened(HookId::AddPackFinders) {
         return Vec::new();
     }
     let mut registry = Registry::new(kind, mods.clone());
@@ -139,7 +149,7 @@ pub(super) fn discover(kind: PackType, mods: &ModsState) -> Vec<Pack> {
         PackType::ServerData => HostSide::Server(&mut host),
         _ => return Vec::new(),
     };
-    mod_api::dispatch_add_pack_finders(host, &mut registry);
+    mod_api::dispatch_add_pack_finders_for(host, &mut registry, |id| mods.code_owner_enabled(id));
     registry.packs
 }
 
@@ -163,12 +173,13 @@ pub(super) fn data_repository(
 ) -> Vec<DataPack> {
     let mut packs = sunrise_client::datapack::discover_with_features(world, resources);
     packs.extend(additional.iter().map(|pack| (**pack).clone()));
+    packs.sort_by(|a, b| sunrise_client::datapack::compare_ids(&a.id, &b.id));
     packs
 }
 
 impl Game<'_> {
     pub(super) fn discover_mod_packs(&mut self, kind: PackType) -> Vec<Pack> {
-        if !mod_api::__private::listened(HookId::AddPackFinders) {
+        if !mod_api::__private::enabled_listened(HookId::AddPackFinders) {
             return Vec::new();
         }
         let mut registry = Registry::new(kind, self.mods.clone());

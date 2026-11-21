@@ -108,9 +108,13 @@ fn resolve(ids: &[&str]) -> (EntityRendererTable, Vec<String>) {
             )
         })
         .collect();
-    EntityRendererTable::resolve(&registered, &TYPES, &Default::default(), |id| {
-        ["minecraft:oak_boat", "ruby:bolt", "ruby:dart"].contains(&id)
-    })
+    EntityRendererTable::resolve(
+        &registered,
+        &TYPES,
+        &Default::default(),
+        &crate::game::general::GeneralTypeCatalog::freeze(&[]).unwrap(),
+        |id| ["minecraft:oak_boat", "ruby:bolt", "ruby:dart"].contains(&id),
+    )
 }
 
 #[test]
@@ -281,7 +285,7 @@ fn a_vanilla_boat_is_unchanged_by_a_registration_for_its_type() {
             game.boats
                 .push(super::boats::Boat::new(100, "oak".into(), feet(), 0.0));
             let mut boat = Vec::new();
-            game.boat_geometry(CAMERA, 1.0, &mut boat);
+            game.boat_geometry(CAMERA, 1.0, &mut boat, 0..game.boats.len());
             assert!(!boat.is_empty(), "its vanilla model");
             assert!(
                 boat.iter().all(|v| above(v) < 2.0),

@@ -10,7 +10,6 @@ description = "Open and Share for saved performance captures: the local viewer l
 sunrise-addresses = { path = "../sunrise-addresses" }
 sunrise-platform = { path = "../sunrise-platform" }
 getrandom = "0.3"
-log = "0.4"
 open = "5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

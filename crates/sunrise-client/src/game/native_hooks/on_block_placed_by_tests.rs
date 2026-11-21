@@ -144,8 +144,8 @@ impl Hooks for Probe {
     }
     fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
         event
-            .blocks
-            .push(mod_api::Block::new(CRATE, "minecraft:stone"));
+            .register(mod_api::Block::new(CRATE, "minecraft:stone"))
+            .unwrap();
     }
     fn entity_place(
         &self,

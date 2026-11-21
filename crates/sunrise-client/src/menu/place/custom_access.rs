@@ -1,10 +1,6 @@
 //! Engine owners of detached placement and publication use the same frozen plan.
 use super::{Kind, Menu, custom_plan::MenuPlacement};
 impl MenuPlacement {
-    /// Input supply cells; fuel and real machine output are not input stock.
-    pub fn input_slots(&self) -> &[usize] {
-        &self.inputs
-    }
     /// Physical slots whose old contents the placement operation may return.
     pub fn cleared_slots(&self) -> &[usize] {
         &self.clear

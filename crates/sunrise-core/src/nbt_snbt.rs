@@ -1,5 +1,6 @@
 //! `SnbtGrammar`/`TagParser` over NbtOps, shared by commands and persistent codecs.
 use super::{Compound, JavaString, Tag};
+use std::ops::Range;
 
 /// A grammar failure, with an input-relative cursor and its completion suppliers.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,7 +26,7 @@ enum Input<'a> {
     Utf8(&'a str),
     Utf16(&'a [u16]),
 }
-impl Input<'_> {
+impl<'a> Input<'a> {
     fn at(self, cursor: usize) -> Option<u32> {
         match self {
             Self::Utf8(text) => text.get(cursor..)?.chars().next().map(u32::from),
@@ -38,6 +39,18 @@ impl Input<'_> {
             Self::Utf16(_) => 1,
         }
     }
+    /// The scanner has already restricted every unit in the span to ASCII digits or underscores.
+    fn clean_digits(self, span: Range<usize>) -> impl Iterator<Item = u8> + use<'a> {
+        let (bytes, units) = match self {
+            Self::Utf8(text) => (&text.as_bytes()[span], &[][..]),
+            Self::Utf16(text) => (&[][..], &text[span]),
+        };
+        bytes
+            .iter()
+            .copied()
+            .chain(units.iter().map(|&unit| unit as u8))
+            .filter(|&byte| byte != b'_')
+    }
 }
 
 /// `TagParser.parseAsArgument`: one value, preserving a byte cursor for UTF-8.
@@ -45,7 +58,7 @@ pub fn parse_snbt_argument(text: &str) -> Result<(Tag, usize), SnbtError> {
     Parser::new(Input::Utf8(text)).parse()
 }
 
-/// One value in a Java string; its cursor counts UTF-16 code units.
+/// One persistent value in a Java string; its cursor counts UTF-16 code units.
 pub fn parse_snbt_utf16(text: &[u16]) -> Result<(Tag, usize), SnbtError> {
     Parser::new(Input::Utf16(text)).parse()
 }
@@ -60,19 +73,16 @@ pub fn snbt_suggestions(text: &str) -> (usize, Vec<String>) {
     let mut parser = Parser::new(Input::Utf8(text));
     parser.collect_suggestions = true;
     match parser.value() {
-        Ok(_) if parser.cursor > parser.suggestion_cursor => {
-            parser.suggestions.clear();
-            parser.suggestion_cursor = parser.cursor;
+        Ok(value) => {
+            super::discard_tag(value);
+            // `ParseState.parseTopRule` discards errors strictly before a successful read.
+            parser.record(parser.cursor, std::iter::empty());
         }
-        Ok(_) => {}
-        Err(error) => {
-            let error = parser.furthest(error);
-            let values: Vec<&str> = error.suggestions.iter().map(String::as_str).collect();
-            parser.record(error.cursor, &values);
-        }
-    }
-    if let Some(kept) = parser.deferred.take() {
-        parser.record(kept.cursor, &[]);
+        Err(Failure {
+            cursor,
+            reason: Reason::DepthLimit,
+        }) => return (cursor, Vec::new()),
+        Err(error) => parser.defer(error),
     }
     (parser.suggestion_cursor, parser.suggestions)
 }
@@ -83,6 +93,53 @@ pub fn snbt_whitespace(value: u32) -> bool {
         | 0x2008..=0x200a | 0x2028..=0x2029 | 0x205f | 0x3000)
 }
 
+// Vanilla's SNBT grammar has no explicit depth limit, but its NBT reader uses
+// NbtAccounter.MAX_STACK_DEPTH. Apply that bound here to protect tag consumers.
+const MAX_PARSE_DEPTH: usize = 512;
+
+struct Failure {
+    cursor: usize,
+    reason: Reason,
+}
+
+enum Reason {
+    /// A resource refusal, not a recoverable grammar failure.
+    DepthLimit,
+    /// The ASCII characters accepted by one `StringReaderTerms` terminal.
+    Literal(&'static str),
+    Key {
+        key: &'static str,
+        arg: Option<String>,
+        suggestions: &'static [&'static str],
+    },
+    IntegerRange {
+        literal: IntegerLiteral,
+        kind: u8,
+        magnitude: Option<u64>,
+    },
+}
+
+impl Reason {
+    fn suggestions(&self) -> impl Iterator<Item = &str> {
+        let (literal, words) = match self {
+            Self::Literal(chars) => (*chars, &[][..]),
+            Self::Key { suggestions, .. } => ("", *suggestions),
+            Self::DepthLimit | Self::IntegerRange { .. } => ("", &[][..]),
+        };
+        (0..literal.len())
+            .map(move |i| &literal[i..i + 1])
+            .chain(words.iter().copied())
+    }
+}
+
+struct IntegerLiteral {
+    digits: Range<usize>,
+    radix: u32,
+    minus: bool,
+    signed: bool,
+    kind: Option<u8>,
+}
+
 struct Parser<'a> {
     input: Input<'a>,
     cursor: usize,
@@ -90,9 +147,9 @@ struct Parser<'a> {
     collect_suggestions: bool,
     suggestion_cursor: usize,
     suggestions: Vec<String>,
-    /// The furthest error of an alternative that failed and was left behind (a float
-    /// literal whose integer reading took over); `LongestOnly` still reports it.
-    deferred: Option<SnbtError>,
+    /// `ErrorCollector.LongestOnly` and `Grammar.parseForCommands` keep the
+    /// first syntax exception at the furthest position, even after backtracking.
+    deferred: Option<Failure>,
 }
 impl<'a> Parser<'a> {
     fn new(input: Input<'a>) -> Self {
@@ -109,11 +166,44 @@ impl<'a> Parser<'a> {
     fn parse(mut self) -> Result<(Tag, usize), SnbtError> {
         match self.value() {
             Ok(value) => Ok((value, self.cursor)),
-            Err(error) => Err(self.furthest(error)),
+            Err(error) => {
+                let Failure { cursor, reason } = if matches!(error.reason, Reason::DepthLimit) {
+                    error
+                } else {
+                    match self.deferred.take() {
+                        Some(kept) if kept.cursor >= error.cursor => kept,
+                        _ => error,
+                    }
+                };
+                let suggestions: Vec<_> = reason.suggestions().map(str::to_owned).collect();
+                let (key, arg) = match reason {
+                    Reason::DepthLimit => ("arguments.nbtpath.too_deep", None),
+                    Reason::Literal(_) => {
+                        ("argument.literal.incorrect", Some(suggestions.join("|")))
+                    }
+                    Reason::Key { key, arg, .. } => (key, arg),
+                    Reason::IntegerRange {
+                        literal,
+                        kind,
+                        magnitude,
+                    } => (
+                        "snbt.parser.number_parse_failure",
+                        Some(self.integer_range_message(literal, kind, magnitude)),
+                    ),
+                };
+                Err(SnbtError {
+                    key,
+                    args: arg.into_iter().collect(),
+                    cursor,
+                    suggestions,
+                })
+            }
         }
     }
-    /// Remember a failed alternative's error; the first of the furthest ones is kept.
-    fn defer(&mut self, error: SnbtError) {
+    fn defer(&mut self, error: Failure) {
+        if self.collect_suggestions {
+            self.record(error.cursor, error.reason.suggestions());
+        }
         if self
             .deferred
             .as_ref()
@@ -122,37 +212,43 @@ impl<'a> Parser<'a> {
             self.deferred = Some(error);
         }
     }
-    /// `ErrorCollector.LongestOnly`: the error that reached furthest wins, the earlier
-    /// stored one on a tie.
-    fn furthest(&mut self, error: SnbtError) -> SnbtError {
-        match self.deferred.take() {
-            Some(kept) if kept.cursor >= error.cursor => kept,
-            _ => error,
-        }
+    fn error(&self, key: &'static str) -> Failure {
+        self.diagnostic(key, None, &[])
     }
-    fn error(&self, key: &'static str) -> SnbtError {
-        SnbtError {
-            key,
-            args: Vec::new(),
-            cursor: self.cursor,
-            suggestions: Vec::new(),
-        }
-    }
-    fn integer_error(
+    fn diagnostic(
         &self,
-        digits: &str,
-        minus: bool,
+        key: &'static str,
+        arg: Option<String>,
+        suggestions: &'static [&'static str],
+    ) -> Failure {
+        Failure {
+            cursor: self.cursor,
+            reason: Reason::Key {
+                key,
+                arg,
+                suggestions,
+            },
+        }
+    }
+    fn integer_range_message(
+        &self,
+        literal: IntegerLiteral,
         kind: u8,
-        signed: bool,
-        radix: u32,
         magnitude: Option<u64>,
-    ) -> SnbtError {
-        // The IntegerLiteral factories expose the Java numeric parser's detail.
-        let text = if minus {
-            format!("-{digits}")
-        } else {
-            digits.to_owned()
-        };
+    ) -> String {
+        // Only the selected diagnostic needs the text Java's number parser reports.
+        let IntegerLiteral {
+            digits,
+            radix,
+            minus,
+            signed,
+            ..
+        } = literal;
+        let mut text = String::new();
+        if minus {
+            text.push('-');
+        }
+        text.extend(self.input.clean_digits(digits).map(char::from));
         let for_input = || {
             if radix == 10 {
                 format!("For input string: \"{text}\"")
@@ -160,7 +256,7 @@ impl<'a> Parser<'a> {
                 format!("For input string: \"{text}\" under radix {radix}")
             }
         };
-        let message = match magnitude {
+        match magnitude {
             Some(value) if kind < 2 && value <= i32::MAX as u64 + u64::from(minus) => {
                 if signed {
                     format!("Value out of range. Value:\"{text}\" Radix:{radix}")
@@ -168,20 +264,17 @@ impl<'a> Parser<'a> {
                     format!("out of range: {value}")
                 }
             }
-            Some(value) if !signed && kind == 2 && value <= i64::MAX as u64 => {
+            _ if !signed && kind == 2 => {
                 format!("String value {text} exceeds range of unsigned int.")
             }
             None if !signed && kind == 3 => {
                 format!("String value {text} exceeds range of unsigned long.")
             }
             _ => for_input(),
-        };
-        let mut error = self.error("snbt.parser.number_parse_failure");
-        error.args.push(message);
-        error
+        }
     }
-    fn record(&mut self, cursor: usize, values: &[&str]) {
-        if !self.collect_suggestions || cursor < self.suggestion_cursor {
+    fn record<'v>(&mut self, cursor: usize, values: impl Iterator<Item = &'v str>) {
+        if cursor < self.suggestion_cursor {
             return;
         }
         if cursor > self.suggestion_cursor {
@@ -190,7 +283,7 @@ impl<'a> Parser<'a> {
         }
         for value in values {
             if !self.suggestions.iter().any(|present| present == value) {
-                self.suggestions.push((*value).to_owned());
+                self.suggestions.push(value.to_owned());
             }
         }
     }
@@ -207,81 +300,98 @@ impl<'a> Parser<'a> {
         self.cursor += self.input.width(value);
         Some(value)
     }
-    fn eat(&mut self, value: u8) -> bool {
-        let start = self.cursor;
-        self.skip();
-        if self.peek() == Some(u32::from(value)) {
-            self.bump();
-            true
-        } else {
-            if self.collect_suggestions {
-                self.record(self.cursor, &[&char::from(value).to_string()]);
+    /// `Term.optional`: rewind a failed term without discarding its diagnostics.
+    fn optional<T>(&mut self, parse: impl FnOnce(&mut Self) -> Result<T, Failure>) -> Option<T> {
+        let mark = self.cursor;
+        match parse(self) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                self.defer(error);
+                self.cursor = mark;
+                None
             }
-            self.cursor = start;
-            false
         }
     }
-    fn expect(&mut self, value: u8) -> Result<(), SnbtError> {
-        if self.eat(value) {
+    fn eat(&mut self, chars: &'static str) -> bool {
+        self.optional(|parser| parser.expect(chars)).is_some()
+    }
+    /// `StringReaderTerms.TerminalCharacters.parse`: ignore leading whitespace,
+    /// then report a mismatch at the first non-whitespace position.
+    fn expect(&mut self, chars: &'static str) -> Result<(), Failure> {
+        self.skip();
+        if self
+            .peek()
+            .is_some_and(|c| chars.bytes().any(|value| c == u32::from(value)))
+        {
+            self.bump();
             Ok(())
         } else {
-            self.skip();
-            let text = char::from(value).to_string();
-            let mut error = self.error("argument.literal.incorrect");
-            error.args.push(text.clone());
-            error.suggestions.push(text);
-            Err(error)
+            Err(Failure {
+                cursor: self.cursor,
+                reason: Reason::Literal(chars),
+            })
         }
     }
-    fn lower(&mut self) -> Option<u8> {
-        self.skip();
-        u8::try_from(self.peek()?)
-            .ok()
-            .map(|value| value.to_ascii_lowercase())
+    /// `Term.repeatedWithTrailingSeparator`: try an entry before the closer,
+    /// then a comma before each next entry. Only grammar failures backtrack.
+    fn entries(
+        &mut self,
+        mut entry: impl FnMut(&mut Self) -> Result<(), Failure>,
+    ) -> Result<(), Failure> {
+        loop {
+            let mark = self.cursor;
+            match entry(self) {
+                Ok(()) => {
+                    if !self.eat(",") {
+                        return Ok(());
+                    }
+                }
+                Err(error) if matches!(error.reason, Reason::DepthLimit) => return Err(error),
+                Err(error) => {
+                    self.defer(error);
+                    self.cursor = mark;
+                    return Ok(());
+                }
+            }
+        }
     }
-    fn enter(&mut self) -> Result<(), SnbtError> {
-        // The shared NBT boundary already limits containers to 512. Count builtin
-        // calls too: deeply nested bool(...) must not overflow the native stack.
-        if self.depth >= 512 {
-            return Err(self.error("arguments.nbtpath.too_deep"));
+    fn descend<T>(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> Result<T, Failure>,
+    ) -> Result<T, Failure> {
+        if self.depth >= MAX_PARSE_DEPTH {
+            return Err(Failure {
+                cursor: self.cursor,
+                reason: Reason::DepthLimit,
+            });
         }
         self.depth += 1;
-        Ok(())
+        let result = super::with_tree_stack(|| parse(self));
+        self.depth -= 1;
+        result
     }
-    fn value(&mut self) -> Result<Tag, SnbtError> {
+    /// The SNBT `literal` rule: structural starters commit via silent lookahead.
+    /// A failed numeric rule falls back to a word, but a matched integer literal
+    /// is converted after the alternative commits.
+    fn value(&mut self) -> Result<Tag, Failure> {
         self.skip();
         match self.peek() {
-            Some(0x7b) => {
-                self.enter()?;
-                let value = self.compound();
-                self.depth -= 1;
-                value
-            }
-            Some(0x5b) => {
-                self.enter()?;
-                let value = self.list();
-                self.depth -= 1;
-                value
-            }
-            Some(0x22 | 0x27) => self.string().map(Tag::String),
+            Some(0x7b) => self.descend(Self::compound),
+            Some(0x5b) => self.descend(Self::list),
+            Some(0x22 | 0x27) => self.quoted_string().map(Tag::String),
             Some(0x2b | 0x2d | 0x2e | 0x30..=0x39) => {
-                // FloatLiteral | IntegerLiteral: a float that fails anywhere, including
-                // its value check, leaves the integer reading to try from the start.
-                let start = self.cursor;
-                match self.float() {
-                    Ok(Some(value)) => Ok(value),
-                    Ok(None) => self.integer(None),
-                    Err(error) => {
-                        self.defer(error);
-                        self.cursor = start;
-                        self.integer(None)
-                    }
+                if let Some(value) = self.optional(Self::float) {
+                    Ok(value)
+                } else if let Some(integer) = self.optional(Self::integer) {
+                    self.convert_integer(integer, None)
+                } else {
+                    self.word()
                 }
             }
             _ => self.word(),
         }
     }
-    fn unquoted(&mut self) -> Result<String, SnbtError> {
+    fn unquoted(&mut self) -> Result<String, Failure> {
         self.skip();
         let mut value = String::new();
         while let Some(c) = self.peek().and_then(|c| u8::try_from(c).ok()) {
@@ -297,13 +407,13 @@ impl<'a> Parser<'a> {
             Ok(value)
         }
     }
-    fn string(&mut self) -> Result<JavaString, SnbtError> {
-        self.skip();
-        let Some(quote @ (0x22 | 0x27)) = self.peek() else {
-            self.record(self.cursor, &["\"", "'"]);
-            return self.unquoted().map(|value| value.as_str().into());
+    fn quoted_string(&mut self) -> Result<JavaString, Failure> {
+        let quote = if self.eat("\"") {
+            0x22
+        } else {
+            self.expect("'")?;
+            0x27
         };
-        self.bump();
         let mut units = Vec::new();
         loop {
             match self.bump() {
@@ -313,23 +423,28 @@ impl<'a> Parser<'a> {
                 None => {
                     // The contents rule fails first at the end; the closing quote, the other
                     // quote and a backslash are what could continue the string.
-                    let mut error = self.error("snbt.parser.invalid_string_contents");
-                    error.suggestions = ["\"", "'", "\\"].map(str::to_owned).to_vec();
-                    return Err(error);
+                    return Err(self.diagnostic(
+                        "snbt.parser.invalid_string_contents",
+                        None,
+                        &["\"", "'", "\\"],
+                    ));
                 }
             }
         }
     }
-    fn escape(&mut self, units: &mut Vec<u16>) -> Result<(), SnbtError> {
+    fn escape(&mut self, units: &mut Vec<u16>) -> Result<(), Failure> {
         // StringReaderTerms terminals skip whitespace even after a backslash;
         // fixed-width hex runs and ordinary quoted contents do not.
         self.skip();
-        self.record(
-            self.cursor,
-            &[
-                "b", "s", "t", "n", "f", "r", "\\", "'", "\"", "x", "u", "U", "N",
-            ],
-        );
+        if self.collect_suggestions {
+            self.record(
+                self.cursor,
+                [
+                    "b", "s", "t", "n", "f", "r", "\\", "'", "\"", "x", "u", "U", "N",
+                ]
+                .into_iter(),
+            );
+        }
         let escape_cursor = self.cursor;
         let value = match self.bump() {
             Some(0x62) => 8,
@@ -353,23 +468,27 @@ impl<'a> Parser<'a> {
                         .and_then(char::from_u32)
                         .and_then(|c| c.to_digit(16))
                     else {
-                        let mut error = self.error("snbt.parser.expected_hex_escape");
-                        error.cursor = digits_cursor;
-                        error.args.push(count.to_string());
-                        return Err(error);
+                        self.cursor = digits_cursor;
+                        return Err(self.diagnostic(
+                            "snbt.parser.expected_hex_escape",
+                            Some(count.to_string()),
+                            &[],
+                        ));
                     };
                     self.bump();
                     value = (value << 4) | digit;
                 }
                 if value > 0x10ffff {
-                    let mut error = self.error("snbt.parser.invalid_codepoint");
-                    error.args.push(format!("U+{value:08X}"));
-                    return Err(error);
+                    return Err(self.diagnostic(
+                        "snbt.parser.invalid_codepoint",
+                        Some(format!("U+{value:08X}")),
+                        &[],
+                    ));
                 }
                 value
             }
             Some(0x4e) => {
-                self.expect(b'{')?;
+                self.expect("{")?;
                 let mut name = String::new();
                 while let Some(c) = self.peek().and_then(|c| u8::try_from(c).ok()) {
                     if !c.is_ascii_alphanumeric() && !matches!(c, b'-' | b' ') {
@@ -383,209 +502,185 @@ impl<'a> Parser<'a> {
                 if name.is_empty() {
                     return Err(self.error("snbt.parser.invalid_character_name"));
                 }
-                self.expect(b'}')?;
+                self.expect("}")?;
                 crate::character_names::code_point_of(&name)
                     .ok_or_else(|| self.error("snbt.parser.invalid_character_name"))?
             }
             _ => {
                 // The first escape alternative is what a failed literal reports.
-                let mut error = self.error("argument.literal.incorrect");
-                error.cursor = escape_cursor;
-                error.args.push("b".to_owned());
-                return Err(error);
+                return Err(Failure {
+                    cursor: escape_cursor,
+                    reason: Reason::Literal("b"),
+                });
             }
         };
         push_code_point(units, value);
         Ok(())
     }
-    fn compound(&mut self) -> Result<Tag, SnbtError> {
-        self.expect(b'{')?;
+    fn compound(&mut self) -> Result<Tag, Failure> {
+        self.expect("{")?;
         let mut values = Compound::new();
-        if self.eat(b'}') {
-            return Ok(Tag::Compound(values));
-        }
-        loop {
-            let key = self.string()?;
+        let entries = self.entries(|parser| {
+            let key = match parser.optional(Self::quoted_string) {
+                Some(key) => key,
+                None => parser.unquoted()?.as_str().into(),
+            };
+            parser.expect(":")?;
+            let value = parser.value()?;
             if key.0.is_empty() {
-                return Err(self.error("snbt.parser.empty_key"));
+                super::discard_tag(value);
+                return Err(parser.error("snbt.parser.empty_key"));
             }
-            self.expect(b':')?;
-            values.insert(key, self.value()?);
-            if self.eat(b'}') {
-                return Ok(Tag::Compound(values));
+            if let Some(previous) = values.insert(key, value) {
+                super::discard_tag(previous);
             }
-            self.expect(b',')?;
-            if self.eat(b'}') {
-                return Ok(Tag::Compound(values));
-            }
-        }
-    }
-    fn list(&mut self) -> Result<Tag, SnbtError> {
-        self.expect(b'[')?;
-        let start = self.cursor;
-        self.skip();
-        self.record(self.cursor, &["B", "L", "I"]);
-        let typed = match self.peek() {
-            Some(0x42) => Some(0),
-            Some(0x49) => Some(2),
-            Some(0x4c) => Some(3),
-            _ => None,
-        };
-        let typed = typed.filter(|_| {
-            self.bump();
-            self.eat(b';')
+            Ok(())
         });
-        if typed.is_none() {
-            self.cursor = start;
+        let tag = Tag::Compound(values);
+        if let Err(error) = entries.and_then(|()| self.expect("}")) {
+            super::discard_tag(tag);
+            return Err(error);
         }
-        let mut values = Vec::new();
-        if !self.eat(b']') {
-            loop {
-                values.push(if let Some(kind) = typed {
-                    self.integer(Some(kind))?
-                } else {
-                    self.value()?
-                });
-                if self.eat(b']') {
-                    break;
-                }
-                self.expect(b',')?;
-                if self.eat(b']') {
-                    break;
-                }
+        Ok(tag)
+    }
+    fn list(&mut self) -> Result<Tag, Failure> {
+        self.expect("[")?;
+        // Only the prefix and semicolon choose the typed branch. Entries may
+        // be empty in either branch; a later failure does not change the choice.
+        let typed = self.optional(|parser| {
+            let kind = if parser.eat("B") {
+                0
+            } else if parser.eat("L") {
+                3
+            } else {
+                parser.expect("I")?;
+                2
+            };
+            parser.expect(";")?;
+            Ok(kind)
+        });
+        if let Some(kind) = typed {
+            let mut values = Vec::new();
+            self.entries(|parser| {
+                values.push(parser.integer()?);
+                Ok(())
+            })?;
+            self.expect("]")?;
+            let values = values
+                .into_iter()
+                .map(|value| self.convert_integer(value, Some(kind)).map(integer_value));
+            Ok(match kind {
+                0 => Tag::ByteArray(
+                    values
+                        .map(|value| value.map(|v| v as u8))
+                        .collect::<Result<_, _>>()?,
+                ),
+                2 => Tag::IntArray(
+                    values
+                        .map(|value| value.map(|v| v as i32))
+                        .collect::<Result<_, _>>()?,
+                ),
+                _ => Tag::LongArray(values.collect::<Result<_, _>>()?),
+            })
+        } else {
+            let mut values = Vec::new();
+            let entries = self.entries(|parser| {
+                values.push(parser.value()?);
+                Ok(())
+            });
+            let tag = Tag::List(values);
+            if let Err(error) = entries.and_then(|()| self.expect("]")) {
+                super::discard_tag(tag);
+                return Err(error);
             }
+            Ok(tag)
         }
-        Ok(match typed {
-            Some(0) => Tag::ByteArray(
-                values
-                    .into_iter()
-                    .map(|value| integer_value(value) as u8)
-                    .collect(),
-            ),
-            Some(2) => Tag::IntArray(
-                values
-                    .into_iter()
-                    .map(|value| integer_value(value) as i32)
-                    .collect(),
-            ),
-            Some(3) => Tag::LongArray(values.into_iter().map(integer_value).collect()),
-            _ => Tag::List(values),
-        })
     }
     fn sign(&mut self) -> bool {
-        self.eat(b'-') || {
-            self.eat(b'+');
-            false
-        }
+        !self.eat("+") && self.eat("-")
     }
-    fn digits(&mut self, radix: u32) -> Result<Option<String>, SnbtError> {
+    /// `NumberRunParseRule.parse`: a rejected run is reported at its start.
+    fn digits(&mut self, radix: u32) -> Result<Range<usize>, Failure> {
         self.skip();
-        let mut text = String::new();
+        let start = self.cursor;
+        let mut last = None;
         while let Some(c) = self.peek().and_then(char::from_u32) {
             if c != '_' && !c.is_digit(radix) {
                 break;
             }
             self.bump();
-            text.push(c);
+            last = Some(c);
         }
-        if text.starts_with('_') || text.ends_with('_') {
+        if last == Some('_') || self.input.at(start) == Some(u32::from(b'_')) {
+            self.cursor = start;
             return Err(self.error("snbt.parser.underscore_not_allowed"));
         }
-        if text.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(text))
-        }
-    }
-    fn required_digits(&mut self, radix: u32) -> Result<String, SnbtError> {
-        self.digits(radix)?.ok_or_else(|| {
-            self.error(match radix {
+        if last.is_none() {
+            Err(self.error(match radix {
                 2 => "snbt.parser.expected_binary_numeral",
                 16 => "snbt.parser.expected_hex_numeral",
                 _ => "snbt.parser.expected_decimal_numeral",
-            })
-        })
-    }
-    fn exponent(&mut self, text: &mut String) -> Result<bool, SnbtError> {
-        if !self.eat(b'e') && !self.eat(b'E') {
-            return Ok(false);
+            }))
+        } else {
+            Ok(start..self.cursor)
         }
-        text.push('e');
-        if self.sign() {
-            text.push('-');
-        }
-        text.push_str(&self.required_digits(10)?);
-        Ok(true)
     }
-    fn float(&mut self) -> Result<Option<Tag>, SnbtError> {
-        let start = self.cursor;
+    fn exponent(&mut self) -> Result<(bool, Range<usize>), Failure> {
+        self.expect("eE")?;
         let minus = self.sign();
-        let whole = self.digits(10)?;
+        Ok((minus, self.digits(10)?))
+    }
+    fn float(&mut self) -> Result<Tag, Failure> {
+        let minus = self.sign();
+        let whole = self.optional(|parser| parser.digits(10));
+        // The first two float readings commit when they consume the dot. A
+        // leading dot needs a fraction; a dot after digits does not.
+        let (dot, fraction) = if whole.is_none() {
+            self.expect(".")?;
+            (true, Some(self.digits(10)?))
+        } else if self.eat(".") {
+            (true, self.optional(|parser| parser.digits(10)))
+        } else {
+            (false, None)
+        };
+        let exponent = self.optional(Self::exponent);
+        let is_float = self.eat("fF");
+        if !is_float {
+            if dot || exponent.is_some() {
+                self.eat("dD");
+            } else {
+                self.expect("dD")?;
+            }
+        }
+
         let mut text = String::new();
         if minus {
             text.push('-');
         }
-        if let Some(whole) = &whole {
-            text.push_str(whole);
+        if let Some(whole) = whole {
+            text.extend(self.input.clean_digits(whole).map(char::from));
         }
-        let dot = self.eat(b'.');
         if dot {
             text.push('.');
-            match self.digits(10)? {
-                Some(fraction) => text.push_str(&fraction),
-                None if whole.is_none() => {
-                    return Err(self.error("snbt.parser.expected_decimal_numeral"));
-                }
-                None => {}
+        }
+        if let Some(fraction) = fraction {
+            text.extend(self.input.clean_digits(fraction).map(char::from));
+        }
+        if let Some((minus, digits)) = exponent {
+            text.push('e');
+            if minus {
+                text.push('-');
             }
-        } else if whole.is_none() {
-            self.cursor = start;
-            return Ok(None);
+            text.extend(self.input.clean_digits(digits).map(char::from));
         }
-        // The exponent is optional after a dot; without one the float needs it, and a
-        // malformed exponent ends this reading instead of failing the value.
-        let before_exponent = self.cursor;
-        let text_len = text.len();
-        let exponent = match self.exponent(&mut text) {
-            Ok(found) => found,
-            Err(error) => {
-                self.defer(error);
-                if !dot {
-                    self.cursor = start;
-                    return Ok(None);
-                }
-                self.cursor = before_exponent;
-                text.truncate(text_len);
-                false
-            }
-        };
-        let suffix_start = self.cursor;
-        let suffix = self.lower().filter(|suffix| matches!(suffix, b'f' | b'd'));
-        if suffix.is_none() {
-            self.record(self.cursor, &["f", "F", "d", "D"]);
-        }
-        if suffix.is_some() {
-            self.bump();
-        } else {
-            self.cursor = suffix_start;
-        }
-        if !dot && !exponent && suffix.is_none() {
-            self.cursor = start;
-            return Ok(None);
-        }
-        text.retain(|c| c != '_');
-        if suffix == Some(b'f') {
+        if is_float {
             let value = text
                 .parse::<f32>()
                 .map_err(|_| self.error("snbt.parser.number_parse_failure"))?;
             if !value.is_finite() {
                 return Err(self.error("snbt.parser.infinity_not_allowed"));
             }
-            Ok(Some(Tag::Float(if value == 0.0 {
-                0
-            } else {
-                value.to_bits()
-            })))
+            Ok(Tag::Float(if value == 0.0 { 0 } else { value.to_bits() }))
         } else {
             let value = text
                 .parse::<f64>()
@@ -593,83 +688,88 @@ impl<'a> Parser<'a> {
             if !value.is_finite() {
                 return Err(self.error("snbt.parser.infinity_not_allowed"));
             }
-            Ok(Some(Tag::Double(if value == 0.0 {
-                0
-            } else {
-                value.to_bits()
-            })))
+            Ok(Tag::Double(if value == 0.0 { 0 } else { value.to_bits() }))
         }
     }
-    fn integer(&mut self, array: Option<u8>) -> Result<Tag, SnbtError> {
+    /// `integer_literal` is syntactic: scalar conversion belongs to `literal`,
+    /// and array conversion to `list_literal` after the closing bracket.
+    fn integer(&mut self) -> Result<IntegerLiteral, Failure> {
         let minus = self.sign();
-        let (mut digits, radix) = if self.eat(b'0') {
-            if self.eat(b'x') || self.eat(b'X') {
-                (self.required_digits(16)?, 16)
+        let (digits, radix) = if self.eat("0") {
+            let zero = self.cursor - 1..self.cursor;
+            if self.eat("xX") {
+                (self.digits(16)?, 16)
+            } else if let Some(binary) = self.optional(|parser| {
+                parser.expect("bB")?;
+                parser.digits(2)
+            }) {
+                (binary, 2)
+            } else if self.optional(|parser| parser.digits(10)).is_some() {
+                return Err(self.error("snbt.parser.leading_zero_not_allowed"));
             } else {
-                let after_zero = self.cursor;
-                let binary = if self.eat(b'b') || self.eat(b'B') {
-                    self.digits(2)?
-                } else {
-                    None
-                };
-                if let Some(binary) = binary {
-                    (binary, 2)
-                } else {
-                    self.cursor = after_zero;
-                    if self.digits(10)?.is_some() {
-                        return Err(self.error("snbt.parser.leading_zero_not_allowed"));
-                    }
-                    self.cursor = after_zero;
-                    ("0".to_owned(), 10)
-                }
+                (zero, 10)
             }
         } else {
-            (self.required_digits(10)?, 10)
+            (self.digits(10)?, 10)
         };
-        let suffix_start = self.cursor;
-        let prefix = self.lower().filter(|c| matches!(c, b'u' | b's'));
-        if prefix.is_none() {
-            self.record(self.cursor, &["u", "U", "s", "S"]);
-            self.cursor = suffix_start;
-        }
-        let mut signed = None;
-        if let Some(prefix) = prefix {
-            self.bump();
-            let ty = self.lower();
-            if ty.is_some_and(|ty| matches!(ty, b'b' | b's' | b'i' | b'l')) {
-                signed = Some(prefix == b's');
-            } else {
-                self.cursor = suffix_start;
-            }
-        }
-        let suffix_cursor = self.cursor;
-        let kind = match self.lower() {
-            Some(b'b') => Some(0),
-            Some(b's') => Some(1),
-            Some(b'i') => Some(2),
-            Some(b'l') => Some(3),
-            _ => None,
-        };
-        if kind.is_none() {
-            self.record(self.cursor, &["b", "B", "s", "S", "i", "I", "l", "L"]);
-        }
-        if kind.is_some() {
-            self.bump();
+        let (kind, signed) = if let Some(kind) = self.optional(|parser| {
+            parser.expect("uU")?;
+            parser.integer_type()
+        }) {
+            (Some(kind), false)
+        } else if let Some(kind) = self.optional(|parser| {
+            parser.expect("sS")?;
+            parser.integer_type()
+        }) {
+            (Some(kind), true)
         } else {
-            self.cursor = suffix_cursor;
+            (self.optional(Self::integer_type), radix == 10)
+        };
+        Ok(IntegerLiteral {
+            digits,
+            radix,
+            minus,
+            signed,
+            kind,
+        })
+    }
+    fn integer_type(&mut self) -> Result<u8, Failure> {
+        if self.eat("bB") {
+            Ok(0)
+        } else if self.eat("sS") {
+            Ok(1)
+        } else if self.eat("iI") {
+            Ok(2)
+        } else {
+            self.expect("lL")?;
+            Ok(3)
         }
+    }
+    fn convert_integer(&self, literal: IntegerLiteral, array: Option<u8>) -> Result<Tag, Failure> {
+        let IntegerLiteral {
+            radix,
+            minus,
+            signed,
+            kind,
+            ..
+        } = literal;
         let kind = kind.unwrap_or(array.unwrap_or(2));
         if array.is_some_and(|array| kind > array) {
             return Err(self.error("snbt.parser.invalid_array_element_type"));
         }
-        let signed = signed.unwrap_or(radix == 10);
         if minus && !signed {
             return Err(self.error("snbt.parser.expected_non_negative_number"));
         }
-        digits.retain(|c| c != '_');
+        let magnitude =
+            self.input
+                .clean_digits(literal.digits.clone())
+                .try_fold(0u64, |value, byte| {
+                    let digit = char::from(byte).to_digit(radix).expect("scanned digit");
+                    value
+                        .checked_mul(u64::from(radix))?
+                        .checked_add(u64::from(digit))
+                });
         let bits = [8, 16, 32, 64][usize::from(kind)];
-        let magnitude = u64::from_str_radix(&digits, radix)
-            .map_err(|_| self.integer_error(&digits, minus, kind, signed, radix, None))?;
         let max = if signed {
             (1u64 << (bits - 1)) - 1 + u64::from(minus)
         } else if bits == 64 {
@@ -677,13 +777,20 @@ impl<'a> Parser<'a> {
         } else {
             (1u64 << bits) - 1
         };
-        if magnitude > max {
-            return Err(self.integer_error(&digits, minus, kind, signed, radix, Some(magnitude)));
-        }
+        let Some(magnitude_in_range) = magnitude.filter(|&value| value <= max) else {
+            return Err(Failure {
+                cursor: self.cursor,
+                reason: Reason::IntegerRange {
+                    literal,
+                    kind,
+                    magnitude,
+                },
+            });
+        };
         let value = if minus {
-            magnitude.wrapping_neg() as i64
+            magnitude_in_range.wrapping_neg() as i64
         } else {
-            magnitude as i64
+            magnitude_in_range as i64
         };
         Ok(match kind {
             0 => Tag::Byte(value as i8),
@@ -692,42 +799,53 @@ impl<'a> Parser<'a> {
             _ => Tag::Long(value),
         })
     }
-    fn word(&mut self) -> Result<Tag, SnbtError> {
-        let start = self.cursor;
+    fn word(&mut self) -> Result<Tag, Failure> {
         let word = self.unquoted()?;
-        if self.eat(b'(') {
-            self.enter()?;
-            let result = self.arguments(&word);
-            self.depth -= 1;
-            return result;
+        let mark = self.cursor;
+        let arguments = if self.eat("(") {
+            Some(self.descend(|parser| {
+                let mut arguments = Vec::new();
+                if let Err(error) = parser.entries(|parser| {
+                    arguments.push(parser.value()?);
+                    Ok(())
+                }) {
+                    super::discard_tag(Tag::List(arguments));
+                    return Err(error);
+                }
+                if let Err(error) = parser.expect(")") {
+                    // The optional sequence rewinds the reader, but the named
+                    // argument list is already in the enclosing rule's scope.
+                    parser.defer(error);
+                    parser.cursor = mark;
+                }
+                Ok(arguments)
+            })?)
+        } else {
+            None
+        };
+        if matches!(word.as_bytes()[0], b'+' | b'-' | b'.' | b'0'..=b'9') {
+            if let Some(arguments) = arguments {
+                super::discard_tag(Tag::List(arguments));
+            }
+            return Err(self.diagnostic(
+                "snbt.parser.invalid_unquoted_start",
+                None,
+                &["false", "true", "bool", "uuid"],
+            ));
+        }
+        if let Some(arguments) = arguments {
+            return self.operation(&word, arguments);
         }
         if word.eq_ignore_ascii_case("true") {
             Ok(Tag::Byte(1))
         } else if word.eq_ignore_ascii_case("false") {
             Ok(Tag::Byte(0))
         } else {
-            if matches!(word.as_bytes()[0], b'+' | b'-' | b'.' | b'0'..=b'9') {
-                self.cursor = start;
-                return Err(self.error("snbt.parser.invalid_unquoted_start"));
-            }
             Ok(Tag::String(word.as_str().into()))
         }
     }
-    fn arguments(&mut self, word: &str) -> Result<Tag, SnbtError> {
-        let mut arguments = Vec::new();
-        if !self.eat(b')') {
-            loop {
-                arguments.push(self.value()?);
-                if self.eat(b')') {
-                    break;
-                }
-                self.expect(b',')?;
-                if self.eat(b')') {
-                    break;
-                }
-            }
-        }
-        match (word, arguments.as_slice()) {
+    fn operation(&self, word: &str, arguments: Vec<Tag>) -> Result<Tag, Failure> {
+        let result = (|| match (word, arguments.as_slice()) {
             ("bool", [value]) => {
                 let value = match value {
                     Tag::Byte(v) => f64::from(*v),
@@ -754,12 +872,14 @@ impl<'a> Parser<'a> {
                 ]))
             }
             ("uuid", [_]) => Err(self.error("snbt.parser.expected_string_uuid")),
-            _ => {
-                let mut error = self.error("snbt.parser.no_such_operation");
-                error.args.push(format!("{word}/{}", arguments.len()));
-                Err(error)
-            }
-        }
+            _ => Err(self.diagnostic(
+                "snbt.parser.no_such_operation",
+                Some(format!("{word}/{}", arguments.len())),
+                &[],
+            )),
+        })();
+        super::discard_tag(Tag::List(arguments));
+        result
     }
 }
 fn integer_value(value: Tag) -> i64 {
@@ -869,21 +989,109 @@ mod tests {
         );
     }
 
-    /// `FloatLiteral | IntegerLiteral`: a malformed or out-of-range float falls back to the
-    /// integer reading, an optional exponent after a dot is dropped, and the furthest failed
-    /// alternative is still what a later failure reports.
     #[test]
-    fn failed_float_alternatives_fall_back() {
+    fn failed_alternatives_report_the_first_terminal_at_the_furthest_cursor() {
+        for (source, expected, cursor) in [
+            ("{]", "\"", 1),
+            ("{", "\"", 1),
+            ("{,}", "\"", 1),
+            ("{:1}", "\"", 1),
+            ("[ x", "(", 3),
+            ("[", "B", 1),
+            ("{a:[}", "B", 4),
+            ("{a:1", ".", 4),
+            ("{a:1 x", ".", 5),
+            ("{a:99999999999}", ".", 14),
+            ("{\"\":1}", ".", 5),
+            ("{a:1.2.3}", "e|E", 6),
+            ("{a:--1}", "(", 6),
+            ("{a:[I;1.5]}", "u|U", 7),
+            ("[B;1", "u|U", 4),
+            ("[B;1 x", "u|U", 5),
+        ] {
+            let error = parse_snbt_argument(source).unwrap_err();
+            assert_eq!(error.key, "argument.literal.incorrect", "{source}");
+            assert_eq!(error.args, [expected], "{source}");
+            assert_eq!(error.cursor, cursor, "{source}");
+        }
+    }
+
+    #[test]
+    fn nesting_refusal_is_not_a_backtrackable_syntax_error() {
+        for (open, close, cursor) in [("[", "]", 512), ("{a:", "}", 1536), ("bool(", ")", 2565)] {
+            let source = format!("{}0{}", open.repeat(513), close.repeat(513));
+            let error = parse_snbt_argument(&source).unwrap_err();
+            assert_eq!(
+                (error.key, error.cursor),
+                ("arguments.nbtpath.too_deep", cursor)
+            );
+            let units: Vec<_> = source.encode_utf16().collect();
+            assert_eq!(parse_snbt_utf16(&units), Err(error));
+            assert_eq!(snbt_suggestions(&source), (cursor, Vec::new()));
+        }
+    }
+
+    #[test]
+    fn short_suffix_keeps_signed_suffix_completions_at_its_end() {
+        assert_eq!(parse_snbt_argument("1s"), Ok((Tag::Short(1), 2)));
+        let (cursor, mut suggestions) = snbt_suggestions("1s");
+        suggestions.sort_unstable();
+        assert_eq!(cursor, 2);
+        assert_eq!(suggestions, ["B", "I", "L", "S", "b", "i", "l", "s"]);
+    }
+
+    #[test]
+    fn an_unclosed_builtin_rewinds_but_keeps_its_arguments() {
+        assert_eq!(parse_snbt_argument("bool(1"), Ok((Tag::Byte(1), 4)));
+        let error = parse_snbt_argument("foo(").unwrap_err();
+        assert_eq!(error.key, "snbt.parser.expected_unquoted_string");
+        assert_eq!(error.cursor, 4);
+    }
+
+    #[test]
+    fn typed_array_converts_radix_spans_after_the_closer() {
+        let source = "[I;1_2i,0xFFui,0b1_1]";
+        let expected = Tag::IntArray(vec![12, 255, 3]);
+        assert_eq!(parse_snbt_argument(source), Ok((expected.clone(), 21)));
+        let units: Vec<_> = source.encode_utf16().collect();
+        assert_eq!(parse_snbt_utf16(&units), Ok((expected, 21)));
+    }
+
+    #[test]
+    fn unsigned_int_overflow_reports_the_unsigned_range_error() {
+        for (source, digits, cursor) in [
+            ("9223372036854775808ui", "9223372036854775808", 21),
+            ("18446744073709551616ui", "18446744073709551616", 22),
+            ("[I;18446744073709551616ui]", "18446744073709551616", 26),
+        ] {
+            let error = parse_snbt_argument(source).unwrap_err();
+            assert_eq!(error.key, "snbt.parser.number_parse_failure");
+            assert_eq!(error.cursor, cursor);
+            assert_eq!(
+                error.args,
+                [format!(
+                    "String value {digits} exceeds range of unsigned int."
+                )]
+            );
+        }
+    }
+
+    /// `FloatLiteral | IntegerLiteral`: a malformed or out-of-range float falls back to the
+    /// integer reading, optional numeric terms rewind, and the furthest failed alternative
+    /// is still what a later failure reports.
+    #[test]
+    fn failed_numeric_alternatives_rewind() {
         let double = |value: f64| Tag::Double(value.to_bits());
         assert_eq!(parse_snbt_argument("1e").unwrap(), (Tag::Int(1), 1));
         assert_eq!(parse_snbt_argument("1e309").unwrap(), (Tag::Int(1), 1));
         assert_eq!(parse_snbt_argument("1.5e").unwrap(), (double(1.5), 3));
         assert_eq!(parse_snbt_argument("1e5").unwrap(), (double(1e5), 3));
+        assert_eq!(parse_snbt_argument("1._").unwrap(), (double(1.0), 2));
+        assert_eq!(parse_snbt_argument("0b_").unwrap(), (Tag::Byte(0), 2));
         let error = parse_snbt_argument("[1e309]").unwrap_err();
-        assert_eq!(
-            (error.key, error.cursor),
-            ("snbt.parser.infinity_not_allowed", 6)
-        );
+        // The optional float suffix fails before semantic conversion detects infinity.
+        assert_eq!((error.key, error.cursor), ("argument.literal.incorrect", 6));
+        assert_eq!(error.args, ["f|F"]);
         assert!(parse_snbt_argument("{v:1e}").is_err());
     }
 }

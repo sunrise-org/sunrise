@@ -16,7 +16,10 @@ use crate::game::transactions::decision::{
     StaleReason,
 };
 use mod_api::item::menu::{StackResult, StackedOnOtherResult};
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 use sunrise_client::menu::{
     Env, Menu, PlanningRules, RuleAnswers, StackedClick, StackedOutcome, StoredRules,
 };
@@ -38,6 +41,8 @@ struct Shared<'p> {
     current: Current<'p>,
     perform: RefCell<Option<Perform<'p>>>,
     answer: RefCell<Option<StackedOutcome>>,
+    /// The click found its slot's rules refusing the mods' replacement (`StackedOutcome::refused`).
+    refused: Cell<bool>,
 }
 
 /// The decision's target: an id that names the route's menu (a second click on it while this one
@@ -103,6 +108,9 @@ impl<'a, 'g> ActionTarget<GameHost<'a, 'g>> for PickupTarget<'_> {
         let perform = self.shared.perform.take().expect("a pickup runs once");
         let answer = self.shared.answer.take();
         perform(host.game, answer.as_ref());
+        self.shared
+            .refused
+            .set(answer.is_some_and(|a| a.refused.get()));
     }
 }
 
@@ -130,6 +138,7 @@ impl Game<'_> {
         route: MenuId,
         frozen: StackedClick,
         current: impl Fn(&Game<'_>) -> Option<StackedClick> + 'p,
+        plan: impl FnOnce(&mut Game<'_>, &StackedOutcome),
         perform: impl FnOnce(&mut Game<'_>, Option<&StackedOutcome>) + 'p,
     ) -> Pickup {
         if !Self::stacked_listened() {
@@ -157,6 +166,7 @@ impl Game<'_> {
             current: Box::new(current),
             perform: RefCell::new(Some(Box::new(perform))),
             answer: RefCell::new(None),
+            refused: Cell::new(false),
         });
         let target = PickupTarget {
             id: route,
@@ -174,12 +184,20 @@ impl Game<'_> {
                 &mut host,
                 &target,
                 |_, _| PickupPlan,
-                move |host| fire(host.game, &fired),
+                move |host| fire(host.game, &fired, plan),
             )
         };
-        self.transaction_close(&seal, matches!(outcome, Ok(Outcome::Applied)));
+        // A replacement the slot's rules refused is undone with everything the listeners wrote.
+        let ran = matches!(outcome, Ok(Outcome::Applied)) && !shared.refused.get();
+        self.transaction_close(&seal, ran);
         match outcome {
-            Ok(Outcome::Applied) => Pickup::Ran,
+            Ok(Outcome::Applied) if ran => Pickup::Ran,
+            Ok(Outcome::Applied) => {
+                log::warn!(
+                    "item_stacked_on_other: the slot refused the replacement; nothing changed"
+                );
+                Pickup::Refused
+            }
             Ok(other) => {
                 log::warn!(
                     "item_stacked_on_other: the click was refused ({other:?}); nothing changed"
@@ -198,7 +216,11 @@ impl Game<'_> {
 
 /// Fire the hook with the frozen stacks and validate what it answers. The answer is kept for the
 /// click; a bad one refuses it.
-fn fire(game: &mut Game<'_>, shared: &Shared<'_>) -> Reply {
+fn fire(
+    game: &mut Game<'_>,
+    shared: &Shared<'_>,
+    plan: impl FnOnce(&mut Game<'_>, &StackedOutcome),
+) -> Reply {
     let frozen = &shared.frozen;
     let (Ok(carried), Ok(clicked)) = (frozen.carried.try_into_api(), frozen.clicked.try_into_api())
     else {
@@ -219,6 +241,12 @@ fn fire(game: &mut Game<'_>, shared: &Shared<'_>) -> Reply {
     game.native_item_stacked_on_other(&event, &mut result, &mut canceled);
     match answer(game, canceled, &result) {
         Ok(answer) => {
+            // Ask each rule with the exact stack and context the accepted click would use.
+            // Model it on a probe before deciding whether any write can be applied.
+            plan(game, &answer);
+            if answer.refused.get() {
+                return Reply::Invalid(InvalidReason::Plan);
+            }
             *shared.answer.borrow_mut() = Some(answer);
             Reply::Allow
         }
@@ -250,6 +278,7 @@ fn answer(
         handled: result.handled,
         carried: convert(&result.carried)?,
         clicked: convert(&result.clicked)?,
+        ..StackedOutcome::default()
     })
 }
 
@@ -303,30 +332,31 @@ impl Game<'_> {
         if !Self::stacked_listened() || slot == 200 {
             return None;
         }
-        // Plan: read what the click finds and ask the slot rules for what the click would
-        // consult (once for each distinct question, on a copy of the menu, for each way the hook
-        // can leave the click), keeping nothing: the session is only a view of the game.
-        let answers = Rc::new(RuleAnswers::default());
+        // Freeze the stacks first; the answer determines the actual slot-rule questions.
+        let answers = RuleAnswers::default();
         let mut found = None;
         let modeled = self.menu_session(|menu, env, to_menu| {
             let menu_slot = to_menu(slot)? as i32;
             found = menu.stacked_click(env, menu_slot, button, Input::Pickup);
-            if found.is_some() {
-                plan_click(menu, env, menu_slot, button, &answers);
-            }
             Some(false)
         });
         let frozen = found.filter(|_| modeled)?;
         let handled = Rc::new(std::cell::Cell::new(false));
         let result = handled.clone();
         let carried = frozen.carried.clone();
-        let stored = answers.clone();
         let pickup = self.stacked_pickup(
             local_pickup_id(),
             frozen.clone(),
             // What the click reads of the game itself: the cursor. The rest is the journals'.
             move |game| (game.carried == carried).then(|| frozen.clone()),
-            move |game, answer| {
+            |game, answer| {
+                game.menu_session(|menu, env, to_menu| {
+                    let menu_slot = to_menu(slot)? as i32;
+                    plan_click(menu, env, menu_slot, button, &answers, answer);
+                    Some(false)
+                });
+            },
+            |game, answer| {
                 // The click's own writes belong to the action: an outer abort puts them back.
                 let player = game.native_acting_id();
                 game.journal_player(player);
@@ -335,7 +365,7 @@ impl Game<'_> {
                 }
                 result.set(game.menu_session(|menu, env, to_menu| {
                     // The click asks no one: it uses what the plan was told.
-                    let rules = StoredRules(&stored);
+                    let rules = StoredRules(&answers);
                     let env = Env {
                         slot_rules: Some(&rules),
                         stacked: answer,
@@ -354,35 +384,26 @@ impl Game<'_> {
     }
 }
 
-/// Ask the slot rules for what a pickup click consults, for each way the hook can leave it: the
-/// bundle override and the plain pickup (not cancelled), and the plain pickup (cancelled, not
-/// handled). A cancelled, handled click only sets stacks and consults nothing. The click runs on
-/// copies of `menu`; the asks, and nothing else, are kept in `answers`.
+/// Resolve the slot questions for the exact pickup the hook answered. Run it on a copy:
+/// only the rule answers survive and the live click will reuse them without asking again.
 pub(in crate::game) fn plan_click(
     menu: &Menu,
     env: &Env,
     slot: i32,
     button: i32,
     answers: &RuleAnswers,
+    outcome: &StackedOutcome,
 ) {
     let planning = PlanningRules {
         rules: env.slot_rules,
         answers,
     };
-    for outcome in [
-        StackedOutcome::default(),
-        StackedOutcome {
-            canceled: true,
-            ..StackedOutcome::default()
-        },
-    ] {
-        let env = Env {
-            slot_rules: Some(&planning),
-            stacked: Some(&outcome),
-            ..*env
-        };
-        let _ = menu
-            .clone()
-            .click(&env, slot, button, sunrise_client::menu::Input::Pickup);
-    }
+    let env = Env {
+        slot_rules: Some(&planning),
+        stacked: Some(outcome),
+        ..*env
+    };
+    let _ = menu
+        .clone()
+        .click(&env, slot, button, sunrise_client::menu::Input::Pickup);
 }

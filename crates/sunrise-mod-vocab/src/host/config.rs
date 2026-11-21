@@ -75,9 +75,6 @@ pub trait ConfigHost {
     /// `datapacks/` is in that world's folder (`saves/<world>/datapacks`).
     /// The folder the game runs in (`--player-dir` moves a player's options
     /// and servers only, not the instance). Nothing is created.
-    ///
-    /// Not on wasm: a path in the game's file system, which a wasm mod has none of; a wasm mod
-    /// reads its own data and assets through reload listeners.
     #[access(WorldOnly)]
     fn instance_dir(&self) -> PathBuf;
 }
@@ -148,9 +145,6 @@ pub trait ConfigServerHost {
     /// The open world's folder (`world/`, beside its `level.dat`): a server
     /// mod keeps its data in a folder of its own there, so the world's
     /// backups carry it. None when no world is open.
-    ///
-    /// Not on wasm: a path in the game's file system, which a wasm mod has none of; a wasm mod
-    /// keeps world data in level attachments.
     #[access(WorldOnly)]
     fn world_dir(&self) -> Option<PathBuf>;
     /// Side: server. The calling mod's bulk files in the current save's

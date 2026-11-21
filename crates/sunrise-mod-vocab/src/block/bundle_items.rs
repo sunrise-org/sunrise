@@ -52,14 +52,22 @@ impl ResourceHandler<ItemResource> for BundleItems {
     fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
         self.slot(host, index).map_or(0, |stack| stack.count())
     }
-    fn capacity(&self, host: &mut dyn ServerHost, index: usize, resource: &ItemResource) -> u32 {
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
+        let Some(resource) = resource else {
+            return if index < self.size(host) { u32::MAX } else { 0 };
+        };
         self.0.stack(host).map_or(0, |held| {
             backend_of(&*host).map_or(0, |backend| {
                 backend.item_bundle_capacity(&held, index, resource.as_stack())
             })
         })
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -81,7 +89,7 @@ impl ResourceHandler<ItemResource> for BundleItems {
             went => self.rewrite(host, tx, &changed, went.min(amount)),
         }
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,

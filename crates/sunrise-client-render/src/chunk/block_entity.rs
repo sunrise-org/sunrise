@@ -15,7 +15,10 @@ pub use mod_api::item::containers::{
 pub use mod_models::{ModBlockEntity, ModBlockEntityFields, ModRevision};
 use std::{collections::HashMap, sync::Arc};
 use {
-    sunrise_core::nbt::{Compound, Tag},
+    sunrise_core::{
+        java_hash_set::{JavaHashSet, JavaUuid},
+        nbt::{Compound, Tag},
+    },
     sunrise_world::level::sculk::SculkSpreader,
 };
 
@@ -502,8 +505,8 @@ pub struct TrialSpawner {
     pub ominous: ConfigSlot,
     pub target_cooldown_length: i32,
     pub required_player_range: i32,
-    pub detected_players: Vec<Uuid>,
-    pub current_mobs: Vec<Uuid>,
+    pub detected_players: JavaHashSet<JavaUuid>,
+    pub current_mobs: JavaHashSet<JavaUuid>,
     pub cooldown_ends_at: i64,
     pub next_mob_spawns_at: i64,
     pub total_mobs_spawned: i32,
@@ -527,8 +530,8 @@ impl Default for TrialSpawner {
             ominous: ConfigSlot::default(),
             target_cooldown_length: 36000,
             required_player_range: 14,
-            detected_players: Vec::new(),
-            current_mobs: Vec::new(),
+            detected_players: JavaHashSet::default(),
+            current_mobs: JavaHashSet::default(),
             cooldown_ends_at: 0,
             next_mob_spawns_at: 0,
             total_mobs_spawned: 0,

@@ -12,6 +12,8 @@ pub fn install_parts(
     initialize().map_err(|reason| vec![reason.to_owned()])?;
     crate::parts::install_parts(mods, schema, dimension_shape)
 }
+#[path = "native_log.rs"]
+pub mod native_log;
 #[path = "profiler.rs"]
 pub mod profiler;
 
@@ -19,8 +21,7 @@ pub mod profiler;
 /// A first guard entry seals the socket; late initialization is refused without
 /// replacing a backend or disturbing an in-flight call.
 pub fn initialize() -> Result<(), &'static str> {
-    crate::content::crash::ensure_installed()?;
-    crate::wire::initialize()
+    crate::content::crash::ensure_installed()
 }
 
 /// Install instrumentation before publishing the process-wide mod list.
@@ -32,11 +33,12 @@ pub fn install(mods: crate::Mods) {
 }
 
 #[doc(hidden)]
-pub use crate::load_state::{install_packages, install_registration_data};
+pub use crate::load_state::{install_dependencies, install_packages, install_registration_data};
 #[cfg(any(test, feature = "testing"))]
 #[doc(hidden)]
 pub use crate::load_state::{
-    with_test_package_inventory, with_test_packages, with_test_registration_data,
+    with_test_dependencies, with_test_package_inventory, with_test_packages,
+    with_test_registration_data,
 };
 
 pub use crate::equip_reads::{

@@ -1850,8 +1850,6 @@ trait SeededPipeline: Send + Sync {
     }
     /// Empty the caches that only spare work ([`OverworldGenerator::release_caches`]).
     fn release_caches(&self) {}
-    /// The exact `end_island_decorated` origins in a chunk, without terrain.
-    fn end_island_origins(&self, chunk: ChunkPos) -> Vec<[i32; 3]>;
     fn sea_level(&self) -> i32;
     /// `NoiseGeneratorSettings.disableMobGeneration`, which
     /// `NoiseBasedChunkGenerator.spawnOriginalMobs` reads.
@@ -2000,20 +1998,6 @@ where
             start_chunks,
             start_lists,
         }
-    }
-    fn end_island_origins(&self, chunk: ChunkPos) -> Vec<[i32; 3]> {
-        let Some(decoration) = &self.decoration else {
-            return Vec::new();
-        };
-        let mut resolver = self.source.resolver(
-            &self.climate,
-            self.router.get(RouterField::Erosion).as_ref(),
-        );
-        let mut context = SamplerContext::cached();
-        decoration.origins(self.seed, chunk, |position| {
-            let quart = [position[0] >> 2, position[1] >> 2, position[2] >> 2];
-            resolver.sample(&mut context, quart).ok() == Some("minecraft:small_end_islands")
-        })
     }
     fn sea_level(&self) -> i32 {
         self.settings.sea_level
@@ -2408,13 +2392,12 @@ where
             if lowest > highest {
                 (min, min + height)
             } else {
-                let lowest = lowest.max(min);
-                (
-                    min + (lowest - min) / step_y * step_y,
-                    highest
-                        .max(self.settings.sea_level + COARSE)
-                        .min(min + height),
-                )
+                let bottom = min + (lowest.max(min) - min) / step_y * step_y;
+                // Up to COARSE above the picker's highest fluid in these columns.
+                let far = [ox + (nx - 1) * step_xz, oz + (nz - 1) * step_xz];
+                let top = self.picker.level_bound([ox, oz], far);
+                let top = top.map_or(min + height, |l| highest.max(l.saturating_add(COARSE)));
+                (bottom, top.min(min + height))
             }
         } else {
             (min, min + height)
@@ -2523,8 +2506,7 @@ where
                         _ => spans.push((min, band_min, fill)),
                     }
                 }
-                // Void cells still need a biome: the End's small islands are
-                // features over the void, and their biome is 2D there.
+                // A void cell has no surface to tint: a placeholder biome.
                 let biome = if let Some((height, _)) = top {
                     memo_biome(
                         &self.data,
@@ -2874,10 +2856,6 @@ impl OverworldGenerator {
     /// inside the dimension's build height, when the settings reach past it.
     pub fn noise_clamped(&self) -> Option<(NoiseSettings, NoiseSettings)> {
         self.noise_clamped
-    }
-    /// The exact `end_island_decorated` origins in a chunk, without terrain.
-    pub fn end_island_origins(&self, chunk: ChunkPos) -> Vec<[i32; 3]> {
-        self.pipeline.end_island_origins(chunk)
     }
     pub fn sea_level(&self) -> i32 {
         self.pipeline.sea_level()

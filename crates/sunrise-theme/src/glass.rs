@@ -18,28 +18,17 @@ pub const ON_LIGHT: u32 = 0x100a1f;
 pub const LIVE: u32 = 0x4ade80;
 /// Busy (pulsing) and partly-working states.
 pub const WARN: u32 = 0xf2c46b;
-/// Destructive menu rows (`#ff8a8a`, hovered over `#ff6b6b` at 12 %).
+/// Destructive menu rows.
 pub const DANGER: u32 = 0xff8a8a;
-pub const DANGER_HOVER: u32 = 0xff6b6b;
-/// The Discord button and its hover.
-pub const DISCORD: u32 = 0x5865f2;
-pub const DISCORD_HOVER: u32 = 0x4752c4;
-/// The scrim under dialogs and the palette: this colour at 50 %.
-pub const SCRIM: u32 = 0x07050f;
 
 /// Text families: Geist for everything, Bricolage for page, instance and dialog names.
 pub const FONT: &str = crate::FONT;
 pub const DISPLAY_FONT: &str = "Bricolage Grotesque Display";
-pub const HEADING_FONT: &str = "Bricolage Grotesque Heading";
 
 /// Corners, in px. No step anywhere: everything is round.
 pub mod radius {
-    /// Dialogs.
-    pub const MODAL: f32 = 28.;
     /// Panels (the sidebar, cards, the tabbed panel).
     pub const PANEL: f32 = 20.;
-    /// Menus and popovers; choice cards in dialogs.
-    pub const POPOVER: f32 = 16.;
     /// The Play group, the big icon buttons, the top bar's tab strip.
     pub const LARGE: f32 = 14.;
     /// Rows, chips, fields in dialogs.
@@ -53,28 +42,20 @@ pub mod radius {
 /// How opaque white text is in each role (the mockup's `text-white/NN`).
 pub mod ink {
     pub const FULL: f32 = 1.;
-    pub const STRONG: f32 = 0.8;
-    pub const SOFT: f32 = 0.75;
     pub const BODY: f32 = 0.7;
-    pub const MUTED: f32 = 0.65;
     pub const NOTE: f32 = 0.6;
     pub const QUIET: f32 = 0.55;
     pub const FAINT: f32 = 0.5;
     pub const DIM: f32 = 0.45;
-    pub const PLACEHOLDER: f32 = 0.4;
     pub const OFF: f32 = 0.35;
 }
 
 /// How opaque white fills are (`bg-white/[0.NN]`): rows hovered, selected, buttons, fields.
 pub mod fill {
-    pub const HOVER: f32 = 0.05;
-    pub const ROW_HOVER: f32 = 0.06;
     pub const FIELD: f32 = 0.07;
     pub const BUTTON: f32 = 0.08;
     pub const SELECTED: f32 = 0.1;
-    pub const FIELD_FOCUS: f32 = 0.11;
     pub const ACTIVE: f32 = 0.12;
-    pub const BUTTON_HOVER: f32 = 0.14;
 }
 
 /// The look's colours for one accent and glass setting.
@@ -217,19 +198,6 @@ pub fn from_oklab([l, a, b]: [f32; 3]) -> u32 {
 pub fn mix_oklab(a: u32, b: u32, p: f32) -> u32 {
     let (x, y) = (oklab(a), oklab(b));
     from_oklab([0, 1, 2].map(|i| x[i] * p + y[i] * (1. - p)))
-}
-
-/// WCAG relative luminance, as the mockup's `luminance` picks the label colour on the accent.
-pub fn luminance(c: u32) -> f32 {
-    let [r, g, b] = [16, 8, 0].map(|s| {
-        let v = ((c >> s) & 255) as f32 / 255.;
-        if v <= 0.03928 {
-            v / 12.92
-        } else {
-            ((v + 0.055) / 1.055).powf(2.4)
-        }
-    });
-    0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
 #[cfg(test)]

@@ -71,6 +71,9 @@ impl<'a> Edits<'a> {
             None,
         )
         .unwrap();
+        // A placed sign opens its editor for a live server player, whose
+        // handle needs the open world's epoch.
+        game.native_lifecycle_open_started();
         game.build_registries();
         game.set_allow_commands(true);
         game.world

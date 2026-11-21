@@ -170,10 +170,7 @@ impl Page for Section {
         if !owns_switch() {
             return;
         }
-        rows.push(Row::Toggle {
-            label: LABEL,
-            on: enabled(),
-        });
+        rows.push(Row::toggle(LABEL, enabled()));
     }
     fn act(&self, row: usize, act: Act) {
         if row == 0 && owns_switch() && matches!(act, Act::Press | Act::PressBack) {
@@ -725,13 +722,7 @@ mod tests {
         assert_eq!(wanted(), Status::Off);
         let mut rows = Vec::new();
         SECTION.rows(&mut rows);
-        assert_eq!(
-            rows,
-            [Row::Toggle {
-                label: LABEL,
-                on: false
-            }]
-        );
+        assert_eq!(rows, [Row::toggle(LABEL, false)]);
         let mut lines = Vec::new();
         Setting.save(&mut |k, v| lines.push(format!("{k}:{v}")));
         assert_eq!(lines, ["discordPresence:false"]);

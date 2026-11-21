@@ -504,11 +504,6 @@ pub fn prepare_chat_keys_for(session: Arc<AuthSession>, now: bool) {
     }
 }
 
-/// The chat key pair fetched so far, unless it has expired.
-pub fn chat_keys() -> Option<Arc<ChatKeyPair>> {
-    chat_keys_for(current()?.uuid)
-}
-
 /// This account's key pair; keys for other accounts are never returned.
 pub fn chat_keys_for(uuid: u128) -> Option<Arc<ChatKeyPair>> {
     CHAT_KEYS

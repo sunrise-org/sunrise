@@ -1,0 +1,5 @@
+manifest:
+refused: sunrise-mod.toml: the field sha512 is missing; add sha512 = …
+
+icon:
+unavailable

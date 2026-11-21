@@ -4,7 +4,6 @@ use super::{Game, Screen};
 use sunrise_client::{
     Result,
     confirm_screen::Confirm,
-    dialog::Dialog,
     hud::{HudBatch, rgba},
     text::{self, ClickEvent, Text},
     ui,
@@ -246,10 +245,10 @@ fn pause_icons(
     let (x0, y0) = pause_grid(w, h, u8::from(links || additions) + rows.len() as u8);
     let (x0, y) = (x0 + 60.0, y0 + 98.0);
     [
-        (x0, y, "gui/sprites/pause_menu/bug"),
-        (x0 + 24.0, y, "gui/sprites/pause_menu/social_interactions"),
-        (x0 + 48.0, y, "gui/sprites/friends/friends"),
-        (x0 + 72.0, y, "gui/sprites/pause_menu/player_reporting"),
+        (x0, y, "pause_menu/bug"),
+        (x0 + 24.0, y, "pause_menu/social_interactions"),
+        (x0 + 48.0, y, "friends/friends"),
+        (x0 + 72.0, y, "pause_menu/player_reporting"),
     ]
 }
 /// DeathScreen.init: a hardcore player can only spectate.
@@ -318,7 +317,7 @@ impl Game<'_> {
         let tag = registries.tag("minecraft:dialog", "minecraft:pause_screen_additions")?;
         // addCustomDialogButtons' label: computeExternalTitle falls back to the title.
         let button = |dialog_tag: Tag| -> Option<(Text, Tag)> {
-            let dialog = Dialog::parse(&dialog_tag)?;
+            let dialog = self.decode_dialog(&dialog_tag, Some(registries))?;
             let label = dialog.external_title.unwrap_or(dialog.title);
             Some((label, dialog_tag))
         };

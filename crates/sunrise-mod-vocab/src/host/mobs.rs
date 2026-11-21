@@ -139,10 +139,10 @@ pub trait MobsBackend {
     #[access(WorldOnly)]
     fn mob_requires_custom_persistence(&self, mob: MobRef) -> Option<bool>;
     /// Side: server.
-    /// `Mob.isNoAi`: the mob stands where it is and its goals do not run,
-    /// while what NoAI keeps running in vanilla (the daylight burn of the
-    /// undead, a horse's tail) still does. Saved with it as `NoAI`. None
-    /// for anything but a mob.
+    /// `Mob.isNoAi`: the mob skips its goals and normal self-travel. Mobs in
+    /// `minecraft:burn_in_daylight` can still burn in daylight, and horses
+    /// still swish their tails. Saved with it as `NoAI`. None for anything
+    /// but a mob.
     #[access(WorldOnly)]
     fn mob_no_ai(&self, mob: MobRef) -> Option<bool>;
     /// Side: server.

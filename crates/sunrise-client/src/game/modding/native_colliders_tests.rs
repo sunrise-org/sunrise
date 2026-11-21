@@ -254,23 +254,25 @@ fn a_call_into_another_level_reads_that_levels_colliders_and_restores_the_caller
         };
         // The overworld's colliders are the caller's scope.
         let placed = game.placed_moving_colliders();
-        sunrise_client_render::moving_colliders::in_level(placed, || {
-            assert_eq!((meets(spot), meets(other)), (1, 0));
-            game.enter_level(Dim::Nether).unwrap();
-            game.in_this_levels_colliders(|_| {
-                assert_eq!(
-                    (meets(spot), meets(other)),
-                    (0, 1),
-                    "the level in place's colliders, not the caller's"
-                );
-            });
+        let _scope = sunrise_client_render::moving_colliders::Scope::enter_level(
+            game.collider_level(),
+            placed,
+        );
+        assert_eq!((meets(spot), meets(other)), (1, 0));
+        game.enter_level(Dim::Nether).unwrap();
+        game.in_this_levels_colliders(|_| {
             assert_eq!(
                 (meets(spot), meets(other)),
-                (1, 0),
-                "the caller's colliders are back"
+                (0, 1),
+                "the level in place's colliders, not the caller's"
             );
-            game.enter_level(Dim::Overworld).unwrap();
         });
+        assert_eq!(
+            (meets(spot), meets(other)),
+            (1, 0),
+            "the caller's colliders are back"
+        );
+        game.enter_level(Dim::Overworld).unwrap();
     });
 }
 

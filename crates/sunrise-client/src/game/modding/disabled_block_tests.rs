@@ -180,21 +180,23 @@ mod tests {
             r.block_part(farmland, HydratesWithLava);
         }
         fn blocks(&self, _: &RegistrationContext, e: &mut mod_api::BlocksEvent<'_>) {
-            e.blocks.push(
+            e.register(
                 mod_api::Block::new("inert_test:machine", "minecraft:observer").with_item(false),
-            );
+            )
+            .unwrap();
             let mut carpet = mod_api::Block::new(CARPET, "minecraft:white_carpet");
             carpet.properties.push_reaction = Some(mod_api::PushReaction::PushPull);
-            e.blocks.push(carpet);
-            e.blocks
-                .push(mod_api::Block::new("inert_test:sand", "minecraft:sand"));
+            e.register(carpet).unwrap();
+            e.register(mod_api::Block::new("inert_test:sand", "minecraft:sand"))
+                .unwrap();
             let mut plant = mod_api::Block::new("inert_test:plant", "minecraft:dandelion");
             plant.properties.push_reaction = Some(mod_api::PushReaction::PushPull);
-            e.blocks.push(plant);
-            e.blocks
-                .push(mod_api::Block::new("inert_test:soil", "minecraft:stone"));
+            e.register(plant).unwrap();
+            e.register(mod_api::Block::new("inert_test:soil", "minecraft:stone"))
+                .unwrap();
             for id in ["inert_test:farmland", "inert_test:unsubscribed_farmland"] {
-                e.blocks.push(mod_api::Block::new(id, "minecraft:farmland"));
+                e.register(mod_api::Block::new(id, "minecraft:farmland"))
+                    .unwrap();
             }
         }
     }

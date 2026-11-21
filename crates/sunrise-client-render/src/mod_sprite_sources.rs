@@ -1,7 +1,11 @@
 //! The atlas sprite source types native mods register (NeoForge's `RegisterSpriteSourcesEvent`),
 //! kept once at start, and the hook point that asks a mod's source for its sprites.
-use mod_api::{HookId, Identifier, RegistrationContext, SpriteSourceOutput};
-use std::{collections::BTreeSet, sync::RwLock};
+use crate::atlas_sources::ModSources;
+use mod_api::{HookId, Identifier, RegistrationContext, ResourceReader, SpriteSourceOutput};
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, RwLock},
+};
 use sunrise_core::nbt::Tag;
 
 static TYPES: RwLock<BTreeSet<String>> = RwLock::new(BTreeSet::new());
@@ -13,46 +17,72 @@ pub fn register(ids: Vec<String>) -> Vec<String> {
     sunrise_assets::item_model::keep_mod_ids(&TYPES, "sprite source type", ids)
 }
 
-/// Whether a native mod registered `id` as a sprite source type.
-pub fn is_registered(id: &str) -> bool {
-    TYPES.read().unwrap_or_else(|e| e.into_inner()).contains(id)
-}
-
 /// Hook point for native mods (docs/modding/src/how-to/native-mods.md, declared in `hooks/` with
 /// the game's): an atlas definition's entry of a type a mod registered (`SpriteSource.run`).
-/// `config` is the entry's object, `listed` the sprites the entries before it listed; the mod that
-/// owns `source` pushes its sprites to `output`.
+/// `config` is the entry's object and `resources` the load's resources; the mod that owns
+/// `source` pushes its sprites to `output`.
 #[inline(never)]
 pub fn native_sprite_source(
     context: &RegistrationContext,
     source: &str,
     atlas: &Identifier,
     config: &Tag,
-    listed: &[Identifier],
+    resources: &Arc<dyn ResourceReader>,
     output: &mut Vec<SpriteSourceOutput>,
 ) {
     if !mod_api::__private::listened(HookId::SpriteSource) {
         return;
     }
-    mod_api::dispatch_sprite_source(context, source, atlas, config, listed, output);
+    mod_api::dispatch_sprite_source(context, source, atlas, config, resources, output);
 }
 
-/// What the mods' sources answer for the entries of `atlas`: the `ask` of
-/// [`crate::atlas_sources::list`]. It runs on the resource loader, as a registration.
-pub fn ask(
-    atlas: &Identifier,
-) -> impl FnMut(&str, &Tag, &[Identifier]) -> Vec<SpriteSourceOutput> + '_ {
-    use mod_api::__private::game::RegistrationContextNew;
-    move |source, config, listed| {
+fn is_registered(kind: &str) -> bool {
+    TYPES
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(kind)
+}
+
+/// The native mods' source types, declared but never answered: for a load that draws nothing.
+pub struct Declared;
+impl ModSources for Declared {
+    fn is_registered(&self, kind: &str) -> bool {
+        is_registered(kind)
+    }
+    fn ask(
+        &self,
+        _: &Identifier,
+        _: &str,
+        _: &Tag,
+        _: &Arc<dyn ResourceReader>,
+    ) -> Vec<SpriteSourceOutput> {
+        Vec::new()
+    }
+}
+
+/// The native mods' source types, answered on the resource loader as registrations.
+pub struct Registered;
+impl ModSources for Registered {
+    fn is_registered(&self, kind: &str) -> bool {
+        is_registered(kind)
+    }
+    fn ask(
+        &self,
+        atlas: &Identifier,
+        kind: &str,
+        config: &Tag,
+        resources: &Arc<dyn ResourceReader>,
+    ) -> Vec<SpriteSourceOutput> {
+        use mod_api::__private::game::RegistrationContextNew;
         let _phase =
             mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::Registration);
         let mut output = Vec::new();
         native_sprite_source(
             &RegistrationContext::new(),
-            source,
+            kind,
             atlas,
             config,
-            listed,
+            resources,
             &mut output,
         );
         output
@@ -62,7 +92,7 @@ pub fn ask(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atlas_sources::{SpriteOrigin, SpriteSource, decode, list};
+    use crate::atlas_sources::{SpriteOrigin, SpriteSource, decode, list, test_mods::Mods};
 
     fn id(text: &str) -> Identifier {
         Identifier::parse(text).unwrap()
@@ -86,13 +116,13 @@ mod tests {
     }
     /// A definition of a directory source, the registered source, then a single file.
     fn definition() -> Vec<SpriteSource> {
-        register(vec!["srctest:own".into()]);
         decode(
             r#"{"sources":[
                 {"type":"directory","source":"item","prefix":"item/"},
                 {"type":"srctest:own","shade":7},
                 {"type":"single","resource":"srctest:item/stick","sprite":"srctest:late"}
             ]}"#,
+            &Mods::new(&["srctest:own"], |_, _, _, _| Vec::new()),
         )
         .unwrap()
     }
@@ -121,49 +151,37 @@ mod tests {
     fn an_unregistered_type_fails_its_definition_by_name() {
         let text = r#"{"sources":[{"type":"directory","source":"item","prefix":""},{"type":"srcfree:nobody"}]}"#;
         assert_eq!(
-            decode(text).unwrap_err().to_string(),
+            decode(text, &Mods::none()).unwrap_err().to_string(),
             "sources[1]: unknown sprite source type srcfree:nobody"
         );
-        register(vec!["srcfree:nobody".into()]);
+        let registered = Mods::new(&["srcfree:nobody"], |_, _, _, _| Vec::new());
         assert!(matches!(
-            decode(text).unwrap().as_slice(),
+            decode(text, &registered).unwrap().as_slice(),
             [_, SpriteSource::Registered { kind, .. }] if kind == "srcfree:nobody"
         ));
     }
 
     #[test]
-    fn the_source_is_asked_with_its_entry_and_what_was_listed_before_it() {
+    fn the_source_is_asked_with_its_entry_and_nothing_the_entries_before_it_listed() {
         let mut asked = Vec::new();
-        list(&definition(), &textures(), &mut |kind, config, listed| {
+        list(&definition(), &textures(), &mut |kind, config| {
             assert!(
                 matches!(config, Tag::Compound(_)),
                 "an object converts to a compound"
             );
-            asked.push((
-                kind.to_owned(),
-                config.get("shade").cloned(),
-                listed.to_vec(),
-            ));
+            asked.push((kind.to_owned(), config.get("shade").cloned()));
             Vec::new()
         });
         assert_eq!(
             asked,
-            [(
-                "srctest:own".to_owned(),
-                // A JSON number converts to the narrowest tag that holds it.
-                Some(Tag::Byte(7)),
-                vec![
-                    id("srctest:item/apple"),
-                    id("srctest:item/gem"),
-                    id("srctest:item/stick")
-                ]
-            )]
+            // A JSON number converts to the narrowest tag that holds it.
+            [("srctest:own".to_owned(), Some(Tag::Byte(7)))]
         );
     }
 
     #[test]
     fn outputs_apply_in_order_and_a_later_sprite_replaces_an_earlier_one() {
-        let listed = list(&definition(), &textures(), &mut |_, _, _| {
+        let listed = list(&definition(), &textures(), &mut |_, _| {
             vec![
                 // Replaces the directory's apple, then is replaced by the next output.
                 pixels("srctest:item/apple", 1, 1, vec![1, 1, 1, 255]),
@@ -177,18 +195,23 @@ mod tests {
             ]
         });
         assert_eq!(
-            listed["srctest:item/apple"],
+            listed.sprites["srctest:item/apple"],
             SpriteOrigin::File("srctest:item/gem".into())
         );
         assert_eq!(
-            listed["srctest:new"],
+            listed.sprites["srctest:new"],
             SpriteOrigin::Pixels((1, 2, vec![9; 8]))
         );
         assert_eq!(
-            listed["srctest:late"],
+            listed.sprites["srctest:late"],
             SpriteOrigin::File("srctest:item/stick".into())
         );
-        let generated = crate::atlas_sources::generate(&listed["srctest:new"], &|_| None);
+        assert_eq!(
+            listed.by_mods.iter().collect::<Vec<_>>(),
+            ["srctest:item/apple", "srctest:new"],
+            "the mod's, but not what a later built-in source took back"
+        );
+        let generated = crate::atlas_sources::generate(&listed.sprites["srctest:new"], &|_| None);
         assert_eq!(
             generated,
             Some((1, 2, vec![9; 8])),
@@ -198,7 +221,7 @@ mod tests {
 
     #[test]
     fn remove_drops_a_listed_sprite_and_an_unlisted_id_changes_nothing() {
-        let listed = list(&definition(), &textures(), &mut |_, _, _| {
+        let listed = list(&definition(), &textures(), &mut |_, _| {
             vec![
                 SpriteSourceOutput::Remove {
                     sprite: id("srctest:item/gem"),
@@ -208,7 +231,7 @@ mod tests {
                 },
             ]
         });
-        let ids: Vec<&str> = listed.keys().map(String::as_str).collect();
+        let ids: Vec<&str> = listed.sprites.keys().map(String::as_str).collect();
         assert_eq!(
             ids,
             ["srctest:item/apple", "srctest:item/stick", "srctest:late"]
@@ -218,7 +241,7 @@ mod tests {
     #[test]
     fn what_cant_be_a_sprite_is_skipped_alone() {
         let side = 32768_u32;
-        let listed = list(&definition(), &textures(), &mut |_, _, _| {
+        let listed = list(&definition(), &textures(), &mut |_, _| {
             vec![
                 pixels("srctest:short", 2, 2, vec![0; 15]),
                 pixels("srctest:long", 2, 2, vec![0; 17]),
@@ -239,7 +262,7 @@ mod tests {
                 pixels("srctest:good", 2, 2, vec![0; 16]),
             ]
         });
-        let ids: Vec<&str> = listed.keys().map(String::as_str).collect();
+        let ids: Vec<&str> = listed.sprites.keys().map(String::as_str).collect();
         assert_eq!(
             ids,
             [

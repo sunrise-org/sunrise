@@ -182,27 +182,27 @@ impl PartRegistrar {
     /// Actual declaration ownership is checked after content has loaded.
     pub(crate) fn skip_absent_effect_parts(&mut self) {
         let packages = crate::load_state::current_packages();
+        let dependencies = crate::load_state::effective_dependencies();
         let mut ids: Vec<_> = self.parts.effects.keys().cloned().collect();
         ids.sort_unstable();
         for id in ids {
             let namespace = id.split_once(':').map_or("", |(namespace, _)| namespace);
-            let owner = packages
+            if packages
                 .iter()
-                .find(|package| package.namespaces().any(|owned| owned == namespace));
-            let owner_id = owner.map_or(namespace, |package| package.id());
-            let parts = self.parts.effects.get_mut(&id).unwrap();
-            parts.retain(|part| {
-                if part.mod_id == owner_id { return true; }
-                let dependency = packages.iter().find(|package| package.id() == part.mod_id)
-                    .and_then(|package| package.dependencies().iter().find(|dependency| dependency.id() == owner_id));
-                if owner.is_none() && dependency.is_some_and(|dependency| dependency.kind() == crate::DependencyKind::Optional) {
+                .any(|package| package.namespaces().any(|owned| owned == namespace))
+            {
+                continue;
+            }
+            self.parts.effects.get_mut(&id).unwrap().retain(|part| {
+                if part.mod_id != namespace
+                    && dependencies.kind(part.mod_id, namespace) == Some(crate::DependencyKind::Optional)
+                {
                     self.registry_keys.borrow_mut().effects.withdraw(part.mod_id, &id);
-                    log::debug!("mod {} skipped {} on effect {id}: optional dependency {owner_id} is absent", part.mod_id, part.type_name);
+                    log::debug!("mod {} skipped {} on effect {id}: optional dependency {namespace} is absent", part.mod_id, part.type_name);
                     return false;
                 }
                 true
             });
-            parts.sort_by_key(|part| (part.mod_index, part.order));
         }
     }
 }

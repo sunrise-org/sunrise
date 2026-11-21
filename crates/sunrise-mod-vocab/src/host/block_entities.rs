@@ -192,6 +192,7 @@ pub trait BlockEntitiesBackendMut {
     ) -> Result<bool, BlockEntityShapesError>;
     /// Side: server.
     /// Set a mod block entity's menu data slot in place, joining the current transaction.
+    /// These slots are not saved; keep persistent values in the block entity's NBT.
     /// This raw storage write issues no notification; call set_changed explicitly if needed.
     /// Ok(false) for a vanilla entity, invalid slot or no change. Does not resize slots.
     #[access(WorldOnly)]
@@ -202,8 +203,8 @@ pub trait BlockEntitiesBackendMut {
         value: i32,
     ) -> Result<bool, BlockEntityError>;
     /// Side: server.
-    /// Sizes a mod block entity's menu data explicitly, using the same silent storage write
-    /// and journal as scalar data-slot writes.
+    /// Sizes a mod block entity's transient menu data explicitly, using the same silent
+    /// storage write and journal as scalar data-slot writes.
     /// Removed, replaced or reloaded holders return BlockEntityDataError::Stale.
     #[access(WorldOnly)]
     fn block_entity_set_data_slots(
@@ -212,8 +213,10 @@ pub trait BlockEntitiesBackendMut {
         values: Vec<i32>,
     ) -> Result<bool, BlockEntityDataError>;
     /// Side: server.
-    /// Replace internal storage silently under the existing transaction; ITEMS routing is
-    /// separate. Removed, replaced or reloaded holders return BlockEntityItemError::Stale.
+    /// Replace internal storage under the existing transaction; ITEMS routing is separate.
+    /// A committed change marks the chunk unsaved but sends no notification. Call
+    /// set_changed explicitly to notify. Removed, replaced or reloaded holders return
+    /// BlockEntityItemError::Stale.
     #[access(WorldOnly)]
     fn block_entity_set_item_slot(
         &mut self,

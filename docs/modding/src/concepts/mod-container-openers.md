@@ -24,5 +24,4 @@ reach vibration listeners just as vanilla container events do.
 
 A mod can update its block state or play its own sound from the viewer callback.
 Use `previous == 0 && viewers > 0` for an open edge and
-`previous > 0 && viewers == 0` for a close edge. Named injections request
-`hook_version = 2`.
+`previous > 0 && viewers == 0` for a close edge.

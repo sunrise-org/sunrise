@@ -33,17 +33,17 @@ use sunrise_client::{
     save,
     world::World,
 };
-use sunrise_core::{
-    geometry::{Aabb, Direction, Vec3},
-    position::BlockPos,
-    random::RandomSource,
-};
+use sunrise_core::{geometry::Direction, position::BlockPos, random::RandomSource};
 use sunrise_world::{
     level::{Behaviours, LevelAccess},
     registry::BlockStateId,
 };
 
-type Pos = (i32, i32, i32);
+pub(super) use sunrise_gameplay::hoppers::{
+    HopperState, ItemColumns, StampedItemColumns, cat_sitting_above, dir_from_name, offset, room,
+    shelf_signal,
+};
+pub(in crate::game) use sunrise_gameplay::hoppers::{Pos, hopper_cooldown_in};
 
 /// What item automation reaches among the entities at its target (`ENTITY_AUTOMATION`).
 enum AutomationEntity {
@@ -59,55 +59,9 @@ enum ContainerTarget<'a> {
     Part(Capability<dyn ResourceHandler<ItemResource>>),
 }
 
-/// `HopperBlockEntity` transient state (`TransferCooldown`, `tickedGameTime`).
-#[derive(Clone, Copy, Debug)]
-pub(super) struct HopperState {
-    pub(super) cooldown: i32,
-    ticked: i64,
-}
-impl Default for HopperState {
-    fn default() -> Self {
-        Self {
-            cooldown: -1,
-            ticked: 0,
-        }
-    }
-}
-
-impl HopperState {
-    /// A transferred holder keeps its cooldown and starts with a fresh ticker timestamp.
-    pub(super) fn with_cooldown(cooldown: i32) -> Self {
-        Self {
-            cooldown,
-            ticked: 0,
-        }
-    }
-
-    /// `HopperBlockEntity.loadAdditional`: only the cooldown is saved; the
-    /// last tick time starts at zero for the new block entity.
-    pub(super) fn load(tag: &sunrise_core::nbt::Tag) -> Self {
-        let canonical = sunrise_client::block_entity_nbt::canonical(tag);
-        let cooldown = match canonical.as_ref().and_then(|t| t.get("TransferCooldown")) {
-            Some(sunrise_core::nbt::Tag::Int(value)) => *value,
-            _ => -1,
-        };
-        Self::with_cooldown(cooldown)
-    }
-}
-
 impl Game<'_> {
     pub(super) fn hopper_cooldown(&self, pos: Pos) -> i32 {
-        self.hoppers.get(&pos).map_or_else(
-            || {
-                self.world
-                    .chunks
-                    .get(&(pos.0 >> 4, pos.2 >> 4))
-                    .and_then(|c| c.saved.as_deref())
-                    .and_then(|s| s.block_entity_sources.iter().find(|(p, _)| *p == pos))
-                    .map_or(-1, |(_, tag)| HopperState::load(tag).cooldown)
-            },
-            |s| s.cooldown,
-        )
+        hopper_cooldown_in(&self.hoppers, &self.world, pos)
     }
 }
 
@@ -233,31 +187,6 @@ impl Iterator for Slots<'_> {
 }
 impl ExactSizeIterator for Slots<'_> {}
 
-pub(super) fn dir_from_name(name: &str) -> Option<Direction> {
-    Some(match name {
-        "down" => Direction::Down,
-        "up" => Direction::Up,
-        "north" => Direction::North,
-        "south" => Direction::South,
-        "west" => Direction::West,
-        "east" => Direction::East,
-        _ => return None,
-    })
-}
-fn step(d: Direction) -> [i32; 3] {
-    match d {
-        Direction::Down => [0, -1, 0],
-        Direction::Up => [0, 1, 0],
-        Direction::North => [0, 0, -1],
-        Direction::South => [0, 0, 1],
-        Direction::West => [-1, 0, 0],
-        Direction::East => [1, 0, 0],
-    }
-}
-fn offset(p: Pos, d: Direction) -> Pos {
-    let s = step(d);
-    (p.0 + s[0], p.1 + s[1], p.2 + s[2])
-}
 /// State-level container queries shared by the game and comparator signals.
 pub(super) struct Containers<'a> {
     world: &'a World,
@@ -315,6 +244,7 @@ enum MoveIn {
 impl PlacementAttempt {
     fn ask(
         &mut self,
+        world: &World,
         pos: Pos,
         entity: &sunrise_client::containers::ModBlockEntity,
         slot: usize,
@@ -375,8 +305,26 @@ impl PlacementAttempt {
         if offered.count() != stack.count && offered.set_count(stack.count).is_err() {
             return Some(false);
         }
+        let (x, y, z) = pos;
+        let state = world.block(x, y, z);
+        let state = match state.try_into_api() {
+            Ok(state) => state,
+            Err(error) => {
+                log::debug!(
+                    "Sunrise: can_place_item could not read block state at {pos:?}: {error:?}"
+                );
+                return Some(false);
+            }
+        };
         let mut allowed = None;
-        Game::native_can_place_item(snapshot, slot, offered, &mut allowed);
+        Game::native_can_place_item(
+            snapshot,
+            mod_api::BlockPos::new(x, y, z),
+            state,
+            slot,
+            offered,
+            &mut allowed,
+        );
         allowed
     }
 
@@ -659,7 +607,9 @@ impl Containers<'_> {
                 return false;
             };
             let answer = match query {
-                PlacementQuery::Offer(attempt) => attempt.ask(pos, entity, index, stack),
+                PlacementQuery::Offer(attempt) => {
+                    attempt.ask(self.world, pos, entity, index, stack)
+                }
                 PlacementQuery::Planning => mod_api::__private::block_entity_type_listens(
                     mod_api::HookId::CanPlaceItem,
                     entity.id(),
@@ -702,10 +652,12 @@ impl Containers<'_> {
         if !self.accepts(view, slot, stack) {
             return 0;
         }
-        self.slot_stack_limit(view, slot, stack)
+        self.slot_stack_limit(view, slot, Some(stack))
     }
-    fn slot_stack_limit(&self, view: &View, slot: usize, stack: &ItemStack) -> u32 {
-        let capacity = view.slot_limit().min(self.max_stack(stack));
+    fn slot_stack_limit(&self, view: &View, slot: usize, stack: Option<&ItemStack>) -> u32 {
+        let capacity = stack.map_or(view.slot_limit(), |s| {
+            view.slot_limit().min(self.max_stack(s))
+        });
         view.locate(slot)
             .and_then(|(pos, _)| self.world.container_stack_limit(pos))
             .map_or(capacity, |limit| capacity.min(limit))
@@ -719,7 +671,7 @@ impl Containers<'_> {
     }
     fn insertion_room(&self, view: &View, slot: usize, stack: &ItemStack) -> u32 {
         room(
-            self.slot_stack_limit(view, slot, stack),
+            self.slot_stack_limit(view, slot, Some(stack)),
             self.get(view, slot),
             stack,
         )
@@ -797,98 +749,6 @@ impl Containers<'_> {
     }
 }
 
-/// Physical room for this item and components, in an empty or matching stack
-/// (`HopperBlockEntity.canMergeItems`).
-fn room(limit: u32, current: Option<&ItemStack>, stack: &ItemStack) -> u32 {
-    match current {
-        None => limit,
-        Some(current) if current.same_item_same_components(stack) => {
-            limit.saturating_sub(current.count)
-        }
-        Some(_) => 0,
-    }
-}
-
-/// The block columns any item entity's box reaches, so that a hopper with
-/// no item over it skips the scan of every item. Kept for one block-entity
-/// pass, in which items do not move: removing one leaves a superset, still
-/// right, and adding one (always pushed at the end, under a new id) or
-/// removing the last rebuilds the columns.
-#[derive(Default)]
-pub(super) struct ItemColumns {
-    /// The item count and last item id when last asked, if built.
-    seen: Option<(usize, Option<u32>)>,
-    cells: sunrise_client::fast_hash::FxHashSet<(i32, i32)>,
-}
-impl ItemColumns {
-    /// Whether an item's box may reach into column (x, z).
-    fn may_reach(
-        &mut self,
-        items: &[sunrise_client::entities::ItemEntity],
-        x: i32,
-        z: i32,
-    ) -> bool {
-        if items.is_empty() {
-            return false;
-        }
-        let (len, last) = (items.len(), items.last().map(|i| i.id));
-        let stale = self
-            .seen
-            .is_none_or(|(seen_len, seen_last)| len > seen_len || last != seen_last);
-        self.seen = Some((len, last));
-        if stale {
-            self.cells.clear();
-            for item in items {
-                let b = item.bounds();
-                let (lo, hi) = (b.min_position(), b.max_position());
-                for cx in lo.x.floor() as i32..=hi.x.floor() as i32 {
-                    for cz in lo.z.floor() as i32..=hi.z.floor() as i32 {
-                        self.cells.insert((cx, cz));
-                    }
-                }
-            }
-        }
-        self.cells.contains(&(x, z))
-    }
-    /// Whether an item's box may reach into any column of x0..=x1, z0..=z1.
-    pub(super) fn may_reach_area(
-        &mut self,
-        items: &[sunrise_client::entities::ItemEntity],
-        (x0, x1): (i32, i32),
-        (z0, z1): (i32, i32),
-    ) -> bool {
-        (x0..=x1).any(|x| (z0..=z1).any(|z| self.may_reach(items, x, z)))
-    }
-}
-
-/// [`ItemColumns`] for a pass in which items can move (a command, an
-/// explosion's push), kept with the item list's
-/// [`ListStamp`](sunrise_client::join_seq::ListStamp): after any write the
-/// first question scans as before (`true`), and the second with nothing
-/// written in between builds the columns. A pass that writes the items
-/// between questions costs no more than the scans did.
-#[derive(Default)]
-pub(super) struct StampedItemColumns {
-    stamp: Option<sunrise_client::join_seq::ListStamp>,
-    columns: ItemColumns,
-}
-impl StampedItemColumns {
-    /// [`ItemColumns::may_reach_area`] for the items as they are now.
-    pub(super) fn may_reach_area(
-        &mut self,
-        items: &sunrise_client::join_seq::JoinList<sunrise_client::entities::ItemEntity>,
-        xs: (i32, i32),
-        zs: (i32, i32),
-    ) -> bool {
-        if self.stamp != Some(items.stamp()) {
-            self.stamp = Some(items.stamp());
-            self.columns = ItemColumns::default();
-            return true;
-        }
-        self.columns.may_reach_area(items, xs, zs)
-    }
-}
-
 fn bone_meal_stack() -> &'static ItemStack {
     static STACK: std::sync::LazyLock<ItemStack> = std::sync::LazyLock::new(|| ItemStack {
         item: "minecraft:bone_meal".into(),
@@ -897,25 +757,6 @@ fn bone_meal_stack() -> &'static ItemStack {
         extra: None,
     });
     &STACK
-}
-
-/// `ChestBlock.isCatSittingOnChest`: a sitting cat whose box meets the block
-/// above `key` (the box of the block above, not the chest's own).
-pub(super) fn cat_sitting_above(mobs: &[Mob], key: Pos) -> bool {
-    let area = Aabb::new(
-        Vec3::new(f64::from(key.0), f64::from(key.1 + 1), f64::from(key.2)),
-        Vec3::new(
-            f64::from(key.0 + 1),
-            f64::from(key.1 + 2),
-            f64::from(key.2 + 1),
-        ),
-    );
-    mobs.iter().any(|m| {
-        m.species() == sunrise_client::mobs::Species::Cat
-            && m.alive()
-            && sunrise_client::mobs::tame::cat_sitting(m)
-            && m.bounds().intersects(area)
-    })
 }
 
 /// Comparator input from a container block entity (0 when there is none):
@@ -930,47 +771,6 @@ pub(super) fn container_signal(level: &mut super::GameLevel<'_>, pos: BlockPos) 
     }
     let c = level.containers();
     view.map_or(0, |v| c.signal(&v))
-}
-
-/// `ChiseledBookShelfBlock.getAnalogOutputSignal` and
-/// `ShelfBlock.getAnalogOutputSignal`, from the block entity Sunrise keeps as
-/// it was loaded; `None` for any other block. `direction` points from the
-/// block to the comparator.
-pub(super) fn shelf_signal(
-    world: &World,
-    registry: &'static sunrise_world::registry::BlockRegistry,
-    state: BlockStateId,
-    pos: BlockPos,
-    direction: Direction,
-) -> Option<i32> {
-    let info = registry.state(state)?;
-    let chiseled = info.name == "minecraft:chiseled_bookshelf";
-    if !chiseled && !info.name.ends_with("_shelf") {
-        return None;
-    }
-    if chiseled {
-        // The last slot touched, plus one (`lastInteractedSlot` starts at -1).
-        return Some(match world.block_entities.get(&(pos.x, pos.y, pos.z)) {
-            Some(BlockEntity::ChiseledBookshelf(b)) => b.last_slot + 1,
-            _ => 0,
-        });
-    }
-    // Only read from the back: a bit for each of the three slots in use.
-    let facing = info.properties.get("facing").and_then(|f| dir_from_name(f));
-    if facing.map(Direction::opposite) != Some(direction) {
-        return Some(0);
-    }
-    let Some(BlockEntity::Shelf(shelf)) = world.block_entities.get(&(pos.x, pos.y, pos.z)) else {
-        return Some(0);
-    };
-    Some(
-        shelf
-            .items
-            .iter()
-            .enumerate()
-            .map(|(slot, item)| i32::from(item.is_some()) << slot)
-            .sum(),
-    )
 }
 
 impl super::GameLevel<'_> {
@@ -1072,10 +872,8 @@ impl Game<'_> {
             self.mark_block_entity_updated(pos);
         }
         // A double chest's other half changes with it.
-        let halves: Vec<Pos> = std::iter::once(pos)
-            .chain(self.chest_other_half(pos))
-            .collect();
-        for pos in halves {
+        let other = self.chest_other_half(pos);
+        for pos in std::iter::once(pos).chain(other) {
             self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
             self.with_level(|b, level, ticks| {
                 b.container_changed(level, ticks, BlockPos::new(pos.0, pos.1, pos.2))
@@ -1539,7 +1337,6 @@ impl Game<'_> {
     pub(super) fn put_into_part(
         &mut self,
         part: &Capability<dyn ResourceHandler<ItemResource>>,
-        at: [i32; 3],
         stack: &ItemStack,
         take: impl FnOnce(&mut Self, u32) -> Option<()>,
     ) -> u32 {
@@ -1550,11 +1347,13 @@ impl Game<'_> {
         let resource = ItemResource::of(&snapshot);
         mod_api::run_transaction(self, |game, tx| {
             let host: &mut dyn mod_api::ServerHost = game;
-            let went = part.insert_any(host, tx, &resource, stack.count);
-            match part.checked(went, stack.count, &at) {
-                Some(0) | None => Err(()),
-                Some(went) => take(game, went).map(|()| went).ok_or(()),
+            let went = part
+                .insert(host, tx, &resource, stack.count)
+                .map_err(|_| ())?;
+            if went == 0 {
+                return Err(());
             }
+            take(game, went).map(|()| went).ok_or(())
         })
         .unwrap_or(0)
     }
@@ -1573,11 +1372,7 @@ impl Game<'_> {
         part: &Capability<dyn ResourceHandler<ItemResource>>,
         at: [i32; 3],
     ) -> bool {
-        if (0..part.size(self)).all(|slot| {
-            part.resource(self, slot).is_some_and(|resource| {
-                part.amount(self, slot) >= part.capacity(self, slot, &resource)
-            })
-        }) {
+        if mod_api::resource_util::is_full(self, part) {
             return false;
         }
         let from = self.container_world_pos(hopper);
@@ -1601,14 +1396,12 @@ impl Game<'_> {
                 let Some(mut one) = game.take_one(hopper, slot) else {
                     continue;
                 };
-                let went = part.insert_any(game, tx, &resource, 1);
-                let accepted = part.checked(went, 1, &at);
-                if accepted == Some(1) {
+                let went = part.insert(game, tx, &resource, 1).map_err(|_| ())?;
+                if went == 1 {
                     return Ok(());
                 }
                 one.count = snapshot.count();
                 *game.slot_mut_at(hopper, slot).ok_or(())? = Some(one);
-                accepted.ok_or(())?;
             }
             Err(())
         })
@@ -1639,7 +1432,7 @@ impl Game<'_> {
             }
             let moved = mod_api::run_transaction(self, |game, tx| {
                 let host: &mut dyn mod_api::ServerHost = game;
-                let came = part.extract(host, tx, slot, &resource, 1);
+                let came = part.extract_at(host, tx, slot, &resource, 1);
                 if part.checked(came, 1, &at) != Some(1) {
                     return Err(());
                 }
@@ -2266,8 +2059,7 @@ impl Game<'_> {
                     ControlFlow::Continue(inserted)
                 }
                 ContainerTarget::Part(part) => {
-                    let at = [target.0, target.1, target.2];
-                    game.dropper_into_part(&part, &stack, at, &view, slot);
+                    game.dropper_into_part(&part, &stack, &view, slot);
                     ControlFlow::Break(())
                 }
             });
@@ -2411,7 +2203,7 @@ mod brewing_fuel_transfer_tests {
                 .unwrap();
                 let resource = mod_api::ItemResource::of(&stack);
                 host.transaction(|host, tx| {
-                    assert_eq!(items.insert(host, tx, 0, &resource, 1), 1);
+                    assert_eq!(items.insert_at(host, tx, 0, &resource, 1), 1);
                     Ok::<_, ()>(())
                 })
                 .unwrap();
@@ -2589,9 +2381,8 @@ mod item_column_tests {
             position: at,
             previous: at,
             velocity: Vec3::ZERO,
-            on_ground: true,
+            ground: sunrise_world::ground_support::GroundState::from_ground_flag(true),
             vertical_collision: false,
-            horizontal_collision: false,
             age: 0,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -3170,7 +2961,7 @@ mod hopper_cart_transfer_tests {
                 &game.options.resources.join("data"),
                 &PackOverlay {
                     files: &files,
-                    ..PackOverlay::NONE
+                    ..PackOverlay::default()
                 },
             ));
             game.adv.loaded = true;

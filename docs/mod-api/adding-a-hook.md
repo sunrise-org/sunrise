@@ -8,7 +8,7 @@ area filename. Alternatively, a named hook may live in any logical module under 
 area folders, `mod.rs` and `#[path]` modules. Its target must name that module and
 `Game<'_>::native_<name>`. Exactly one matching `Game` method must exist. Outside `native_hooks/`,
 the method must call `dispatch_<name>` itself: placeholders are not filled there. Remove macros,
-`cfg` and `cfg_attr` from that method so injections can patch it. A refusal names the hook and
+`cfg` and `cfg_attr` from that method so native mixins can patch it. A refusal names the hook and
 what to change. These checks run at build time and add no dispatch-time work.
 The build discovers native hook modules automatically; do not add a module list entry. Shared
 support lives in `shared.rs`; `fire.rs` includes generated dispatch entry points, not hook implementations.
@@ -24,7 +24,7 @@ the generator also puts the method on that scope's part trait ([Parts](../moddin
 placeholder nor already calls the dispatch is an error, and the generator never changes it. Hooks that are
 free functions outside `Game` are wired by hand: those crates can't see the mod list, so each calls a callback
 the executable installs once, such as `NativeLoadHooks` in `sunrise-world` and `NativeClientHooks` in the
-client library (`living_breathe`, `ingredient`). A build reports a placeholder still to
+client library (`living_drown`, `ingredient`). A build reports a placeholder still to
 fill instead of changing hand-written source; run `cargo run -p xtask -- mod-api` to fill it. Mixin injections
 go at the head of the body, before the dispatch, so they still run first.
 
@@ -37,13 +37,3 @@ the active immutable item-registry owner before lending its mutable host, and ca
 engine conversions for final commit. Untouched listeners neither clone another checkpoint nor
 revalidate unchanged stacks. Keep this policy in the generator when adding mixed-output hooks;
 the general generated hook notes describe the author-visible rule once.
-
-The `wasm-mods` job also builds `tests/mixed-output-fixture` and runs
-`sunrise-mod-wasm`'s `listener_outputs` target with `mixed-output-fixture` enabled.
-This opt-in catalog contract is absent from normal API/wire generation: the existing
-cancellable drop hooks carry `ItemDrop`, not a direct `Vec<ItemStack>`. The test runs
-the same literal stack/scalar/cancel edits natively and through a compiled guest's
-generated event serialization and the real `WasmMod` proxy, including warning ownership,
-cancelled-listener filtering and later-listener independence. Its conversion callback
-has a fixed fixture limit; Game registry conversion has separate coverage. A standalone
-Wasm VM running both dispatcher and listeners is not evidence of this boundary.

@@ -1,6 +1,15 @@
 use super::*;
 
 impl Game<'_> {
+    pub(in crate::game) fn authoritative_world_for_mods(
+        resources: &crate::game::Resources,
+        seed: i64,
+    ) -> sunrise_client::world::World {
+        let mut world = Self::world_for_mods(resources.facts().air, seed);
+        world.authoritative_group_lifetime(resources.rest().behaviours.clone());
+        world
+    }
+
     /// Configure notice collection before this level can receive any block entities.
     pub(in crate::game) fn world_for_mods(
         air: BlockStateId,

@@ -1,8 +1,7 @@
 # Cache reload-stable recipe definitions
 
 Cache recipe **definitions** instead of fetching and parsing files on every
-block-entity tick. Match against live inputs on each tick. You can use the same
-cache pattern for native and wasm mods.
+block-entity tick. Match against live inputs on each tick.
 
 ## Publish after the final server data
 

@@ -50,6 +50,13 @@ pub enum PlayerWorldRefusal {
     InTransaction,
 }
 
+/// A wrong-phase call refuses as `Stale`: no player is in reach there.
+impl crate::AccessRefusal for PlayerWorldRefusal {
+    fn unavailable() -> Self {
+        Self::Stale
+    }
+}
+
 impl crate::NoBackend for PlayerWorldRefusal {
     fn no_backend() -> Self {
         Self::Stale

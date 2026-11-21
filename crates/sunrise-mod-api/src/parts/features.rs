@@ -11,10 +11,9 @@ pub mod tests {
 
     /// A feature type twice, one in an unowned namespace, one without a name, one taking a
     /// vanilla feature type's id, one with an invalid schema and one with a reference field:
-    /// every registration is refused at startup, naming the mod. A wasm mod's type is refused
-    /// by name too.
+    /// every invalid registration is refused at startup, naming the mod.
     #[test]
-    pub(crate) fn invalid_and_wasm_feature_types_refuse_registration() {
+    pub(crate) fn invalid_feature_types_refuse_registration() {
         use mod_api::{DatapackField, DatapackFieldKind, DatapackValue};
         struct Tree;
         impl mod_api::FeatureType for Tree {
@@ -90,15 +89,6 @@ pub mod tests {
         assert!(errors[3].contains("namespace"), "{}", errors[3]);
         assert!(errors[4].contains("test:doubled: invalid config schema: InvalidFieldName"));
         assert!(errors[5].contains("test:linked: config field \"next\" is a Reference"));
-
-        let errors = install_parts(
-            &[ModEntry::wasm("test", Box::new(Valid(height())))],
-            &crate::parts::tests::rule_schema(),
-            |_| false,
-        )
-        .unwrap_err();
-        assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].contains("test:tree: feature types run on the worldgen workers"));
     }
 }
 
@@ -118,14 +108,7 @@ impl FeaturesRegistrar for PartRegistrar {
         };
         let refuse =
             |reason: String| format!("{} registered feature type {id}: {reason}", self.mod_id);
-        // Feature calls run on the worldgen workers; a wasm group's single store lock can't
-        // serve them, so a wasm type is refused before any world loads.
-        let refusal = if self.mod_wasm {
-            Some(refuse(
-                "feature types run on the worldgen workers and are not yet available to wasm mods"
-                    .into(),
-            ))
-        } else if self.feature_types.iter().any(|t| *t.id == *id) {
+        let refusal = if self.feature_types.iter().any(|t| *t.id == *id) {
             Some(format!(
                 "{} registered feature type {id} twice",
                 self.mod_id

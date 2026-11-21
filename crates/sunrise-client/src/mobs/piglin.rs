@@ -25,17 +25,6 @@ const CONVERSION: i32 = 300;
 /// `DANCING` memories last.
 const CELEBRATION: i32 = 300;
 
-/// `ZombifiedPiglin.populateDefaultEquipmentSlots`: a golden sword, or one
-/// time in 20 a golden spear, off `random` (`Pig.thunderHit` passes the pig's
-/// own, `this.getRandom()`).
-pub fn default_equipment(random: &mut impl RandomSource) -> &'static str {
-    if random.next_int_bound(20).unwrap_or(1) == 0 {
-        "minecraft:golden_spear"
-    } else {
-        "minecraft:golden_sword"
-    }
-}
-
 /// `PiglinAi.BARTERING_ITEM`: vanilla's barter currency, compared by item.
 pub const BARTERING_ITEM: &str = "minecraft:gold_ingot";
 
@@ -2358,7 +2347,7 @@ pub fn hoglin_anim(m: &Mob, s: &State, p: &mut Poses) {
 
 /// `Brain.Packed`: the guarded-block live ANGRY_AT entry. The existing
 /// anger counter supplies its remaining long TTL, not an absolute timestamp.
-pub fn write_guarded_anger(m: &Mob, map: &mut sunrise_core::nbt::Compound) {
+pub fn write_guarded_anger(m: &Mob, map: &mut crate::entity_nbt::EntityTagWriter) {
     use sunrise_core::nbt::{Compound, Tag};
     let Some(actor) = m.extra.piglin.guarded_angry_at else {
         return;

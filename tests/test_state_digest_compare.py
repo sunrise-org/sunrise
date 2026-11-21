@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from tools import state_digest_compare
 
@@ -37,6 +39,32 @@ class CompareTests(unittest.TestCase):
     def test_a_run_without_stepped_ticks_is_different(self):
         _, same = state_digest_compare.compare(BASE, [line(100, run="0")])
         self.assertFalse(same)
+
+
+class CoverageTests(unittest.TestCase):
+    def runs(self, a, b):
+        with tempfile.TemporaryDirectory() as tmp:
+            dirs = [Path(tmp) / "a", Path(tmp) / "b"]
+            for d, text in zip(dirs, (a, b)):
+                d.mkdir()
+                if text is not None:
+                    (d / "coverage.txt").write_text(text)
+            return state_digest_compare.compare_coverage(*dirs)
+
+    def test_runs_without_coverage_have_nothing_to_compare(self):
+        self.assertIsNone(self.runs(None, None))
+
+    def test_a_different_saved_trader_delay_is_different(self):
+        _, same = self.runs("trader spawn_delay=22800\n", "trader spawn_delay=24000\n")
+        self.assertFalse(same)
+
+    def test_coverage_in_one_run_only_is_different(self):
+        _, same = self.runs("fox_spit reached\n", None)
+        self.assertFalse(same)
+
+    def test_the_same_coverage_is_identical(self):
+        _, same = self.runs("fox_spit reached\n", "fox_spit reached\n")
+        self.assertTrue(same)
 
 
 if __name__ == "__main__":

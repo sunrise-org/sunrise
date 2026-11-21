@@ -26,7 +26,7 @@ pub trait ScreensClientHost {
     /// What the block's mod wrote for the mod screen that is open
     /// (`menu_extra_data` on the server), empty when it wrote nothing;
     /// None when no mod screen is open. The same for a menu `PlayerRef::open_mod_menu`
-    /// opened with its `extra`. A copy, so native and wasm read it alike. @API:menu_extra_data@.
+    /// opened with its `extra`. Returns a copy. @API:menu_extra_data@.
     #[access(ClientSetup)]
     fn screen_extra_data(&self) -> Option<Vec<u8>>;
     /// Side: client.
@@ -112,9 +112,14 @@ pub trait ScreensClientHost {
     /// with the menu's id, then the client menu closed), a pause menu closes
     /// to the game, and another screen runs its own close. The sign editor
     /// sends its sign update (`ServerboundSignUpdatePacket`), as Escape does.
-    /// The screen hooks fire as for Escape. The death screen does not close
-    /// this way. False when no screen is open (or, outside a world, when it
-    /// cannot act).
+    /// A book closes with nothing sent; a lectern's book closes its menu
+    /// (`ServerboundContainerClosePacket`). A confirmation, a server's pack
+    /// prompt or a dialog open over another screen is the one that closes.
+    /// Declining a required pack disconnects rather than returning to the
+    /// screen underneath. The screen hooks fire as for Escape.
+    /// The death screen, the code of conduct and a dialog Escape cannot
+    /// close do not close this way. False when no screen is open (or,
+    /// outside a world, when it cannot act).
     #[access(WorldOnly)]
     fn close_screen(&mut self) -> bool;
     /// Side: client.
@@ -156,7 +161,8 @@ pub trait ScreensClientHost {
     fn debug_overlay_visible(&self) -> bool;
     /// Side: client.
     /// Whether a specific key is currently held down.
-    /// `key` is the vanilla physical key name (`key.keyboard.left.shift`, for example).
+    /// `key` is the vanilla physical key or mouse button name (`key.keyboard.left.shift`,
+    /// `key.mouse.left`, `key.mouse.4`, for example).
     /// Unknown names are not down. Modifier combinations use `ClientHost::modifiers`.
     #[access(ClientSetup)]
     fn is_key_down(&self, key: &str) -> bool;

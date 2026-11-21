@@ -54,10 +54,23 @@ impl Menu {
         input: Input,
         asked: Asked,
     ) -> Result<(), &'static str> {
+        self.start_click(env, slot_index, button, input, asked)
+            .0
+            .map(|_| ())
+    }
+
+    /// Start a click that may suspend at the first take, preserving the rule answers.
+    pub fn start_click(
+        &mut self,
+        env: &Env,
+        slot_index: i32,
+        button: i32,
+        input: Input,
+        asked: Asked,
+    ) -> (Result<Option<ClickContinuation>, &'static str>, Asked) {
         self.planned(asked, |menu| {
             menu.click_planned(env, slot_index, button, input)
         })
-        .0
     }
 
     /// `Slot.mayPickup` of slot `s` asked before a click reaches the menu, and the answers to

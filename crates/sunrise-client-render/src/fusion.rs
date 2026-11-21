@@ -14,8 +14,8 @@ use crate::connected::{Overlay, Pick, TileLayer};
 use crate::models::StateModels;
 use crate::sprites::Sprites;
 use std::{collections::HashMap, num::NonZeroU16};
+use sunrise_connected::{self as connect, Axes, Face};
 use sunrise_optifine::cem::json::Json;
-use sunrise_optifine::ctm::connect::{self, Axes, Face};
 use sunrise_optifine::fusion::{
     Connection, Layout, Tiles,
     model::{Connections, ModelType},
@@ -256,7 +256,8 @@ impl FusionTextures {
             for face in &mut model.faces {
                 let sprite = &face.quad.material.sprite;
                 // The model's face on the side this one turned to, else any with its sprite.
-                let side = Face::ALL[face.quad.facing as usize];
+                let side = Face::from_direction_index(face.quad.facing as u8)
+                    .expect("a model quad faces one of the six directions");
                 let mut drawing = found.iter().filter(|(s, _, _)| s == sprite);
                 let Some((_, _, connection)) = drawing
                     .clone()

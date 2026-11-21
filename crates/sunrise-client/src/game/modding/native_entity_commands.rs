@@ -147,10 +147,12 @@ impl Game<'_> {
             if silent { None } else { Some(Vec::new()) },
         );
         let outer_exec = std::mem::take(&mut self.exec);
+        let outer_results = self.cmds.results.take();
         let level = std::mem::replace(&mut self.ui.registries.permission, permission);
         let ok = self.run_command(line);
         self.ui.registries.permission = level;
         self.exec = outer_exec;
+        self.cmds.results = outer_results;
         let lines = std::mem::replace(&mut self.chat_capture, capture).unwrap_or_default();
         self.console_broadcast = console;
         self.native_command_filter = filter;

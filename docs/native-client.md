@@ -21,9 +21,25 @@ The launcher does not create firewall rules or change network-profile settings.
 ## musl Linux: manual installation
 
 On x86-64 musl distributions, download `sunrise-linux-musl-x86_64.tar.gz` from the
-[Nightly release](https://github.com/horizon-rust/horizon/releases/tag/nightly), when available. This optional
-build is omitted if its build fails. The launcher does not install or update it. Its desktop gameplay and
-vanilla parity are still unverified; see the [musl build limitations](release-flow.md#builds).
+[Nightly release](https://github.com/sunrise-org/sunrise/releases/tag/nightly), once it appears. It is attached
+separately after publication, and the launcher does not install or update it. Its desktop gameplay and vanilla
+parity are still unverified; see the [musl build limitations](release-flow.md#builds).
+
+Before extracting, download `SHA256SUMS-musl` and `SHA256SUMS-musl.v2.sig` from the **same release** as the
+archive. Keep them in a folder of their own, not alongside the launcher's `SHA256SUMS`. Copy `SHA256SUMS-musl`
+to `SHA256SUMS` in that folder for the verifier. From a trusted Sunrise checkout, run the following with the date
+and commit from the release's title (`Nightly <date> · <commit>`), not from the moving `nightly` tag:
+
+```sh
+version='nightly-<date>-<commit>' # Replace <date> and <commit> with the values from the title.
+cp /path/to/musl-download/SHA256SUMS-musl /path/to/musl-download/SHA256SUMS
+cargo run --locked -p sunrise-release-sign -- verify --tag "$version" \
+  --signature SHA256SUMS-musl.v2.sig --only sunrise-linux-musl-x86_64.tar.gz /path/to/musl-download
+```
+
+For a Dev build, use `dev-<date>-<commit>` as the tag in the verification command. The verifier checks
+both the signature against Sunrise's release key and the archive's checksum. Do not extract the archive if
+verification fails.
 
 You need a working X11 or Wayland desktop, musl, libgcc, ALSA and libudev. For Vulkan, install both the loader
 (`libvulkan.so.1`) and your GPU's driver. On Alpine, the common runtime packages are:
@@ -54,7 +70,7 @@ The sounds command copies the sounds from your Minecraft installation's asset st
 incomplete, obtain the missing assets through your Minecraft launcher first. Preparation details and alternative
 layouts are described below.
 
-Updates are manual: download and extract the next musl archive, prepare its resources, and use that version's
+Updates are manual: download, verify and extract the next musl archive, prepare its resources, and use that version's
 programs. Keep your saves in a separate `SUNRISE_HOME` and point each version at it. Back up saves before
 updating. The bundled `sunrise-server` also refuses automatic updates because the server update archives use
 glibc. An absent musl archive is not a reason to install the glibc archive on a musl system.
@@ -279,6 +295,11 @@ newest report (the `logs` MCP tool returns the same). F3 + C held for ten
 seconds crashes the game on purpose, as in vanilla (the world is saved first);
 development builds also crash with `SUNRISE_DEBUG_CRASH=SECONDS`, that long
 after the first frame.
+
+For development, set `SUNRISE_LOG_STDERR` to a comma-separated list of external log targets, such as
+`my_mod,other_mod`. The game also prints records for each target and its `::` submodules to
+stderr in the log file's format. This does not change the log level or file contents, and the
+extra output is off when the variable is unset.
 
 **MCP.** `sunrise-ctl mcp` serves the Model Context Protocol over stdin and
 stdout (JSON-RPC 2.0, one message per line), with one tool per command and a

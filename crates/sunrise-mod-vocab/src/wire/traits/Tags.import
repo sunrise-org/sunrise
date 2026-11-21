@@ -1,1 +1,0 @@
-Read merged block, item and fluid tags without borrowing the game's registry structs.

@@ -165,8 +165,8 @@ impl<'a> Fields<'a> {
     }
     /// `BaseContainerBlockEntity`: the custom name and the lock.
     fn base_container(&mut self) {
-        self.component("CustomName");
         self.lock();
+        self.component("CustomName");
     }
     /// `RandomizableContainer.tryLoadLootTable` / `trySaveLootTable`; true when the
     /// block entity has a loot table (and so saves no items).
@@ -417,12 +417,17 @@ pub fn is_known_type(id: &str) -> bool {
 /// entity compound with `id`, `x`, `y`, `z`); None for an unknown type or a tag
 /// without a position.
 pub fn canonical(tag: &Tag) -> Option<Tag> {
-    canonical_with_stack(tag, &stack)
+    canonical_with_stack(tag, &stack, None).map(Tag::Compound)
 }
 
 /// Canonical block entity fields with the caller's saved-stack codec.
 /// Only actual stack fields use this codec; templates and opaque metadata stay intact.
-pub fn canonical_with_stack(tag: &Tag, stack: &dyn Fn(&Tag) -> Option<Tag>) -> Option<Tag> {
+/// A save snapshot may carry already-encoded live items alongside pending loot.
+pub fn canonical_with_stack(
+    tag: &Tag,
+    stack: &dyn Fn(&Tag) -> Option<Tag>,
+    live_items: Option<Tag>,
+) -> Option<Compound> {
     let id = id(tag)?;
     let (x, y, z) = (int(tag.get("x"))?, int(tag.get("y"))?, int(tag.get("z"))?);
     let mut f = Fields {
@@ -436,16 +441,13 @@ pub fn canonical_with_stack(tag: &Tag, stack: &dyn Fn(&Tag) -> Option<Tag>) -> O
     if crate::block_entity_types::declared(&id) {
         f.custom(tag);
         let mut out = f.out;
-        out.insert("id".into(), string(&id));
-        out.insert("x".into(), Tag::Int(x));
-        out.insert("y".into(), Tag::Int(y));
-        out.insert("z".into(), Tag::Int(z));
         if let Some(c @ Tag::Compound(patch)) = tag.get("components")
             && !patch.is_empty()
         {
             out.insert("components".into(), c.clone());
         }
-        return Some(Tag::Compound(out));
+        write_metadata(&mut out, &id, [x, y, z]);
+        return Some(out);
     }
     match id.as_str() {
         "minecraft:furnace" | "minecraft:smoker" | "minecraft:blast_furnace" => {
@@ -802,11 +804,9 @@ pub fn canonical_with_stack(tag: &Tag, stack: &dyn Fn(&Tag) -> Option<Tag>) -> O
         _ => return None,
     }
     let mut out = f.out;
-    out.insert("id".into(), string(&id));
-    out.insert("x".into(), Tag::Int(x));
-    out.insert("y".into(), Tag::Int(y));
-    out.insert("z".into(), Tag::Int(z));
-    out.insert("keepPacked".into(), Tag::Byte(0));
+    if let Some(items) = live_items {
+        out.insert("Items".into(), items);
+    }
     out.insert(
         "components".into(),
         match tag.get("components") {
@@ -814,7 +814,17 @@ pub fn canonical_with_stack(tag: &Tag, stack: &dyn Fn(&Tag) -> Option<Tag>) -> O
             _ => Tag::Compound(Compound::new()),
         },
     );
-    Some(Tag::Compound(out))
+    write_metadata(&mut out, &id, [x, y, z]);
+    out.insert("keepPacked".into(), Tag::Byte(0));
+    Some(out)
+}
+
+/// `BlockEntity.saveMetadata`, after the caller has written additional fields and components.
+pub fn write_metadata(out: &mut Compound, id: &str, pos: [i32; 3]) {
+    out.insert("id".into(), string(id));
+    for (key, v) in ["x", "y", "z"].into_iter().zip(pos) {
+        out.insert(key.into(), Tag::Int(v));
+    }
 }
 
 /// `VibrationSystem.Data` for a sensor with no pending vibration.
@@ -841,21 +851,17 @@ fn is_record(item: &Compound) -> bool {
 /// `loaded` what Sunrise encodes right after decoding it, and `current` what Sunrise
 /// encodes now. Whatever the game left unchanged since loading keeps its original
 /// form (including the detail Sunrise does not model, such as styled text), what it
-/// changed takes the current value, and keys Sunrise never models stay.
+/// changed takes the current value, and keys Sunrise never models stay. The outer
+/// table follows the live writer; unchanged values keep their original tables.
 pub fn overlay(original: &Tag, loaded: &Tag, current: &Tag) -> Tag {
-    if current == loaded {
-        return original.clone();
-    }
     match (original, loaded, current) {
         (Tag::Compound(o), Tag::Compound(l), Tag::Compound(c)) => {
-            let mut out = Compound::new();
-            for (key, cv) in c {
-                let value = match (o.get(key), l.get(key)) {
-                    (Some(ov), Some(lv)) => overlay(ov, lv, cv),
-                    _ => cv.clone(),
-                };
-                out.insert(key.clone(), value);
-            }
+            let mut out = c.clone();
+            out.for_each_mut(|key, value| {
+                if let (Some(ov), Some(lv)) = (o.get(key), l.get(key)) {
+                    *value = overlay_value(ov, lv, value);
+                }
+            });
             // Keys the game never models (or models only when present) survive;
             // keys it removed are gone.
             for (key, ov) in o {
@@ -864,6 +870,18 @@ pub fn overlay(original: &Tag, loaded: &Tag, current: &Tag) -> Tag {
                 }
             }
             Tag::Compound(out)
+        }
+        _ => overlay_value(original, loaded, current),
+    }
+}
+
+fn overlay_value(original: &Tag, loaded: &Tag, current: &Tag) -> Tag {
+    if current == loaded {
+        return original.clone();
+    }
+    match (original, loaded, current) {
+        (Tag::Compound(_), Tag::Compound(_), Tag::Compound(_)) => {
+            overlay(original, loaded, current)
         }
         (Tag::List(o), Tag::List(l), Tag::List(c)) if keyed_by_slot(c) && keyed_by_slot(l) => {
             let slot = |t: &Tag| int(t.get("Slot"));
@@ -875,7 +893,7 @@ pub fn overlay(original: &Tag, loaded: &Tag, current: &Tag) -> Tag {
                             list.iter().find(|t| int(t.get("Slot")) == slot)
                         }
                         match (find(o, s), find(l, s)) {
-                            (Some(ov), Some(lv)) => overlay(ov, lv, cv),
+                            (Some(ov), Some(lv)) => overlay_value(ov, lv, cv),
                             _ => cv.clone(),
                         }
                     })

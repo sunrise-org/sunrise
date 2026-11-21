@@ -65,6 +65,14 @@ impl Ingredient {
     pub fn validate_recipe(value: &Value, items: &Items) -> Result<(), String> {
         components::validate_recipe(value, items)
     }
+    pub(crate) fn validate_persistence(value: &Value, recipe: &str) -> bool {
+        if let Err(error) = components::persistent_recipe(value) {
+            let recipe = sunrise_items::recipe_sources::qualified(recipe);
+            log::warn!("recipe {recipe} rejected: {error}");
+            return false;
+        }
+        true
+    }
     /// Decode built-in rules and materialize display stacks at a load boundary.
     pub fn prepare_components(&mut self, items: &Items) -> Option<()> {
         if let Some(rule) = &self.rule {

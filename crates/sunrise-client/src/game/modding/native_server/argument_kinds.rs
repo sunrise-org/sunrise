@@ -316,10 +316,21 @@ fn provider_suggestions(
             )
         }),
     );
-    let answered =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| provider.suggest(&request)));
+    let answered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        mod_api::__private::contain_refusal(
+            mod_api::content::crash::current_native_mod().unwrap_or("unknown"),
+            || provider.suggest(&request),
+        )
+    }));
     match answered {
-        Ok(reply) => reply
+        Ok(Err(refusal)) => {
+            refusal.report();
+            eprintln!(
+                "mod command argument type {id} suggestion provider refused: {refusal}; no suggestions"
+            );
+            Vec::new()
+        }
+        Ok(Ok(reply)) => reply
             .suggestions
             .into_iter()
             .map(|suggestion| sunrise_client::command::CustomSuggestion {
@@ -356,9 +367,20 @@ pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgTy
         let kind_id = id.to_owned();
         // Read once per tree, like `kind()`: the tree keeps the declaration, not the mod code.
         let provider = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            argument.suggestion_provider()
+            mod_api::__private::contain_refusal(
+                mod_api::content::crash::current_native_mod().unwrap_or("unknown"),
+                || argument.suggestion_provider(),
+            )
         })) {
-            Ok(provider) => provider,
+            Ok(Ok(provider)) => provider,
+            Ok(Err(refusal)) => {
+                refusal.report();
+                eprintln!(
+                    "mod command argument type {id} was refused declaring its suggestion provider: {refusal}; \
+                     its arguments complete by `suggest`"
+                );
+                None
+            }
             Err(_) => {
                 eprintln!(
                     "mod command argument type {id} panicked declaring its suggestion provider; \
@@ -377,9 +399,18 @@ pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgTy
             id,
             kind,
             move |input| {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parse.parse(input)))
-                    .map_err(|_| Text::tr("commands.generic.failed", &[]))?
-                    .map_err(refused_argument_text)
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    mod_api::__private::contain_refusal(
+                        mod_api::content::crash::current_native_mod().unwrap_or("unknown"),
+                        || parse.parse(input),
+                    )
+                }))
+                .map_err(|_| Text::tr("commands.generic.failed", &[]))?
+                .map_err(|refusal| {
+                    refusal.report();
+                    Text::tr("commands.generic.failed", &[])
+                })?
+                .map_err(refused_argument_text)
             },
             move |reg: &sunrise_client::command::Registries, prefix: &str| {
                 // The mod's provider decides what this sender may complete; the game keeps
@@ -392,10 +423,21 @@ pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgTy
                     )
                 });
                 let Ok(results) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    suggest.suggest(sender.as_ref(), prefix)
+                    mod_api::__private::contain_refusal(
+                        mod_api::content::crash::current_native_mod().unwrap_or("unknown"),
+                        || suggest.suggest(sender.as_ref(), prefix),
+                    )
                 })) else {
                     eprintln!("mod command argument completer panicked");
                     return Vec::new();
+                };
+                let results = match results {
+                    Ok(results) => results,
+                    Err(refusal) => {
+                        refusal.report();
+                        eprintln!("mod command argument completer refused: {refusal}");
+                        return Vec::new();
+                    }
                 };
                 // Suggestions use STRING_UTF8 (Java UTF-16 length). Tooltips are
                 // literal NBT strings, whose modified UTF-8 byte length is unsigned u16.

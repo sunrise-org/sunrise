@@ -8,6 +8,26 @@ use winit::keyboard::KeyCode;
 
 #[test]
 #[ignore = "daily"]
+fn a_boat_clamps_the_riders_yaw_without_changing_the_previous_yaw() {
+    with_client_game(|game| {
+        let (client, server) = sunrise_protocol::connection::Pipe::pair();
+        game.connect_local(client, "boat-clamp").unwrap();
+        game.remote.as_mut().unwrap().first_passenger = false;
+        game.boats
+            .push(Boat::new(71, "oak".into(), Vec3::new(2.5, 64.0, 2.5), 0.0));
+        game.riding = Some(71);
+        game.yaw = 200.0;
+        game.rope_rot_old.0 = 180.0;
+
+        assert!(game.remote_ride(Keys::default(), 0).unwrap());
+        assert_eq!(game.yaw, 255.0);
+        assert_eq!(game.rope_rot_old.0, 180.0);
+        server.shutdown();
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn a_riders_move_takes_the_look_of_the_tick_and_leaves_it_off_the_ground() {
     mod_platform::testing::with_mods(Vec::new().into(), || {
         with_client_game(|game| {

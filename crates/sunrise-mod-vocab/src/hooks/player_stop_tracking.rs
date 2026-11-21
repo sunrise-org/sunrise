@@ -15,8 +15,7 @@ pub trait Hooks {
     /// next tracking pass. The entity is not necessarily still there, and a
     /// player who left is gone. As in `player_start_tracking`, the engine is
     /// walking its tracker: don't spawn, remove or teleport entities from
-    /// here. No player's state is swapped in. Server-side. Named injections
-    /// request `hook_version = 2`.
+    /// here. No player's state is swapped in. Server-side.
     #[hook(
         side = "server",
         contract = "listen",

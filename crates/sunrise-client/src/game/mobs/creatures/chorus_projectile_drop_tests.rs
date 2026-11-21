@@ -204,6 +204,7 @@ fn default_drop_rng_continues_identically_with_table_sequence_or_level_fallback(
                     &sunrise_world::loot::PackOverlay {
                         files: &files,
                         conditions: &sunrise_world::conditions::LoadConditions::default(),
+                        ..sunrise_world::loot::PackOverlay::default()
                     },
                     game.res.item_defaults(),
                 )

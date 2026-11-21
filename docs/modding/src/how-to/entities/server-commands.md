@@ -64,8 +64,8 @@ as vanilla's parser so `~`, `^` and the dimension list complete as in a vanilla 
 listener runs. A `vec3` and a `vec3_uncentered` cannot share a position in one command's
 usages, as they look the same to a client.
 A player's source is their position and rotation. The console has no source
-entity and uses the Overworld spawn's block corner with zero rotation, so `@s`
-cannot resolve there. Every source receives the same owned data, on native and wasm.
+entity and uses the world spawn's block corner, in the level the spawn is in, with zero rotation, so `@s`
+cannot resolve there. Every source receives the same owned data.
 
 `event.source` is a non-exhaustive `CommandSource`: `Player { player, .. }`,
 `Console { .. }`, `CommandBlock { position, level, .. }`,
@@ -97,8 +97,7 @@ plain text. The player still receives those lines in chat, and operator
 notifications follow the normal rules. Feedback silenced by the source or game
 rules is absent. Other entities use a silent source and return no lines; a stale,
 removed or unavailable entity returns `success: false` and no lines. Teleports to
-another level still happen at the next tick's start. Native and wasm mods use the
-same method and runner. `run_command(host, line, level)` keeps its bool return.
+another level still happen at the next tick's start. `run_command(host, line, level)` keeps its bool return.
 
 ## Entity and player selectors
 
@@ -127,8 +126,7 @@ are delivered when resolvable. Dragon parts
 are not selector members in vanilla and are never delivered by these arguments.
 Temporarily held-out or removed entities cannot be delivered. An unbounded
 selector can reach other loaded dimensions; handle lookup uses the entity's own
-dimension. Lists are bounded only by the wire frame limits, on native and wasm;
-there is no extra count cap. A very large `@e` is the caller's cost.
+dimension. There is no extra count cap. A very large `@e` is the caller's cost.
 
 ## Custom argument types
 

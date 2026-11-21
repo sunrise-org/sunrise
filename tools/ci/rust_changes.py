@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 # The repository root, appended so a script run finds `tools` without shadowing anything already importable.
 sys.path.append(str(ROOT))
+from tools.ci.pr_files import repo_path  # noqa: E402
 
 # The root workspace's manifest and toolchain files.
 ROOT_RUST = {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rustfmt.toml", "clippy.toml"}
@@ -146,7 +147,7 @@ def resolve_include(source, crate, argument):
         if pieces[at:at + 3] == [("ident", "env"), ("punct", "!"), ("punct", "(")] and at + 4 < len(pieces) \
                 and pieces[at + 3][0] == "str" and pieces[at + 4] == ("punct", ")"):
             name = pieces[at + 3][1]
-            if name == "OUT_DIR":
+            if name == "OUT_DIR" and at == 0:
                 return "exact", set()
             if name == "CARGO_MANIFEST_DIR" and not parts and crate is not None:
                 base = crate + "/"
@@ -188,7 +189,10 @@ def rust_includes():
     """(the files this checkout's Rust includes by name, [(source, regex)] for the includes whose path is assembled
     from something other than literals); None if the sources can't be read."""
     scanned = rust_literals()
-    listed = git("grep", "-l", "-z", "-E", r"\binclude(_str|_bytes)?\b|#\[[[:space:]]*path", "--", "*.rs")
+    # An attribute's `#[` and `path` can be on different lines: also list a line ending in `#[` or holding `path =`
+    # and a quote or the end of the line. (An anchored `^ *path` pattern costs git grep half a second.)
+    pattern = r'\binclude(_str|_bytes)?\b|#\[[[:space:]]*path|\bpath[[:space:]]*=[[:space:]]*("|$)|#\[[[:space:]]*$'
+    listed = git("grep", "-l", "-z", "-E", pattern, "--", "*.rs")
     if scanned is None or listed.returncode not in (0, 1):
         return None
     manifests = scanned[0]
@@ -491,10 +495,16 @@ def framed_entries(data):
         rows = [(status.decode("ascii"), path.decode("utf-8")) for status, path in zip(fields[:-1:2], fields[1::2])]
     except UnicodeError:
         return None
-    return rows if all(status in {"A", "D", "M", "T"} and path for status, path in rows) else None
+    if not all(status in {"A", "D", "M", "T"} and repo_path(path) for status, path in rows):
+        return None
+    return rows if len({path for _, path in rows}) == len(rows) else None
 
 
 def changed_entries(base, head):
+    # Git reads an empty endpoint as the checkout's HEAD, which could make the diff empty or another one.
+    if not base or not head:
+        print("rust_changes: missing diff endpoint; treating everything as changed", file=sys.stderr)
+        return [("?", UNKNOWN_CHANGE)]
     # Disable rename folding: retain both deleted and added paths, including source moved into docs.
     command = ["git", "diff", "--name-status", "--no-renames", "-z", f"{base}...{head}", "--"]
     for fetch_base in (False, True):
@@ -513,20 +523,25 @@ def changed_entries(base, head):
     return [("?", UNKNOWN_CHANGE)]
 
 
-def listed_entries(path):
-    """The (status, path) pairs of a `git diff --name-status -z` listing saved in a file (tools/ci/pr_files.py)."""
+def listed_entries(path, count):
+    """The (status, path) pairs of a `git diff --name-status -z` listing saved in a file (tools/ci/pr_files.py),
+    complete only with the `count` of records it printed, so a listing that lost a whole record is refused."""
     try:
-        return framed_entries(Path(path).read_bytes())
+        rows = framed_entries(Path(path).read_bytes())
     except OSError:
         return None
+    return rows if rows is not None and len(rows) == count else None
 
 
-def pr_entries(base, head, listing=None):
+def pr_entries(base, head, listing=None, count=None):
     if not all(re.fullmatch(r"[0-9a-f]{40}", sha) for sha in (base, head)):
         print("rust_changes: invalid event commits; treating everything as changed", file=sys.stderr)
         return [("?", UNKNOWN_CHANGE)]
-    cached = listed_entries(listing) if listing else None
-    return cached if cached is not None else changed_entries(base, head)
+    if listing:
+        # A saved listing is used whole or not at all: any doubt about it runs every check, as no history was fetched.
+        cached = listed_entries(listing, count)
+        return cached if cached is not None else [("?", UNKNOWN_CHANGE)]
+    return changed_entries(base, head)
 
 
 def changed_paths(base, head):
@@ -540,9 +555,10 @@ if __name__ == "__main__":
     parser.add_argument("--all", action="store_true", help="emit centralized dyna-checks selections")
     parser.add_argument("--files", metavar="LIST", help="read base...head's changes from this listing (pr_files.py) "
                         "instead of git")
+    parser.add_argument("--entries", type=int, metavar="N", help="the number of entries pr_files.py wrote to LIST")
     args = parser.parse_args()
     if args.all:
-        changes = pr_entries(args.base, args.head, args.files)
+        changes = pr_entries(args.base, args.head, args.files, args.entries)
         try:
             required_checks = selections(changes)
         except Exception as error:  # Selection is an optimization, never a reason not to run checks.

@@ -1,7 +1,7 @@
 # Global loot modifiers
 
 Global loot modifiers are registered serializer types with data-enabled instances, not per-roll
-listeners. A type with no instance file never runs. Native and wasm use the same interfaces.
+listeners. A type with no instance file never runs.
 
 Register a `GlobalLootModifierSerializer` in `Hooks::register`:
 
@@ -29,8 +29,8 @@ not a mutable game host. Report invalid fields with `LootModifierError::new(fiel
 - `condition`: an inline loot condition or predicate id, absent for unconditional application.
 
 A serializer can retain those settings and implement `GlobalLootModifier::priority` and `condition`
-from them, returning `Ok(value)`. Both metadata methods are fallible so a refused wasm call cannot
-silently turn into a default priority or an absent condition. The runtime captures them once during
+from them, returning `Ok(value)`. An error from either metadata method refuses the modifier instead of silently using
+a default priority or an absent condition. The runtime captures them once during
 decoding, not during rolls. The prepared
 instance and its code store stay alive while a roll retains their generation, even after reload.
 

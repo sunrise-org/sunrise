@@ -26,7 +26,9 @@ pub struct ParticleOptions {
     pub ty: ParticleKey,
     /// `BlockParticleOption`: the block's particle sprite and terrain tint.
     pub block: Option<(String, u32)>,
-    /// RGB(A) for dust, spells, entity effects and tinted leaves.
+    /// RGB(A) for dust, spells, entity effects and tinted leaves. The item crumbs (`item` and
+    /// its `item_*` variants) multiply their red, green and blue by it when spawned and ignore
+    /// its alpha; white, the default, leaves them as they are.
     pub color: [f32; 4],
     /// `DustParticleOptions.scale`, `PowerParticleOption.power`, `SpellParticleOption.power`,
     /// `SculkChargeParticleOptions.roll`, `ShriekParticleOption.delay`.
@@ -49,18 +51,12 @@ pub struct ParticleOptions {
     /// sent to clients; the resolved point is used for local rendering
     /// (`ParticleEngine::vibration` is the same particle).
     pub vibration: Option<(PositionSource, [f64; 3], i32)>,
-    /// Older entity-effect providers use velocity as RGB; true is ambient.
-    pub legacy_entity_effect: Option<bool>,
-    /// Older trails choose their lifetime in the provider rather than on the wire.
-    pub legacy_trail_lifetime: bool,
 }
 impl ParticleOptions {
     /// Construct an option for a retained vanilla or custom sprite-provider key.
     pub fn simple(ty: ParticleKey) -> Self {
         Self {
             ty,
-            legacy_entity_effect: None,
-            legacy_trail_lifetime: false,
             block: None,
             color: [1.0; 4],
             scale: 1.0,
@@ -166,6 +162,16 @@ impl ParticleOptions {
         Self {
             color: rgba,
             ..Self::simple(ty)
+        }
+    }
+    /// These options with `color` set to `rgba` ([`ParticleOptions::color`]): the way to tint an
+    /// item crumb, as `ParticleOptions::item(key, vec![sprite]).with_color([r, g, b, 1.0])`. An
+    /// item crumb's colour must be finite and each component in `0.0..=1.0`; `add_particle`
+    /// refuses anything else, and nothing is clamped.
+    pub fn with_color(self, rgba: [f32; 4]) -> Self {
+        Self {
+            color: rgba,
+            ..self
         }
     }
 }

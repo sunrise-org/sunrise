@@ -3,7 +3,8 @@
 /// a chat type the registry lacks is `minecraft:chat`'s.
 #[test]
 fn chat_is_narrated_with_its_chat_types_narration_decoration() {
-    use super::super::{Decoration, chat_type_decorate, play};
+    use super::super::chat::chat_type_decorate;
+    use super::super::{Decoration, play};
     use serde_json::json;
     use sunrise_core::nbt::{JavaString, Tag, parse_snbt};
     let bound = play::ChatTypeBound {

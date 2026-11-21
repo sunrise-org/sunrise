@@ -160,7 +160,7 @@ fn with_game(test: impl FnOnce(&mut Game<'_>)) {
             &game.options.resources,
             &PackOverlay {
                 files: &files,
-                ..PackOverlay::NONE
+                ..PackOverlay::default()
             },
             game.res.item_defaults(),
         )
@@ -801,7 +801,7 @@ fn random_selection_streams() {
         &root,
         &PackOverlay {
             files: &files,
-            ..PackOverlay::NONE
+            ..PackOverlay::default()
         },
         &sunrise_world::item_defaults::read(&root).unwrap(),
     )

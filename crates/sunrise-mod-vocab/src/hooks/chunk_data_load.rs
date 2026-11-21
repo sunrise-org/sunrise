@@ -5,7 +5,7 @@ pub trait Hooks {
     /// Runs on a chunk worker with a restricted Host. Read and edit `data` through
     /// its typed methods; edits become the loaded store only if the entire job
     /// succeeds. Missing records and proto-to-full promotion do not fire this hook.
-    /// A codec error, unwind or guest trap refuses publication of the whole store.
+    /// A codec error or unwind refuses publication of the whole store.
     #[hook(
         side = "server",
         contract = "listen",

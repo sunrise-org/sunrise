@@ -27,11 +27,7 @@ impl ObserverCache {
                     scope,
                 )))
             });
-            {
-                let mut observer = observer.borrow_mut();
-                observer.scope = scope;
-                observer.current = None;
-            }
+            observer.borrow_mut().scope = scope;
             Rc::clone(observer) as Observer
         });
         (Some(Rc::clone(shared)), observer)

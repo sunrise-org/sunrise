@@ -55,7 +55,7 @@ impl Renderer {
         &mut self,
         mut encoder: wgpu::CommandEncoder,
         args: PostPassArgs<'_>,
-    ) -> (wgpu::CommandEncoder, PostPassResult) {
+    ) -> std::result::Result<(wgpu::CommandEncoder, PostPassResult), String> {
         let PostPassArgs {
             frame,
             scaled,
@@ -114,7 +114,7 @@ impl Renderer {
                     .prepare(
                         &self.device,
                         &mut encoder,
-                        &mut self.uploads,
+                        |enc, buf, offset, data| self.uploads.buffer(enc, buf, offset, data),
                         atlas,
                         frame.weather,
                         frame.weather_time,
@@ -200,7 +200,8 @@ impl Renderer {
             // Both strokes of a high contrast outline, the black one first.
             post.set_lines(pack_draws_outline.then(|| pack_post::Lines {
                 edges: self.outline.clone(),
-                count: outline_edges as u32 * if frame.outline_high_contrast { 2 } else { 1 },
+                count: outline_edges as u32,
+                strokes: if frame.outline_high_contrast { 2 } else { 1 },
             }));
             post.set_clouds(pack_draws_clouds.then(|| pack_post::Clouds {
                 vertices: self.cloud_buffer.clone(),
@@ -208,7 +209,9 @@ impl Renderer {
                 indices: self.indices.clone(),
                 quads: cloud_quads,
             }));
-            post.run(
+            // Fails only on a wait that found the device lost: the frame stops here, with
+            // the pack kept for the next one and nothing more encoded.
+            let ran = post.run(
                 &self.device,
                 &self.queue,
                 &mut encoder,
@@ -221,11 +224,14 @@ impl Renderer {
                 [self.config.width, self.config.height],
                 pages,
                 &mut terrain,
+                &self.device_lost,
+                super::super::in_flight::poll_live,
             );
             // Keep the capacity, not the buffers: a page the arena frees must not stay alive
             // here until the next shader-pack frame (or forever once the pack is off).
             self.pack_pages.clear();
             self.pack_post = Some((dimension, Some(post)));
+            ran?;
         } else if let Some((color, depth)) = &scaled
             && native_post
             && let Some(native) = &mut self.native
@@ -357,13 +363,13 @@ impl Renderer {
             timer.end(&self.device, &mut encoder, (&view_target, overlay_format));
         }
 
-        (
+        Ok((
             encoder,
             PostPassResult {
                 readback,
                 target_texture,
                 fg_made,
             },
-        )
+        ))
     }
 }

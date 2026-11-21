@@ -231,6 +231,10 @@ struct Area {
     stem: String,
     camel: String,
     tiers: BTreeMap<Tier, Vec<Entry>>,
+    /// The backend tiers the game answers from a borrowed view of its read-only tables, not
+    /// from `Game`, declared by `#[table_backend("path")]` on the trait: the view carries the
+    /// reads and implements the trait once, and `Game` forwards to it.
+    tables: BTreeMap<Tier, String>,
 }
 
 impl Area {
@@ -243,7 +247,7 @@ impl Area {
 }
 
 /// The traits of one area file by tier. Only `<Camel><Tier>` and the explicitly listed draw
-/// contexts and services are accepted: an unknown trait would reach neither a union nor the WIT.
+/// contexts and services are accepted: an unknown trait cannot be reached through the Host.
 /// Imports and file/item attributes are allowed, but modules, macros and other items are refused
 /// rather than hiding declarations from this scan.
 fn area_tiers(camel: &str, file: syn::File) -> Result<BTreeMap<Tier, Vec<Entry>>, String> {
@@ -312,6 +316,31 @@ fn area_tiers(camel: &str, file: syn::File) -> Result<BTreeMap<Tier, Vec<Entry>>
     Ok(tiers)
 }
 
+/// The `#[table_backend("path")]` declarations of an area file: only a `Backend` trait may carry
+/// one, since the game answers only its reads from a view.
+fn table_backends(camel: &str, file: &syn::File) -> Result<BTreeMap<Tier, String>, String> {
+    let mut tables = BTreeMap::new();
+    for item in &file.items {
+        let Item::Trait(item) = item else { continue };
+        for attr in &item.attrs {
+            if !attr.path().is_ident("table_backend") {
+                continue;
+            }
+            if item.ident != format!("{camel}Backend") {
+                return Err(format!(
+                    "`#[table_backend]` belongs on `{camel}Backend`, not `{}`",
+                    item.ident
+                ));
+            }
+            let path = attr
+                .parse_args::<syn::LitStr>()
+                .map_err(|e| format!("`#[table_backend]` takes a path string: {e}"))?;
+            tables.insert(Tier::Backend, path.value());
+        }
+    }
+    Ok(tables)
+}
+
 /// The area files, `base` first and then by name, as the catalog's are.
 fn load(root: &Path) -> Result<Vec<Area>, String> {
     let dir = root.join(DIRECTORY);
@@ -322,8 +351,15 @@ fn load(root: &Path) -> Result<Vec<Area>, String> {
         let source = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let file = syn::parse_file(&source).map_err(|e| format!("{}: {e}", path.display()))?;
         let camel = stem.to_upper_camel_case();
+        let tables =
+            table_backends(&camel, &file).map_err(|e| format!("{}: {e}", path.display()))?;
         let tiers = area_tiers(&camel, file).map_err(|e| format!("{}: {e}", path.display()))?;
-        areas.push(Area { stem, camel, tiers });
+        areas.push(Area {
+            stem,
+            camel,
+            tiers,
+            tables,
+        });
     }
     crate::rerun_if_changed(&dir.display());
     Ok(areas)
@@ -356,6 +392,68 @@ pub(super) fn areas_source(root: &Path) -> Result<String, String> {
             stem = area.stem
         ));
     }
+    // A partial read backend advertises the backend but can only answer some of it.
+    // Forward the named methods, and let the API's standard no-backend value handle
+    // the rest. Infallible key metadata retains the usual fail-loud default.
+    let mut choices = String::new();
+    let mut partial_impls = String::new();
+    let mut read_names = std::collections::BTreeSet::new();
+    for area in &areas {
+        for tier in [Tier::Backend, Tier::ClientBackend] {
+            let Some(entries) = area.tiers.get(&tier) else {
+                continue;
+            };
+            let trait_name = area.trait_name(tier);
+            writeln!(
+                partial_impls,
+                "#[deny(unconditional_recursion)] impl $crate::prelude::{trait_name} for $host {{"
+            )
+            .unwrap();
+            for entry in entries {
+                let name = entry.name.as_str();
+                if read_names.insert(name) {
+                    writeln!(choices, "(@known {name}) => {{}};\n([{name} $($tail:ident)*] {name} $forward:item {{$($refused:item)*}}) => {{ $forward }};").unwrap();
+                }
+                let sig = entry.sig.to_token_stream();
+                let args = signature_args(&entry.sig, name)?;
+                let call_args = if args.is_empty() {
+                    "self".to_owned()
+                } else {
+                    format!("self, {args}")
+                };
+                let refused = refusal(&entry.sig, name)?
+                    .map(|value| {
+                        if args.is_empty() {
+                            format!("{sig} {{ {value} }}")
+                        } else {
+                            format!("{sig} {{ let _ = ({args},); {value} }}")
+                        }
+                    })
+                    .unwrap_or_default();
+                writeln!(partial_impls, "$crate::__partial_read!([$($provided)*] {name} {sig} {{ Self::{name}({call_args}) }} {{ {refused} }});").unwrap();
+            }
+            partial_impls.push_str("}\n");
+        }
+    }
+    writeln!(macros, r#"#[doc(hidden)] #[macro_export] macro_rules! __mod_api_partial_read {{
+        {choices}
+        (@known $name:ident) => {{ compile_error!(concat!("unknown backend read: ", stringify!($name))); }};
+        ([$other:ident $($tail:ident)*] $name:ident $forward:item {{$($refused:item)*}}) => {{
+            $crate::__partial_read!([$($tail)*] $name $forward {{$($refused)*}});
+        }};
+        ([] $name:ident $forward:item {{$($refused:item)*}}) => {{ $($refused)* }};
+    }}
+    #[doc(hidden)] pub use __mod_api_partial_read as __partial_read;"#).unwrap();
+    let partial = format!(
+        "($host:ty, partial($($provided:ident),* $(,)?)) => {{
+        const _: () = {{
+            use $crate::*;
+            use ::std::sync::Arc;
+            $($crate::__partial_read!(@known $provided);)*
+            {partial_impls}
+        }};
+    }};"
+    );
     for (name, tiers, union) in [
         ("impl_host_areas", &[Tier::Host][..], "Host"),
         (
@@ -396,8 +494,16 @@ pub(super) fn areas_source(root: &Path) -> Result<String, String> {
                 )
             })
             .collect();
+        let (partial, partial_doc) = if name == "impl_backend_areas" {
+            (
+                partial.as_str(),
+                "/// `partial(method, ...)` forwards the listed reads to inherent methods and answers\n/// the ordinary no-backend value for other reads that can refuse.\n",
+            )
+        } else {
+            ("", "")
+        };
         macros.push_str(&format!(
-            "/// Implements the area traits of `{union}` for `$host` with their defaults, except the areas listed in `except(...)`, which the caller implements itself. The union trait is left to the caller.\n#[doc(hidden)]\n#[macro_export]\nmacro_rules! __mod_api_{name} {{ ($host:ty $(, except($($skip:ident),*))?) => {{ {impls} }}; }}\n#[doc(hidden)]\npub use __mod_api_{name} as {name};\n"
+            "/// Implements the area traits of `{union}` for `$host` with their defaults, except the areas listed in `except(...)`, which the caller implements itself. The union trait is left to the caller.\n{partial_doc}#[doc(hidden)]\n#[macro_export]\nmacro_rules! __mod_api_{name} {{ ($host:ty $(, except($($skip:ident),*))?) => {{ {impls} }}; {partial} }}\n#[doc(hidden)]\npub use __mod_api_{name} as {name};\n"
         ));
     }
     Ok(format!(
@@ -408,127 +514,153 @@ pub(super) fn areas_source(root: &Path) -> Result<String, String> {
 /// Generate every area impl explicitly. Full-path calls plus a hard recursion lint
 /// refuse a missing inherent implementation instead of inheriting a trait default.
 pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
+    // The gated methods with no refusal-shaped `Result`: a refused call unwinds out of them
+    // (#3123).
+    let mut unwinding = std::collections::BTreeSet::new();
+    let refusals = refusal_errors(root)?;
     let mut code = String::from(
         "use crate::game::Game;\nuse crate::game::api_values::{call_stack_write, call_state_write, call_write, TryIntoApi, TryIntoEngine};\nuse mod_api::*;\n",
     );
     for area in load(root)? {
         for (tier, entries) in &area.tiers {
-            code.push_str(&format!(
-                "#[deny(unconditional_recursion)]\nimpl mod_api::prelude::{} for Game<'_> {{\n",
+            let table = area.tables.get(tier).map(String::as_str);
+            // A table-backed area is implemented by its view, and by `Game`, which hands the
+            // view out: both forward the same reads, so neither keeps a copy of them.
+            let targets: &[&str] = match table {
+                Some(table) => &[table, "Game"],
+                None => &["Game"],
+            };
+            for &target in targets {
+                let via_game = table.is_some() && target == "Game";
+                code.push_str(&format!(
+                "#[deny(unconditional_recursion)]\nimpl mod_api::prelude::{} for {target}<'_> {{\n",
                 area.trait_name(*tier)
             ));
-            for entry in entries {
-                let name = &entry.name;
-                let attrs: Vec<_> = entry
-                    .attrs
-                    .iter()
-                    .filter(|a| a.path().is_ident("access"))
-                    .collect();
-                if attrs.len() != 1 {
-                    return Err(format!("{name}: expected exactly one access declaration"));
-                }
-                let level = attrs[0]
-                    .parse_args::<syn::Ident>()
-                    .map_err(|e| e.to_string())?;
-                if !matches!(
-                    level.to_string().as_str(),
-                    "WorldOnly" | "Metadata" | "ClientSetup" | "PublishedResources"
-                ) {
-                    return Err(format!("{name}: unknown access level {level}"));
-                }
-                let read_stack = entry.attrs.iter().any(|a| a.path().is_ident("read_stack"));
-                let (setup, args, checked_write) =
-                    boundary_arguments(&entry.sig, name, read_stack)?;
-                let static_call = entry.attrs.iter().any(|a| a.path().is_ident("static_call"));
-                let args = if static_call {
-                    args
-                } else if args.is_empty() {
-                    "self".into()
-                } else {
-                    format!("self, {args}")
-                };
-                let sig = entry.sig.to_token_stream();
-                let call = if entry.attrs.iter().any(|a| a.path().is_ident("service")) {
-                    "self".into()
-                } else {
-                    format!("Game::{name}({args})")
-                };
-                let crosses_output = match &entry.sig.output {
-                    syn::ReturnType::Type(_, ty) => boundary_value(ty),
-                    syn::ReturnType::Default => false,
-                };
-                let text_output = match &entry.sig.output {
-                    syn::ReturnType::Type(_, ty) => text_value(ty),
-                    syn::ReturnType::Default => false,
-                };
-                let text_result = result_error(&entry.sig.output)
-                    .is_some_and(|error| outer_type(error, "TextFormError"));
-                let call = if text_output {
-                    if text_result {
-                        format!("{call}.try_into_api().map_err(Into::into)")
-                    } else {
-                        format!("{call}.try_into_api().unwrap_or_else(|error| Err(error.into()))")
+                for entry in entries {
+                    let name = &entry.name;
+                    let attrs: Vec<_> = entry
+                        .attrs
+                        .iter()
+                        .filter(|a| a.path().is_ident("access"))
+                        .collect();
+                    if attrs.len() != 1 {
+                        return Err(format!("{name}: expected exactly one access declaration"));
                     }
-                } else if text_result {
-                    // Writes with converted Text arguments call an infallible engine
-                    // body. Read backends return Result so converting API-owned
-                    // aggregate fields can refuse without losing a boundary error.
-                    let text_input =
-                        entry.sig.inputs.iter().any(
+                    let level = attrs[0]
+                        .parse_args::<syn::Ident>()
+                        .map_err(|e| e.to_string())?;
+                    if !matches!(
+                        level.to_string().as_str(),
+                        "WorldOnly" | "Metadata" | "ClientSetup" | "PublishedResources"
+                    ) {
+                        return Err(format!("{name}: unknown access level {level}"));
+                    }
+                    let read_stack = entry.attrs.iter().any(|a| a.path().is_ident("read_stack"));
+                    let (setup, args, checked_write) =
+                        boundary_arguments(&entry.sig, name, read_stack)?;
+                    let static_call = entry.attrs.iter().any(|a| a.path().is_ident("static_call"));
+                    let view_args = args.clone();
+                    let args = if static_call {
+                        args
+                    } else if args.is_empty() {
+                        "self".into()
+                    } else {
+                        format!("self, {args}")
+                    };
+                    let sig = entry.sig.to_token_stream();
+                    let call = if entry.attrs.iter().any(|a| a.path().is_ident("service")) {
+                        "self".into()
+                    } else if via_game {
+                        let table = table.unwrap_or_default();
+                        format!("{table}::of(self).{name}({view_args})")
+                    } else {
+                        format!("{target}::{name}({args})")
+                    };
+                    let crosses_output = match &entry.sig.output {
+                        syn::ReturnType::Type(_, ty) => boundary_value(ty),
+                        syn::ReturnType::Default => false,
+                    };
+                    let text_output = match &entry.sig.output {
+                        syn::ReturnType::Type(_, ty) => text_value(ty),
+                        syn::ReturnType::Default => false,
+                    };
+                    let text_result = result_error(&entry.sig.output)
+                        .is_some_and(|error| outer_type(error, "TextFormError"));
+                    let call = if text_output {
+                        if text_result {
+                            format!("{call}.try_into_api().map_err(Into::into)")
+                        } else {
+                            format!(
+                                "{call}.try_into_api().unwrap_or_else(|error| Err(error.into()))"
+                            )
+                        }
+                    } else if text_result {
+                        // Writes with converted Text arguments call an infallible engine
+                        // body. Read backends return Result so converting API-owned
+                        // aggregate fields can refuse without losing a boundary error.
+                        let text_input = entry.sig.inputs.iter().any(
                             |arg| matches!(arg, syn::FnArg::Typed(arg) if text_value(&arg.ty)),
                         );
-                    let read = entry
-                        .sig
-                        .receiver()
-                        .is_some_and(|receiver| receiver.mutability.is_none());
-                    if text_input && !read {
-                        format!("Ok({call})")
+                        let read = entry
+                            .sig
+                            .receiver()
+                            .is_some_and(|receiver| receiver.mutability.is_none());
+                        if text_input && !read {
+                            format!("Ok({call})")
+                        } else {
+                            call
+                        }
+                    } else if checked_write {
+                        if crosses_output
+                            && result_error(&entry.sig.output)
+                                .is_some_and(|error| outer_type(error, "LevelWriteError"))
+                        {
+                            format!("call_state_write(|| {call})")
+                        } else if crosses_output {
+                            format!("call_stack_write(|| {call})")
+                        } else {
+                            format!("call_write(|| {call})")
+                        }
+                    } else if crosses_output {
+                        match result_error(&entry.sig.output) {
+                            Some(error)
+                                if refusal_shaped(&entry.sig.output, &refusals).is_some()
+                                    && !outer_type(error, "LevelWriteError") =>
+                            {
+                                let error = error.to_token_stream();
+                                format!(
+                                    "{call}.try_into_api().unwrap_or(Err(<{error} as mod_api::AccessRefusal>::unavailable()))"
+                                )
+                            }
+                            Some(error) if outer_type(error, "GameRuleReadError") => format!(
+                                "{call}.try_into_api().expect(\"game rule values convert infallibly\")"
+                            ),
+                            Some(_) => format!(
+                                "{call}.try_into_api().unwrap_or_else(|error| Err(error.into_write_error().into()))"
+                            ),
+                            None => format!("{call}.try_into_api().unwrap_or_default()"),
+                        }
                     } else {
                         call
+                    };
+                    let typed_access_error = refusal_shaped(&entry.sig.output, &refusals);
+                    if typed_access_error.is_none() {
+                        unwinding.insert(format!("{}::{name}", area.stem));
                     }
-                } else if checked_write {
-                    if crosses_output
-                        && result_error(&entry.sig.output)
-                            .is_some_and(|error| outer_type(error, "LevelWriteError"))
-                    {
-                        format!("call_state_write(|| {call})")
-                    } else if crosses_output {
-                        format!("call_stack_write(|| {call})")
+                    let access = if let Some(error) = typed_access_error {
+                        let error = error.to_token_stream();
+                        format!(
+                            "if !mod_api::__private::access_allowed({name:?}, mod_api::__private::LoadAccess::{level}) {{ return Err(<{error} as mod_api::AccessRefusal>::unavailable()); }}"
+                        )
                     } else {
-                        format!("call_write(|| {call})")
-                    }
-                } else if crosses_output {
-                    match result_error(&entry.sig.output) {
-                        Some(error) if outer_type(error, "LevelReadError") => format!(
-                            "{call}.try_into_api().unwrap_or(Err(mod_api::LevelReadError::Unavailable))"
-                        ),
-                        Some(error) if outer_type(error, "GameRuleReadError") => format!(
-                            "{call}.try_into_api().expect(\"game rule values convert infallibly\")"
-                        ),
-                        Some(_) => format!(
-                            "{call}.try_into_api().unwrap_or_else(|error| Err(error.into_write_error().into()))"
-                        ),
-                        None => format!("{call}.try_into_api().unwrap_or_default()"),
-                    }
-                } else {
-                    call
-                };
-                let typed_access_error = result_error(&entry.sig.output).filter(|error| {
-                    outer_type(error, "LevelReadError") || outer_type(error, "LevelWriteError")
-                });
-                let access = if let Some(error) = typed_access_error {
-                    let error = error.to_token_stream();
-                    format!(
-                        "if !mod_api::__private::access_allowed({name:?}, mod_api::__private::LoadAccess::{level}) {{ return Err({error}::Unavailable); }}"
-                    )
-                } else {
-                    format!(
-                        "mod_api::__private::check_access({name:?}, mod_api::__private::LoadAccess::{level});"
-                    )
-                };
-                code.push_str(&format!("{sig} {{ {access} {setup} {call} }}\n"));
+                        format!(
+                            "mod_api::__private::check_access({name:?}, mod_api::__private::LoadAccess::{level});"
+                        )
+                    };
+                    code.push_str(&format!("{sig} {{ {access} {setup} {call} }}\n"));
+                }
+                code.push_str("}\n");
             }
-            code.push_str("}\n");
             if matches!(tier, Tier::Host | Tier::Backend | Tier::ClientBackend) {
                 let area_trait = area.trait_name(*tier);
                 writeln!(code,"#[deny(unconditional_recursion)] impl mod_api::prelude::{area_trait} for crate::game::equip_host::EquipHost<'_, '_> {{").unwrap();
@@ -587,10 +719,112 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
             }
         }
     }
+    check_unwinding(root, &unwinding)?;
     let parsed = syn::parse_file(&code).map_err(|e| e.to_string())?;
     let imports = standard_imports(&parsed);
     let parsed = syn::parse_file(&(imports + &code)).map_err(|e| e.to_string())?;
     Ok(prettyplease::unparse(&parsed))
+}
+
+/// The error types a gated method may refuse with: those the mod vocabulary crate implements
+/// `AccessRefusal` for. The `impl` is the marker, so a new refusal-shaped error is one `impl` and
+/// no entry in a list here.
+pub(crate) fn refusal_errors(root: &Path) -> Result<std::collections::BTreeSet<String>, String> {
+    // Every file of the crate's source folder: its module tree is generated, so it is not walked
+    // from `lib.rs`.
+    let mut errors = std::collections::BTreeSet::new();
+    let mut folders = vec![root.join("crates/sunrise-mod-vocab/src")];
+    while let Some(folder) = folders.pop() {
+        crate::rerun_if_changed(&folder.display().to_string());
+        for entry in fs::read_dir(&folder).map_err(|e| format!("{}: {e}", folder.display()))? {
+            let path = entry.map_err(|e| e.to_string())?.path();
+            if path.is_dir() {
+                folders.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "rs")
+                && !path.file_stem().is_some_and(|stem| {
+                    stem == "tests" || stem.to_string_lossy().ends_with("_tests")
+                })
+            {
+                crate::rerun_if_changed(&path.display().to_string());
+                let source =
+                    fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                errors.extend(access_refusal_impls(&source)?);
+            }
+        }
+    }
+    Ok(errors)
+}
+
+/// The types `source` implements `AccessRefusal` for.
+fn access_refusal_impls(source: &str) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|e| e.to_string())?;
+    Ok(file
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Impl(item) => {
+                // A test-only impl never reaches the generated forwarders.
+                (!item.attrs.iter().any(|a| {
+                    a.path().is_ident("cfg")
+                        && a.parse_args::<syn::Ident>().is_ok_and(|i| i == "test")
+                }))
+                .then_some(())?;
+                let (_, path, _) = item.trait_.as_ref()?;
+                (path.segments.last()?.ident == "AccessRefusal").then_some(())?;
+                let Type::Path(ty) = &*item.self_ty else {
+                    return None;
+                };
+                Some(ty.path.segments.last()?.ident.to_string())
+            }
+            _ => None,
+        })
+        .collect())
+}
+
+/// The error of a `Result` return when it is one of the `refusals`: what lets a wrong-phase call
+/// refuse instead of unwinding.
+fn refusal_shaped<'a>(
+    output: &'a syn::ReturnType,
+    refusals: &std::collections::BTreeSet<String>,
+) -> Option<&'a Type> {
+    result_error(output).filter(|error| refusals.iter().any(|name| outer_type(error, name)))
+}
+
+/// Where the gated methods that may unwind are listed, one `area::method` per line. The list
+/// only shrinks: `tools/ci/check_unwinding_methods.py` refuses a line added since the base.
+const UNWINDING_METHODS: &str = "crates/sunrise-mod-api-gen/unwinding-methods.txt";
+
+/// A gated method that returns no `Result` with a refusal error (a type with a `AccessRefusal`
+/// impl, whose `unavailable()` the forwarder returns) can only refuse a wrong-phase
+/// call by unwinding. A new one is refused unless it is listed; a listed one that has gained a
+/// refusal, or is gone, must leave the list.
+fn check_unwinding(
+    root: &Path,
+    unwinding: &std::collections::BTreeSet<String>,
+) -> Result<(), String> {
+    let path = root.join(UNWINDING_METHODS);
+    crate::rerun_if_changed(&path.display());
+    let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let listed: std::collections::BTreeSet<String> = text
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.is_empty())
+        .map(str::to_owned)
+        .collect();
+    let added: Vec<_> = unwinding.difference(&listed).cloned().collect();
+    if !added.is_empty() {
+        return Err(format!(
+            "gated methods without a refusal-shaped Result: return `Result<_, E>` with an error `E` that implements `AccessRefusal` (`LevelReadError`, `LevelWriteError`...) so a wrong-phase call refuses instead of unwinding; the list in {UNWINDING_METHODS} only shrinks:\n{}",
+            added.join("\n")
+        ));
+    }
+    let stale: Vec<_> = listed.difference(unwinding).cloned().collect();
+    if !stale.is_empty() {
+        return Err(format!(
+            "remove these from {UNWINDING_METHODS}: each now returns a refusal-shaped Result or is gone:\n{}",
+            stale.join("\n")
+        ));
+    }
+    Ok(())
 }
 
 /// API records whose game representation is owned by another crate. Conversions are
@@ -808,7 +1042,7 @@ fn refusal(sig: &syn::Signature, name: &str) -> Result<Option<&'static str>, Str
         Some("Option") => Some("None"),
         Some("bool") => Some("false"),
         // A read that answers `Result`: its refusal is the error a host without a backend answers.
-        Some("Result") => Some("Err(mod_api::NoBackend::no_backend())"),
+        Some("Result") => Some("Err(NoBackend::no_backend())"),
         Some("u64" | "u32" | "i32" | "u16" | "u8" | "usize") => Some("0"),
         // A registry key's metadata: a read the goal view only forwards.
         Some("String") => None,
@@ -1183,7 +1417,53 @@ mod state_write_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_non_test_impls_of_the_marker_name_a_refusal() {
+        let source = "impl AccessRefusal for A {}\n#[cfg(test)]\nimpl AccessRefusal for B {}\n#[cfg(not(test))]\nimpl AccessRefusal for D {}\nimpl Other for C {}";
+        assert_eq!(access_refusal_impls(source).unwrap(), ["A", "D"]);
+    }
+
     use super::*;
+
+    /// A marked error is refusal-shaped as a `Result`'s error and an unmarked one is not; the
+    /// marker is the `AccessRefusal` impl.
+    #[test]
+    fn a_result_is_refusal_shaped_by_its_errors_access_refusal_impl() {
+        let source = "impl crate::AccessRefusal for Marked { fn unavailable() -> Self { Self } }\n\
+                      impl mod_api::AccessRefusal for other::Path { fn unavailable() -> Self { Self } }\n\
+                      impl NoBackend for Unmarked { fn no_backend() -> Self { Self } }";
+        let marked: std::collections::BTreeSet<_> =
+            access_refusal_impls(source).unwrap().into_iter().collect();
+        assert_eq!(marked, ["Marked".to_owned(), "Path".to_owned()].into());
+        let output = |ty: &str| syn::parse_str::<syn::ReturnType>(&format!("-> {ty}")).unwrap();
+        assert!(refusal_shaped(&output("Result<u32, Marked>"), &marked).is_some());
+        assert!(refusal_shaped(&output("Result<u32, Unmarked>"), &marked).is_none());
+        assert!(refusal_shaped(&output("u32"), &marked).is_none());
+    }
+
+    /// The vocabulary's own refusal errors are found from their impls.
+    #[test]
+    fn the_vocabulary_marks_its_refusal_errors() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let found = refusal_errors(&root).unwrap();
+        for name in ["LevelReadError", "LevelWriteError", "AudioRefusal"] {
+            assert!(found.contains(name), "{name} in {found:?}");
+        }
+    }
+
+    /// A gated method outside the list that has no refusal-shaped `Result` is refused, and one
+    /// inside it passes.
+    #[test]
+    fn an_unmarked_gated_method_must_be_listed_to_pass() {
+        let root = std::env::temp_dir().join(format!("sunrise-unwinding-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("crates/sunrise-mod-api-gen")).unwrap();
+        std::fs::write(root.join(UNWINDING_METHODS), "# listed\narea::listed\n").unwrap();
+        let methods = |names: &[&str]| names.iter().map(|n| n.to_string()).collect();
+        assert!(check_unwinding(&root, &methods(&["area::listed"])).is_ok());
+        let refused = check_unwinding(&root, &methods(&["area::listed", "area::new"]));
+        assert!(refused.unwrap_err().contains("area::new"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     fn entry(source: &str) -> Entry {
         let method: syn::TraitItemFn = syn::parse_str(source).unwrap();

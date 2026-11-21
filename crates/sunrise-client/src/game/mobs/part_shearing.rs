@@ -39,9 +39,16 @@ impl Game<'_> {
                 hook: "is_shearable",
                 part: Some(attached.type_name()),
             });
-            let answer = attached
-                .part()
-                .is_shearable(self, entity, player, &shears)?;
+            // Called outside the world (a reload or setup) a refused Host call is no answer.
+            let answer = match mod_api::__private::contain_outside_world(|| {
+                attached.part().is_shearable(self, entity, player, &shears)
+            }) {
+                Ok(answer) => answer?,
+                Err(refusal) => {
+                    refusal.report();
+                    return None;
+                }
+            };
             Some((at, answer))
         })
     }
@@ -49,13 +56,15 @@ impl Game<'_> {
     /// `IShearable.onSheared` on mob `index`'s entity part `part` (as [`Self::part_shearable`]
     /// named it), then `spawnShearedDrop` for each drop it returns: one block above where the mob
     /// stands afterwards, nudged by the mob's own random as `Sheep.shear` nudges its wool.
+    /// A call the load phase refuses (reported) is no shearing: it comes back as the refusal, not
+    /// as a shearing that dropped nothing.
     pub(super) fn part_shear(
         &mut self,
         index: usize,
         part: usize,
         player: Option<PlayerRef>,
         shears: &ItemStack,
-    ) {
+    ) -> Result<(), mod_api::__private::PhaseRefusal> {
         let (id, at) = (self.mobs[index].id, self.mobs[index].position);
         let parts = mod_api::__private::entity_parts();
         let (Some(attached), Some(entity), Ok(shears)) = (
@@ -63,7 +72,7 @@ impl Game<'_> {
             self.entity(id),
             shears.try_into_api(),
         ) else {
-            return;
+            return Ok(());
         };
         let drops = {
             let _guard = enter_native_mod(ModCall {
@@ -71,7 +80,10 @@ impl Game<'_> {
                 hook: "on_sheared",
                 part: Some(attached.type_name()),
             });
-            attached.part().on_sheared(self, entity, player, &shears)
+            mod_api::__private::contain_outside_world(|| {
+                attached.part().on_sheared(self, entity, player, &shears)
+            })
+            .inspect_err(|refusal| refusal.report())?
         };
         // The part may have moved or removed the mob: its drops fall where it is now.
         let index = self.mobs.iter().position(|m| m.id == id && !m.removed);
@@ -93,6 +105,7 @@ impl Game<'_> {
                 item.velocity = Vec3::new(v.x + push[0], v.y + push[1], v.z + push[2]);
             }
         }
+        Ok(())
     }
 
     /// Shears in the acting player's hand on mob `index` (`ShearsItem.interactLivingEntity`):
@@ -140,7 +153,9 @@ impl Game<'_> {
             }
         }
         let (part, _) = part?;
-        self.part_shear(index, part, player, &shears);
+        if self.part_shear(index, part, player, &shears).is_err() {
+            return Some(false);
+        }
         let ctx = self.who_context(Some(Who::Player), None);
         self.post_game_event("minecraft:shear", [at.x, at.y, at.z], ctx);
         self.damage_held_tool();
@@ -248,6 +263,115 @@ mod tests {
             assert!(!game.shear_entity((4, 64, 0)).unwrap(), "the sheep refuses");
             assert!(!game.mobs.iter().any(|m| m.id == 2 && m.extra.sheared));
             assert!(!game.dropped.iter().any(|d| d.stack.item.ends_with("_wool")));
+        });
+    }
+
+    /// A cow whose part reads the world through the Host, as a mod's part may.
+    struct GatedCow;
+    #[mod_api::sunrise_part]
+    impl mod_api::EntityPart for GatedCow {
+        fn is_shearable(
+            &self,
+            host: &dyn mod_api::Host,
+            _: mod_api::EntityRef,
+            _: Option<PlayerRef>,
+            _: &mod_api::ItemStack,
+        ) -> Option<bool> {
+            let _ = host.level("minecraft:overworld");
+            Some(true)
+        }
+        fn on_sheared(
+            &self,
+            host: &mut dyn mod_api::ServerHost,
+            _: mod_api::EntityRef,
+            _: Option<PlayerRef>,
+            _: &mod_api::ItemStack,
+        ) -> Vec<mod_api::ItemStack> {
+            let _ = host.level("minecraft:overworld");
+            let leather = mod_api::__private::item_key("minecraft:leather").unwrap();
+            vec![mod_api::ItemStack::new(leather, 1).unwrap()]
+        }
+    }
+    /// A sheep whose part agrees to shear without a Host call, then reads the world in `on_sheared`:
+    /// the shearing starts and its performing is the refused call.
+    struct GatedSheep;
+    #[mod_api::sunrise_part]
+    impl mod_api::EntityPart for GatedSheep {
+        fn is_shearable(
+            &self,
+            _: &dyn mod_api::Host,
+            _: mod_api::EntityRef,
+            _: Option<PlayerRef>,
+            _: &mod_api::ItemStack,
+        ) -> Option<bool> {
+            Some(true)
+        }
+        fn on_sheared(
+            &self,
+            host: &mut dyn mod_api::ServerHost,
+            _: mod_api::EntityRef,
+            _: Option<PlayerRef>,
+            _: &mod_api::ItemStack,
+        ) -> Vec<mod_api::ItemStack> {
+            let _ = host.level("minecraft:overworld");
+            Vec::new()
+        }
+    }
+    struct GatedMod;
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for GatedMod {
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            r.entity_part("minecraft:cow", GatedCow);
+            r.entity_part("minecraft:sheep", GatedSheep);
+        }
+    }
+
+    /// Entity parts run in ticks, after the thread reached World. Fired in Setup and in Reloading anyway,
+    /// a part's world read is a contained refusal (no answer, no drops), never the no-scope panic; in World
+    /// the same part shears.
+    #[test]
+    #[ignore = "daily"]
+    fn a_part_shearing_outside_the_world_is_refused_not_a_panic() {
+        use super::super::native_entity_refs::tests::{run_fresh_cases, with_game};
+        use mod_api::__private::{ModPhase, PhaseOwner};
+        if run_fresh_cases(
+            "game::part_shearing::tests::a_part_shearing_outside_the_world_is_refused_not_a_panic",
+            "SUNRISE_PART_SHEARING_PHASE_CHILD",
+            &["valid"],
+        ) {
+            return;
+        }
+        let entries = vec![mod_api::ModEntry::new("gated", Box::new(GatedMod))];
+        mod_platform::__private::install(entries.into());
+        crate::game::api_values::install_parts(&[mod_api::ModEntry::new(
+            "gated",
+            Box::new(GatedMod),
+        )])
+        .unwrap();
+        with_game(|game| {
+            game.resolve_parts().unwrap();
+            game.next_entity = game.next_entity.max(2);
+            let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
+            game.mobs
+                .push(Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0));
+            let sheep = game.res.mob_types().get("minecraft:sheep").unwrap().clone();
+            game.mobs
+                .push(Mob::new(2, sheep, Vec3::new(4.5, 64.0, 0.5), 0.0));
+            let shears = sunrise_client::items::ItemStack::new("minecraft:shears", 1);
+            for reloading in [false, true] {
+                let setup = PhaseOwner::scope(ModPhase::Setup);
+                let _reload = reloading.then(|| setup.reloading().unwrap());
+                assert_eq!(game.part_shearable(0, None, &shears), None);
+                assert!(game.part_shear(0, 0, None, &shears).is_err());
+                assert!(game.dropped.is_empty(), "a refused part drops nothing");
+                // The dispenser's shearing is not a success when the part's performing is refused.
+                assert!(
+                    !game.shear_entity((4, 64, 0)).unwrap(),
+                    "a refused on_sheared shears nothing"
+                );
+                assert!(!game.mobs[1].extra.sheared);
+            }
+            assert_eq!(game.part_shearable(0, None, &shears), Some((0, true)));
         });
     }
 }

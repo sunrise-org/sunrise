@@ -25,6 +25,8 @@ impl Game<'_> {
         self.connect_local(client, "BoatSeatFixture")?;
         self.remote.as_mut().unwrap().entity_id = 1;
         self.player = Some(PlayerMotion::new(self.motion, Vec3::new(0.0, 100.0, 0.0))?);
+        self.spawn_entity(2, "minecraft:marker", [0.0, 100.0, 0.0], [0.0; 3]);
+        self.spawn_entity(3, "minecraft:oak_boat", [0.0, 100.0, 0.0], [0.0; 3]);
 
         let mut output = Vec::new();
         for case in cases {
@@ -45,7 +47,7 @@ impl Game<'_> {
             self.boats.push(b);
             let mut steps = Vec::new();
             for first in case.first {
-                self.remote_set_passengers(3, if first { &[1, 2] } else { &[2, 1] });
+                self.remote_set_passengers(3, if first { vec![1, 2] } else { vec![2, 1] });
                 let mut accepts_server_moves = false;
                 self.tick_remote_objects(
                     |_, p| {

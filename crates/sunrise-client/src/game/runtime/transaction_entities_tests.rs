@@ -881,20 +881,20 @@ fn a_pending_boat_removal_is_hidden_from_selectors_until_it_commits() {
         let boat = summon(game, "minecraft:oak_boat", "{}").unwrap();
         let handle = game.entity(boat).unwrap();
         let target = Target::Boat(boat);
-        assert!(game.level_candidates().contains(&target));
+        assert!(game.level_candidates(false).contains(&target));
 
         let seal = game.transaction_open();
         assert!(game.entity_discard(handle));
         assert_eq!(game.entity(boat), None, "the handle is stale");
         assert!(
-            !game.level_candidates().contains(&target),
+            !game.level_candidates(false).contains(&target),
             "selectors do not find it"
         );
-        assert!(!game.global_selector_candidates().contains(&target));
+        assert!(!game.global_selector_candidates(false).contains(&target));
         game.transaction_close(&seal, false);
         assert_eq!(game.entity(boat), Some(handle));
         assert!(
-            game.level_candidates().contains(&target),
+            game.level_candidates(false).contains(&target),
             "an abort brings it back"
         );
 
@@ -903,7 +903,7 @@ fn a_pending_boat_removal_is_hidden_from_selectors_until_it_commits() {
         game.transaction_close(&seal, true);
         assert_eq!(game.entity(boat), None);
         assert!(
-            !game.level_candidates().contains(&target),
+            !game.level_candidates(false).contains(&target),
             "a commit removed it"
         );
     });

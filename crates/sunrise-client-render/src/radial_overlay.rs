@@ -260,8 +260,8 @@ const DIM: f32 = 0.3;
 const WAITING_DIM: f32 = 0.55;
 
 /// The vanilla sprites a tile is drawn with (the F3+F4 game mode switcher's).
-const SLOT_SPRITE: &str = "gui/sprites/gamemode_switcher/slot";
-const SELECTION_SPRITE: &str = "gui/sprites/gamemode_switcher/selection";
+const SLOT_SPRITE: &str = "gamemode_switcher/slot";
+const SELECTION_SPRITE: &str = "gamemode_switcher/selection";
 /// The hotbar's size, to dim it under a small view's dial.
 const HOTBAR: [f32; 2] = [182.0, 22.0];
 

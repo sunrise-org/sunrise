@@ -1,10 +1,12 @@
 //! `cargo sunrise-mod check <file>`: what the registry checks of a submission,
 //! run anywhere: its kind's own checks (docs/modding/src/reference/registry-index.md), its signature
-//! when given a key, and for a `.smod` whether it runs WebAssembly code or is content only.
+//! when given a key, and for a `.smod` whether it contains native source or only content.
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::Path;
+use sunrise_mod_package::Package;
 use sunrise_mod_package::index::{self, Facts, Kind};
+use sunrise_mod_package::manifest::{MANIFEST, MAX_USES};
 use sunrise_shader_api::mod_pipeline;
 
 pub struct Report {
@@ -36,7 +38,6 @@ impl Report {
             "sha256": self.sha256,
             "size": self.size,
             "signed": self.signed,
-            "wasm": self.facts.wasm,
         })
     }
 
@@ -90,9 +91,7 @@ impl Report {
         if self.kind == Kind::NativeMod {
             out += "  native source: unsandboxed; not executed by the registry check. Compile and test against the exact pinned Sunrise and Mixins revisions before review.\n";
         }
-        if self.kind == Kind::Mod && self.facts.wasm {
-            out += "  WebAssembly code: runs sandboxed in the game, within its time and memory limits; not executed by the registry check\n";
-        } else if self.kind == Kind::Mod {
+        if self.kind == Kind::Mod {
             out += "  no code: content only, nothing to run\n";
         }
         out
@@ -119,6 +118,27 @@ pub fn check(
     key: Option<&str>,
     signature: Option<&str>,
 ) -> Result<Report, String> {
+    check_package(path, kind, key, signature, true)
+}
+
+/// Inspect a reviewed source when adding only a build. An older source without a uses list
+/// stays exact to its pin; the registry still verifies its source and judges the appended build.
+pub(crate) fn check_reviewed_source(
+    path: &Path,
+    kind: Kind,
+    key: Option<&str>,
+    signature: Option<&str>,
+) -> Result<Report, String> {
+    check_package(path, kind, key, signature, false)
+}
+
+fn check_package(
+    path: &Path,
+    kind: Kind,
+    key: Option<&str>,
+    signature: Option<&str>,
+    require_uses: bool,
+) -> Result<Report, String> {
     let size = std::fs::metadata(path)
         .map_err(|e| format!("{}: {e}", path.display()))?
         .len();
@@ -127,6 +147,9 @@ pub fn check(
     }
     index::open(&kind)?;
     let facts = index::inspect(&kind, path)?;
+    if require_uses && kind == Kind::NativeMod {
+        uses_list(path)?;
+    }
     let signed = match (key, signature) {
         (Some(key), Some(sig)) => {
             index::verify_signature(key, sig, path)?;
@@ -142,6 +165,35 @@ pub fn check(
         size,
         signed,
     })
+}
+
+/// A native mod carries the list of what it uses, made for the build it pins: without it the mod
+/// works on that one build only. A mod with rows no list can judge
+/// ([`sunrise_native_build::game_uses::unjudged`]) is made for one build by nature and needs none.
+fn uses_list(path: &Path) -> Result<(), String> {
+    use sunrise_mod_package::mod_surface::uses::{USES_FILE, UsesTable};
+    let manifest = Package::read(path)?.manifest;
+    if sunrise_native_build::game_uses::unjudged(&manifest).is_some() {
+        return Ok(());
+    }
+    let pin = manifest
+        .native
+        .ok_or_else(|| format!("no [native] table in {MANIFEST}"))?
+        .sunrise;
+    let repack = "Pack the mod with `cargo sunrise-mod build`, which writes the list; if it says it cannot read the mod's code, fix what it names first.";
+    let Some(bytes) = Package::entry(path, USES_FILE, MAX_USES)? else {
+        return Err(format!(
+            "no {USES_FILE}: the package does not list what the mod uses, so it would work on game build {pin} only and stop at the next one. {repack}"
+        ));
+    };
+    let list = UsesTable::read(&bytes).map_err(|e| format!("{USES_FILE}: {e}. {repack}"))?;
+    if list.made_for != pin {
+        return Err(format!(
+            "{USES_FILE} was made for game build {}, and the mod pins {pin}, so the list says nothing about the pinned build. {repack}",
+            list.made_for
+        ));
+    }
+    Ok(())
 }
 
 /// The references among a project's content files ([`sunrise_mod_package::content::check_references`]):
@@ -290,28 +342,5 @@ mod tests {
             assert!(text.contains(word), "{text}");
         }
         assert_eq!(report.json()["dependencies"], dependencies);
-    }
-
-    #[test]
-    fn a_wasm_mod_is_reported_as_code_and_a_content_mod_as_none() {
-        let report = |wasm| Report {
-            kind: Kind::Mod,
-            facts: Facts {
-                id: Some("m".into()),
-                version: Some("1.0.0".into()),
-                wasm,
-                ..Facts::default()
-            },
-            sha256: "0".repeat(64),
-            size: 1,
-            signed: false,
-        };
-        let wasm = report(true);
-        assert!(wasm.text().contains("WebAssembly code: runs sandboxed"));
-        assert!(!wasm.text().contains("no code"));
-        assert_eq!(wasm.json()["wasm"], true);
-        let content = report(false);
-        assert!(content.text().contains("no code: content only"));
-        assert_eq!(content.json()["wasm"], false);
     }
 }

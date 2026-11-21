@@ -287,18 +287,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             && !self.level.has_weak_power_hook()
             && self.b.is_block(state, self.b.named.redstone_wire);
         let node = cacheable.then(|| self.wire_node(pos));
-        let (block_signal, incoming, power) = match node {
+        let (block_signal, incoming) = match node {
             Some(node) => (
                 i32::from(node.block_signal),
                 self.wire_incoming_from(pos, node.sources),
-                i32::from(node.power),
             ),
-            None => (
-                self.wire_block_signal(pos),
-                self.wire_incoming_signal(pos),
-                self.b.table.int(state, self.b.props.power),
-            ),
+            None => (self.wire_block_signal(pos), self.wire_incoming_signal(pos)),
         };
+        // `updatePowerStrength` compares the *passed* state's power: the
+        // `affectNeighborsAfterRemoval` call after a wire is removed hands over
+        // the old state, whose power — not the level's, already air — decides
+        // the neighbour fan-out.
+        let power = self.b.table.int(state, self.b.props.power);
         let target = if block_signal == 15 {
             15
         } else {

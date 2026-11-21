@@ -14,7 +14,7 @@ suggest something. A pull request for a roadmap item carries its `roadmap:<id>` 
 queue (the hub, or `/suggest` on Discord) rather than to issues, which are for bugs.
 
 **Mod-related pull requests come here too.** Sunrise is where the mod API is built: the mod API, native hooks and
-events for mods, native mods, content mods (`.smod`), mixins, wasm mods, `cargo sunrise-mod`, `sunrise-mods`, mod
+events for mods, native mods, content mods (`.smod`), mixins, `cargo sunrise-mod`, `sunrise-mods`, mod
 builds and the registry, and their docs ([mods](docs/mods.md), [native mods](docs/native-mods.md)). A change to the mod
 API follows its clean-break rules ([AGENTS.md](AGENTS.md#mod-api-the-clean-break)).
 
@@ -143,10 +143,9 @@ needs prepared resources, a child process or the network.
 | --- | --- | --- |
 | Push | every pull request push | `format`, `verify-static` |
 | Gate | rollup and sync pull requests, pushes to main | `lint`, `verify` (unit tests only), `verify-static` |
-| Daily | once a day on main's head | every test that boots the game or needs prepared resources, the wasm fixture, `fn-replace-check`, the SDK build and its linkage probe, the machine sample built against the mod API, and vanilla parity on the main head captured at dispatch |
+| Daily | once a day on main's head | every test that boots the game or needs prepared resources, `fn-replace-check`, the SDK build and its linkage probe, the machine sample built against the mod API, the modding book's quickstart run with the mod tool alone, and vanilla parity on the main head captured at dispatch |
 
-**A unit test** uses no prepared resources, boots no game, starts no child process, uses no network and no compiled
-wasm fixture, and finishes in under 2 seconds. Any other test is a daily test: it carries `#[ignore]` and a row in
+**A unit test** uses no prepared resources, boots no game, starts no child process, uses no network, and finishes in under 2 seconds. Any other test is a daily test: it carries `#[ignore]` and a row in
 `tools/ci/ignored-tests/` (the format is in that folder's README). `verify` fails a unit test that takes over 5
 seconds and `verify-static` one that boots the game.
 In Linux `verify`, test binaries run normally under an inet guard: opening, binding or connecting an IPv4/IPv6
@@ -162,8 +161,8 @@ still fails by binary name. Move a network test with `tools/ci/move_to_daily.py`
 - If a daily run fails on a test your pull request added or touched, an issue is filed that names the test, where it
   panicked and the pull requests merged since the last green daily run. The fix is an ordinary pull request.
 
-Three kinds of build: a **snapshot**, from main's head on request, needs only the gate tier and no in-game tests
-(it is published as `snapshot-<date>-<short>`, which no launcher offers, to test packages and platforms after a
+Three kinds of build: a **Dev build**, from a commit on main on request, needs only the gate tier and no in-game tests
+(it is published as `dev-<date>-<short>`, installed only by explicit tag, to test packages and platforms after a
 merge); the **nightly** is published by the daily run when every part of it is green; a **release** is cut from a
 nightly.
 
@@ -226,6 +225,11 @@ it (edited on every push, never repeated): talk to its author in the thread befo
 - **Release labels** (we set them if you can't): `feature` also puts it under "New" in the release notes,
   `skip-release` when players see no change (tooling, docs, tests), nothing for a fix. `release-now` is for crash
   fixes that shouldn't wait. pr_ready suggests one.
+- **`breaking`** when players or server owners must do something after they update: a save or settings format that
+  changes, a removed feature, a changed command or `server.toml` key. Say what they must do under a
+  `## Breaking change` heading in the description, for example "Set your render distance again in Options." Sunrise's
+  Discord feed posts that text as a ⚠️ breaking-change notice, so write it for players. Mod API breaks don't need the
+  label: the `migrate` line of their change note in `crates/sunrise-mod-vocab/changes/` says what mod makers do.
 
 Who reviews and merges: the Sunrise Team, on CI for ordinary pull requests; risky ones (saves, network, world
 generation, the launcher's updates) wait for a local proof first ([merging](docs/release-flow.md#merging)).

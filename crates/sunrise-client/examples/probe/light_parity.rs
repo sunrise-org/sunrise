@@ -4,7 +4,10 @@
 //!
 //! cargo run --profile fast -p sunrise-client --example probe -- light_parity \
 //!     RESOURCES DIMENSION_DIR [--nether] [--chunks X0 Z0 X1 Z1]
-use std::{collections::HashMap, path::PathBuf};
+//! The light-storage harness also calls light_parity --ordered-padding RESOURCES OUTPUT.
+mod ordered_padding;
+
+use std::{collections::HashMap, ffi::OsStr, path::PathBuf};
 use sunrise_client::{
     assets::Assets,
     biome::Biomes,
@@ -22,6 +25,12 @@ use {
 type Arrays = HashMap<i32, (Option<Vec<u8>>, Option<Vec<u8>>)>;
 
 pub fn main() -> sunrise_client::Result<()> {
+    let mut args = crate::args_os().skip(1);
+    if args.next().as_deref() == Some(OsStr::new("--ordered-padding")) {
+        let resources = args.next().ok_or("missing resources directory")?;
+        let output = args.next().ok_or("missing ordered padding report path")?;
+        return ordered_padding::write_report(resources.into(), output.into());
+    }
     let args: Vec<String> = crate::args().skip(1).collect();
     let root = PathBuf::from(
         args.first()

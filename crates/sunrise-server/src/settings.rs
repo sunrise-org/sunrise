@@ -142,7 +142,6 @@ pub fn parse_change(
 fn range(section: &str, field: &str) -> Option<std::ops::RangeInclusive<i64>> {
     match (section, field) {
         ("server", "view_distance" | "simulation_distance") => Some(2..=32),
-        ("server", "max_view_distance") => Some(0..=32),
         ("server", "max_viewed_loaded_chunks" | "max_viewed_ticking_chunks") => Some(0..=65536),
         (
             "server",
@@ -226,6 +225,13 @@ pub fn apply(
     let current = toml::Table::try_from(config::Config::load(dir)?).map_err(|e| e.to_string())?;
     let mut parsed = changes
         .iter()
+        .filter(|c| {
+            let retired = config::retired_change(c);
+            if retired {
+                eprintln!("{}: no longer read, skipped", c.trim());
+            }
+            !retired
+        })
         .map(|c| parse_change(&current, c))
         .collect::<Result<Vec<_>, _>>()?;
     // The file keeps the last value for each key. Send only those same final values to the game,
@@ -444,6 +450,29 @@ mod tests {
         let refuses = |_: &str| false;
         let outcome = apply(&dir, &["server.motd=Closed"], Some(&refuses)).unwrap();
         assert_eq!(outcome.restart, ["server.motd"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A change naming a retired key is skipped, and the others in the same update are saved.
+    #[test]
+    fn an_update_with_a_retired_key_saves_the_rest() {
+        let dir =
+            std::env::temp_dir().join(format!("sunrise-server-retired-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(config::FILE), config::TEMPLATE).unwrap();
+        let changes = [
+            "server.max_view_distance=24",
+            "world.difficulty=hard",
+            "properties.sunrise-max-view-distance=24",
+        ];
+        let outcome = apply(&dir, &changes, None).unwrap();
+        assert_eq!(outcome.saved, ["world.difficulty"]);
+        let saved = config::Config::load(&dir).unwrap();
+        assert_eq!(saved.world.difficulty, "hard");
+        assert!(saved.properties.is_empty());
+        let text = std::fs::read_to_string(dir.join(config::FILE)).unwrap();
+        assert!(config::retired_in(&text).is_empty(), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

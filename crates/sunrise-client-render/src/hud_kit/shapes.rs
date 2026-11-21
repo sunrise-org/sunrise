@@ -118,15 +118,6 @@ impl HudBatch {
         self.triangle_shaded(white(atlas), corners, [color; 3]);
     }
 
-    /// A fan in one colour: a triangle from `centre` to each two neighbouring points of `rim`
-    /// (GUI px). Repeat the first point at the end to close it.
-    pub fn fill_fan(&mut self, atlas: &HudAtlas, centre: [f32; 2], rim: &[[f32; 2]], color: u32) {
-        let uv = white(atlas);
-        for pair in rim.windows(2) {
-            self.triangle_shaded(uv, [centre, pair[0], pair[1]], [color; 3]);
-        }
-    }
-
     /// An annular sector in one colour: between radii `r0` and `r1` (GUI px, snapped to whole
     /// px) from `angles[0]` to `angles[1]` (radians from up, clockwise), cut into
     /// [`arc_segments`]. With `r0` 0 it is a pie slice; a span of `TAU` is a whole ring.

@@ -11,7 +11,7 @@ use sunrise_core::nbt::Tag;
 ///
 /// Builtin maps are already registered. They return canonical codec NBT compounds,
 /// including Float distances (with infinity preserved) and Int frequencies. This store
-/// is server-only, shared by native and wasm hosts, not network-synced to clients.
+/// is server-only and is not synced to clients.
 /// Mod-defined maps retain the JSON-to-NBT mapping below.
 ///
 /// Register a mod-defined map in `data_map_types` with [`DataMap::ty`], then read an entry's value with its

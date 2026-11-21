@@ -337,36 +337,27 @@ impl State {
 /// text is checked against.
 fn load(root: &Path) -> (Vec<Preset>, BTreeSet<String>, BTreeSet<String>) {
     let mut presets = Vec::new();
-    let tag_path =
-        root.join("data/minecraft/tags/worldgen/flat_level_generator_preset/visible.json");
-    if let Ok(text) = std::fs::read_to_string(tag_path)
-        && let Ok(tag) = serde_json::from_str::<Value>(&text)
-    {
-        fn members(root: &Path, tag: &Value, active: &mut BTreeSet<String>) -> Vec<String> {
-            sunrise_world::tag_layers::TagLayers::from_file(tag).build(|id| {
-                if !active.insert(id.to_owned()) {
-                    return Vec::new();
-                }
-                let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
-                let file = root.join(format!(
-                    "data/{namespace}/tags/worldgen/flat_level_generator_preset/{path}.json"
-                ));
-                let out = std::fs::read(file)
-                    .ok()
-                    .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-                    .map(|v| members(root, &v, active))
-                    .unwrap_or_default();
-                active.remove(id);
-                out
-            })
-        }
-        for id in members(root, &tag, &mut BTreeSet::new()) {
-            let Some((namespace, path)) = id.split_once(':') else {
+    let kind = "worldgen/flat_level_generator_preset";
+    let preset_path = |id: &str| {
+        let (namespace, path) = id.split_once(':')?;
+        let name = format!("data/{namespace}/{kind}/{path}.json");
+        sunrise_assets::resource_source::stays_inside(&name).then(|| root.join(name))
+    };
+    let tags = sunrise_world::tag_layers::load(
+        root,
+        kind,
+        &sunrise_world::loot::PackOverlay::NONE,
+        |id| preset_path(id).is_some_and(|file| file.is_file()),
+    )
+    .unwrap_or_else(|error| {
+        log::warn!("Sunrise: flat preset tags unavailable: {error}");
+        Default::default()
+    });
+    if let Some(ids) = tags.get("minecraft:visible") {
+        for id in ids {
+            let Some(path) = preset_path(id) else {
                 continue;
             };
-            let path = root.join(format!(
-                "data/{namespace}/worldgen/flat_level_generator_preset/{path}.json"
-            ));
             let Ok(text) = std::fs::read_to_string(path) else {
                 continue;
             };
@@ -981,7 +972,7 @@ fn slot(
     x: f32,
     y: f32,
 ) {
-    if let Some(rect) = atlas.sprites.get("gui/sprites/container/slot").copied() {
+    if let Some(rect) = atlas.sprites.get("container/slot").copied() {
         batch.rect_uv(x, y, 18.0, 18.0, rect, u32::MAX);
     } else {
         batch.fill(atlas, x, y, 18.0, 18.0, rgba(139, 139, 139, 255));

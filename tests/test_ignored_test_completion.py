@@ -11,6 +11,9 @@ from unittest.mock import patch
 
 from tools.ci import ignored_tests
 
+# What precedes a test run's own command: GNU timeout and the run's limit, where the platform has them.
+LIMIT = len(ignored_tests.time_limit())
+
 
 def target(count, results, summary):
     return f"     Running unittests src/lib.rs (target/debug/deps/example)\nrunning {count} tests\n{results}{summary}"
@@ -27,6 +30,16 @@ class IgnoredTests(unittest.TestCase):
         with patch.object(ignored_tests.subprocess, "run", return_value=subprocess.CompletedProcess([], code, output)), contextlib.redirect_stdout(io.StringIO()) as log:
             result = ignored_tests.run("example", [])
         return result, log.getvalue()
+
+    def test_test_threads_get_the_harnesses_stack(self):
+        # A server Game held by value overflowed libtest's 2 MiB test thread (#3744).
+        output = target(1, "test first ... ok\n", summary(passed=1))
+        with patch.object(ignored_tests.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)) as run, \
+                contextlib.redirect_stdout(io.StringIO()):
+            ignored_tests.run("sunrise-client", [])
+        stacks = [call.kwargs["env"].get("RUST_MIN_STACK") for call in run.call_args_list if call.args[0][LIMIT:LIMIT + 2] == ["cargo", "test"]]
+        self.assertTrue(stacks)
+        self.assertEqual(set(stacks), {str(16 * 1024 * 1024)})
 
     def test_success_and_multiple_targets(self):
         output = target(1, "test first ... ok\n", summary(passed=1))
@@ -166,6 +179,40 @@ class IgnoredTests(unittest.TestCase):
             self.assertIsNone(ignored_tests.run("example", []))
         self.assertEqual(ignored_tests._stopped["still_running"],
                          [f"identity withheld (longer than {ignored_tests.IDENTITY_CHARS} characters)"])
+
+    def test_a_run_stopped_at_its_time_limit_names_the_tests_still_running(self):
+        # A hung test held both client halves until the job limit cancelled them, naming nothing (daily 44814607973).
+        output = (target(3, "test done ... ok\ntest game::dragon::hangs has been running for over 60 seconds\n"
+                            "test game::wind::finished_late has been running for over 60 seconds\n"
+                            "test game::wind::finished_late ... ok\n", ""))
+        with patch.object(ignored_tests.subprocess, "run",
+                          return_value=subprocess.CompletedProcess([], ignored_tests.TIMED_OUT, output)) as run, \
+                contextlib.redirect_stdout(io.StringIO()) as log:
+            self.assertIsNone(ignored_tests.run("example", []))
+        if LIMIT:
+            self.assertEqual(run.call_args.args[0][:LIMIT], ["timeout", f"{ignored_tests.TEST_RUN_LIMIT}s"])
+        self.assertEqual(ignored_tests._stopped["reason"], "tests still running at the time limit (a hung test)")
+        self.assertEqual(ignored_tests._stopped["ended_by"], f"the {ignored_tests.TEST_RUN_LIMIT} s limit")
+        self.assertEqual(ignored_tests._stopped["still_running"], ["game::dragon::hangs"])
+        # What finished before the limit still counts.
+        self.assertEqual(ignored_tests._reported, {"done": True, "game::wind::finished_late": True})
+        self.assertIn("still running past 60 s: game::dragon::hangs", log.getvalue())
+
+    def test_one_executable_stopped_at_the_limit_stops_the_daily_rows_run_but_not_the_next_executable(self):
+        ran = []
+
+        def execute(command, **_):
+            executable = command[LIMIT]
+            ran.append(Path(executable).name)
+            code = ignored_tests.TIMED_OUT if executable.endswith("/a") else 0
+            return subprocess.CompletedProcess(command, code, "")
+
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(ignored_tests.ignored_shards, "workspace_members", return_value={"pkg": (folder, ".")}), \
+                patch.object(ignored_tests.subprocess, "run", side_effect=execute):
+            done = ignored_tests.run_binaries("pkg", {"lib": f"{folder}/a", "test:b": f"{folder}/b"}, ["--ignored"], {})
+        self.assertEqual(ran, ["a", "b"])
+        self.assertEqual(done.returncode, ignored_tests.TIMED_OUT)
 
     def test_the_report_names_the_run_in_progress_before_it_ends(self):
         # A job stopped at its time limit kills this script too: what it wrote before the run is what is uploaded.
@@ -352,7 +399,7 @@ class IgnoredTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(ignored_tests.run("sunrise-relay", [], only=(["lib", "test:tunnel"], ["a", "b"])),
                              {"a": True, "b": True})
-        command = execute.call_args.args[0]
+        command = execute.call_args.args[0][LIMIT:]
         # The features the workspace build turns on, as verify compiled the test.
         self.assertEqual(command[:command.index("--")],
                          ["cargo", "test", "-p", "sunrise-relay", "--features", "fixture,index", "--lib", "--test", "tunnel",
@@ -374,7 +421,7 @@ class IgnoredTests(unittest.TestCase):
             self.assertEqual(ignored_tests.run("sunrise-mod-package", [], only=(["lib"], ["holder::tests::slow"])),
                              {"holder::tests::slow": True})
         self.assertEqual(execute.call_args_list[0].args[0], prepare)
-        self.assertEqual(execute.call_args_list[1].args[0][:2], ["cargo", "test"])
+        self.assertEqual(execute.call_args_list[1].args[0][LIMIT:LIMIT + 2], ["cargo", "test"])
         # A failed build stops the run, saying why, before any test runs.
         with patch.object(ignored_tests.subprocess, "run", return_value=subprocess.CompletedProcess([], 101, "error: x\n")) as execute, \
                 patch.object(ignored_tests, "workspace_features", return_value={}), contextlib.redirect_stdout(io.StringIO()):

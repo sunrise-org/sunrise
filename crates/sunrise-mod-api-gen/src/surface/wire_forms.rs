@@ -1,6 +1,6 @@
-//! How each API type crosses the WebAssembly boundary, read from the code that makes it cross:
+//! How each API type implements `Wire`, read from the code that defines the encoding:
 //! the `Wire` derive (with `#[wire(via = T)]`), a hand-written `impl Wire` (its
-//! `layout_fields!` list, or a `layout_via!` naming the type it crosses as), including the impls the
+//! `layout_fields!` list, or a `layout_via!` naming its encoded form), including the impls the
 //! API's own macros write once expanded.
 use crate::index::{Found, Index, ItemId};
 pub(super) use mod_source::layouts::WireForm;

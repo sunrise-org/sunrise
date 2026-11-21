@@ -22,7 +22,14 @@ pub fn stamp(path: &Path, build: &str, id: &str, version: &str, patch: bool) -> 
         sha256: String::new(),
         kind: if patch { "patch" } else { "mod" }.into(),
         mod_id: id.into(),
-        identity: format!("{build} {id} {version} {}", crate::rust::VERSION),
+        // Every library, the patch library too, names its panic strategy as its entry's export
+        // does; the loader refuses `abort` by name.
+        identity: sunrise_mod_package::index::registry::builds::library_identity(
+            build,
+            id,
+            version,
+            crate::rust::VERSION,
+        ),
     };
     fs::write(
         path.with_extension("identity.json"),
@@ -141,9 +148,14 @@ mod tests {
         let json = serde_json::to_value(&rows).unwrap();
         assert_eq!(json[0]["mod"], "dependency");
         assert_eq!(json[2]["kind"], "patch");
+        // The patch library's identity is the five fields the loader reads, as a mod's is.
+        assert_eq!(
+            rows[2].identity,
+            format!("build sunrise_patch 1 {} unwind", crate::rust::VERSION)
+        );
         assert_eq!(
             rows[0].identity,
-            format!("build dependency 1 {}", crate::rust::VERSION)
+            format!("build dependency 1 {} unwind", crate::rust::VERSION)
         );
     }
 }

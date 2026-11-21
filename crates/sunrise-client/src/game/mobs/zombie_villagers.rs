@@ -251,6 +251,8 @@ impl Game<'_> {
                 origin,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &ctx(&me), w)
                 && adv::conditions(&c["zombie"], &ctx(&zombie), w)

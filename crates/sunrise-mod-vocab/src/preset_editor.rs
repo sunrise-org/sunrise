@@ -2,7 +2,7 @@
 
 /// A client screen used to customize a data-pack world preset.
 #[derive(sunrise_mod_api_macros::Wire, Clone, Debug, PartialEq, Eq)]
-// exhaustive: registration is plain data shared by native and wasm mods
+// exhaustive: registration is plain data
 pub struct PresetEditor {
     /// World-preset registry id, such as `example:islands`.
     pub preset: String,

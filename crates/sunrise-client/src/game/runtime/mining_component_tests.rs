@@ -79,7 +79,7 @@ fn mining_uses_admitted_stack_tools_and_actual_eye_immersion() {
             .any(|item| &*item.stack.item == "minecraft:cobblestone")
     );
     assert!(game.run_command(&format!("item replace entity @s weapon.mainhand with minecraft:diamond_pickaxe[{tool},minecraft:max_damage=20]")));
-    game.mine_block_with_held("minecraft:stone", 1.5);
+    assert!(game.mine_block_with_held("minecraft:stone", 1.5).is_none());
     assert_eq!(game.held().unwrap().damage, 3);
     assert_eq!(game.stats.get("used", "minecraft:diamond_pickaxe"), 1);
 
@@ -88,7 +88,7 @@ fn mining_uses_admitted_stack_tools_and_actual_eye_immersion() {
         "item replace entity @s weapon.mainhand with minecraft:diamond_pickaxe[!minecraft:tool]"
     ));
     assert_eq!(game.destroy_progress(pos), 1.0 / 1.5 / 100.0);
-    game.mine_block_with_held("minecraft:stone", 1.5);
+    assert!(game.mine_block_with_held("minecraft:stone", 1.5).is_none());
     assert_eq!(game.held().unwrap().damage, 0);
     assert_eq!(game.stats.get("used", "minecraft:diamond_pickaxe"), 1);
 
@@ -136,7 +136,7 @@ fn mining_uses_admitted_stack_tools_and_actual_eye_immersion() {
     assert!(game.run_command(&format!("item replace entity @s weapon.mainhand with minecraft:diamond_pickaxe[{tool},minecraft:damage=1560]")));
     game.lan_acting = Some(777);
     game.guest_equipment_breaks.clear();
-    game.mine_block_with_held("minecraft:stone", 1.5);
+    assert!(game.mine_block_with_held("minecraft:stone", 1.5).is_some());
     assert!(game.held().is_none());
     assert_eq!(*game.guest_equipment_breaks.last().unwrap(), 47);
     game.lan_acting = None;

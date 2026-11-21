@@ -1,6 +1,7 @@
 //! The sun's passes on the float frame, through the actual entity shader and pipelines: a row
 //! of sun texels across the target, over the sky at paper white.
 use super::Celestial;
+use crate::gfx::CelestialBody;
 use crate::gfx::hdr::{SCENE_PEAK as S, SUN_CAP, TIERS};
 use crate::mesher::{LOW, VERY_BRIGHT, Vertex};
 use wgpu::util::DeviceExt;
@@ -27,8 +28,20 @@ fn top(c: [f32; 3]) -> f32 {
 }
 
 /// The float frame's stored colour of each texel of `row` drawn by the bodies' passes at `tier`
-/// onto vanilla's `sky`, the sun's disc's peak at `sun_peak`.
+/// onto vanilla's `sky`, the sun's disc's peak at `sun_peak`, the quad as the sun's.
 fn draw(
+    lifted: bool,
+    row: &[[u8; 3]],
+    tier: u8,
+    sky: [f32; 3],
+    sun_peak: f32,
+) -> Option<Vec<[f32; 3]>> {
+    draw_as(CelestialBody::Sun, lifted, row, tier, sky, sun_peak)
+}
+
+/// `draw` with the quad given as `body` (`Frame::celestial_bodies`).
+fn draw_as(
+    body: CelestialBody,
     lifted: bool,
     row: &[[u8; 3]],
     tier: u8,
@@ -199,7 +212,7 @@ fn draw(
         pass.set_bind_group(0, &group, &[]);
         pass.set_vertex_buffer(0, vertices.slice(..));
         pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-        celestial.draw_bodies(&mut pass, lifted, 0..6);
+        celestial.draw_bodies(&mut pass, lifted, [(0, body)]);
     }
     let bytes_per_row = (width * 8).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let read = device.create_buffer(&wgpu::BufferDescriptor {
@@ -350,6 +363,29 @@ fn on_a_brighter_display_only_the_disc_follows_its_peak() {
                 draw(true, &moon, LOW, sky, peak),
                 draw(true, &moon, LOW, sky, S),
                 "peak {peak}, sky {sky:?}: the moon"
+            );
+        }
+    }
+}
+
+/// Only the quad that is the sun takes the sun's passes in the lifted world: the same texels
+/// given as the moon's quad, or the End's flash, are added as when the world isn't lifted.
+#[test]
+fn only_the_suns_quad_takes_the_suns_passes() {
+    for sky in SKIES {
+        let (Some(sun), Some(added)) = (
+            draw(true, &RINGS, VERY_BRIGHT, sky, S),
+            draw(false, &RINGS, VERY_BRIGHT, sky, S),
+        ) else {
+            eprintln!("celestial GPU unavailable");
+            return;
+        };
+        assert_ne!(sun, added, "sky {sky:?}: the sun's passes change the disc");
+        for body in [CelestialBody::Moon, CelestialBody::EndFlash] {
+            assert_eq!(
+                draw_as(body, true, &RINGS, VERY_BRIGHT, sky, S),
+                Some(added.clone()),
+                "sky {sky:?}: the {body:?} quad"
             );
         }
     }

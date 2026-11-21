@@ -13,7 +13,7 @@ impl crate::AttachmentDeclarations for LoadedAttachmentDeclarations {
     }
 }
 
-/// The immutable registry reached by guest metadata checks, with no world borrow.
+/// The immutable attachment type registry, with no world borrow.
 pub fn attachment_declarations() -> &'static dyn crate::AttachmentDeclarations {
     static LOOKUP: LoadedAttachmentDeclarations = LoadedAttachmentDeclarations;
     &LOOKUP
@@ -32,17 +32,16 @@ impl AttachmentTypesRegistrar for PartRegistrar {
             }
             let identifier = crate::Identifier::parse_namespaced(id)
                 .ok_or("explicit lowercase namespaced id required")?;
-            if self
-                .attachment_types
+            if let Some(owner) = self
+                .attachment_owners
                 .get(identifier.namespace())
-                .is_some_and(|types| types.contains_key(identifier.path()))
+                .and_then(|types| types.get(identifier.path()))
             {
-                return Err(format!(
-                    "already declared by package {}",
-                    identifier.namespace()
-                ));
+                return Err(format!("already declared by package {owner}"));
             }
-            if identifier.namespace() != self.mod_id {
+            if identifier.namespace() == "minecraft"
+                || !owns_namespace(self.mod_id, identifier.namespace())
+            {
                 return Err(format!(
                     "namespace belongs to package {}, not {}",
                     identifier.namespace(),
@@ -53,6 +52,10 @@ impl AttachmentTypesRegistrar for PartRegistrar {
                 .entry(identifier.namespace().into())
                 .or_default()
                 .insert(identifier.path().into(), has_sync_codec);
+            self.attachment_owners
+                .entry(identifier.namespace().into())
+                .or_default()
+                .insert(identifier.path().into(), self.mod_id);
             Ok(())
         })();
         result.map_err(|reason| {
@@ -86,19 +89,42 @@ impl PartRegistrar {
         if !errors.is_empty() {
             return Err(errors);
         }
-        for package in crate::load_state::current_packages()
-            .iter()
-            .filter(|p| p.side() == crate::Side::Server)
-        {
-            if let Some(types) = self.attachment_types.get(package.id()) {
-                for name in types
-                    .iter()
-                    .filter(|(_, sync)| **sync)
-                    .map(|(name, _)| name)
-                    .collect::<std::collections::BTreeSet<_>>()
-                {
-                    errors.push(format!("package {} attachment {}:{name}: a side = \"server\" package cannot declare a synced attachment", package.id(), package.id()));
+        let packages = crate::load_state::current_packages();
+        let mut synced = Vec::new();
+        for (namespace, types) in &self.attachment_types {
+            for (name, &sync) in types {
+                if !sync {
+                    continue;
                 }
+                let declarer = self
+                    .attachment_owners
+                    .get(namespace)
+                    .and_then(|owners| owners.get(name))
+                    .copied()
+                    .unwrap_or(namespace.as_str());
+                synced.push((declarer, namespace.as_str(), name.as_str()));
+            }
+        }
+        synced.sort_unstable();
+        for (declarer, namespace, name) in synced {
+            let declarer_server = packages
+                .iter()
+                .any(|p| p.id() == declarer && p.side() == crate::Side::Server);
+            if declarer_server {
+                errors.push(format!(
+                    "package {declarer} attachment {namespace}:{name}: a side = \"server\" package cannot declare a synced attachment"
+                ));
+                continue;
+            }
+            if let Some(supplier) = packages.iter().find(|p| {
+                p.side() == crate::Side::Server
+                    && (p.id() == declarer || p.served_by() == Some(declarer))
+                    && p.namespaces().any(|owned| owned == namespace)
+            }) {
+                errors.push(format!(
+                    "package {declarer} attachment {namespace}:{name}: a side = \"server\" package ({}) cannot supply a synced attachment",
+                    supplier.id()
+                ));
             }
         }
         if errors.is_empty() {
@@ -386,5 +412,78 @@ mod tests {
             registrar.register_attachment_type("a:mana", false),
             Err("package b attachment a:mana: already declared by package a".into())
         );
+    }
+
+    #[test]
+    fn served_by_attachment_delegates_and_enforces_supplier_side() {
+        let packages = vec![
+            package("host", crate::Side::Both),
+            package("other", crate::Side::Both),
+            crate::PackageInfo::new(
+                "runes".into(),
+                "1".into(),
+                crate::PackageKind::Content,
+                crate::Side::Both,
+                vec!["runes".into()],
+                vec![],
+            )
+            .with_served_by(Some("host".into())),
+            crate::PackageInfo::new(
+                "srv_runes".into(),
+                "1".into(),
+                crate::PackageKind::Content,
+                crate::Side::Server,
+                vec!["srv_runes".into()],
+                vec![],
+            )
+            .with_served_by(Some("host".into())),
+        ];
+        crate::load_state::with_test_package_inventory(packages, || {
+            // A both-side host cannot declare a synced attachment in a server-only served namespace.
+            let mut bad = PartRegistrar::new("host");
+            bad.register_attachment_type("srv_runes:synced", true)
+                .unwrap();
+            let errors = super::super::install_registrar(bad, &crate::parts::tests::rule_schema())
+                .unwrap_err();
+            assert_eq!(errors.len(), 1);
+            assert!(
+                errors[0].contains("srv_runes:synced") && errors[0].contains("side = \"server\""),
+                "{errors:?}"
+            );
+            assert!(!mod_vocab::__private::parts_installation::parts_installed());
+
+            let mut good = PartRegistrar::new("host");
+            good.register_attachment_type("runes:charge", true).unwrap();
+            good.register_attachment_type("srv_runes:internal", false)
+                .unwrap();
+            good.mod_id = "other";
+            assert!(good.register_attachment_type("runes:other", false).is_err());
+            assert_eq!(
+                good.register_attachment_type("runes:charge", false),
+                Err(
+                    "package other attachment runes:charge: already declared by package host"
+                        .into()
+                )
+            );
+            good.refused.clear();
+            super::super::install_registrar(good, &crate::parts::tests::rule_schema()).unwrap();
+            assert_eq!(
+                crate::__private::client_requirement("host"),
+                Some("declares the synced attachment runes:charge".into())
+            );
+            let _caller = crate::content::crash::enter_native_mod(crate::content::crash::ModCall {
+                id: "other",
+                hook: "test",
+                part: None,
+            });
+            assert_eq!(
+                mod_vocab::__private::validate_attachment_use("runes", "charge", true),
+                Ok(())
+            );
+            assert_eq!(
+                mod_vocab::__private::validate_attachment_use("srv_runes", "internal", false),
+                Ok(())
+            );
+        });
     }
 }

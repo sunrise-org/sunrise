@@ -17,8 +17,6 @@ zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 libc = "0.2"
 
-[build-dependencies]
-sha2 = "0.10"
 
 [[bin]]
 name = "sunrise-prepare"

@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use sunrise_mod_runtime::registry_keys::{ParticleKind, Particles};
 
 /// A particle requested at registration, resolved once when providers load.
-// no wire: decoding validates the u32 slot with ParticleKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+// no wire: decoding validates the u32 slot with ParticleKey::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: only the load-owned table creates keys
 pub struct ParticleKey(pub(crate) u32);
@@ -13,7 +13,6 @@ fn resolved() -> &'static OnceLock<Particles> {
     crate::parts::installed().map_or(&EMPTY, |parts| &parts.particles)
 }
 impl ParticleKey {
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
         let known = crate::parts::registration_membership(
             crate::parts::RegistrationKeyKind::Particle,

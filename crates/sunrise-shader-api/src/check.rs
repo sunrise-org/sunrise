@@ -170,8 +170,11 @@ pub fn check(pack: &Pack) -> Result<Report, Vec<Problem>> {
         .chain(m.tonemap.iter().map(|s| (StageKind::Tonemap, s)))
         .chain(m.entity.iter().map(|s| (StageKind::Entity, s)));
     let (mut checked, mut problems) = (Vec::new(), Vec::new());
+    let mut post = 0;
     for (kind, stage) in stages {
-        match check_stage(pack, kind, &stage.file) {
+        let entry = if kind == StageKind::Post { post } else { 0 };
+        post += (kind == StageKind::Post) as usize;
+        match check_stage(pack, kind, &stage.file, entry) {
             Ok(mut c) => {
                 c.label = stage.name.clone().unwrap_or_else(|| stage.file.clone());
                 checked.push(c);
@@ -230,15 +233,25 @@ pub fn check(pack: &Pack) -> Result<Report, Vec<Problem>> {
 
 /// Builds and checks one stage of `pack` from its file, on a thread of its own with the stack
 /// and the bounds of [`crate::guard`]: a pack's file never crashes the checker.
-pub fn check_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedStage, Vec<Problem>> {
-    crate::guard::guarded(|| build_stage(pack, kind, file))
+pub fn check_stage(
+    pack: &Pack,
+    kind: StageKind,
+    file: &str,
+    entry: usize,
+) -> Result<CheckedStage, Vec<Problem>> {
+    crate::guard::guarded(|| build_stage(pack, kind, file, entry))
         .unwrap_or_else(|reason| Err(vec![problem(file, reason)]))
 }
 
-fn build_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedStage, Vec<Problem>> {
+fn build_stage(
+    pack: &Pack,
+    kind: StageKind,
+    file: &str,
+    entry: usize,
+) -> Result<CheckedStage, Vec<Problem>> {
     // First without the entry points, so a missing or mistyped stage function
     // is reported as such rather than as a call that doesn't resolve.
-    let mut own = compose(pack, kind, file);
+    let mut own = compose(pack, kind, file, entry);
     if let Some((at, message)) = crate::guard::refusal(&own.text) {
         return Err(vec![located(&own, at, message)]);
     }
@@ -270,7 +283,7 @@ fn build_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedStage,
     if !problems.is_empty() {
         return Err(problems);
     }
-    let composed = compose(pack, kind, file);
+    let composed = compose(pack, kind, file, entry);
     let module = parse(&composed)?;
     let info = validate(&composed, &module)?;
     let (expressions, texture_reads) = cost(&module);

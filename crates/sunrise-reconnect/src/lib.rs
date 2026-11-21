@@ -29,49 +29,39 @@ pub struct Reconnect;
 
 impl Hooks for Reconnect {
     fn connecting(&self, server: &Server) {
-        with_seat(|seat| {
-            seat.planned = None;
-            let tracker = &mut seat.tracker;
-            tracker.connecting(&server.address, &server.name, server.lan);
-        });
+        with_seat(|seat| seat.connecting(server));
     }
 
     fn joined(&self) {
-        with_seat(|seat| seat.tracker.joined(Instant::now()));
+        with_seat(|seat| seat.joined(&SystemClock));
     }
 
     fn left(&self, _how: Left) {
-        with_seat(|seat| {
-            seat.planned = None;
-            seat.tracker.reset();
-        });
+        with_seat(Seat::left);
     }
 
     /// The next attempt, while the switch is on and the reason allows one.
     fn ended(&self, end: &Ended<'_>) {
-        with_seat(|seat| {
-            seat.planned = if seat.on && end.by != By::Client {
-                let tracker = &mut seat.tracker;
-                tracker.ended(end.reason, end.key, end.by == By::Server, Instant::now())
-            } else {
-                seat.tracker.reset();
-                None
-            };
-        });
+        with_seat(|seat| seat.ended(end, &SystemClock));
     }
 
     /// The countdown to the next attempt, then the attempt.
     fn retry(&self) -> Option<Retry> {
-        with_seat(|seat| {
-            let planned = seat.planned.as_ref()?;
-            let now = Instant::now();
-            Some(if planned.due(now) {
-                let (address, name) = (planned.address.clone(), planned.name.clone());
-                Retry::Now(Server::new(address, name, planned.lan))
-            } else {
-                Retry::Wait(planned.text(now))
-            })
-        })
+        with_seat(|seat| seat.retry(&SystemClock))
+    }
+}
+
+/// Reads the current instant: the game's clock, or a test's fixed one.
+trait Clock {
+    fn now(&self) -> Instant;
+}
+
+/// The real clock.
+struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Instant {
+        Instant::now()
     }
 }
 
@@ -84,12 +74,57 @@ struct Seat {
     planned: Option<policy::Retry>,
 }
 
+impl Seat {
+    /// A connection starts: a new address counts anew and nothing is planned.
+    fn connecting(&mut self, server: &Server) {
+        self.planned = None;
+        self.tracker
+            .connecting(&server.address, &server.name, server.lan);
+    }
+
+    fn joined(&mut self, clock: &dyn Clock) {
+        self.tracker.joined(clock.now());
+    }
+
+    /// The player left on purpose, or cancelled: nothing to retry.
+    fn left(&mut self) {
+        self.planned = None;
+        self.tracker.reset();
+    }
+
+    /// Plans the next attempt while the switch is on and the reason allows one.
+    fn ended(&mut self, end: &Ended<'_>, clock: &dyn Clock) {
+        self.planned = if self.on && end.by != By::Client {
+            self.tracker
+                .ended(end.reason, end.key, end.by == By::Server, clock.now())
+        } else {
+            self.tracker.reset();
+            None
+        };
+    }
+
+    /// The countdown to the next attempt, then the attempt.
+    fn retry(&self, clock: &dyn Clock) -> Option<Retry> {
+        let planned = self.planned.as_ref()?;
+        let now = clock.now();
+        Some(if planned.due(now) {
+            Retry::Now(Server::new(
+                planned.address.clone(),
+                planned.name.clone(),
+                planned.lan,
+            ))
+        } else {
+            Retry::Wait(planned.text(now))
+        })
+    }
+}
+
 static SEATS: Mutex<Vec<Seat>> = Mutex::new(Vec::new());
 
-/// The player whose turn it is.
+/// Runs `f` on the active seat's state, growing the list as seats appear.
 fn with_seat<T>(f: impl FnOnce(&mut Seat) -> T) -> T {
-    let mut seats = SEATS.lock().unwrap_or_else(|e| e.into_inner());
     let seat = hooks::seat();
+    let mut seats = SEATS.lock().unwrap_or_else(|e| e.into_inner());
     if seats.len() <= seat {
         seats.resize_with(seat + 1, Seat::default);
     }
@@ -154,10 +189,7 @@ impl Page for Section {
         Place::Extras
     }
     fn rows(&self, rows: &mut Vec<Row>) {
-        rows.push(Row::Toggle {
-            label: LABEL,
-            on: on(),
-        });
+        rows.push(Row::toggle(LABEL, on()));
     }
     fn act(&self, row: usize, act: Act) {
         if row == 0 && matches!(act, Act::Press | Act::PressBack) {
@@ -171,7 +203,18 @@ impl Page for Section {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+
+    /// A fixed instant, so the orchestration's countdown is reached without sleeping.
+    struct FixedClock(Instant);
+
+    impl Clock for FixedClock {
+        fn now(&self) -> Instant {
+            self.0
+        }
+    }
 
     /// The only test that touches the statics: off, a lost connection plans nothing; on, the
     /// screen counts down to the same server; leaving forgets it.
@@ -193,9 +236,76 @@ mod tests {
             panic!("no countdown");
         };
         assert!(line.ends_with("(attempt 1 of 5)"), "{line}");
+
         HOOKS.left(Left::Disconnected);
         assert_eq!(HOOKS.retry(), None);
         SETTING.load(KEY, "false");
         assert!(SETTING.is_default());
+    }
+
+    #[test]
+    fn leaving_one_seat_keeps_the_other_seats_retry() {
+        let clock = FixedClock(Instant::now());
+        let first_server = Server::new("example.org", "First", false);
+        let second_server = Server::new("second.example", "Second", false);
+        let lost = Ended::new("Server closed", None, By::Server);
+        let mut first = Seat {
+            on: true,
+            ..Seat::default()
+        };
+        let mut second = Seat::default();
+        first.connecting(&first_server);
+        first.ended(&lost, &clock);
+        second.connecting(&second_server);
+        second.ended(&lost, &clock);
+        assert_eq!(second.retry(&clock), None);
+
+        second.on = true;
+        second.connecting(&second_server);
+        second.ended(&lost, &clock);
+        let due = FixedClock(clock.0 + Duration::from_secs(5));
+        assert_eq!(second.retry(&due), Some(Retry::Now(second_server)));
+        second.left();
+        assert_eq!(second.retry(&due), None);
+        assert_eq!(first.retry(&due), Some(Retry::Now(first_server)));
+    }
+
+    #[test]
+    fn a_due_countdown_reconnects_to_the_same_server() {
+        let start = Instant::now();
+        let clock = FixedClock(start);
+        let server = Server::new("example.org", "Tester", true);
+        let mut seat = Seat {
+            on: true,
+            ..Seat::default()
+        };
+        seat.connecting(&server);
+        seat.ended(&Ended::new("Server closed", None, By::Server), &clock);
+        assert_eq!(
+            seat.retry(&clock),
+            Some(Retry::Wait("Reconnecting in 5 s (attempt 1 of 5)".into()))
+        );
+        let due = start + Duration::from_secs(5);
+        assert_eq!(
+            seat.retry(&FixedClock(due - Duration::from_nanos(1))),
+            Some(Retry::Wait("Reconnecting in 1 s (attempt 1 of 5)".into()))
+        );
+        assert_eq!(seat.retry(&FixedClock(due)), Some(Retry::Now(server)));
+    }
+
+    #[test]
+    fn a_client_side_end_never_reconnects_even_with_the_switch_on() {
+        let now = Instant::now();
+        let clock = FixedClock(now);
+        let mut seat = Seat {
+            on: true,
+            ..Seat::default()
+        };
+        seat.connecting(&Server::new("example.org", "Tester", false));
+        seat.ended(
+            &Ended::new("Required resource pack declined", None, By::Client),
+            &clock,
+        );
+        assert_eq!(seat.retry(&clock), None);
     }
 }

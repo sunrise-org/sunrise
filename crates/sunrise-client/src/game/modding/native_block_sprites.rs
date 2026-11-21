@@ -5,7 +5,6 @@ use mod_api::{AtlasRegion, Identifier};
 use sunrise_client::block_sprites::{BlockSprites, Lookup, SpriteRef};
 use sunrise_world::registry::BlockStateId;
 
-#[allow(dead_code)]
 impl Game<'_> {
     /// For a client mod: what each block (`minecraft:grass_block`, `oak_log[axis=x]`; properties left out take the
     /// block's default) draws on each of its six sides, as the mesher bakes its model: each face's sprite (array and
@@ -92,14 +91,17 @@ impl Game<'_> {
         self.pack.context.render.generation
     }
     /// For a client mod: where GUI sprite `sprite` lies in the GUI atlas and its size, none for one the atlas lacks
-    /// (a server's metrics-only atlas lacks them all). The atlas names vanilla's sprites by path alone
-    /// (`gui/sprites/container/slot`) and a mod's with its namespace (`mymod:gui/panel`).
+    /// or whose entry its definition removed (a server's metrics-only atlas lacks them all). The atlas names its
+    /// sprites by GUI id: `container/slot` or `minecraft:container/slot`, a mod's `mymod:panel`.
     pub(super) fn gui_sprite(&self, sprite: &Identifier) -> Option<AtlasRegion> {
-        let r = if sprite.namespace() == "minecraft" {
-            self.gui.atlas.sprites.get(sprite.path())
+        let found = if sprite.namespace() == "minecraft" {
+            self.gui.atlas.gui_lookup(sprite.path())
         } else {
-            self.gui.atlas.sprites.get(&sprite.to_string())
-        }?;
+            self.gui.atlas.gui_lookup(&sprite.to_string())
+        };
+        let Some(sunrise_client::hud::GuiSprite::Present { rect: r, .. }) = found else {
+            return None;
+        };
         Some(AtlasRegion::new([r.u0, r.v0, r.u1, r.v1], [r.w, r.h]))
     }
     fn native_sprite_lookup(&self) -> Lookup<'_> {
@@ -115,8 +117,8 @@ impl Game<'_> {
 #[cfg(test)]
 mod texture_atlas_stitched_tests {
     use mod_api::{
-        AtlasRegion, ClientHost, Hooks, Identifier, ModEntry, RegisterRuntimeSpritesEvent,
-        RegistrationContext, RuntimeSprite, SpriteRef, TextureAtlas, TextureAtlasStitchedEvent,
+        AtlasRegion, ClientHost, Hooks, Identifier, ModEntry, SpriteRef, TextureAtlas,
+        TextureAtlasStitchedEvent,
     };
     use mod_platform::testing::with_mods;
     use std::sync::{Arc, Mutex};
@@ -127,35 +129,10 @@ mod texture_atlas_stitched_tests {
         atlases: Vec<TextureAtlas>,
         stone: Option<SpriteRef>,
         slot: Option<AtlasRegion>,
-        registrations: u32,
-        runtime_block: Option<SpriteRef>,
-        runtime_gui: Option<AtlasRegion>,
     }
     struct Keeper(Arc<Mutex<Kept>>);
     #[mod_api::__subscriptions]
     impl Hooks for Keeper {
-        fn register_runtime_sprites(
-            &self,
-            _: &RegistrationContext,
-            event: &mut RegisterRuntimeSpritesEvent<'_>,
-        ) {
-            use crate::game::client_reload::fixture_png;
-            let mut kept = self.0.lock().unwrap();
-            kept.registrations += 1;
-            if kept.registrations == 1 {
-                event.sprites.push(RuntimeSprite {
-                    atlas: TextureAtlas::Blocks,
-                    id: id("keeper:block/marker"),
-                    png: fixture_png(2, 2, 32),
-                });
-            }
-            event.sprites.push(RuntimeSprite {
-                atlas: TextureAtlas::Gui,
-                id: id("keeper:gui/marker"),
-                png: fixture_png(kept.registrations + 2, 3, 64),
-            });
-        }
-
         fn texture_atlas_stitched(
             &self,
             host: &mut dyn ClientHost,
@@ -166,11 +143,9 @@ mod texture_atlas_stitched_tests {
             match event.atlas {
                 TextureAtlas::Blocks => {
                     kept.stone = host.texture_sprites(&["minecraft:block/stone"])[0];
-                    kept.runtime_block = host.texture_sprites(&["keeper:block/marker"])[0];
                 }
                 TextureAtlas::Gui => {
-                    kept.slot = host.gui_sprite(&id("gui/sprites/container/slot"));
-                    kept.runtime_gui = host.gui_sprite(&id("keeper:gui/marker"));
+                    kept.slot = host.gui_sprite(&id("container/slot"));
                 }
                 _ => {}
             }
@@ -179,6 +154,229 @@ mod texture_atlas_stitched_tests {
 
     fn id(text: &str) -> Identifier {
         Identifier::parse(text).unwrap()
+    }
+
+    /// A mod's sprite source: a 2x2 block sprite no model names, and a GUI sprite one pixel
+    /// wider each time the GUI atlas is asked, so a reload's answer differs from the first load's.
+    #[derive(Default)]
+    struct Marker {
+        gui_asks: u32,
+        block: Option<SpriteRef>,
+        gui: Option<AtlasRegion>,
+    }
+    struct Source(Arc<Mutex<Marker>>);
+    #[mod_api::__subscriptions]
+    impl Hooks for Source {
+        fn register_sprite_sources(
+            &self,
+            _: &mod_api::RegistrationContext,
+            event: &mut mod_api::RegisterSpriteSourcesEvent<'_>,
+        ) {
+            event.sources.push("marker:own".into());
+        }
+        fn sprite_source(
+            &self,
+            _: &mod_api::RegistrationContext,
+            event: &mut mod_api::SpriteSourceEvent<'_>,
+        ) {
+            if event.source != "marker:own" {
+                return;
+            }
+            let mut marker = self.0.lock().unwrap();
+            match event.atlas.to_string().as_str() {
+                "minecraft:blocks" => event.output.push(mod_api::SpriteSourceOutput::Pixels {
+                    sprite: id("marker:block/own"),
+                    width: 2,
+                    height: 2,
+                    rgba: [32, 64, 96, 255].repeat(4),
+                }),
+                "minecraft:gui" => {
+                    marker.gui_asks += 1;
+                    let width = 2 + marker.gui_asks;
+                    event.output.push(mod_api::SpriteSourceOutput::Pixels {
+                        sprite: id("marker:own"),
+                        width,
+                        height: 3,
+                        rgba: [64, 96, 32, 255].repeat((width * 3) as usize),
+                    });
+                    // A sprite the first load publishes and the reload no longer does.
+                    if marker.gui_asks == 1 {
+                        event.output.push(mod_api::SpriteSourceOutput::Pixels {
+                            sprite: id("marker:first_only"),
+                            width: 2,
+                            height: 2,
+                            rgba: [9, 9, 9, 255].repeat(4),
+                        });
+                    }
+                    // The replacement of a walked vanilla sprite, of another size.
+                    event.output.push(mod_api::SpriteSourceOutput::Pixels {
+                        sprite: id("container/slot"),
+                        width: 5,
+                        height: 5,
+                        rgba: [255, 0, 255, 255].repeat(25),
+                    });
+                }
+                _ => {}
+            }
+        }
+        fn texture_atlas_stitched(
+            &self,
+            host: &mut dyn ClientHost,
+            event: &mut TextureAtlasStitchedEvent,
+        ) {
+            let mut marker = self.0.lock().unwrap();
+            match event.atlas {
+                TextureAtlas::Blocks => {
+                    marker.block = host.texture_sprites(&["marker:block/own"])[0];
+                }
+                TextureAtlas::Gui => marker.gui = host.gui_sprite(&id("marker:own")),
+                _ => {}
+            }
+        }
+    }
+
+    /// The prepared resources with the definitions `files` (relative path, bytes) laid over them:
+    /// every other file is linked, never copied.
+    #[cfg(unix)]
+    fn shadowed(base: &std::path::Path, files: &[(&str, Vec<u8>)]) -> tempfile::TempDir {
+        fn mirror(src: &std::path::Path, dst: &std::path::Path, files: &[(Vec<&str>, &[u8])]) {
+            for entry in std::fs::read_dir(src).unwrap() {
+                let entry = entry.unwrap();
+                let name = entry.file_name();
+                let name = name.to_str().unwrap();
+                let under: Vec<_> = files
+                    .iter()
+                    .filter(|(path, _)| path[0] == name)
+                    .map(|(path, bytes)| (path[1..].to_vec(), *bytes))
+                    .collect();
+                let to = dst.join(name);
+                match under.iter().find(|(rest, _)| rest.is_empty()) {
+                    Some((_, bytes)) => std::fs::write(&to, bytes).unwrap(),
+                    None if under.is_empty() => {
+                        std::os::unix::fs::symlink(entry.path(), &to).unwrap();
+                    }
+                    None => {
+                        std::fs::create_dir(&to).unwrap();
+                        mirror(&entry.path(), &to, &under);
+                    }
+                }
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let files: Vec<(Vec<&str>, &[u8])> = files
+            .iter()
+            .map(|(path, bytes)| (path.split('/').collect(), bytes.as_slice()))
+            .collect();
+        mirror(base, root.path(), &files);
+        root
+    }
+
+    /// The game's own definition of `atlas` with an entry of the mod's source type added.
+    #[cfg(unix)]
+    fn with_marker_entry(base: &std::path::Path, atlas: &str) -> (String, Vec<u8>) {
+        let path = format!("assets/minecraft/atlases/{atlas}.json");
+        let mut definition: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(base.join(&path)).unwrap()).unwrap();
+        definition["sources"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"type": "marker:own"}));
+        (path, serde_json::to_vec(&definition).unwrap())
+    }
+
+    /// A registered sprite source's output is published by atlas and id through the real host,
+    /// at startup and after a reload: a block sprite no model names, a GUI sprite of another size
+    /// each time, and a walked vanilla GUI sprite replaced by the source's pixels, all found by
+    /// their ids; what the source never made, or made only before the reload, is none.
+    #[test]
+    #[cfg(unix)]
+    #[ignore = "daily"]
+    fn a_sprite_source_publishes_its_sprites_by_atlas_and_id_through_the_host() {
+        use mod_api::__private::game::RegistrationContextNew;
+
+        // Both resource loads need the source type, whose registry is process-wide.
+        if super::super::native_entity_refs::tests::run_fresh_cases(
+            "game::native_block_sprites::texture_atlas_stitched_tests::a_sprite_source_publishes_its_sprites_by_atlas_and_id_through_the_host",
+            "SUNRISE_SPRITE_SOURCE_ATLAS_TEST_CHILD",
+            &["atlas"],
+        ) {
+            return;
+        }
+        let base = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+        let files: Vec<_> = ["blocks", "gui"]
+            .map(|atlas| with_marker_entry(&base, atlas))
+            .into();
+        let files: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.clone())).collect();
+        let root = shadowed(&base, &files);
+        let marker = Arc::new(Mutex::new(Marker::default()));
+        let mods: mod_api::Mods = vec![ModEntry::new(
+            "marker",
+            Box::new(Source(Arc::clone(&marker))),
+        )]
+        .into();
+        with_mods(mods, || {
+            let role = crate::game::execution_role::ExecutionRole::Client;
+            let mut types = Vec::new();
+            super::Game::native_register_sprite_sources(
+                &mod_api::RegistrationContext::new(),
+                &mut types,
+            );
+            assert_eq!(
+                sunrise_client_render::mod_sprite_sources::register(types),
+                ["marker:own"]
+            );
+            super::super::native_entity_refs::tests::with_game_role(
+                root.path().to_owned(),
+                role,
+                |game| {
+                    game.texture_atlases_stitched();
+                    {
+                        let mut marker = marker.lock().unwrap();
+                        assert!(
+                            marker.block.take().is_some(),
+                            "no model names the block sprite"
+                        );
+                        assert_eq!(marker.gui.map(|s| s.size), Some([3, 3]));
+                    }
+                    assert_eq!(
+                        game.gui_sprite(&id("container/slot")).map(|s| s.size),
+                        Some([5, 5])
+                    );
+                    assert_eq!(game.gui_sprite(&id("marker:no_such_sprite")), None);
+                    assert_eq!(
+                        game.gui_sprite(&id("marker:first_only")).map(|s| s.size),
+                        Some([2, 2])
+                    );
+                    game.spawn_pack_reload(super::super::packs::ReloadKind::Selection)
+                        .unwrap();
+                    let started = std::time::Instant::now();
+                    while game.pack_reload.is_some() {
+                        assert!(
+                            started.elapsed().as_secs() < 300,
+                            "the reload never finished"
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        game.drive_pack_reload();
+                    }
+                    let marker = marker.lock().unwrap();
+                    assert!(marker.block.is_some(), "published again after the reload");
+                    assert_eq!(
+                        game.gui_sprite(&id("marker:first_only")),
+                        None,
+                        "a sprite the reload no longer makes is gone"
+                    );
+                    assert_eq!(
+                        marker.gui.map(|s| s.size),
+                        Some([4, 3]),
+                        "the reload's own answer, not the first load's"
+                    );
+                    assert_eq!(
+                        game.gui_sprite(&id("container/slot")).map(|s| s.size),
+                        Some([5, 5])
+                    );
+                },
+            );
+        });
     }
 
     /// `TextureAtlasStitchedEvent`: the mod hears the blocks' atlas and then the GUI's, finds a
@@ -197,11 +395,6 @@ mod texture_atlas_stitched_tests {
                     let kept = kept.lock().unwrap();
                     assert_eq!(kept.atlases, [TextureAtlas::Blocks, TextureAtlas::Gui]);
                     assert!(kept.stone.is_some(), "stone is in the block arrays");
-                    assert!(
-                        kept.runtime_block.is_some(),
-                        "no model references this block sprite"
-                    );
-                    assert_eq!(kept.runtime_gui.map(|sprite| sprite.size), Some([3, 3]));
                     let slot = kept.slot.expect("the slot sprite is in the GUI atlas");
                     assert_eq!(slot.size, [18, 18], "the slot's own pixels");
                     let [u0, v0, u1, v1] = slot.uv;
@@ -209,10 +402,7 @@ mod texture_atlas_stitched_tests {
                     assert!(0.0 <= v0 && v0 < v1 && v1 <= 1.0, "{:?}", slot.uv);
                 }
                 // A mod's namespace is part of the name; one the atlas lacks is none.
-                assert_eq!(
-                    game.gui_sprite(&id("mymod:gui/sprites/container/slot")),
-                    None
-                );
+                assert_eq!(game.gui_sprite(&id("mymod:container/slot")), None);
                 assert_eq!(game.gui_sprite(&id("gui/no_such_sprite")), None);
                 // F3+T: the reload stages on a worker and applies here.
                 kept.lock().unwrap().atlases.clear();
@@ -229,12 +419,6 @@ mod texture_atlas_stitched_tests {
                 }
                 let kept = kept.lock().unwrap();
                 assert_eq!(kept.atlases, [TextureAtlas::Blocks, TextureAtlas::Gui]);
-                assert_eq!(kept.registrations, 2);
-                assert!(
-                    kept.runtime_block.is_none(),
-                    "omitted sprite leaves the new atlas"
-                );
-                assert_eq!(kept.runtime_gui.map(|sprite| sprite.size), Some([4, 3]));
                 assert_eq!(
                     kept.slot.map(|s| s.size),
                     Some([18, 18]),

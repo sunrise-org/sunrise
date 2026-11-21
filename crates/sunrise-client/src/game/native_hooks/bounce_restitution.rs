@@ -1,6 +1,7 @@
 use super::*;
+use crate::game::native_surface::FrictionView;
 
-impl HitLevel<'_> {
+impl FrictionView<'_> {
     /// `IBlockExtension.getBounceRestitution`: entity `entity` of type `kind` landed on `state`
     /// at `pos` (`Entity.getOnPosLegacy`). `factor` is the block's own restitution, which its
     /// parts may change. Asked on both sides, in the level of the side that ticks the entity.
@@ -26,7 +27,7 @@ const RESTITUTION_HOOKS: sunrise_client::block_contact::RestitutionHooks =
             )
         },
         restitution: |level, c, factor| {
-            HitLevel(level.reborrow())
+            FrictionView(level)
                 .native_bounce_restitution(c.entity, c.kind, c.state, c.position, factor);
         },
     };

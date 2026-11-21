@@ -75,6 +75,34 @@ pub(in crate::game) fn with_guests_at(
     });
 }
 
+/// Add a fixture menu to both the hub's protocol registry and the mod API's menu keys.
+pub(in crate::game) fn register_test_menu(
+    game: &mut super::Game<'_>,
+    id: &str,
+) -> mod_api::MenuKey {
+    use sunrise_client::lan::data::SyncData;
+    use sunrise_protocol::registry::Ids;
+
+    let current = game.lan.as_ref().unwrap().hub.sync_data();
+    let mut sync = SyncData::empty();
+    sync.builtin = current.builtin.clone();
+    sync.dynamic = current.dynamic.clone();
+    sync.recipes = current.recipes.clone();
+    sync.tags = current.tags.clone();
+    let mut names = sync.builtin.get("minecraft:menu").unwrap().names.clone();
+    names.push(id.to_owned());
+    mod_api::__private::resolve_menus(names.iter().map(String::as_str)).unwrap();
+    sync.builtin
+        .registries
+        .insert("minecraft:menu".into(), Ids::from_names(names));
+    game.with_advancement_hub(|hub, owners| hub.reload_resources(Arc::new(sync), owners))
+        .unwrap();
+    mod_api::__private::menu_keys()
+        .into_iter()
+        .find(|key| mod_api::__private::menu_key_id(*key).as_deref() == Some(id))
+        .unwrap()
+}
+
 #[test]
 #[ignore = "daily"]
 fn player_dimensions_validate_identity_on_both_server_roles() {
@@ -460,7 +488,7 @@ fn a_players_move_by_stops_at_a_boat() {
 #[test]
 #[ignore = "daily"]
 fn a_players_move_by_is_the_mover_a_colliders_stack_exempts() {
-    use sunrise_client_render::moving_colliders::{Placed, Prepared, in_level};
+    use sunrise_client_render::moving_colliders::{Placed, Prepared, Scope};
     use sunrise_core::geometry::{
         Aabb,
         oriented::{ColliderBoxes, Frame, OrientedCollider},
@@ -487,10 +515,10 @@ fn a_players_move_by_is_the_mover_a_colliders_stack_exempts() {
             block(900, x + 1.0, vec![900, player]),
             block(901, x + 3.0, vec![901]),
         ]);
-        let by = in_level(placed, || {
-            game.entity_move_by(b.entity(), [4.0, 0.0, 0.0], MoveCause::SelfMovement)
-        })
-        .unwrap();
+        let _scope = Scope::enter_level(game.collider_level(), placed);
+        let by = game
+            .entity_move_by(b.entity(), [4.0, 0.0, 0.0], MoveCause::SelfMovement)
+            .unwrap();
         assert!(
             by[0] > 1.5 && by[0] < 2.8,
             "passed the collider it rides with and stopped at the other, moved {by:?}"
@@ -905,7 +933,7 @@ fn a_mounted_guests_turn_publishes_its_teleport_without_dismounting() {
         game.mobs
             .push(Mob::new(42, horse, Vec3::new(3.0, 64.0, 5.0), 0.0));
         // Ordinary seating sends no teleport. A passenger transition does,
-        // even to the same position; an unmounted command keeps its relative axes.
+        // even to the same position; both carry the transition's relative axes.
         for (vehicle, teleported, destination) in [
             (Some(42), false, [10.0, 70.0, -4.0]),
             (Some(42), true, [10.0, 70.0, -4.0]),
@@ -957,12 +985,7 @@ fn a_mounted_guests_turn_publishes_its_teleport_without_dismounting() {
                 assert_eq!(packet.position, destination);
                 assert_eq!(packet.delta, [0.0; 3]);
                 assert_eq!([packet.yaw, packet.pitch], [120.0, -15.0]);
-                let expected = if vehicle.is_some() {
-                    relative::DELTA_X | relative::DELTA_Y | relative::DELTA_Z
-                } else {
-                    relative::DELTA_X | relative::DELTA_Z
-                };
-                assert_eq!(packet.relatives, expected);
+                assert_eq!(packet.relatives, relative::DELTA_X | relative::DELTA_Z);
                 assert_eq!(guest.position, destination);
                 assert_eq!(
                     guest.awaiting_teleport,

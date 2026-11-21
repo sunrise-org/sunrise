@@ -12,100 +12,24 @@ use sunrise_client::{
     collisions::SceneCollisions,
     containers::BlockEntity,
     items::{ItemStack, Items},
-    mobs::{Mob, Species, equip::equippable, sulfur_cube},
+    mobs::{Species, equip::equippable, sulfur_cube},
     particles::{ParticleOptions, ParticleType},
     projectiles::{Projectile, ProjectileKind},
 };
-// Its old home, for mixin code that names it here.
-use std::sync::Arc;
 use sunrise_core::{
     geometry::{Aabb, Direction, Vec3},
     position::BlockPos,
     random::RandomSource,
 };
+pub(super) use sunrise_gameplay::dispense_rules::{
+    CLICK, Dispensed, FAIL, Pos, Slot, body_equipment_species, equip_sound, mob_set_slot,
+    mob_slot_item, offset, tipped_effect,
+};
+use sunrise_gameplay::dispense_rules::{
+    LAUNCH, block_box, data_value, mob_can_dispenser_equip, mob_can_use_slot, overlaps,
+    place_rotation, section_order, shrink, step, y_rot,
+};
 use sunrise_world::{fluid::FluidKind, level::PlaceContext, registry::BlockStateId};
-
-pub(super) type Pos = (i32, i32, i32);
-
-/// The sound event of a plain click, a failed dispense and a launched projectile.
-pub(super) const CLICK: i32 = 1000;
-pub(super) const FAIL: i32 = 1001;
-const LAUNCH: i32 = 1002;
-
-fn step(d: Direction) -> [i32; 3] {
-    match d {
-        Direction::Down => [0, -1, 0],
-        Direction::Up => [0, 1, 0],
-        Direction::North => [0, 0, -1],
-        Direction::South => [0, 0, 1],
-        Direction::West => [-1, 0, 0],
-        Direction::East => [1, 0, 0],
-    }
-}
-pub(super) fn offset(p: Pos, d: Direction) -> Pos {
-    let s = step(d);
-    (p.0 + s[0], p.1 + s[1], p.2 + s[2])
-}
-/// `Direction.get3DDataValue`.
-fn data_value(d: Direction) -> i32 {
-    match d {
-        Direction::Down => 0,
-        Direction::Up => 1,
-        Direction::North => 2,
-        Direction::South => 3,
-        Direction::West => 4,
-        Direction::East => 5,
-    }
-}
-/// `Direction.toYRot` (vertical directions give 270 through `data2d = -1`).
-fn y_rot(d: Direction) -> f32 {
-    match d {
-        Direction::South => 0.0,
-        Direction::West => 90.0,
-        Direction::North => 180.0,
-        Direction::East => 270.0,
-        _ => 270.0,
-    }
-}
-/// `DirectionalPlaceContext.getRotation`: `get2DDataValue() * 90`, so a
-/// vertical direction (`data2d = -1`) gives -90 where `toYRot` gives 270: the
-/// same horizontal facing, but the raw value a mod's placement hook reads.
-fn place_rotation(d: Direction) -> f32 {
-    match d {
-        Direction::Up | Direction::Down => -90.0,
-        _ => y_rot(d),
-    }
-}
-fn block_box(p: Pos) -> Aabb {
-    Aabb::new(
-        Vec3::new(f64::from(p.0), f64::from(p.1), f64::from(p.2)),
-        Vec3::new(f64::from(p.0 + 1), f64::from(p.1 + 1), f64::from(p.2 + 1)),
-    )
-}
-/// `EntitySectionStorage.forEachAccessibleNonEmptySection`: x ascending, then
-/// the packed key (`SectionPos.asLong`: z as 22 unsigned bits, then y as 20);
-/// within a section the entities go in the order they joined, which ids follow.
-fn section_order(at: Vec3) -> (i32, u32, u32) {
-    let s = |v: f64| (v.floor() as i32) >> 4;
-    let (x, y, z) = (s(at.x), s(at.y), s(at.z));
-    (x, z as u32 & 0x3F_FFFF, y as u32 & 0xF_FFFF)
-}
-fn overlaps(a: Aabb, b: Aabb) -> bool {
-    let (a0, a1, b0, b1) = (
-        a.min_position(),
-        a.max_position(),
-        b.min_position(),
-        b.max_position(),
-    );
-    a0.x < b1.x && b0.x < a1.x && a0.y < b1.y && b0.y < a1.y && a0.z < b1.z && b0.z < a1.z
-}
-/// `ItemStack.shrink(1)`; the slot is empty at zero.
-fn shrink(mut stack: ItemStack) -> Option<ItemStack> {
-    stack.count = stack.count.saturating_sub(1);
-    (stack.count > 0).then_some(stack)
-}
-/// A dispenser's answer: the slot's new content and the level event played.
-pub(super) type Dispensed = (Option<ItemStack>, i32);
 
 /// None keeps vanilla's behaviour; an explicit empty remainder consumes the stack.
 fn mod_dispensed(answer: Option<mod_api::Dispensed>, items: &Items) -> Option<Dispensed> {
@@ -141,150 +65,6 @@ enum Target {
     Guest(u32),
     Mob(usize),
     Stand(usize),
-}
-
-/// `EquipmentSlot`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Slot {
-    MainHand,
-    OffHand,
-    Feet,
-    Legs,
-    Chest,
-    Head,
-    Body,
-    Saddle,
-}
-impl Slot {
-    pub(super) fn from_name(name: &str) -> Option<Self> {
-        Some(match name {
-            "mainhand" => Self::MainHand,
-            "offhand" => Self::OffHand,
-            "feet" => Self::Feet,
-            "legs" => Self::Legs,
-            "chest" => Self::Chest,
-            "head" => Self::Head,
-            "body" => Self::Body,
-            "saddle" => Self::Saddle,
-            _ => return None,
-        })
-    }
-    /// The player's armour array index (head, chest, legs, feet).
-    fn armor_index(self) -> Option<usize> {
-        match self {
-            Self::Head => Some(0),
-            Self::Chest => Some(1),
-            Self::Legs => Some(2),
-            Self::Feet => Some(3),
-            _ => None,
-        }
-    }
-    /// `ArmorStand` equipment index (mainhand, offhand, feet, legs, chest, head).
-    fn stand_index(self) -> Option<usize> {
-        match self {
-            Self::MainHand => Some(0),
-            Self::OffHand => Some(1),
-            Self::Feet => Some(2),
-            Self::Legs => Some(3),
-            Self::Chest => Some(4),
-            Self::Head => Some(5),
-            _ => None,
-        }
-    }
-}
-
-fn equine(s: Species) -> bool {
-    matches!(
-        s,
-        Species::Horse
-            | Species::Donkey
-            | Species::Mule
-            | Species::SkeletonHorse
-            | Species::ZombieHorse
-            | Species::Camel
-            | Species::CamelHusk
-            | Species::Llama
-            | Species::TraderLlama
-    )
-}
-/// Mobs with species-specific body equipment.
-pub(super) fn body_equipment_species(s: Species) -> bool {
-    equine(s)
-        || matches!(s, Species::Wolf | Species::HappyGhast | Species::SulfurCube)
-        || sunrise_client::mobs::nautilus::is_nautilus(s)
-}
-/// What a mob holds in a slot.
-pub(super) fn mob_slot_item(m: &Mob, slot: Slot) -> Option<Arc<str>> {
-    let x = &m.extra;
-    match slot {
-        Slot::MainHand | Slot::OffHand | Slot::Feet | Slot::Legs | Slot::Chest | Slot::Head => {
-            sunrise_client::mobs::finalize::item(m, slot as usize)
-        }
-        Slot::Body => x.body_stack().map(|s| s.item.clone()),
-        Slot::Saddle => m.saddle_item().map(|s| s.item),
-    }
-}
-/// `LivingEntity.canUseSlot` and its overrides.
-fn mob_can_use_slot(m: &Mob, slot: Slot) -> bool {
-    let s = m.species();
-    let grown = m.alive() && !m.is_baby();
-    match s {
-        Species::Pig | Species::Strider if slot == Slot::Saddle => grown,
-        Species::Horse
-        | Species::SkeletonHorse
-        | Species::ZombieHorse
-        | Species::Llama
-        | Species::TraderLlama => true,
-        _ if equine(s) && slot == Slot::Saddle => grown && m.extra.tame,
-        _ if sunrise_client::mobs::nautilus::is_nautilus(s)
-            && matches!(slot, Slot::Saddle | Slot::Body) =>
-        {
-            grown && m.extra.tame
-        }
-        Species::SulfurCube | Species::HappyGhast if slot == Slot::Body => grown,
-        _ => true,
-    }
-}
-/// `Mob.canDispenserEquipIntoSlot` and its overrides.
-fn mob_can_dispenser_equip(m: &Mob, slot: Slot) -> bool {
-    let s = m.species();
-    let loot = m.extra.pick_up_loot;
-    match s {
-        Species::Pig | Species::Strider => slot == Slot::Saddle || loot,
-        _ if equine(s) => matches!(slot, Slot::Body | Slot::Saddle) && m.extra.tame || loot,
-        _ if sunrise_client::mobs::nautilus::is_nautilus(s) => {
-            matches!(slot, Slot::Body | Slot::Saddle) || loot
-        }
-        Species::SulfurCube | Species::HappyGhast => slot == Slot::Body,
-        Species::Dolphin | Species::Panda | Species::Fox => slot == Slot::MainHand && loot,
-        Species::Allay => false,
-        _ => loot,
-    }
-}
-/// `getEquipSound`: the saddle overrides of pigs, striders, horses, camels and nautili.
-pub(super) fn equip_sound(m: &Mob, slot: Slot, default: Option<String>) -> Option<String> {
-    if slot != Slot::Saddle {
-        return default;
-    }
-    let s = m.species();
-    Some(match s {
-        Species::Pig => "minecraft:entity.pig.saddle".into(),
-        Species::Strider => "minecraft:entity.strider.saddle".into(),
-        Species::Camel => "minecraft:entity.camel.saddle".into(),
-        Species::CamelHusk => "minecraft:entity.camel_husk.saddle".into(),
-        _ if equine(s) => "minecraft:entity.horse.saddle".into(),
-        _ if sunrise_client::mobs::nautilus::is_nautilus(s) => {
-            if m.fluids.eye_in_water {
-                "minecraft:item.nautilus_saddle_underwater_equip".into()
-            } else {
-                "minecraft:item.nautilus_saddle_equip".into()
-            }
-        }
-        _ => return default,
-    })
-}
-pub(super) fn mob_set_slot(m: &mut Mob, slot: Slot, stack: ItemStack) {
-    m.set_equipment_stack(slot as usize, Some(stack));
 }
 
 impl Game<'_> {
@@ -481,7 +261,6 @@ impl Game<'_> {
     /// return this remainder in its answer with `CLICK`; the caller plays the
     /// answer's event and smoke once. A client, another dimension or an unloaded
     /// chunk keeps the input stack unchanged.
-    #[allow(dead_code)]
     pub(super) fn dispense_default(
         &mut self,
         dimension: &str,
@@ -752,12 +531,7 @@ impl Game<'_> {
             }
             return Ok((self.default_execute(pos, facing, stack), CLICK));
         }
-        // DispenserBlock.getDefaultDispenseMethod: an egg without ENTITY_DATA drops as an item.
-        if stack.item.ends_with("_spawn_egg")
-            && stack
-                .data()
-                .is_none_or(|data| data.other("!minecraft:entity_data").is_none())
-        {
+        if stack.item.ends_with("_spawn_egg") {
             return self.dispense_spawn_egg(pos, facing, stack);
         }
         Ok((self.default_execute(pos, facing, stack), CLICK))
@@ -966,18 +740,6 @@ impl Game<'_> {
         let mut source = source_slot.as_mut().map(|slot| {
             sunrise_client::mobs::equip::EquipDecision::new(stack as *const _ as usize as u64, slot)
         });
-        let kinds = if observed {
-            targets
-                .iter()
-                .map(|target| match target {
-                    Target::Mob(i) => self.mobs[*i].kind.id.as_str(),
-                    Target::Stand(_) => "minecraft:armor_stand",
-                    _ => "minecraft:player",
-                })
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
         let entities = if observed {
             targets
                 .iter()
@@ -999,7 +761,7 @@ impl Game<'_> {
         let input = source.as_deref().map_or(&*stack, |source| source);
         let (tags, prepared) = (
             &self.stations().enchantments.entity_tags,
-            self.equip_stack(input, &kinds, &entities),
+            self.equip_stack(input, &entities),
         );
         let stamp = source.as_ref().and_then(|source| source.stamp());
         let allows = |entity: u32, id: &str| {
@@ -1203,9 +965,16 @@ impl Game<'_> {
         facing: Direction,
         stack: ItemStack,
     ) -> Result<Dispensed> {
-        let (kind, _) = sunrise_client::block_entity_item::spawn_egg_on_spawner(&stack, false);
+        let items = self.res.shared_items();
+        let Some(data) = sunrise_client::block_entity_item::item_entity_data(&stack, &items) else {
+            // Without effective ENTITY_DATA, DispenserBlock selects the ordinary drop.
+            return Ok((self.default_execute(pos, facing, stack), CLICK));
+        };
+        if !self.spawn_egg_allowed(&data.kind) {
+            return Ok((Some(stack), CLICK));
+        }
         let front = offset(pos, facing);
-        let Some(id) = self.spawn_mob_at(&kind, front, facing != Direction::Up) else {
+        let Some(id) = self.spawn_mob_at(&data.kind, front, facing != Direction::Up) else {
             return Ok((Some(stack), CLICK));
         };
         // EntityType.create: `finalizeSpawn` first, the egg's components after.
@@ -1219,7 +988,7 @@ impl Game<'_> {
         // EntityType.updateCustomEntityTag: a configured egg
         // (`/give @s pig_spawn_egg[minecraft:entity_data={…}]`) spawns the mob
         // it describes from a dispenser too, not only from a player's hand.
-        self.apply_spawn_egg_entity_data(id, &stack);
+        self.apply_spawn_egg_entity_data(id, &data);
         self.mob_ambient(id)?;
         // SpawnEggItemBehavior: the entity was placed by the dispenser.
         self.post_block_game_event("minecraft:entity_place", [pos.0, pos.1, pos.2], None, None);
@@ -2091,7 +1860,12 @@ impl Game<'_> {
                 LevelSound::new(name, [at.x, at.y, at.z], 1.0, 1.0).in_source(SoundSource::Blocks)
             };
             match m.species() {
-                _ if let Some((part, _)) = part => self.part_shear(i, part, None, &shears),
+                // A refused part shears nothing: no shear event, and the dispenser does not succeed.
+                _ if let Some((part, _)) = part => {
+                    if self.part_shear(i, part, None, &shears).is_err() {
+                        continue;
+                    }
+                }
                 Species::SulfurCube if sulfur_cube::has_body(m) => {
                     // SulfurCube.shear: the swallowed block comes out at the
                     // passenger attachment, and nothing is swallowed for 5 s.
@@ -2435,28 +2209,89 @@ impl Game<'_> {
         ))
     }
 }
-/// A tipped arrow's lasting effect at an eighth of the potion's duration
-/// (`Arrow.doPostHurtEffects`).
-pub(super) fn tipped_effect(stack: &ItemStack) -> Option<(&'static str, i32)> {
-    stack
-        .potion()
-        .and_then(sunrise_client::brewing::potion)
-        .and_then(|def| {
-            def.effects
-                .iter()
-                .find(|(id, _, _)| !sunrise_client::brewing::effect(id).is_some_and(|e| e.instant))
-                .map(|(id, duration, _)| {
-                    (
-                        sunrise_client::brewing::namespaced(id),
-                        (duration / 8).max(1),
-                    )
-                })
-        })
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sunrise_client::mobs::Mob;
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_dispenser_keeps_the_egg_if_its_type_cannot_spawn_in_peaceful() {
+        use crate::game::{commands::peaceful_tests, execution_role::ExecutionRole};
+
+        peaceful_tests::with_types(ExecutionRole::IntegratedServer, |game| {
+            let egg = peaceful_tests::trader_egg();
+            let dispense = |game: &mut Game<'_>| {
+                game.dispense_spawn_egg((4, 64, 4), Direction::Up, egg.clone())
+                    .unwrap()
+                    .0
+            };
+            assert_eq!(dispense(game).unwrap().count, 1);
+            assert!(game.mobs.is_empty());
+            game.set_difficulty_forced(2);
+            assert!(dispense(game).is_none());
+            assert_eq!(game.mobs.len(), 1);
+            assert_eq!(game.mobs[0].kind.id, peaceful_tests::TRADER);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_dispenser_drops_an_egg_without_prototype_entity_data() {
+        use crate::game::native_entity_refs::tests::{fixture_root, with_game_at};
+        use std::{fs, path::Path};
+
+        fn link_fixture_source(source: &Path, target: &Path) {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(source, target).unwrap();
+            #[cfg(not(unix))]
+            if source.is_dir() {
+                fs::create_dir(target).unwrap();
+                for entry in fs::read_dir(source).unwrap() {
+                    let entry = entry.unwrap();
+                    link_fixture_source(&entry.path(), &target.join(entry.file_name()));
+                }
+            } else if fs::hard_link(source, target).is_err() {
+                fs::copy(source, target).unwrap();
+            }
+        }
+
+        let source = fixture_root().canonicalize().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        for entry in fs::read_dir(&source).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_name() != "items.json" {
+                link_fixture_source(&entry.path(), &root.path().join(entry.file_name()));
+            }
+        }
+        let egg = "minecraft:cow_spawn_egg";
+        let mut items: serde_json::Value =
+            serde_json::from_slice(&fs::read(source.join("items.json")).unwrap()).unwrap();
+        assert!(
+            items[egg]
+                .as_object_mut()
+                .unwrap()
+                .remove("minecraft:entity_data")
+                .is_some()
+        );
+        fs::write(
+            root.path().join("items.json"),
+            serde_json::to_vec(&items).unwrap(),
+        )
+        .unwrap();
+
+        with_game_at(root.path().to_owned(), |game| {
+            let stack = ItemStack::new(egg, 1);
+            let (left, event) = game
+                .dispense_default_method((4, 64, 4), Direction::Up, stack.clone())
+                .unwrap();
+            assert_eq!((left, event), (None, CLICK));
+            assert!(game.mobs.is_empty());
+            assert_eq!(game.dropped.len(), 1);
+            assert_eq!(game.dropped[0].stack, stack);
+        });
+    }
 
     /// What a dispense probe part heard: which part, and the dispenser it was for.
     #[derive(Clone, Default)]
@@ -2744,20 +2579,12 @@ mod tests {
                 assert_eq!((done, worn, stand), (false, None, false));
                 assert_eq!(fits.asked().len(), 2);
                 // A missing entity is refused, and the part never hears of it.
-                let prepared = game.equip_stack(
-                    &helmet,
-                    &[
-                        "minecraft:player",
-                        "minecraft:zombie",
-                        "minecraft:armor_stand",
-                    ],
-                    &[],
-                );
+                let prepared = game.equip_stack(&helmet, &[]);
                 assert!(!game.can_equip(&prepared, "head", 9_999, "minecraft:zombie", true));
                 assert!(fits.asked().is_empty());
                 // With no part to ask, the component's answer stands for any entity.
                 let chestplate =
-                    game.equip_stack(&ItemStack::new("minecraft:iron_chestplate", 1), &[], &[]);
+                    game.equip_stack(&ItemStack::new("minecraft:iron_chestplate", 1), &[]);
                 assert!(game.can_equip(&chestplate, "chest", 9_999, "minecraft:zombie", true));
             });
         });

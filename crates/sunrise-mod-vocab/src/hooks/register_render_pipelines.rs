@@ -4,8 +4,8 @@ pub trait Hooks {
     /// Register the mod's own render pipelines, once at client startup (NeoForge's
     /// `RegisterRenderPipelinesEvent`; 1.21.1 mods used `RegisterShadersEvent`): push a
     /// [`RenderPipeline`] for each into `event.pipelines`. The game builds them with its own at
-    /// startup and again on every resource reload. An id outside the mod's namespaces, one an
-    /// earlier registration took are logged with the mod and
+    /// startup and again on every resource reload. An id outside the mod's own or served
+    /// (`served_by`) namespaces, or one an earlier registration took, is logged with the mod and
     /// dropped. A required pipeline whose shader is missing or doesn't build fails the load: the
     /// game does not start, and a reload fails and keeps the previous resources. An
     /// [optional](RenderPipeline::optional()) one is logged and resolves to
@@ -15,8 +15,7 @@ pub trait Hooks {
 `Hooks::register_render_pipelines` is the client registration-phase counterpart of NeoForge's
 `RegisterRenderPipelinesEvent` (and of 1.21.1's `RegisterShadersEvent`, which it replaced). A
 pipeline is plain data: its id, a WGSL fragment shader in the mod's assets, a blend mode and a
-depth mode. No GPU object or shader handle crosses the mod API, so a native mod and a wasm mod
-register the same way.
+depth mode. Registration takes no GPU object or shader handle.
 
 ```rust,ignore
 fn register_render_pipelines(
@@ -71,6 +70,7 @@ stage they draw after that stage's plain quads and lines, in the order submitted
 pack they follow the plain quads: a stage the pack draws itself is drawn with the next stage the
 game reaches."#]
     #[hook(
+        version = 2,
         side = "client",
         contract = "collect",
         out = "pipelines",

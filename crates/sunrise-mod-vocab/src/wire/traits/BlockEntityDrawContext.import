@@ -1,1 +1,0 @@
-What a block entity, mob or player submit hook draws with, in blocks under a pose stack (`PoseStack`): one per hook call.

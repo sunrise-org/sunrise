@@ -3,15 +3,19 @@ use super::*;
 
 impl PartRegistrar {
     /// Attaches each declared type's parts to its blocks. A type is found by id whichever mod
-    /// declared it, but another mod's type only for a package that lists the declaring package
-    /// in its `[dependencies]`: otherwise resolution would depend on what else is installed.
+    /// declared it, but another mod's type requires a surviving dependency on its owner.
     pub(crate) fn expand_block_entity_parts(&mut self) {
         let packages = crate::load_state::current_packages();
+        let dependencies = crate::load_state::effective_dependencies();
         let mut ids: Vec<_> = self.parts.block_entity_kinds.keys().collect();
         ids.sort_unstable();
         for id in ids {
             let parts = &self.parts.block_entity_kinds[id];
-            let Some(kind) = self.block_entity_types.iter().find(|kind| kind.id == **id) else {
+            let Some(&(owner, ref kind)) = self
+                .block_entity_types
+                .iter()
+                .find(|(_, kind)| kind.id == **id)
+            else {
                 let namespace = id.split_once(':').map_or("", |(namespace, _)| namespace);
                 // The installed package owning the namespace; an absent one is known only by
                 // its id, which an optional dependency is matched against.
@@ -21,16 +25,7 @@ impl PartRegistrar {
                 let dependency_id = package.map_or(namespace, |package| package.id());
                 let absent = package.is_none();
                 for part in parts {
-                    let dependency = packages
-                        .iter()
-                        .find(|package| package.id() == part.mod_id)
-                        .and_then(|package| {
-                            package
-                                .dependencies()
-                                .iter()
-                                .find(|dependency| dependency.id() == dependency_id)
-                        })
-                        .map(|dependency| dependency.kind());
+                    let dependency = dependencies.kind(part.mod_id, dependency_id);
                     match dependency {
                         Some(crate::DependencyKind::Optional) if absent => {
                             log::debug!(
@@ -65,26 +60,10 @@ impl PartRegistrar {
                 }
                 continue;
             };
-            let owner = self.block_entity_owners.get(&**id).copied();
             let allowed: Vec<_> = parts
                 .iter()
                 .filter(|part| {
-                    let Some(owner) = owner.filter(|owner| *owner != part.mod_id) else {
-                        return true;
-                    };
-                    let depends = packages
-                        .iter()
-                        .find(|package| package.id() == part.mod_id)
-                        .is_some_and(|package| {
-                            package.dependencies().iter().any(|dependency| {
-                                dependency.id() == owner
-                                    && matches!(
-                                        dependency.kind(),
-                                        crate::DependencyKind::Required
-                                            | crate::DependencyKind::Optional
-                                    )
-                            })
-                        });
+                    let depends = dependencies.permits(part.mod_id, owner);
                     if !depends {
                         self.refused.push(format!(
                             "mod {} attached {} to block entity type {id}, declared by package {owner}; declare {owner} as a dependency",
@@ -481,6 +460,17 @@ pub mod tests {
                 let (attached, refused) = attached_to_owner_block(&mods);
                 assert_eq!(refused, Vec::<String>::new());
                 assert_eq!(attached, ["b"]);
+                crate::load_state::with_test_dependencies(Default::default(), || {
+                    let (attached, refused) = attached_to_owner_block(&mods);
+                    assert!(attached.is_empty());
+                    assert_eq!(
+                        refused,
+                        [format!(
+                            "mod b attached {} to block entity type owner:press, declared by package owner; declare owner as a dependency",
+                            type_name::<FromB>()
+                        )]
+                    );
+                });
             },
         );
     }
@@ -915,7 +905,9 @@ impl BlockEntitiesRegistrar for PartRegistrar {
             .id(mod_vocab::__private::parts_installation::block_entity_type_key_slot(key))
             .map(str::to_owned);
         if let Some(id) = id.filter(|id| {
-            self.block_entity_types.iter().any(|decl| decl.id == *id)
+            self.block_entity_types
+                .iter()
+                .any(|(_, decl)| decl.id == *id)
                 && self.owned_declaration_id(id).is_ok()
         }) {
             self.block_entity_transforms.insert(id, step);
@@ -957,11 +949,10 @@ impl BlockEntitiesRegistrar for PartRegistrar {
             .iter()
             .map(|block| mod_vocab::__private::qualified(self.mod_id, block))
             .collect();
-        self.block_entity_owners
-            .entry(id.clone())
-            .or_insert(self.mod_id);
-        self.block_entity_types
-            .push(mod_vocab::__private::parts_installation::block_entity_declaration(id, blocks));
+        self.block_entity_types.push((
+            self.mod_id,
+            mod_vocab::__private::parts_installation::block_entity_declaration(id, blocks),
+        ));
         key
     }
 
@@ -1035,7 +1026,7 @@ impl PartRegistrar {
     ) -> Result<(), crate::PartStateRefusal> {
         let key = (declaration.namespace, declaration.name);
         declaration
-            .check(self.mod_wasm)
+            .check()
             .and_then(|()| match self.part_states.get(&key) {
                 Some(&declared) if declared != declaration.data_name => {
                     Err(crate::PartStateRefusal::Incompatible { declared })

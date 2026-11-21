@@ -5,8 +5,8 @@
 use super::Game;
 use mod_api::world::mod_chunk_tickets::ModTicket;
 use mod_api::{
-    BlockHit, BlockTransformPreview, ChunkRef, ChunkStatus, ClipBlock, ClipFluid, DimensionKey,
-    Hand, LevelRef, LightLayer, MapState, PlayerRef, RespawnData, TicketController, Vec3,
+    BlockHit, BlockTransformPreview, ChunkRef, ChunkStatus, ClipBlock, ClipFluid, GlobalPos, Hand,
+    Identifier, LevelRef, LightLayer, MapState, PlayerRef, RespawnData, TicketController, Vec3,
 };
 use sunrise_client::{streaming::Streaming, world::World};
 use sunrise_core::{
@@ -395,12 +395,12 @@ impl Game<'_> {
     /// without a player. This is the world's own `/forceload` state, not a
     /// ticket the mod owns: the chunk stays forced across restarts, and after
     /// the mod is unloaded or removed, until `set_forced(false)` or
-    /// `/forceload remove` clears it. Adding a newly forced chunk loads it
-    /// before returning, as vanilla does.
-    /// False for a stale handle, on a client, and for a level the server
-    /// has not opened.
+    /// `/forceload remove` clears it. A newly forced chunk loads before
+    /// returning, or when streaming starts if it is still paused.
+    /// False for a stale handle, on a client, outside the world, or when
+    /// adding after generation has stopped.
     pub(super) fn chunk_set_forced(&mut self, chunk: ChunkRef, forced: bool) -> bool {
-        if self.native_level_streaming(chunk.level()).is_none() {
+        if self.native_level_streaming(chunk.level()).is_none() || !chunk_in_world(chunk.pos()) {
             return false;
         }
         let [x, z] = chunk.pos();
@@ -413,6 +413,14 @@ impl Game<'_> {
                 .unwrap_or(false)
         }
     }
+    fn mod_ticket_streaming_mut(&mut self, dim: super::Dim) -> Option<&mut Streaming> {
+        if dim == self.dim {
+            Some(&mut self.streaming)
+        } else {
+            self.levels.parked_streaming_of_mut(dim.id())
+        }
+    }
+
     /// The mods validate the chunk tickets `dim`'s level loaded from its save,
     /// controller by controller (`LoadingValidationCallback.validateTickets`),
     /// and the survivors take hold. Tickets a mod added since the load (in
@@ -420,7 +428,10 @@ impl Game<'_> {
     /// without a validator keeps all of its tickets. Nothing is built while no
     /// mod listens.
     pub(super) fn validate_mod_chunk_tickets(&mut self, dim: super::Dim) {
-        let mut loaded = self.streaming.take_loaded_tickets();
+        let Some(streaming) = self.mod_ticket_streaming_mut(dim) else {
+            return;
+        };
+        let mut loaded = streaming.take_loaded_tickets();
         if !loaded.is_empty() && mod_api::__private::listened(mod_api::HookId::ValidateTickets) {
             let mut controllers: Vec<u32> = loaded.iter().map(|t| t.controller).collect();
             controllers.sort_unstable();
@@ -442,8 +453,10 @@ impl Game<'_> {
                 loaded.extend(own.into_iter().filter(|t| !removed.contains(t)));
             }
         }
-        for ticket in loaded {
-            self.streaming.set_mod_forced(ticket, true);
+        if let Some(streaming) = self.mod_ticket_streaming_mut(dim) {
+            for ticket in loaded {
+                streaming.set_mod_forced(ticket, true);
+            }
         }
     }
     /// The chunk ticket of `controller` for `owner` on `chunk`
@@ -644,6 +657,23 @@ impl Game<'_> {
             .get(key)
             .cloned()
     }
+    /// Read the mod-published connection group at `pos`, or `Ok(None)` when unset, unloaded, or
+    /// out of height. Works on both server (including parked levels) and client (including viewed
+    /// levels).
+    pub(super) fn level_connection_group(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+    ) -> Result<Option<u64>, mod_api::LevelReadError> {
+        let world = self.native_level_view_world(level).ok_or_else(|| {
+            if self.level_handle_current(level) {
+                mod_api::LevelReadError::Unavailable
+            } else {
+                mod_api::LevelReadError::Stale
+            }
+        })?;
+        Ok(world.connection_group(pos[0], pos[1], pos[2]))
+    }
     /// Whether this is the level in place: the one the server ticks now, whose block entities
     /// the game's own capabilities read and write and whose capabilities
     /// `LevelRef::capability` looks up. False for a level parked while the server ticks
@@ -813,15 +843,20 @@ impl Game<'_> {
             return None;
         }
         let [yaw, pitch] = self.level.world_spawn_angle;
+        let [x, y, z] = self.level.world_spawn?;
+        let dimension = self
+            .level
+            .world_spawn_dimension
+            .as_deref()
+            .unwrap_or("minecraft:overworld");
         Some(RespawnData {
-            pos: self.level.world_spawn?,
+            position: GlobalPos::new(Identifier::parse(dimension).ok()?, BlockPos::new(x, y, z)),
             yaw,
             pitch,
         })
     }
-    /// `/setworldspawn`'s write (`set_world_spawn`), for the Overworld's handle. False for
-    /// another level, a stale handle, a client, a non-finite angle and a position outside the
-    /// spawnable bounds.
+    /// `/setworldspawn`'s write (`set_world_spawn`) in the handle's level. False for a stale
+    /// handle, a client, a non-finite angle and a position outside the spawnable bounds.
     pub(super) fn level_set_respawn_data(
         &mut self,
         level: LevelRef,
@@ -830,13 +865,12 @@ impl Game<'_> {
         pitch: f32,
     ) -> bool {
         if !self.native_world_data_allowed(level)
-            || level.dimension() != DimensionKey::OVERWORLD
             || !(yaw.is_finite() && pitch.is_finite())
             || self.level_in_spawnable_bounds(level, pos) != Some(true)
         {
             return false;
         }
-        self.set_world_spawn(pos, [yaw, pitch]);
+        self.set_world_spawn(super::Dim::from_id(level.dimension_id()), pos, [yaw, pitch]);
         true
     }
     /// Map `id`'s saved data as it stands (`with_map`). None on a client, for a stale handle
@@ -998,7 +1032,10 @@ fn horizontal_in_bounds(pos: [i32; 3]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::api_values::TryIntoApi;
-    use super::super::{Dim, native_entity_refs::tests::with_game};
+    use super::super::{
+        Dim,
+        native_entity_refs::tests::{run_fresh_cases, with_game},
+    };
     use mod_api::{ChunkRef, LevelRef, LightLayer, WorldEpoch};
     use sunrise_core::position::BlockPos;
 
@@ -1296,25 +1333,44 @@ mod tests {
             // RespawnData.of: the yaw wraps to -180..180 and the pitch clamps to -90..90.
             assert!(level.set_respawn_data(game, [10, 70, -4], 270.0, 120.0));
             let data = level.respawn_data(game).unwrap();
-            assert_eq!(data.pos, [10, 70, -4]);
+            assert_eq!(data.position.dimension().to_string(), "minecraft:overworld");
+            assert_eq!(data.position.pos(), BlockPos::new(10, 70, -4));
             assert_eq!((data.yaw, data.pitch), (-90.0, 90.0));
             assert_eq!(
                 game.level.world_spawn,
                 Some([10, 70, -4]),
                 "level.dat's spawn"
             );
-            assert!(
-                !nether.set_respawn_data(game, [0, 64, 0], 0.0, 0.0),
-                "Overworld only"
-            );
             assert!(!level.set_respawn_data(game, [0, 64, 0], f32::NAN, 0.0));
             assert!(!level.set_respawn_data(game, [30_000_001, 64, 0], 0.0, 0.0));
             assert!(!stale.set_respawn_data(game, [0, 64, 0], 0.0, 0.0));
             assert_eq!(stale.respawn_data(game), None);
             assert_eq!(
-                level.respawn_data(game).unwrap().pos,
-                [10, 70, -4],
+                level.respawn_data(game).unwrap().position.pos(),
+                BlockPos::new(10, 70, -4),
                 "refusals change nothing"
+            );
+            assert!(
+                !nether.set_respawn_data(game, [3, 40, 9], 0.0, 0.0),
+                "a level not open yet"
+            );
+            // SetWorldSpawnCommand in another level: the world spawn moves there, and every
+            // level's handle reads it with that level.
+            game.enter_level(crate::game::Dim::Nether).unwrap();
+            game.enter_level(crate::game::Dim::Overworld).unwrap();
+            assert!(nether.set_respawn_data(game, [3, 40, 9], 0.0, 0.0));
+            for handle in [level, nether] {
+                let data = handle.respawn_data(game).unwrap();
+                assert_eq!(
+                    data.position.dimension().to_string(),
+                    "minecraft:the_nether"
+                );
+                assert_eq!(data.position.pos(), BlockPos::new(3, 40, 9));
+            }
+            assert_eq!(
+                game.level.world_spawn_dimension.as_deref(),
+                Some("minecraft:the_nether"),
+                "level.dat's spawn.dimension"
             );
 
             // A map repainted through the handle reads back and is marked to save and redraw.
@@ -1761,7 +1817,12 @@ mod tests {
             game.world.modified.insert((-40, 40));
             assert!(!game.chunk_loaded(far));
             assert!(game.chunk_set_forced(far, true));
-            assert!(game.chunk_loaded(far), "loaded before returning");
+            for x in 39..=41 {
+                for z in -8..=-6 {
+                    assert!(game.world.chunks.contains_key(&(x, z)), "missing {x},{z}");
+                }
+            }
+            assert!(game.world.chunks[&(40, -7)].lit);
             assert!(std::sync::Arc::ptr_eq(&old, &game.world.chunks[&(-40, 40)]));
             assert!(game.world.modified.contains(&(-40, 40)));
             assert!(!game.chunk_set_forced(far, true), "already forced");
@@ -1776,7 +1837,6 @@ mod tests {
             assert!(!game.chunk_set_forced(far, false), "already clear");
             assert_eq!(game.level_forced_chunks(level), Some(vec![[-3, 2]]));
             assert!(!game.streaming.forced.contains(&(40, -7)));
-            // Outside the world.
             // Unchanged adds and removals do not load a missing column.
             let pending = game.level_chunk_ref(level, [200, 200]).unwrap();
             assert!(game.streaming.set_forced(200, 200, true));
@@ -1787,6 +1847,75 @@ mod tests {
             assert!(!game.chunk_loaded(pending));
             assert!(game.level_chunk_ref(level, [1_875_000, 0]).is_none());
             assert!(game.level_chunk_ref(level, [0, -1_875_001]).is_none());
+            assert!(!game.chunk_set_forced(ChunkRef::new(level, [i32::MAX, 0]), true));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn paused_forced_loads_are_queued_and_stopped_generation_refuses_adds() {
+        if run_fresh_cases(
+            concat!(
+                "game::native_level_refs::tests::",
+                "paused_forced_loads_are_queued_and_stopped_generation_refuses_adds"
+            ),
+            "SUNRISE_FORCED_STREAMING_CHILD",
+            &["forced_streaming"],
+        ) {
+            return;
+        }
+
+        with_game(|game| {
+            use std::sync::Arc;
+            use sunrise_client::{chunk::Chunk, world::World};
+
+            game.options.headless = true;
+            game.streaming.mesh = false;
+            game.streaming.radius = 0;
+
+            // A remote streamer can use a column from a packet; it cannot
+            // generate a missing column or wait for its lighting and neighbours.
+            let mut remote_world = World::new(game.world.air, 0);
+            let streamer = &mut game.streaming;
+            streamer.remote = true;
+            assert!(!streamer.set_forced_loaded(&mut remote_world, 4, 4, true));
+            assert!(!streamer.commanded().contains(&(4, 4)));
+            assert!(!streamer.forced.contains(&(4, 4)));
+            remote_world
+                .chunks
+                .insert((4, 4), Arc::new(Chunk::empty(4, 4)));
+            streamer.paused = false;
+            assert!(streamer.set_forced_loaded(&mut remote_world, 4, 4, true));
+            assert!(streamer.commanded().contains(&(4, 4)));
+            assert!(streamer.forced.contains(&(4, 4)));
+            assert!(streamer.set_forced(4, 4, false));
+            streamer.remote = false;
+            streamer.paused = true;
+
+            let level = game.level(game.dim.id()).unwrap();
+            let queued = game.level_chunk_ref(level, [40, -7]).unwrap();
+            assert!(!game.chunk_loaded(queued));
+            assert!(game.chunk_set_forced(queued, true));
+            assert!(!game.chunk_set_forced(queued, true));
+            assert_eq!(game.level_forced_chunks(level), Some(vec![[40, -7]]));
+            assert!(!game.chunk_loaded(queued), "paused streaming does no work");
+
+            game.streaming.paused = false;
+            game.prepare_levels().unwrap();
+            assert!(game.world.chunks[&(40, -7)].lit);
+            for x in 39..=41 {
+                for z in -8..=-6 {
+                    assert!(game.world.chunks.contains_key(&(x, z)), "missing {x},{z}");
+                }
+            }
+
+            game.streaming.abort_generation();
+            let missing = game.level_chunk_ref(level, [60, -7]).unwrap();
+            assert!(!game.chunk_set_forced(missing, true));
+            assert_eq!(game.level_forced_chunks(level), Some(vec![[40, -7]]));
+            assert!(game.chunk_set_forced(queued, false));
+            assert!(!game.chunk_set_forced(queued, true));
+            assert_eq!(game.level_forced_chunks(level), Some(vec![]));
         });
     }
 
@@ -2316,6 +2445,8 @@ mod tests {
     #[ignore = "daily"]
     fn mod_tickets_save_apart_from_vanillas_tickets_and_release_with_the_world() {
         use mod_api::TicketOwner::{Block, Entity};
+        use std::sync::Arc;
+        use sunrise_client::{streaming::Streaming, testgen::TestTerrain};
         with_machines(|game| {
             let level = game.level(game.dim.id()).unwrap();
             let chunk = game.level_chunk_ref(level, [-9, 4]).unwrap();
@@ -2328,8 +2459,13 @@ mod tests {
             game.save_chunk_tickets().unwrap();
             let vanilla = game.save.load_forced_chunks();
             assert!(vanilla.is_empty(), "vanilla's file has no mod ticket");
-            // The world closes: its streaming goes, the next opening reads the file.
+            // A new level starts with no live tickets; only the saved tickets carry over.
             let reopen = |game: &mut super::super::Game<'_>, slot_of: fn(&str) -> Option<u32>| {
+                let terrain =
+                    TestTerrain::new(game.pack.assets.registry, game.res.biomes()).unwrap();
+                game.streaming = Streaming::new(Arc::new(terrain), game.worker_context(), 1);
+                game.streaming.mesh = false;
+                game.streaming.radius = 0;
                 game.streaming.load_forced(
                     game.save.load_forced_chunks(),
                     game.save.load_mod_tickets(slot_of),
@@ -2669,17 +2805,23 @@ mod tests {
     fn validation_sees_the_saved_tickets_not_ones_added_after_the_load() {
         with_machines(|game| {
             let level = game.level(game.dim.id()).unwrap();
+            let owner = mod_api::TicketOwner::Block([1, 64, 1]);
+            let live = game.level_chunk_ref(level, [5, 5]).unwrap();
+            {
+                let _guard = in_mod("machines");
+                assert!(game.chunk_set_mod_forced(live, quarry(), owner, true, false));
+            }
             let tickets = vec![saved("machines:quarry", [1, 64, 1], (7, 7))];
             game.streaming.load_forced(Default::default(), tickets);
             // `level_load` runs after the load: its hold is the same owner's.
             let fresh = game.level_chunk_ref(level, [6, 6]).unwrap();
             {
                 let _guard = in_mod("machines");
-                let owner = mod_api::TicketOwner::Block([1, 64, 1]);
                 assert!(game.chunk_set_mod_forced(fresh, quarry(), owner, true, false));
             }
             game.validate_mod_chunk_tickets(game.dim);
             assert!(!game.streaming.forced.contains(&(7, 7)), "saved one pruned");
+            assert!(game.streaming.forced.contains(&(5, 5)), "live one kept");
             assert!(game.streaming.forced.contains(&(6, 6)), "fresh one kept");
         });
     }

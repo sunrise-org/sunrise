@@ -21,6 +21,10 @@
 use crate::game::{Creative, Game, Screen};
 use sunrise_client::{containers::BlockEntity, items::ItemStack, menu::Input};
 
+#[cfg(test)]
+#[path = "mouse_tweaks_result_tests.rs"]
+mod result_tests;
+
 #[derive(Default)]
 pub(in crate::game) struct Tweaks {
     drag: Option<Drag>,

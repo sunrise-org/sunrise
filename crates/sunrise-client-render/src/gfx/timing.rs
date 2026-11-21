@@ -241,11 +241,9 @@ impl GpuTimer {
         }
         self.next = (slot + 1) % SLOTS;
     }
-    /// GPU milliseconds of frames whose timestamps have arrived, oldest first.
-    pub fn collect(&mut self, device: &wgpu::Device, out: &mut Vec<f32>) {
-        if device.poll(wgpu::PollType::Poll).is_err() {
-            return;
-        }
+    /// GPU milliseconds of frames whose timestamps have arrived, oldest first: the caller
+    /// polls the device first, and only a live one (`in_flight::poll_live`).
+    pub fn collect(&mut self, out: &mut Vec<f32>) {
         for i in 0..SLOTS {
             let slot = &self.slots[(self.next + i) % SLOTS];
             if slot.state.load(Ordering::Acquire) != MAPPED {
@@ -339,12 +337,12 @@ mod tests {
     #[test]
     fn successful_readback_releases_slot() {
         let _gpu = crate::gfx::test_gpu::lock();
-        let Some((device, _queue, mut timer)) = mapped_timer() else {
+        let Some((_device, _queue, mut timer)) = mapped_timer() else {
             eprintln!("Skipping GPU timer test: no timestamp-capable adapter");
             return;
         };
         let mut samples = Vec::new();
-        timer.collect(&device, &mut samples);
+        timer.collect(&mut samples);
         assert_eq!(
             samples,
             vec![(10.0 * f64::from(timer.period_ns) / 1e6) as f32]
@@ -362,7 +360,8 @@ mod tests {
         // Reproduce a buffer destroyed after its successful map callback (#6320).
         timer.slots[0].buffer.destroy();
         let mut samples = Vec::new();
-        timer.collect(&device, &mut samples);
+        device.poll(wgpu::PollType::Poll).unwrap();
+        timer.collect(&mut samples);
         assert!(samples.is_empty());
         assert_eq!(timer.slots[0].state.load(Ordering::Acquire), FAILED);
         // Later frames must not resolve or copy into the failed readback buffer.
@@ -372,7 +371,8 @@ mod tests {
         assert!(timer.resolved.is_empty());
         queue.submit([encoder.finish()]);
         timer.submitted(&queue);
-        timer.collect(&device, &mut samples);
+        device.poll(wgpu::PollType::Poll).unwrap();
+        timer.collect(&mut samples);
         assert!(samples.is_empty());
     }
 }

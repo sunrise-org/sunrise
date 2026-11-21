@@ -1,5 +1,9 @@
 # Design: typed cauldron interactions
 
+> Historical: this design predates the removal of WebAssembly mods.
+> See [cauldron interactions](../../modding/src/how-to/world/cauldron-interactions.md) for the current native API.
+> The old cross-runtime proposal and test matrix are not implementation instructions.
+
 Provisional contract for [#1323](https://github.com/arismoko/horizon/issues/1323) and parent [#854](https://github.com/arismoko/horizon/issues/854). This note implements no API. Typed registration, handler shape, prediction and atomicity require maintainer approval before code. The merged [#1325](https://github.com/arismoko/horizon/pull/1325) table and [#1390](https://github.com/arismoko/horizon/pull/1390) journal are foundations, not a mod registrar.
 
 ## Vanilla and public counterpart

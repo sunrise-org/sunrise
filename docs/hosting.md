@@ -43,26 +43,27 @@ plan are in [server.md](server.md).
 Linux (x86-64) and macOS (Apple Silicon or Intel):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sunrise-org/sunrise/main/packaging/server/install.sh | sh
 ```
 
 Windows (x64 or ARM64), in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.ps1 | iex
+irm https://raw.githubusercontent.com/sunrise-org/sunrise/main/packaging/server/install.ps1 | iex
 ```
 
 The script picks the machine's x64 or ARM64 archive, including when PowerShell runs under x64 emulation. It downloads
-the current Sunrise Nightly from GitHub (the only build Sunrise ships;
-`--version` picks another), checks it against the release's signature when OpenSSL 3 is installed (on Windows, Git
-for Windows includes it), else against the SHA-256 GitHub publishes, and never asks for sudo or administrator rights. It installs:
+the current Sunrise Nightly from GitHub, or the release `--version <tag>` names (Windows: `-Version <tag>`): a stable
+release's tag, such as `26.3-0.1.0`, puts the server on that stable line, which its updates then follow. It checks it
+against the release's signature with a verifier the script pins (it refuses the install if anything doesn't match),
+and never asks for sudo or administrator rights. It installs:
 
 - the release in `~/.local/share/sunrise/releases/<version>` (Windows: `%LOCALAPPDATA%\Sunrise`), with
   `current` pointing at the one in use;
 - `sunrise-server` and `sunrise-prepare` in `~/.local/bin` (Windows: added to your PATH);
 - a `game-files` folder for the files you prepare, kept across updates.
 
-Options: `--version vX.Y.Z`, `--dir FOLDER`, `--bin FOLDER` (Windows: `-Version`, `-Dir`). Other systems,
+Options: `--version <tag>`, `--dir FOLDER`, `--bin FOLDER` (Windows: `-Version <tag>`, `-Dir FOLDER`). Other systems,
 such as Linux on ARM, build from source: `cargo build --release -p sunrise-game --bin sunrise-client -p
 sunrise-server` and keep both programs in one folder.
 
@@ -85,8 +86,19 @@ sunrise-prepare --prepare --server-jar /path/to/server.jar
 Add `--minecraft-dir PATH` if your launcher keeps the game elsewhere. The prepared files go to
 `game-files`, which updates keep.
 
-**On a headless machine** (a VPS, a home server), prepare on your own computer instead, with the launcher or
-`sunrise-prepare`, and copy the prepared `26.3` folder to the server with `sunrise-server import-resources DIR` (it checks the
+**On a headless machine** (a VPS, a home server) with no Minecraft install, the launcher's command line can
+download the game for your account and set the server up there:
+
+```sh
+sunrise-launcher install latest
+sunrise-launcher account sign-in        # shows a code: enter it at the address it prints, on any device
+sunrise-launcher prepare --download     # Mojang's files, for the signed-in account that owns Minecraft
+sunrise-launcher servers set-up
+sunrise-launcher servers create --name "My server" --accept-eula
+sunrise-launcher servers run "My server" -- start
+```
+
+Or prepare on your own computer instead, with the launcher or `sunrise-prepare`, and copy the prepared `26.3` folder to the server with `sunrise-server import-resources DIR` (it checks the
 folder and its version first), or by hand: into
 `~/.local/share/sunrise/game-files/sunrise-client/26.3`, or into `resources/` in the server folder, or anywhere
 `[engine] resources` in `server.toml` names. A folder copied this way needs release v2026.10.17.07 or
@@ -159,7 +171,6 @@ whitelist = true
 enforce_whitelist = false
 view_distance = 10
 simulation_distance = 10
-max_view_distance = 0        # past view_distance, saved chunks only, up to this (0: off)
 max_viewed_loaded_chunks = 2048             # see "Other levels a mod shows a player" below
 max_viewed_ticking_chunks = 441
 max_viewed_loaded_chunks_per_level = 16384
@@ -185,6 +196,8 @@ resources = ""               # the prepared game files; empty: resources/ here, 
 restart_on_crash = true
 low_memory = false           # true: less memory, slightly slower ticks (see below)
 parallel_tick = false        # reserved: parallel phases are disabled in this fork (see below)
+droppable_clientbound = 262144  # bytes a second of droppable mod payloads sent to each player; 0 turns them off (see below)
+droppable_serverbound = 16384   # the same, accepted from each player
 
 [backups]
 every = "6h"                 # 30m, 6h, 1d...; "0" turns automatic backups off
@@ -209,6 +222,10 @@ start instead of being ignored. When the game changes a setting itself (`/whitel
 back into `server.toml` when it stops, and your comments are kept. Changes to the file apply at the next
 restart: there is no live reload yet.
 
+One retired key is the exception: `max_view_distance` under `[server]`, the old far ring, is ignored with a note
+at each start, and can be removed. For more reach, raise `view_distance` (up to 32); unlike the far ring, that
+loads and, where the world hasn't been generated yet, generates the chunks it sends.
+
 ### Operators' commands: `admin_feedback_to_ops`
 
 On by default, as vanilla: when an operator runs a command that reports to admins (`/gamemode`, `/give`, `/tp`...),
@@ -216,22 +233,6 @@ the other operators read `[name: ...]` in gray, and the console logs it. Players
 either way. `false` keeps it to the console's log (`logs/latest.log`): nobody in game sees an operator's commands,
 while each operator still reads their own command's answer.
 
-### Seeing further: `max_view_distance`
-
-Off by default (0), a Sunrise setting with no vanilla equivalent. Past `view_distance`, up to
-`max_view_distance` (at most 32), each player is also sent the chunks the world has already saved, as far
-as their own render distance goes. Those chunks are only read and sent: the server never generates them,
-keeps them loaded or ticks them, so what lies out there stands still (no mobs, no growing crops, no
-redstone) until a player comes within `view_distance`. A chunk the world hasn't saved yet stays empty on
-the player's screen. To fill the ring, generate the world ahead of the players with `/pregen`
-(`sunrise-pregen = true` under `[properties]`, then `sunrise-server cmd pregen start 2500`,
-[pregeneration](pregeneration.md)).
-
-The far ring goes after everything else: its chunks wait behind the ones inside `view_distance`, are paced
-by how fast each player's game takes them, and aren't read while the world's saves are behind. When the
-average tick goes over 50 ms, the ring pulls in by two chunks a second, never inside `view_distance`; after
-30 s of ticks under 45 ms, it grows back by one chunk every 5 s. What it sent is kept in memory for 5
-minutes (96 MB at most), so a player walking back isn't sent the save again.
 
 ### Other levels a mod shows a player: `max_viewed_*`
 
@@ -265,7 +266,7 @@ with `CapReached`. Set another number under `[properties]` in `server.toml`:
 sunrise-max-runtime-levels = 128
 ```
 
-A level frees its place when its mod unloads or deletes it (a delete also removes its folder from `dimensions/`). After 300 ticks with nobody in it, it leaves memory, as any level does, but keeps its place: it opens again when someone enters it.
+A level frees its place when its mod unloads or deletes it (a delete also removes its folder from `dimensions/`). After 300 ticks with nobody in it, it leaves memory, as any custom level does, but keeps its place: it opens again when someone enters it.
 
 Already have a vanilla server? Run `sunrise-server init` in its folder, or `sunrise-server import
 server.properties` to write `server.toml` from it. The world, `ops.json`, `whitelist.json` and the ban lists
@@ -407,7 +408,9 @@ minutes. It keeps the crash report and gives up after 5 crashes in 10 minutes, a
 after it starts and every 6 hours after, and says so in its log, in `status` and in the panel; it never
 updates by itself. `sunrise-server update --check` (add `--json` for machine output) asks once. `sunrise-server update`:
 
-1. downloads the current Nightly and checks it against its signed SHA-256;
+1. downloads the newest build of the server's channel and checks it against its signed SHA-256: on a stable release
+   (`26.3-0.1.0`), the newest stable release of its line (the same Minecraft version and major, `26.3-0.x`),
+   never a Nightly or the next major; on any other build, the current Nightly;
 2. stops the game, backs up the world (`backups/<time>-before-<release>.zip`) and switches to the new
    release;
 3. starts the game on it and waits up to 5 minutes (`--timeout SECONDS`) for it to come up.
@@ -415,11 +418,25 @@ updates by itself. `sunrise-server update --check` (add `--json` for machine out
 If the new game crashes or doesn't come up in time, the server goes back to the release it was on by itself
 and puts the world back as it was just before the switch (the world the new game left is kept in
 `backups/`). `sunrise-server rollback` goes back to the release before by hand, keeping the world as it is
-(it backs it up first). `--version vX.Y.Z` installs a given release, and `--archive FILE --version NAME` an
+(it backs it up first). `--version <tag>` installs a given release (moving to another line or channel too), and `--archive FILE --version NAME` an
 archive you have, such as your own build. A server still on a release from before the last dated one doesn't know
 that 0.2 comes after the dated releases and says it is up to date: run `sunrise-server update --version v0.2.0`
 once ([versioning](versioning.md)). A stopped server is switched and starts on the new release next
 time. Set `SUNRISE_NO_UPDATE_CHECK=1` in the server's environment to turn the check off.
+
+Release checks and downloads, and the Discord webhook, use the first nonblank setting in this order:
+`HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, `all_proxy` for HTTPS, or `HTTP_PROXY`, `http_proxy`,
+`ALL_PROXY`, `all_proxy` for HTTP. A proxy address without a scheme means HTTP. Supported schemes are
+`http://`, `socks4://`, `socks4a://`, `socks5://`, `socks5h://` and `socks://` (an alias for SOCKS5).
+An `https://` proxy address is not supported, even for HTTPS downloads. HTTP proxy credentials are sent
+only on HTTPS CONNECT, not for plain HTTP requests.
+
+Local addresses bypass the proxy. `NO_PROXY` (or `no_proxy` if `NO_PROXY` is unset) is a comma-separated
+list: `*` bypasses all hosts; a host or domain (`example.org`, `.example.org`, `*.example.org`) matches
+that name and its subdomains. The list accepts IP literals, including bare or bracketed IPv6, but not CIDR.
+An entry with a port (`example.org:8443` or `[2001:db8::1]:8443`) matches only that destination port,
+including the URL scheme's default port when no port is written. Release checks and downloads
+select the route again at each redirect.
 
 ## 6. Web panel
 
@@ -700,7 +717,7 @@ No image is published: build one from the repository. The image holds none of Mi
 folder you prepared (step 2) read-only.
 
 ```sh
-git clone https://github.com/horizon-rust/horizon && cd sunrise
+git clone https://github.com/sunrise-org/sunrise && cd sunrise
 docker build -f packaging/server/Dockerfile -t sunrise-server .
 
 docker run -d --name sunrise -p 25565:25565 --stop-timeout 180 \
@@ -725,7 +742,7 @@ docker run -d --name sunrise -p 25565:25565 --stop-timeout 180 \
 ## 10. How fast is it
 
 The latest bot benchmark compares Sunrise with vanilla 26.3, Paper and Fabric + Lithium:
-[benchmarks/server-four-way-2026-10-19](https://github.com/horizon-rust/horizon/blob/main/benchmarks/server-four-way-2026-10-19/README.md).
+[benchmarks/server-four-way-2026-10-19](https://github.com/sunrise-org/sunrise/blob/main/benchmarks/server-four-way-2026-10-19/README.md).
 It ran release v2026.10.19 on a 4-thread laptop CPU (i7-7500U), with 1 to 50 players walking, exploring and
 standing around spawn, the bots on another machine. All four servers did the same work. Against
 Pumpkin: [performance/server-vs-pumpkin.md](performance/server-vs-pumpkin.md). In short:
@@ -776,6 +793,18 @@ environment variable `SUNRISE_PARALLEL_TICK=1`, for a host that gives you no way
 with a fixed startup command). With the setting off, a `SUNRISE_PARALLEL_TICK` already in the server's
 environment still applies.
 
+### Droppable mod payloads: `droppable_clientbound` and `droppable_serverbound`
+
+A mod can declare a payload channel as droppable (voice chat, live data): under congestion the game drops
+those sends, instead of letting them queue behind chunks and arrive late ([the modding
+book](modding/src/how-to/client/networking.md)). Under `[engine]`, `droppable_clientbound` is the bytes a
+second of them the server sends to each player (default 262144, 256 KiB, about 45 simultaneous speakers
+of Opus voice) and `droppable_serverbound` the bytes a second it accepts from each player (default 16384,
+16 KiB, one microphone with room to spare). Raise them for a busy voice server; `0` turns droppable
+delivery off in that direction. A player over the limit loses those sends, which are counted, and is not
+kicked; nothing else on the connection is ever dropped. Vanilla's `rate-limit` (off by default) still
+counts droppable payloads as packets. It applies at the next start.
+
 ## When something goes wrong
 
 - **"no prepared game files"**: `init` and `run` list the folders they looked in. Prepare (step 2), or set
@@ -786,4 +815,4 @@ environment still applies.
   open in your firewall. On a tailnet, use the server's tailnet address.
 - **It keeps restarting**: `sunrise-server status` shows the last crash and `sunrise-server logs -n 200` the log
   before it. Crash reports are in `crash-reports/`.
-- Report problems at <https://github.com/horizon-rust/horizon/issues>, with the end of the log.
+- Report problems at <https://github.com/sunrise-org/sunrise/issues>, with the end of the log.

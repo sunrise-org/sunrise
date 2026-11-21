@@ -74,7 +74,7 @@ fn validate(info: &PlacementInfo, resources: &dyn DisplayResources) -> Result<()
     }
     // This is only a preflight for values provably unable to cross Wire. The
     // derived codec below, not a second decoder or local depth budget, decides
-    // acceptance identically for native and wasm declarations. A record and
+    // acceptance identically for all declarations. A record and
     // each recursive ingredient record contributes one reader level;
     // category/entry/info/ingredient start at four (lists/options/tuples
     // do not add reader depth).

@@ -1554,20 +1554,7 @@ impl Def {
                         | S::Zoglin
                         | S::Wither
                 ),
-            // The `burn_in_daylight` entity type tag.
-            burns_in_day: matches!(
-                s,
-                S::Zombie
-                    | S::ZombieHorse
-                    | S::Drowned
-                    | S::ZombieVillager
-                    | S::Skeleton
-                    | S::Stray
-                    | S::Bogged
-                    | S::WitherSkeleton
-                    | S::Phantom
-                    | S::ZombieNautilus
-            ),
+            burns_in_day: false,
             undead,
             // `#can_breathe_under_water`. Not the dolphin: it holds its breath
             // (4800 ticks) and surfaces for air; nor the iron golem, which keeps
@@ -1596,6 +1583,48 @@ impl Def {
                     s,
                     S::Villager | S::WanderingTrader | S::IronGolem | S::SnowGolem | S::CopperGolem
                 ),
+            // `EntityType.Builder.notInPeaceful` on the vanilla type.
+            not_in_peaceful: matches!(
+                s,
+                S::Blaze
+                    | S::Bogged
+                    | S::Breeze
+                    | S::CaveSpider
+                    | S::Creaking
+                    | S::Creeper
+                    | S::Drowned
+                    | S::ElderGuardian
+                    | S::Enderman
+                    | S::Endermite
+                    | S::Evoker
+                    | S::Ghast
+                    | S::Giant
+                    | S::Guardian
+                    | S::Hoglin
+                    | S::Husk
+                    | S::Illusioner
+                    | S::MagmaCube
+                    | S::Parched
+                    | S::Phantom
+                    | S::PiglinBrute
+                    | S::Pillager
+                    | S::Ravager
+                    | S::Silverfish
+                    | S::Skeleton
+                    | S::Slime
+                    | S::Spider
+                    | S::Stray
+                    | S::Vex
+                    | S::Vindicator
+                    | S::Warden
+                    | S::Witch
+                    | S::Wither
+                    | S::WitherSkeleton
+                    | S::Zoglin
+                    | S::Zombie
+                    | S::ZombieVillager
+                    | S::ZombifiedPiglin
+            ),
             tick_alone: false,
         }
     }

@@ -122,28 +122,6 @@ fn shared_native_panic_discards_children_and_preserves_completed_output() {
 }
 
 #[test]
-fn shared_trap_verdict_discards_children_without_replaying_dispatch() {
-    let arena = RefCell::new(PendingChildren::default());
-    let drops = Rc::new(Cell::new(0));
-    let mut calls = 0;
-    let result = PendingChildren::run_scoped(
-        &arena,
-        7,
-        1,
-        vec![Child('A', drops.clone())],
-        |_| {
-            calls += 1;
-            Decision::Failed
-        },
-        |_| panic!("failed action must not validate"),
-    );
-    assert!(matches!(result, Err(Error::Failed)));
-    assert_eq!(calls, 1);
-    assert_eq!(drops.get(), 1);
-    assert!(arena.borrow().frames.is_empty());
-}
-
-#[test]
 fn shared_validation_panic_withdraws_exactly_once() {
     let arena = RefCell::new(PendingChildren::default());
     let drops = Rc::new(Cell::new(0));

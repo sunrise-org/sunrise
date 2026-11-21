@@ -1,11 +1,14 @@
-//! `sunrise-stage ROOT POINTS_JSON INTERNALS_JSON COMMIT`: expose internals, mark points and give functions their replacement slots in a staged
-//! source copy, then write the build data (`points.json`, `internals.json`, `loops.json`) with the
+//! `sunrise-stage ROOT INTERNALS_JSON COMMIT`: expose internals and give functions their replacement slots in a staged
+//! source copy, then write the build data (`internals.json`, `loops.json`, `functions.json`) with the
 //! header naming COMMIT, the source's full commit sha (#589). Never run on a working tree.
 //!
-//! `sunrise-stage surface ROOT OUT [--without-calls] [--with-points-and-loops] [--with-internals]`:
+//! `sunrise-stage surface ROOT OUT [--with-loops] [--with-internals]`:
 //! write the SDK surface (`surface.json`) of the source tree at ROOT to OUT, and nothing else. It
 //! only reads the tree, so a working tree is fine. The engine options are for comparisons: choose
-//! the same options for both exports. `--with-internals` also includes points and loops.
+//! the same options for both exports. `--with-internals` also includes loops.
+//!
+//! `sunrise-stage surface-catalogs ROOT SURFACE [--with-internals]`: add the source tree's
+//! engine catalogs to an existing SDK export, without regenerating its typed API records.
 //!
 //! `sunrise-stage uses SURFACE MOD_DIR [--json OUT --made-for BUILD]`: list
 //! what the mod in MOD_DIR uses of SURFACE, each item with the place that brought it in, then
@@ -15,31 +18,30 @@
 //! `sunrise-stage fits USES_JSON TARGET_SURFACE`: whether a uses table fits a build's surface,
 //! naming each changed item. Exit 0 fits, 1 does not fit, 2 error.
 //!
-//! `sunrise-stage surface-diff OLD NEW [--notes DIR] [--base-notes DIR] [--api-notes-only] [--json OUT] [--gate]`:
+//! `sunrise-stage surface-diff OLD NEW [--notes DIR] [--base-notes DIR] [--api-notes-only] [--landed SHA] [--covered-by DIR --covered-base DIR] [--json OUT] [--gate]`:
 //! print what changed between two surface exports, breaking changes first. `--notes` attaches
 //! the change notes of DIR (`crates/sunrise-mod-vocab/changes`) whose file names are not in
 //! `--base-notes` (the base tree's folder; required with `--notes`). For an SDK comparison,
-//! `--api-notes-only` excludes engine ids from note attachment and stale-id checking. Exits 1 when a new note
+//! `--api-notes-only` excludes engine ids from note attachment and stale-id checking. `--covered-by` attaches the
+//! notes of its DIR not in `--covered-base` (a landed merge's own notes, against its first parent's) as coverage
+//! only: their ids no longer read as unnoted, and an id among them that did not change is not stale. Exits 1 when a new note
 //! names an id that did not change, or with `--gate` when a breaking change has no note; 2 when
 //! an input cannot be read or the options are wrong.
 use mod_source::mod_uses;
 use mod_surface::Surface;
-use mod_surface::uses::{Fit, ManifestFacts, Origin, UsesTable, fits, uses_contained};
+use mod_surface::uses::{Fit, ManifestFacts, Origin, UsesTable, uses_contained};
 use std::path::PathBuf;
 use sunrise_mod_api_gen::staging::{self, Mode};
-use sunrise_mod_api_gen::surface::{ExportOptions, export_with};
+use sunrise_mod_api_gen::surface::{ExportOptions, engine_catalogs, export_with};
 
 fn surface(args: &[PathBuf]) {
     let [root, out, flags @ ..] = args else {
-        fail(
-            "usage: sunrise-stage surface ROOT OUT [--without-calls] [--with-points-and-loops] [--with-internals]",
-        )
+        fail("usage: sunrise-stage surface ROOT OUT [--with-loops] [--with-internals]")
     };
     let mut options = ExportOptions::default();
     for flag in flags {
         match flag.to_str() {
-            Some("--without-calls") => options.without_calls = true,
-            Some("--with-points-and-loops") => options.with_points_and_loops = true,
+            Some("--with-loops") => options.with_loops = true,
             Some("--with-internals") => options.with_internals = true,
             _ => fail(format!("unknown option {}", flag.display())),
         }
@@ -95,6 +97,43 @@ fn read_surface(path: &std::path::Path) -> Surface {
     Surface::read(&bytes).unwrap_or_else(|e| fail(format!("{}: {e}", path.display())))
 }
 
+/// `surface-read IN OUT`: IN as this tool reads it, written to OUT (the fields and collections it
+/// doesn't know left out). Refuses a document it can't read, or whose stored hashes are not the
+/// ones it gives their contracts ([`Surface::read_sealed`]).
+fn surface_read(args: &[PathBuf]) -> ! {
+    let [input, out] = args else {
+        fail("usage: sunrise-stage surface-read IN OUT")
+    };
+    let bytes = std::fs::read(input).unwrap_or_else(|e| fail(format!("{}: {e}", input.display())));
+    let (surface, unsealed) =
+        Surface::read_sealed(&bytes).unwrap_or_else(|e| fail(format!("{}: {e}", input.display())));
+    if !unsealed.is_empty() {
+        fail(format!(
+            "{}: these hashes are not what their contracts give: {}",
+            input.display(),
+            unsealed.join(", ")
+        ));
+    }
+    std::fs::write(out, surface.to_json())
+        .unwrap_or_else(|e| fail(format!("{}: {e}", out.display())));
+    std::process::exit(0)
+}
+
+fn surface_catalogs(args: &[PathBuf]) {
+    let [root, path, flags @ ..] = args else {
+        fail("usage: sunrise-stage surface-catalogs ROOT SURFACE [--with-internals]");
+    };
+    let with_internals = match flags {
+        [] => false,
+        [flag] if flag == "--with-internals" => true,
+        _ => fail("usage: sunrise-stage surface-catalogs ROOT SURFACE [--with-internals]"),
+    };
+    let surface = read_surface(path);
+    let items = engine_catalogs(root, with_internals).unwrap_or_else(|error| fail(error));
+    std::fs::write(path, surface.with_engine_items(items).to_json())
+        .unwrap_or_else(|error| fail(format!("{}: {error}", path.display())));
+}
+
 fn uses_command(entry: mod_surface::child::ChildEntry, args: &[PathBuf]) {
     let [surface, dir, options @ ..] = args else {
         fail("usage: sunrise-stage uses SURFACE MOD_DIR [--json OUT --made-for BUILD]")
@@ -112,11 +151,16 @@ fn uses_command(entry: mod_surface::child::ChildEntry, args: &[PathBuf]) {
         }
     }
     let surface = read_surface(surface);
-    let input = mod_uses::read(dir).unwrap_or_else(|e| fail(e));
+    let input = mod_uses::read(dir, &[]).unwrap_or_else(|e| fail(e));
+    if input.game_code {
+        fail(
+            "the mod declares game code (a [native] row or internals), which a surface alone cannot judge: use `cargo sunrise-mod fits`"
+                .to_owned(),
+        );
+    }
     // No manifest form names a hook version today (the schema refuses `hook_version`).
     let manifest = ManifestFacts {
         names: input.manifest_names,
-        hook_versions: Default::default(),
     };
     let uses = uses_contained(
         entry,
@@ -163,14 +207,33 @@ fn fits_command(args: &[PathBuf]) -> ! {
         .unwrap_or_else(|e| fail(format!("{}: {e}", table.display())));
     let table =
         UsesTable::read(&bytes).unwrap_or_else(|e| fail(format!("{}: {e}", table.display())));
-    match fits(&table.entries, &read_surface(target)) {
+    let target = read_surface(target);
+    if table
+        .entries
+        .iter()
+        .any(|entry| entry.id.starts_with("game:"))
+    {
+        fail(
+            "the list records game code the mod declares, which a surface alone cannot judge: use `cargo sunrise-mod fits`"
+                .to_owned(),
+        );
+    }
+    let report = table.fits(&table.entries, &target);
+    let code = match report.verdict {
         Fit::Fits => {
             println!(
                 "fits ({} items, made for {})",
                 table.entries.len(),
                 table.made_for
             );
-            std::process::exit(0)
+            0
+        }
+        Fit::Unversioned(hooks) => {
+            eprintln!(
+                "sunrise-stage: not known: nothing the list can judge changed, but it holds no version of {}; scan the mod again",
+                hooks.join(", ")
+            );
+            2
         }
         Fit::DoesNotFit(misfits) => {
             println!(
@@ -181,19 +244,24 @@ fn fits_command(args: &[PathBuf]) -> ! {
             for misfit in &misfits {
                 println!("  {misfit}  [{}]", misfit.id);
             }
-            std::process::exit(1)
+            1
         }
+    };
+    if let Some(note) = report.deferred {
+        println!("  {note}");
     }
+    std::process::exit(code)
 }
 
 fn surface_diff(args: &[PathBuf]) -> ! {
     use sunrise_mod_api_gen::surface::notes;
     let [old, new, options @ ..] = args else {
         fail(
-            "usage: sunrise-stage surface-diff OLD NEW [--notes DIR] [--base-notes DIR] [--api-notes-only] [--json OUT] [--gate]",
+            "usage: sunrise-stage surface-diff OLD NEW [--notes DIR] [--base-notes DIR] [--api-notes-only] [--landed SHA] [--covered-by DIR --covered-base DIR] [--json OUT] [--gate]",
         )
     };
-    let (mut notes_dir, mut base_notes, mut json) = (None, None, None);
+    let (mut notes_dir, mut base_notes, mut json, mut landed) = (None, None, None, None);
+    let (mut covered_by, mut covered_base) = (None, None);
     let (mut gate, mut api_notes_only) = (false, false);
     let mut options = options.iter();
     while let Some(option) = options.next() {
@@ -209,6 +277,9 @@ fn surface_diff(args: &[PathBuf]) -> ! {
             Some("--notes") => &mut notes_dir,
             Some("--base-notes") => &mut base_notes,
             Some("--json") => &mut json,
+            Some("--landed") => &mut landed,
+            Some("--covered-by") => &mut covered_by,
+            Some("--covered-base") => &mut covered_base,
             _ => fail(format!("unknown option {}", option.display())),
         };
         let value = options
@@ -217,22 +288,41 @@ fn surface_diff(args: &[PathBuf]) -> ! {
         *slot = Some(value);
     }
     let mut diff = mod_surface::diff(&read_surface(old), &read_surface(new));
+    let filter_ids = |file: &mut notes::NoteFile| {
+        if api_notes_only {
+            file.ids
+                .retain(|id| !matches!(id.split_once(':'), Some(("loop" | "internal", _))));
+        }
+    };
     let mut stale = Vec::new();
     if let Some(dir) = notes_dir {
         // Without the base's notes every older note would read as new, and stale.
         let base = base_notes.unwrap_or_else(|| fail("--notes needs --base-notes"));
         let found = notes::read(dir, base).unwrap_or_else(|e| fail(e));
         for mut file in found {
-            if api_notes_only {
-                file.ids.retain(|id| {
-                    !matches!(id.split_once(':'), Some(("point" | "loop" | "internal", _)))
-                });
+            // The notes of one merge are checked against that merge's diff, and no other's.
+            let wanted = landed
+                .and_then(|sha| sha.to_str())
+                .map(str::to_ascii_lowercase);
+            if file.landed != wanted {
+                continue;
             }
+            filter_ids(&mut file);
             for id in diff.attach(&file.note, &file.ids) {
                 stale.push(format!(
                     "change note {} names {id}, which did not change",
                     file.note.file
                 ));
+            }
+        }
+    }
+    if let Some(dir) = covered_by {
+        let base = covered_base.unwrap_or_else(|| fail("--covered-by needs --covered-base"));
+        // Read apart from --notes, so neither set's file names can hide or replace the other's.
+        for mut file in notes::read(dir, base).unwrap_or_else(|e| fail(e)) {
+            if file.landed.is_none() {
+                filter_ids(&mut file);
+                diff.attach(&file.note, &file.ids);
             }
         }
     }
@@ -260,18 +350,20 @@ fn main() {
     let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     match args.first().and_then(|c| c.to_str()) {
         Some("surface") => return surface(&args[1..]),
+        Some("surface-catalogs") => return surface_catalogs(&args[1..]),
         Some("uses") => return uses_command(entry, &args[1..]),
         Some("fits") => fits_command(&args[1..]),
         Some("surface-diff") => surface_diff(&args[1..]),
+        Some("surface-read") => surface_read(&args[1..]),
         _ => {}
     }
     let usage = || {
         eprintln!(
-            "usage: sunrise-stage ROOT POINTS_JSON INTERNALS_JSON COMMIT [--sync-internals]\n       sunrise-stage surface ROOT OUT [--without-calls] [--with-points-and-loops] [--with-internals]\n       sunrise-stage surface-diff OLD NEW [--notes DIR] [--base-notes DIR] [--api-notes-only] [--json OUT] [--gate]\n       sunrise-stage uses SURFACE MOD_DIR [--json OUT --made-for BUILD]\n       sunrise-stage fits USES_JSON TARGET_SURFACE"
+            "usage: sunrise-stage ROOT INTERNALS_JSON COMMIT [--sync-internals]\n       sunrise-stage surface ROOT OUT [--with-loops] [--with-internals]\n       sunrise-stage surface-catalogs ROOT SURFACE [--with-internals]\n       sunrise-stage surface-diff OLD NEW [--notes DIR] [--base-notes DIR] [--api-notes-only] [--landed SHA] [--covered-by DIR --covered-base DIR] [--json OUT] [--gate]\n       sunrise-stage surface-read IN OUT\n       sunrise-stage uses SURFACE MOD_DIR [--json OUT --made-for BUILD]\n       sunrise-stage fits USES_JSON TARGET_SURFACE"
         );
         std::process::exit(2)
     };
-    let [root, list, internals, commit, options @ ..] = &args[..] else {
+    let [root, internals, commit, options @ ..] = &args[..] else {
         usage()
     };
     // Discovery never builds or publishes a game.
@@ -283,19 +375,14 @@ fn main() {
     let Some(commit) = commit.to_str() else {
         usage()
     };
-    let build = point_shape::build_data::Build {
+    let build = staging::Build {
         commit: commit.to_owned(),
     };
-    match staging::stage(root, list, internals, mode, &build) {
+    match staging::stage(root, internals, mode, &build) {
         Ok(staging::Staged {
-            points: staged,
             replace,
             internals: widened,
         }) => {
-            println!(
-                "staged {} points ({} with a head only; {} functions have no API record) in {} files",
-                staged.points, staged.head_only, staged.refused, staged.files
-            );
             println!(
                 "gave {} functions a replacement slot in {} files of {} crates",
                 replace.functions, replace.files, replace.crates

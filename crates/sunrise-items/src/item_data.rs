@@ -12,8 +12,10 @@ pub use sunrise_world::custom_data;
 pub mod custom_model_data;
 #[path = "item_data/ingredient_components.rs"]
 pub mod ingredient_components;
+mod persistence;
 use crate::banner_layer::BannerLayer;
 use crate::items::{ItemInfo, ItemStack};
+use persistence::encode_stack_components;
 use sunrise_core::nbt::{JavaString, Tag};
 
 /// One item attribute modifier, as `ItemAttributeModifiers.Entry` holds it.
@@ -334,6 +336,10 @@ struct ConsumableComponent {
 }
 impl ConsumableComponent {
     fn new(raw: Tag) -> Option<Arc<Self>> {
+        // `Consumable.CODEC` is a record: a scalar or a list is no consumable.
+        if !matches!(raw, Tag::Compound(_)) {
+            return None;
+        }
         let mut value =
             crate::items::parse_consumable(&sunrise_client_core::scoreboard::tag_to_json(&raw))
                 .ok()?;
@@ -1673,7 +1679,7 @@ fn canonical_other_component(id: &str, tag: &Tag) -> Tag {
     if id == "minecraft:map_decorations"
         && let Tag::Compound(entries) = &mut value
     {
-        for entry in entries.values_mut() {
+        entries.for_each_mut(|_, entry| {
             if let Some(Tag::String(kind)) = entry.get_mut("type") {
                 let text = kind.to_string_lossy();
                 if !text.is_empty()
@@ -1683,7 +1689,7 @@ fn canonical_other_component(id: &str, tag: &Tag) -> Tag {
                     *kind = id.to_string().as_str().into();
                 }
             }
-        }
+        });
     }
     value
 }
@@ -1699,60 +1705,47 @@ pub fn encode_extra_components(stack: &ItemStack) -> Option<Tag> {
     encode_stack_components(stack, false, &raw_template_tag)
 }
 
-fn encode_stack_components(
-    stack: &ItemStack,
-    include_damage: bool,
-    template: &impl Fn(&ItemStack) -> Tag,
-) -> Option<Tag> {
-    let mut components =
-        components_tag_inner(stack.damage, stack.data(), include_damage, template)?;
-    // MobEffectInstance.Details' codec always saves the resolved icon flag.
-    // An omitted icon follows show_particles, whose default is true.
-    if let Some(Tag::List(effects)) = components
-        .get_mut("minecraft:potion_contents")
-        .and_then(|potion| potion.get_mut("custom_effects"))
-    {
-        for effect in effects {
-            let shown = effect.get("show_particles").and_then(int).unwrap_or(1) != 0;
-            if let Tag::Compound(fields) = effect {
-                fields
-                    .entry(JavaString::from("show_icon"))
-                    .or_insert(Tag::Byte(i8::from(shown)));
-            }
-        }
-    }
-    // LodestoneTracker.CODEC: optionalFieldOf("tracked", true).
-    if let Some(Tag::Compound(tracker)) = components.get_mut("minecraft:lodestone_tracker")
-        && tracker.get(&JavaString::from("tracked")) == Some(&Tag::Byte(1))
-    {
-        tracker.remove(&JavaString::from("tracked"));
-    }
-    Some(components)
-}
-/// The saved `DataComponentPatch.CODEC`, compared against the loaded prototype.
-/// Nested templates retain their raw patches, including redundant entries and removals.
-pub fn encode_components(stack: &ItemStack, items: &crate::items::Items) -> Option<Tag> {
-    let mut components = encode_stack_components(stack, true, &raw_template_tag)?;
-    let Some(prototype) = items.component_defaults.get(stack.item.as_ref()) else {
-        return Some(components);
-    };
-    let Some(info) = items.get(&stack.item) else {
-        return Some(components);
-    };
-    // Equality belongs to the component codec, not its saved NBT numeric width.
-    if let Tag::Compound(entries) = &mut components {
-        entries.retain(|id, _| {
-            // PatchedDataComponentMap: a removal stays in the patch only where
-            // the prototype has the component; elsewhere nothing is removed.
-            if let Some(removed) = id.0.strip_prefix(&[u16::from(b'!')]) {
-                return prototype.contains_key(&JavaString(removed.to_vec()));
-            }
-            !prototype.contains_key(id)
+/// `PatchedDataComponentMap`: retain sets that differ from the item's prototype and
+/// removals of components the prototype actually has. Unknown prototypes leave the patch intact.
+pub fn component_patch_filter<'a>(
+    stack: &'a ItemStack,
+    items: &'a crate::items::Items,
+) -> impl Fn(&JavaString, bool) -> bool + 'a {
+    let prototype = items
+        .component_defaults
+        .get(stack.item.as_ref())
+        .zip(items.get(&stack.item));
+    move |id, removed| {
+        let Some((keys, info)) = prototype else {
+            return true;
+        };
+        let present = keys.contains_key(id);
+        if removed {
+            present
+        } else {
+            // Equality belongs to the component codec, not its saved NBT numeric width.
+            !present
                 || !ingredient_components::component_equal(
                     &id.to_string_lossy(),
                     stack,
                     &info.component_prototype,
                 )
+        }
+    }
+}
+
+/// The saved `DataComponentPatch.CODEC`, compared against the loaded prototype.
+/// Nested templates retain their raw patches, including redundant entries and removals.
+pub fn encode_components(stack: &ItemStack, items: &crate::items::Items) -> Option<Tag> {
+    let mut components = encode_stack_components(stack, true, &raw_template_tag)?;
+    if let Tag::Compound(entries) = &mut components {
+        let keep = component_patch_filter(stack, items);
+        entries.retain(|id, _| {
+            if let Some(removed) = id.0.strip_prefix(&[u16::from(b'!')]) {
+                keep(&JavaString(removed.to_vec()), true)
+            } else {
+                keep(id, false)
+            }
         });
         if entries.is_empty() {
             return None;
@@ -2228,6 +2221,7 @@ pub fn command_components(text: &str) -> Result<Tag, String> {
     while !rest.is_empty() {
         let end = rest.find(['=', ',']).unwrap_or(rest.len());
         let key = rest[..end].trim();
+        sunrise_world::item_defaults::validate_component_name(key)?;
         rest = &rest[end..];
         if let Some(value) = rest.strip_prefix('=') {
             let (tag, used) = sunrise_core::nbt::parse_snbt(value)?;
@@ -2236,6 +2230,7 @@ pub fn command_components(text: &str) -> Result<Tag, String> {
             } else {
                 format!("minecraft:{key}")
             };
+            sunrise_world::item_defaults::validate_component_tag(&id, &tag)?;
             entries.insert(JavaString::from(id.as_str()), tag);
             rest = &value[used..];
         } else if let Some(key) = key.strip_prefix('!') {

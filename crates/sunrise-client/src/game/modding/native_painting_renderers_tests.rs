@@ -41,7 +41,7 @@ impl EntityRenderer for Paint {
         entity: &EntityRenderState,
         draw: &mut dyn BlockEntityDrawContext,
     ) -> Result<(), String> {
-        self.0.lock().unwrap().state = Some(*entity);
+        self.0.lock().unwrap().state = Some(entity.clone());
         raised_quad(draw, 100.0);
         Ok(())
     }
@@ -270,10 +270,13 @@ fn a_painting_registration_resolves_to_the_painting_slot() {
         "minecraft:painting".to_owned(),
         Arc::new(Mark) as Arc<dyn EntityRenderer>,
     )]);
-    let (table, unknown) =
-        EntityRendererTable::resolve(&registered, &[], &Default::default(), |id| {
-            ["minecraft:painting", "minecraft:oak_boat"].contains(&id)
-        });
+    let (table, unknown) = EntityRendererTable::resolve(
+        &registered,
+        &[],
+        &Default::default(),
+        &crate::game::general::GeneralTypeCatalog::freeze(&[]).unwrap(),
+        |id| ["minecraft:painting", "minecraft:oak_boat"].contains(&id),
+    );
     assert!(table.painting().is_some());
     assert_eq!(unknown, Vec::<String>::new());
 }
@@ -380,7 +383,12 @@ fn a_registered_painting_draws_its_renderer_in_place_of_the_quads() {
                 );
                 assert!(v.pos[2].abs() < 1e-5, "quad z at the hanging pose: {v:?}");
             }
-            let state = heard.lock().unwrap().state.expect("the renderer was asked");
+            let state = heard
+                .lock()
+                .unwrap()
+                .state
+                .take()
+                .expect("the renderer was asked");
             assert_eq!(state.id, 91);
             assert_eq!(state.partial, 0.5);
             assert_eq!(state.age, 6.5);

@@ -149,17 +149,17 @@ impl Renderer {
     /// reads: that frame's, or an error, never an older one. The last frame's PNG has already
     /// waited for it, without a limit, as `screenshot` does.
     pub fn finish_sequence_frame(&mut self) -> Result<()> {
-        self.device
-            .poll(wgpu::PollType::Wait {
+        super::in_flight::poll_live(
+            &self.device,
+            &self.device_lost,
+            wgpu::PollType::Wait {
                 submission_index: None,
                 timeout: Some(std::time::Duration::from_secs(30)),
-            })
-            .map_err(|e| format!("the frame didn't finish on the GPU: {e}"))?;
-        if self.device_lost() {
-            return Err("the graphics device was lost".into());
-        }
+            },
+        )
+        .map_err(|e| format!("the frame didn't finish on the GPU: {e}"))?;
         if let Some((_, Some(post))) = &mut self.pack_post {
-            post.take_center_depth(&self.device)?;
+            post.take_center_depth()?;
         }
         Ok(())
     }
@@ -297,10 +297,6 @@ impl Renderer {
         let report = self.install_shader_pack(loading.dimension, built.map(Some));
         Some((loading.dimension, loading.label, loading.started, report))
     }
-    /// Whether a `shaders/` pack is still building (`load_shader_pack`).
-    pub fn shader_pack_loading(&self) -> bool {
-        self.pack_loading.is_some()
-    }
     /// Drops the running shader pack, of either kind.
     pub fn drop_shader_packs(&mut self) {
         self.pack_loading = None;
@@ -407,7 +403,7 @@ impl Renderer {
             clouds: Some(pack_entities::cloud_inputs()),
             weather: Some(pack_weather::inputs()),
             lines: Some(pack_lines::inputs()),
-            hand: Some(pack_hand::inputs()),
+            hand: Some(pack_hand::adapt_hand_inputs(pack_entities::inputs())),
             ..pack_atlas::game_terrain(terrain, &self.pack_lava_layers)
         }
     }

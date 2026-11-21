@@ -1,2 +1,0 @@
-refusal: unwind
-A mod's client item extensions: the game calls the registered provider for each visible worn equipment piece.

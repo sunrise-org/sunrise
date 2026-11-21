@@ -679,7 +679,9 @@ facade={package='sunrise-internals',path='.sunrise/sdk/api/crates/sunrise-intern
         let build = "0123456789abcdef0123456789abcdef01234567";
         let cache = project.join(".sunrise/cache").join(build);
         fs::create_dir_all(cache.join("build-data")).unwrap();
-        fs::write(cache.join("build"), build).unwrap();
+        crate::sdk_fetch::CacheStamp::new(build, &crate::sdk_fetch::keys())
+            .write(&cache)
+            .unwrap();
         fs::write(cache.join("build-data/internals.json"), format!(r#"{{"schema":1,"build":{{"commit":"{build}"}},"internals":[{{"path":"Used","kind":"struct","signature":"struct Used","hash":"1111"}}]}}"#)).unwrap();
         let before = format!(
             "id = 'example'\nname = 'Example'\nversion = '0.1.0'\napi = '0.2'\ncapabilities = ['registries']\n[native]\ngame = '26.3'\nsunrise = '{build}'\nmixins = '{}'\n",

@@ -1,1 +1,0 @@
-Infallible publication, run once, only after every listener prepared successfully: what a listener's `prepare` hands back.

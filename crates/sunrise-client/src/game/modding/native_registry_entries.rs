@@ -267,13 +267,11 @@ impl Game<'_> {
                     .is_some_and(|members| members.contains(&index)),
             );
         }
-        if registry == "minecraft:enchantment" {
-            return Some(
-                self.active_enchantment_definitions()
-                    .tag(&tag)
-                    .iter()
-                    .any(|member| member.as_ref() == id),
-            );
+        if matches!(
+            registry.as_str(),
+            "minecraft:enchantment" | "minecraft:entity_type"
+        ) {
+            return Some(self.sync_tag_contains(&registry, &id, &tag));
         }
         if registry == "minecraft:slot_source" {
             return Some(
@@ -328,20 +326,22 @@ impl Game<'_> {
                     .is_some_and(|members| members.contains(&id)),
             );
         }
+        Some(self.sync_tag_contains(&registry, &id, &tag))
+    }
+
+    fn sync_tag_contains(&self, registry: &str, id: &str, tag: &str) -> bool {
         let Some(sync) = self.registry_sync() else {
-            return Some(false);
+            return false;
         };
-        let Some(index) = network_id(&sync.builtin, &sync.dynamic, &registry, &id) else {
-            return Some(false);
+        let Some(index) = network_id(&sync.builtin, &sync.dynamic, registry, id) else {
+            return false;
         };
-        Some(
-            sync.tags
-                .registries
-                .iter()
-                .find(|tags| tags.registry == registry)
-                .and_then(|tags| tags.tags.iter().find(|candidate| candidate.name == tag))
-                .is_some_and(|tag| tag.ids.contains(&index)),
-        )
+        sync.tags
+            .registries
+            .iter()
+            .find(|tags| tags.registry == registry)
+            .and_then(|tags| tags.tags.iter().find(|candidate| candidate.name == tag))
+            .is_some_and(|tag| tag.ids.contains(&index))
     }
 
     pub(super) fn registry_entry_key_slot(&self, entry: &RegistryEntry) -> Option<u32> {
@@ -482,7 +482,7 @@ mod condition_tests {
             root.path(),
             &sunrise_world::loot::PackOverlay {
                 files: &files,
-                ..sunrise_world::loot::PackOverlay::NONE
+                ..sunrise_world::loot::PackOverlay::default()
             },
             "spell",
             |id| id == "test:fire",

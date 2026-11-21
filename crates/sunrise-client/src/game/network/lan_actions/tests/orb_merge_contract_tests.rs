@@ -20,7 +20,7 @@ fn orb(id: u32, x: f64, value: i32, count: u32) -> ExperienceOrb {
         velocity: Vec3::ZERO,
         value,
         age: 0,
-        on_ground: true,
+        ground: sunrise_world::ground_support::GroundState::from_ground_flag(true),
         count,
         fire_ticks: 0,
         ticks: 0,

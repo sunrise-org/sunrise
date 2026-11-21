@@ -155,7 +155,10 @@ mod tests {
         }
     }
 
-    fn finish_login(server: &mut sunrise_protocol::connection::Connection) {
+    fn finish_login(
+        game: &mut crate::game::Game<'_>,
+        server: &mut sunrise_protocol::connection::Connection,
+    ) {
         use sunrise_protocol::packets::{Empty, configuration as cfg, login};
         server.recv().unwrap(); // Intention.
         server.recv().unwrap(); // Hello.
@@ -182,6 +185,7 @@ mod tests {
         server
             .send(&cfg::Clientbound::FinishConfiguration(Empty).encode())
             .unwrap();
+        game.acknowledge_test_configuration();
         let (id, payload) = server.recv().unwrap();
         assert!(matches!(
             cfg::Serverbound::decode(id, &payload).unwrap(),
@@ -236,7 +240,7 @@ mod tests {
                     .reader
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                     .unwrap();
-                finish_login(&mut server);
+                finish_login(game, &mut server);
                 game.native_lifecycle
                     .begin_open(mod_api::Authority::RemoteClient);
                 game.title = None;

@@ -23,7 +23,7 @@ impl Hooks for Bus {
         for (id, template) in [(BUS, "minecraft:stone"), (TUFT, "minecraft:bamboo")] {
             let mut block = mod_api::Block::new(id, template);
             block.shapes_from_block_entity = true;
-            event.blocks.push(block);
+            event.register(block).unwrap();
         }
     }
 }

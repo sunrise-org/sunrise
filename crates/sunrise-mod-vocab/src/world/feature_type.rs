@@ -17,10 +17,7 @@
 //! loads, so a config that doesn't fit is refused then, naming the feature, never during
 //! generation.
 //!
-//! Not on wasm: feature types run on the worldgen workers, which wasm mods can't serve yet, so
-//! registering one from a wasm mod is refused at startup, naming the mod and the type, before any
-//! world job runs. Native mods only.
-use crate::wire::{Reader, Wire, WireError, Writer};
+//! Feature types run on the worldgen workers.
 use crate::world::datapack_registry::{DatapackEntry, DatapackField};
 use crate::world::structure_type::HeightmapType;
 use crate::{BlockKey, BlockMetadata, BlockState, BlockUpdateFlags, RandomSource};
@@ -59,8 +56,6 @@ pub trait FeatureType: Send + Sync + 'static {
         origin: [i32; 3],
     ) -> Result<bool, FeatureError>;
 }
-
-crate::wire::wire_handlers::handler!(dyn FeatureType, "FeatureType");
 
 /// What a feature's [`place`](FeatureType::place) sees: vanilla's `WorldGenLevel` around the
 /// origin (a decoration region on a worker, or the live level for growth and commands) and the

@@ -16,7 +16,7 @@ use glam::DVec3;
 /// This frame's world views, asked once (`Renderer::camera_frustum`, or `render` itself when it
 /// was not called), each one's sections and where its draws are in the frame's list. The lists
 /// keep their room from frame to frame.
-pub(super) struct Sections {
+pub(crate) struct Sections {
     /// The views asked for the frame being built, in the order they draw, and whether `render`
     /// has yet to draw them.
     views: WorldViews,

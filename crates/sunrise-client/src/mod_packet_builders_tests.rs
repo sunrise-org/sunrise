@@ -51,7 +51,7 @@ fn plain_component_stacks_match_game_container_codec() {
             removed: vec![11],
             ..Stack::new(4, 3)
         };
-        let hashed = Hashed::create(&network, &sunrise_protocol::item::NoNames);
+        let hashed = Hashed::create(&network, &sunrise_protocol::item::NoNames).unwrap();
         let expected = Serverbound::ContainerClick(ContainerClick {
             container: 2,
             state: 5,

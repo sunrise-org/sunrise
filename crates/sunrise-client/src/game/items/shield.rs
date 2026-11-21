@@ -175,11 +175,13 @@ impl Game<'_> {
         if !outcome.blocking_item_used {
             return;
         }
-        if self.remote.is_none() {
+        // `ItemStack.hurtAndBreak` does nothing for `hasInfiniteMaterials`, its
+        // `ITEM_USED` award included: a creative player's shield counts no use.
+        if self.remote.is_none() && !self.creative {
             self.award_stat("used", &stack.item, 1);
         }
-        // ItemDamageFunction.apply (or what a native mod set, kept only for a hit
-        // the event left blocked), then hurtAndBreak.
+        // Component wear can apply even when no damage was blocked. A mod's wear
+        // override applies only when the hook leaves the hit blocked.
         let item_damage = outcome.shield_damage;
         if item_damage > 0 && !self.creative {
             let (updated, broken) = self.damage_stack(&stack, item_damage, true);
@@ -194,6 +196,7 @@ impl Game<'_> {
                         sunrise_core::equipment_slot::EquipmentSlot::MainHand
                     };
                     self.player_equipment_broke(hand, &broken);
+                    self.player_item_destroyed(&stack, self.item_slot_hand(slot));
                     self.award_stat("broken", &broken.item, 1);
                     return;
                 }

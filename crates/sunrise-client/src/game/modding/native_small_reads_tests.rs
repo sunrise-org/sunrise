@@ -217,6 +217,144 @@ fn a_client_reads_only_its_own_menu() {
 
 #[test]
 #[ignore = "daily"]
+fn client_merchant_offers_follow_the_open_menu() {
+    use super::native_client_session::tests::logged_client;
+    use super::native_entity_refs::tests::with_client_game;
+    use mod_api::__private::{ModPhase, PhaseOwner, game::Fields};
+    use mod_api::{ClientHost, LevelReadError};
+    use sunrise_client::text::Text;
+    use sunrise_core::nbt::Tag;
+    use sunrise_protocol::{
+        item::{Component, Stack, component::STORED_ENCHANTMENTS},
+        packets::{
+            configuration::{RegistryData, RegistryEntry},
+            play,
+        },
+        registry::Builtin,
+    };
+    mod_platform::testing::with_mods(Default::default(), || {
+        with_client_game(|game| {
+            let _server = logged_client(game);
+            let remote = game.remote.as_mut().unwrap();
+            remote.builtin = std::sync::Arc::new(
+                Builtin::parse(
+                    r#"{
+                "minecraft:item":{"entries":{
+                    "minecraft:emerald":{"protocol_id":1},
+                    "minecraft:book":{"protocol_id":2},
+                    "minecraft:enchanted_book":{"protocol_id":3}
+                }},
+                "minecraft:data_component_type":{"entries":{
+                    "minecraft:stored_enchantments":{"protocol_id":45}
+                }}
+            }"#,
+                )
+                .unwrap(),
+            );
+            std::sync::Arc::make_mut(&mut remote.registries).add(RegistryData {
+                registry: "minecraft:enchantment".into(),
+                entries: vec![RegistryEntry {
+                    id: "minecraft:mending".into(),
+                    data: None,
+                }],
+            });
+            let _phase = PhaseOwner::scope(ModPhase::World);
+            let current_menu =
+                |host: &dyn ClientHost| host.local_player().unwrap().container_menu(host).unwrap();
+            let inventory = current_menu(game);
+            assert_eq!(inventory.merchant_offers(game), Ok(None));
+
+            let window = 3;
+            game.remote_open_merchant(window, String::new(), Text::literal("Merchant"));
+            let menu = current_menu(game);
+            assert_eq!(menu.merchant_offers(game), Ok(Some(vec![])));
+            let player = menu.fields().player;
+            let foreign = mod_api::__private::game::menu_ref(
+                mod_api::__private::game::player_ref(player.entity(), 99),
+                window,
+                menu.fields().generation,
+            );
+            assert_eq!(foreign.merchant_offers(game), Ok(None));
+            {
+                let _phase = PhaseOwner::scope(ModPhase::Reloading);
+                assert_eq!(menu.merchant_offers(game), Err(LevelReadError::Unavailable));
+            }
+
+            let discounted_book = play::NetOffer {
+                cost_a: Stack::new(1, 10).into(),
+                cost_b: Some(Stack::new(2, 1).into()),
+                result: Stack {
+                    added: vec![(STORED_ENCHANTMENTS, Component::Enchantments(vec![(0, 1)]))],
+                    ..Stack::new(3, 1)
+                },
+                out_of_stock: false,
+                uses: 2,
+                max_uses: 12,
+                xp: 5,
+                special_price: -3,
+                price_multiplier: 0.5,
+                demand: 1,
+            };
+            let exhausted = play::NetOffer {
+                result: Stack::new(2, 1),
+                cost_b: None,
+                out_of_stock: true,
+                ..discounted_book.clone()
+            };
+            game.handle_packet(play::Clientbound::MerchantOffers(play::MerchantOffers {
+                container: window,
+                offers: vec![discounted_book, exhausted],
+                level: 2,
+                xp: 10,
+                show_progress: true,
+                can_restock: true,
+            }))
+            .unwrap();
+            let offers = menu.merchant_offers(game).unwrap().unwrap();
+            let [book, exhausted] = offers.as_slice() else {
+                panic!("expected both synchronized offers");
+            };
+            let item = |id| mod_api::__private::item_key(id).unwrap();
+            assert_eq!(book.base_cost_a.stack.item(), item("minecraft:emerald"));
+            assert_eq!(book.base_cost_a.stack.count(), 10);
+            let second = &book.cost_b.as_ref().unwrap().stack;
+            assert_eq!((second.item(), second.count()), (item("minecraft:book"), 1));
+            assert_eq!(
+                (book.result.item(), book.result.count()),
+                (item("minecraft:enchanted_book"), 1)
+            );
+            assert_eq!(
+                book.result
+                    .components()
+                    .unwrap()
+                    .as_nbt()
+                    .get(&"minecraft:stored_enchantments".into()),
+                Some(&Tag::compound([("minecraft:mending", Tag::Int(1))])),
+            );
+            assert_eq!((book.uses, book.max_uses, book.xp), (2, 12, 5));
+            assert_eq!(
+                (book.special_price_diff, book.demand, book.price_multiplier),
+                (-3, 1, 0.5)
+            );
+            assert_eq!(book.cost_a_count(game), Some(12));
+            assert!(!book.out_of_stock());
+            assert_eq!(exhausted.result.item(), item("minecraft:book"));
+            assert!(exhausted.cost_b.is_none());
+            assert!(exhausted.out_of_stock());
+
+            // The server may reuse the window id, but not the handle's generation.
+            game.remote_open_merchant(window, String::new(), Text::literal("Merchant"));
+            let replacement = current_menu(game);
+            assert_eq!(menu.merchant_offers(game), Ok(None));
+            assert_eq!(replacement.merchant_offers(game), Ok(Some(vec![])));
+            game.remote_close_local();
+            assert_eq!(replacement.merchant_offers(game), Ok(None));
+        });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn client_player_state_reads_its_own_copy_only() {
     use super::native_client_session::tests::logged_client;
     use super::native_entity_refs::tests::with_client_game;

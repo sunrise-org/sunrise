@@ -222,6 +222,24 @@ class CheckLayersTests(unittest.TestCase):
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("game -> cosmetics: added to portable.pending", problems[0])
 
+    def sides(self, *packages):
+        config = dict(CONFIG, sides={"crates": ["game", "core"]}, crates=dict(CONFIG["crates"], extra="engine"))
+        return check_layers.check(config, check_layers.edges(packages))[0]
+
+    def test_the_two_side_crates_may_not_depend_on_each_other(self):
+        problems = self.sides(package("core", "game"), package("game"))
+        self.assertEqual(problems, [f"core -> game: gameplay's sides may not depend on each other "
+                                    f"({check_layers.CONFIG_PATH} sides)"])
+
+    def test_a_side_dependency_through_a_third_crate_is_refused(self):
+        problems = self.sides(package("core", "extra"), package("extra", "game"), package("game"))
+        self.assertIn(f"core -> game: gameplay's sides may not depend on each other "
+                      f"({check_layers.CONFIG_PATH} sides)", problems)
+        self.assertTrue(any(p.startswith("extra -> game: a crate below") for p in problems), problems)
+
+    def test_independent_side_crates_pass(self):
+        self.assertEqual(self.sides(package("core", "extra"), package("extra"), package("game", "extra")), [])
+
     def test_registry_dependencies_are_not_edges(self):
         pkg = {"name": "game", "dependencies": [{"name": "cosmetics", "kind": None, "path": None}]}
         self.assertEqual(check_layers.edges([pkg]), {"game": set()})

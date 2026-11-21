@@ -1,15 +1,7 @@
 # Entity parts and mob goals
 
-Entity Parts run in native mods in full. A wasm mod may also register one with `r.entity_part`, but
-the part's `general_entity_tick` and client-side `can_rider_interact` cross. The goal, behavior, spawn-size and shear methods
-(`register_goals`, `register_behaviors`, `spawn_cluster_size`, `is_shearable`, `on_sheared`) are native-only.
-A wasm part that overrides one of them is refused at load by name, as
-`EntityPart::<method>: a wasm entity part cannot override native-only methods`, instead of the
-override being silently never called.
-
-On wasm each general row keeps its own attachments, so two rows of one type share the part but not
-their state. A trap in a row's tick rolls that row's writes back and stops the mod's dependency group (the
-mod and the mods linked to it); the game keeps it stopped, and mods outside that group go on ticking.
+Register an `EntityPart` with `r.entity_part` to attach code to an entity type. Individual
+entities of that type share the part, not their attachments.
 
 ## Picking while riding
 
@@ -128,8 +120,8 @@ let full = Robot::edit_state(host, robot, |_, charge| {
   `minecraft:player` (a player's respawn identity is not decided yet), every other vanilla family
   (boats, minecarts, items, projectiles, armor stands...) and an unknown id refuse the load with
   `PartStateRefusal::EntityKind`, naming the type. `entity_part` itself checks no type.
-- The declaration is refused at the call as for block entities, copying on death included. Like
-  `entity_part`, `entity_part_with_state` is native-only; Part state is server-side for now.
+- The declaration is refused at the call as for block entities, copying on death included. Part
+  state is server-side.
 
 ## Brain behaviors
 

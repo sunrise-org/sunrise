@@ -4,10 +4,53 @@ impl Game<'_> {
     /// `AbstractContainerMenu.setItem`/`initializeContents`: the state id a
     /// click answers with is the open menu's, not another window's.
     pub(in crate::game) fn remote_menu_state(&mut self, container: i32, state: i32) {
-        let open = self.remote_menu().0;
-        if let Some(r) = self.remote.as_mut().filter(|_| container == open) {
-            r.state_id = state;
+        if let Some(r) = self.remote.as_mut() {
+            let open = r.menu.as_ref().map_or(0, |m| m.0);
+            if container == open {
+                r.state_id = state;
+            } else if container == 0 {
+                r.inventory_state_id = state;
+            }
         }
+    }
+
+    /// Change the active menu without losing window 0's cursor or state counter.
+    pub(in crate::game) fn remote_set_menu(
+        &mut self,
+        menu: Option<(i32, String)>,
+        title: Option<sunrise_client::text::Text>,
+    ) {
+        let Some(r) = self.remote.as_mut() else {
+            return;
+        };
+        match (r.menu.as_ref().is_some(), menu.is_some()) {
+            (false, true) => {
+                r.inventory_carried = self.carried.take();
+                r.inventory_state_id = std::mem::take(&mut r.state_id);
+                for (saved, active) in r.inventory_craft_grid.iter_mut().zip(&mut self.craft_grid) {
+                    *saved = active.take();
+                }
+                r.inventory_craft_result = r.craft_result.take();
+            }
+            (true, false) => {
+                self.carried = r.inventory_carried.take();
+                r.state_id = std::mem::take(&mut r.inventory_state_id);
+                self.craft_grid.fill(None);
+                for (saved, active) in r.inventory_craft_grid.iter_mut().zip(&mut self.craft_grid) {
+                    *active = saved.take();
+                }
+                r.craft_result = r.inventory_craft_result.take();
+            }
+            (true, true) => {
+                self.carried = None;
+                r.state_id = 0;
+                self.craft_grid.fill(None);
+                r.craft_result = None;
+            }
+            (false, false) => {}
+        }
+        r.menu.set(menu);
+        r.set_menu_title(title);
     }
     /// The server's open menu: its window id and menu type (0, "inventory"
     /// when none is open).
@@ -22,8 +65,8 @@ impl Game<'_> {
     /// menu engine predicts them on this client's copy, then each goes out as
     /// a `ContainerClick` with the slots it changed and the carried stack
     /// after it; the server corrects anything it sees differently. A menu the
-    /// engine doesn't model sends the clicks unpredicted. False when a click's
-    /// slot isn't one of the menu's.
+    /// engine doesn't model sends the clicks unpredicted. False when the batch
+    /// cannot be submitted.
     pub(in crate::game) fn remote_menu_ops(&mut self, ops: &[(Option<usize>, i32, Input)]) -> bool {
         // CrafterScreen.slotClicked: a slot toggle goes out before the click.
         if let [(Some(slot), button, input)] = ops {
@@ -42,22 +85,37 @@ impl Game<'_> {
             clicks.push((slot, button, input));
         }
         // Unpredicted: nothing changed, the carried stack as it is.
-        let mut sent: Vec<Predicted> = clicks
-            .iter()
-            .map(|&(slot, button, input)| (slot, button, input, Vec::new(), self.carried.clone()))
-            .collect();
+        let mut prepared = None;
         let mut threw = false;
-        // The engine's slot indices are the menu's own, as on the network.
-        self.menu_session(|m, env, _| {
+        self.menu_session_with_game(|game, m, env, _| {
             let Some((predicted, dropped)) = predict_clicks(m, env, &clicks) else {
                 // The server throws on it too: nothing is predicted.
                 return Some(false);
             };
-            sent = predicted;
+            let packets = game.prepare_clicks(container, &predicted);
+            let commit = packets.is_ok();
+            prepared = Some(packets.map(|packets| (predicted, packets)));
             threw = dropped;
-            Some(true)
+            Some(commit)
         });
-        self.send_clicks(container, sent);
+        let result = prepared.unwrap_or_else(|| {
+            let unpredicted: Vec<Predicted> = clicks
+                .iter()
+                .map(|&(slot, button, input)| {
+                    (slot, button, input, Vec::new(), self.carried.clone())
+                })
+                .collect();
+            self.prepare_clicks(container, &unpredicted)
+                .map(|packets| (unpredicted, packets))
+        });
+        let (predicted, packets) = match result {
+            Ok(result) => result,
+            Err(error) => {
+                log::warn!("Refused menu click: {error}");
+                return false;
+            }
+        };
+        self.send_clicks(&predicted, packets);
         // LivingEntity.drop(.., Prediction.PREDICTED): the client swings its own
         // main hand; the server shows the swing only to the other players.
         if threw {
@@ -75,8 +133,11 @@ impl Game<'_> {
             return false;
         };
         let carried = self.carried.clone();
-        let click = (slot as i16, 0, Input::QuickMove, Vec::new(), carried);
-        self.send_clicks(container, vec![click]);
+        let clicks = [(slot as i16, 0, Input::QuickMove, Vec::new(), carried)];
+        match self.prepare_clicks(container, &clicks) {
+            Ok(packets) => self.send_clicks(&clicks, packets),
+            Err(error) => log::warn!("Refused quick move: {error}"),
+        }
         true
     }
     /// A Shift double click on a server (`AbstractContainerScreen.mouseReleased`):
@@ -84,7 +145,8 @@ impl Game<'_> {
     pub(in crate::game) fn remote_quick_move_all(&mut self, slot: usize, moved: &ItemStack) {
         let (container, _) = self.remote_menu();
         let mut sent: Vec<Predicted> = Vec::new();
-        self.menu_session(|m, env, to_menu| {
+        let mut prepared = None;
+        self.menu_session_with_game(|game, m, env, to_menu| {
             let clicked = to_menu(slot)?;
             let mut before = menu_items(m);
             let mut each = |m: &sunrise_client::menu::Menu, t: usize| {
@@ -92,14 +154,46 @@ impl Game<'_> {
                 sent.push((t as i16, 0, Input::QuickMove, changed, m.carried.clone()));
                 before = menu_items(m);
             };
-            Some(
-                m.quick_move_all_each(env, clicked, moved, &mut each)
-                    .is_ok(),
-            )
+            let modeled = m
+                .quick_move_all_each(env, clicked, moved, &mut each)
+                .is_ok();
+            let packets = game.prepare_clicks(container, &sent);
+            let commit = modeled && packets.is_ok();
+            prepared = Some(packets);
+            Some(commit)
         });
-        self.send_clicks(container, sent);
+        match prepared {
+            Some(Ok(packets)) => self.send_clicks(&sent, packets),
+            Some(Err(error)) => log::warn!("Refused quick move: {error}"),
+            None => (),
+        }
     }
-    pub(in crate::game) fn send_clicks(&mut self, container: i32, clicks: Vec<Predicted>) {
+    fn prepare_clicks(
+        &self,
+        container: i32,
+        clicks: &[Predicted],
+    ) -> sunrise_protocol::Result<Vec<play::ContainerClick>> {
+        let state = self.remote.as_ref().map_or(0, |r| r.state_id);
+        clicks
+            .iter()
+            .map(|(slot, button, input, changed, carried)| {
+                Ok(play::ContainerClick {
+                    container,
+                    state,
+                    slot: *slot,
+                    button: *button as i8,
+                    input: input_ordinal(*input),
+                    changed: changed
+                        .iter()
+                        .map(|(i, stack)| Ok((*i, self.hashed_stack(stack)?)))
+                        .collect::<sunrise_protocol::Result<_>>()?,
+                    carried: self.hashed_stack(carried)?,
+                })
+            })
+            .collect()
+    }
+
+    fn send_clicks(&mut self, clicks: &[Predicted], packets: Vec<play::ContainerClick>) {
         // A result the engine claims to have changed is the one the server
         // agrees to (`click_agreed`), so it sends none: keep it. A result the
         // engine doesn't claim (a recipe it doesn't know) the server sends.
@@ -108,26 +202,14 @@ impl Game<'_> {
             "inventory" | "minecraft:crafting"
         ) && let Some(r) = self.remote.as_mut()
         {
-            for (.., changed, _) in &clicks {
+            for (.., changed, _) in clicks {
                 if let Some((_, result)) = changed.iter().find(|(slot, _)| *slot == 0) {
                     r.craft_result = result.clone();
                 }
             }
         }
-        let state = self.remote.as_ref().map_or(0, |r| r.state_id);
-        let hashed = |g: &Self, s: &Option<ItemStack>| g.hashed_stack(s);
-        for (slot, button, input, changed, carried) in clicks {
-            let changed = changed.iter().map(|(i, s)| (*i, hashed(self, s))).collect();
-            let carried = hashed(self, &carried);
-            self.send(S::ContainerClick(play::ContainerClick {
-                container,
-                state,
-                slot,
-                button: button as i8,
-                input: input_ordinal(input),
-                changed,
-                carried,
-            }));
+        for packet in packets {
+            self.send(S::ContainerClick(packet));
         }
     }
     /// The server's open menu is the inventory or a chest-like container
@@ -156,17 +238,28 @@ impl Game<'_> {
             .as_ref()
             .and_then(|r| r.menu.as_ref())
             .map_or(0, |m| m.0);
+        let mut predicted = self.carried.clone();
+        let threw = input == Input::Pickup && predicted.is_some();
         if input == Input::Pickup
-            && let Some(c) = self.carried.as_mut()
+            && let Some(c) = predicted.as_mut()
         {
             if right && c.count > 1 {
                 c.count -= 1;
             } else {
-                self.carried = None;
+                predicted = None;
             }
+        }
+        let carried = match self.hashed_stack(&predicted) {
+            Ok(carried) => carried,
+            Err(error) => {
+                log::warn!("Refused drop click: {error}");
+                return;
+            }
+        };
+        if threw {
+            self.carried = predicted;
             self.swing_arm();
         }
-        let carried = self.hashed_stack(&self.carried);
         let state = self.remote.as_ref().map_or(0, |r| r.state_id);
         self.send(S::ContainerClick(play::ContainerClick {
             container,
@@ -260,19 +353,11 @@ impl Game<'_> {
         // inventory moves the focus and closes the container in one press).
         self.pad_clear_focus();
         self.recipe_ui.reset_screen();
-        if let Some(r) = self.remote.as_mut() {
-            r.menu.set(None);
-            r.set_menu_title(None);
-            r.craft_result = None;
-        }
+        self.mod_screen = None;
+        self.remote_set_menu(None, None);
         self.mount_menu_reset();
         // The client's menu has no level access: what it holds is the server's.
         self.station = None;
-        // AbstractContainerMenu.removed: the server gives the grid and the
-        // carried stack back to the inventory and syncs it; the copies here
-        // are stale the moment the window closes.
-        self.craft_grid.fill(None);
-        self.carried = None;
         self.craft_size = 2;
         if let Some(key) = self.container.take() {
             // Server containers stay renderable but lose their copied slots.
@@ -290,11 +375,10 @@ impl Game<'_> {
         title: String,
         text: sunrise_client::text::Text,
     ) {
-        if let Some(r) = self.remote.as_mut() {
-            r.menu
-                .set(Some((container, "minecraft:merchant".to_owned())));
-            r.set_menu_title(Some(text.clone()));
-        }
+        self.remote_set_menu(
+            Some((container, "minecraft:merchant".to_owned())),
+            Some(text.clone()),
+        );
         let mut session = sunrise_client::merchant::Session::new(Vec::new(), true);
         session.client_side = true;
         self.open_remote_merchant(session, (!title.is_empty()).then_some(text));
@@ -343,9 +427,14 @@ impl Game<'_> {
     }
     /// ClientboundOpenScreenPacket for the menus Sunrise draws.
     pub(in crate::game) fn remote_open_screen(&mut self, p: play::OpenScreen) {
-        // A new RecipeBookComponent owns fresh ghost slots and an overlay,
-        // even when the server replaces a menu without a close packet.
-        self.recipe_ui.reset_screen();
+        if self.remote.as_ref().and_then(|r| r.menu.as_ref()).is_some() {
+            // An in-place open has no intervening ContainerClose packet. Drop
+            // the replaced menu's local state, not the screen or pointer grab.
+            self.remote_close_local();
+        } else {
+            self.recipe_ui.reset_screen();
+            self.mod_screen = None;
+        }
         let menu = self
             .remote
             .as_ref()
@@ -374,10 +463,7 @@ impl Game<'_> {
             .map_or(target, |e| e.pos.map(|p| (p[0], p[1], p[2])));
         if menu == "minecraft:lectern" {
             // LecternScreen: the book and page come in the menu's content and data.
-            if let Some(r) = self.remote.as_mut() {
-                r.menu.set(Some((p.container, menu)));
-                r.set_menu_title(None);
-            }
+            self.remote_set_menu(Some((p.container, menu)), None);
             self.remote_open_lectern(target.unwrap_or_default());
             return;
         }
@@ -461,10 +547,7 @@ impl Game<'_> {
             }
         };
         let title = menu_title(&p.title);
-        if let Some(r) = self.remote.as_mut() {
-            r.menu.set(Some((p.container, menu.clone())));
-            r.set_menu_title(Some(title));
-        }
+        self.remote_set_menu(Some((p.container, menu.clone())), Some(title));
         self.craft_size = if menu == "minecraft:crafting" { 3 } else { 2 };
         self.container = None;
         if let Some(entity) = entity {
@@ -486,10 +569,7 @@ impl Game<'_> {
             if self.mod_screen.is_none() && mod_type.is_some() {
                 self.world.block_entities.remove(&key);
                 self.container = None;
-                if let Some(r) = self.remote.as_mut() {
-                    r.menu.set(None);
-                    r.set_menu_title(None);
-                }
+                self.remote_set_menu(None, None);
                 self.send(S::ContainerClose(play::ContainerClose {
                     container: p.container,
                 }));
@@ -502,15 +582,24 @@ impl Game<'_> {
     /// `ClientPacketListener.handleMountScreenOpen`: a horse's or llama's
     /// inventory; for another entity the window is closed again.
     pub(in crate::game) fn remote_open_mount(&mut self, p: play::MountScreenOpen) {
+        self.mod_screen = None;
         let columns = usize::try_from(p.columns).unwrap_or(0).min(5);
+        let record = |game: &mut Self| {
+            game.remote_set_menu(Some((p.container, format!("{MOUNT_MENU}{columns}"))), None);
+        };
+        // With a screen hook listening, the window is recorded before the
+        // screen opens, so a mod's answer that replaces it closes this window
+        // (a rejection clears it again); otherwise after, as vanilla's order.
+        let staged = self.screen_hooks_heard();
+        if staged {
+            record(self);
+        }
         if !self.open_remote_mount_menu(p.entity as u32, columns) {
             self.remote_reject_container(p.container);
             return;
         }
-        if let Some(r) = self.remote.as_mut() {
-            r.menu
-                .set(Some((p.container, format!("{MOUNT_MENU}{columns}"))));
-            r.set_menu_title(None);
+        if !staged {
+            record(self);
         }
     }
     /// The type of the menu a server opened (`MenuType`'s id).

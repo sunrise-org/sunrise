@@ -3,8 +3,8 @@ pub trait Hooks {
     /// Register named conditions once at mod load, before server data admission.
     /// Each handler is a raw-JSON handler: it reads the condition's JSON value.
     /// IDs may use any namespace, but built-in and duplicate IDs refuse mod load.
-    /// Native and wasm handlers share the same route. Whether an unknown ID
-    /// refuses a load or skips a file is determined by the loader, not the namespace.
+    /// Whether an unknown ID refuses a load or skips a file is determined by the
+    /// loader, not the namespace.
     #[hook(
         side = "server",
         version = 2,

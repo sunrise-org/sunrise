@@ -95,9 +95,9 @@ impl PendingMobSpec {
     }
 }
 
-/// An editor lent beside a collection. Native and wasm use the same scoped operations and
-/// ownership checks. Reads and rejected operations leave the collection unchanged. Accepted
-/// edits are visible to the next listener; unattached children die when this lease ends.
+/// An editor lent beside a collection. Reads and rejected operations leave the collection
+/// unchanged. Accepted edits are visible to the next listener; unattached children die
+/// when this lease ends.
 /// This edits only nonresident objects; the action's transaction controls eventual insertion.
 pub trait PendingChildrenEdits {
     /// The collection for this listener. Call it in every callback: a lease from an earlier

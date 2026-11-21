@@ -31,6 +31,8 @@ use winit::keyboard::KeyCode;
 thread_local! {
     /// Level and game events recorded while a fixture case runs.
     static LOG: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    /// The running case is exact (`"exact": true`): `num` prints raw bits.
+    static EXACT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Record a line if a fixture case is running.
@@ -75,8 +77,12 @@ fn event_sound(line: &str) -> Option<String> {
 }
 
 /// Java's `String.format("%.6f")`: the exact value rounded half up (away
-/// from zero) where Rust rounds a tie to even.
+/// from zero) where Rust rounds a tie to even. An exact case prints the raw
+/// bits instead, as the oracle's `num` does then.
 fn num(v: f64) -> String {
+    if EXACT.get() {
+        return format!("{:x}", v.to_bits());
+    }
     let exact = format!("{:.40}", v.abs());
     let tie = exact
         .split_once('.')
@@ -185,6 +191,7 @@ impl Game<'_> {
 
     fn dispense_case(&mut self, case: &Value) -> Result<Vec<String>> {
         let seed = case["seed"].as_i64().unwrap_or(0);
+        EXACT.set(case["exact"].as_bool().unwrap_or(false));
         self.fixture_reset(seed);
         if let Some(op) = case.get("blocking_wear") {
             return self.fixture_blocking_wear(op);
@@ -488,10 +495,12 @@ impl Game<'_> {
             out.push(self.fixture_describe(i, t));
             self.fixture_vehicle_items(i, t, &mut out);
         }
-        let log = LOG.with(|log| log.borrow_mut().take()).unwrap_or_default();
-        let event_sounds: Vec<String> = log.iter().filter_map(|l| event_sound(l)).collect();
-        out.extend(log);
-        out.extend(event_sounds);
+        // Each level event's sound right after the event, as the oracle frames its log.
+        for line in LOG.with(|log| log.borrow_mut().take()).unwrap_or_default() {
+            let sound = event_sound(&line);
+            out.push(line);
+            out.extend(sound);
+        }
         for sound in self.audio.capture.take().unwrap_or_default() {
             out.push(format!("S {} {}", floor_pos(sound.position), sound.event));
         }
@@ -515,10 +524,14 @@ impl Game<'_> {
         } else {
             GameMode::Survival
         };
-        self.player = Some(PlayerMotion::new(
+        let mut player = PlayerMotion::new(
             self.motion,
             sunrise_core::geometry::Vec3::new(0.0, 0.0, 0.0),
-        )?);
+        )?;
+        // A creative player is invulnerable (`GameType.updatePlayerAbilities`): the
+        // arrow's hurt is refused before the shield is reached.
+        player.invulnerable = self.creative;
+        self.player = Some(player);
         self.yaw = 0.0;
         self.armor = Default::default();
         self.offhand = Some(stack);
@@ -818,7 +831,10 @@ impl Game<'_> {
         player.fall_distance = op["fall"].as_f64().unwrap_or(0.0);
         player.fall_flying = op["fall_flying"].as_bool().unwrap_or(false);
         player.flying = op["flying"].as_bool().unwrap_or(false);
+        // A creative player's abilities: it may fly and is invulnerable, as
+        // `GameType.updatePlayerAbilities` sets them (a victim's Thorns hurts no one then).
         player.may_fly = self.creative;
+        player.invulnerable = self.creative;
         if !op["impact"].is_null() {
             player.impulse.impact_position = Some(v3(&op["impact"]));
         }
@@ -1270,7 +1286,8 @@ impl Game<'_> {
         if flag("brown") && s == Species::Mooshroom {
             mob.extra.variant = 1;
         }
-        for (name, snbt) in e["equip"].as_object().into_iter().flatten() {
+        let equip = e["equip"].as_object();
+        for (name, snbt) in equip.into_iter().flatten() {
             if let (Some(slot), Some(stack)) = (
                 Slot::from_name(name),
                 parse_stack(snbt.as_str().unwrap_or("-"))?,
@@ -1285,6 +1302,16 @@ impl Game<'_> {
                     None => mob_set_slot(&mut mob, slot, stack),
                 }
             }
+        }
+        // VanillaDispenserOracle's target has ticked since it was equipped: its
+        // collectEquipmentChanges put the worn pieces' armor and other modifiers
+        // on its attributes, which the hit's absorption reads.
+        if equip.is_some_and(|equip| !equip.is_empty()) {
+            crate::game::living_attributes::collect_equipment(
+                &self.motion.attributes,
+                world_items!(self),
+                &mut mob,
+            );
         }
         self.mobs.push(mob);
         Ok(Target::Mob(id))

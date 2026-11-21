@@ -286,6 +286,51 @@ fn unopened_loot_tags_round_trip_with_zero_seed_omitted() {
 }
 
 #[test]
+fn retained_loot_and_live_items_are_written_before_chunk_metadata() {
+    let (registry, biomes) = fixture();
+    let pos = (1, 64, 2);
+    let mut chunk = Chunk::empty(0, 0);
+    chunk.set(pos.0, pos.1, pos.2, 1);
+    let mut slots = vec![None; 27];
+    slots[0] = Some(crate::items::ItemStack::new("minecraft:gold_ingot", 1));
+    chunk
+        .block_entities
+        .push((pos, crate::containers::BlockEntity::Chest(slots)));
+    chunk.saved = Some(Arc::new(ChunkExtras {
+        pending_loot: [(
+            pos,
+            PendingContainerLoot {
+                table: string("minecraft:chests/simple_dungeon"),
+                seed: Some(Tag::Long(37)),
+            },
+        )]
+        .into(),
+        ..Default::default()
+    }));
+
+    let limits = Limits::default();
+    let encoded = encode(&chunk, &registry, &biomes, &Default::default());
+    let bytes = nbt::write_named(&encoded, limits).unwrap();
+    let (read, _) = nbt::read_named(&bytes, limits).unwrap();
+    let Some(Tag::List(entities)) = read.tag.get("block_entities") else {
+        panic!("missing block entities");
+    };
+    let Tag::Compound(chest) = &entities[0] else {
+        panic!("missing chest compound");
+    };
+    // The Java spread hashes of `Items` and `z` share bucket 10 in this
+    // default-sized table. Appending Items after normalization would put z first.
+    let collision: Vec<_> = chest
+        .keys()
+        .map(|key| key.to_string().unwrap())
+        .filter(|key| matches!(key.as_str(), "Items" | "z"))
+        .collect();
+    assert_eq!(collision, ["Items", "z"]);
+    assert_eq!(entities[0].get("LootTableSeed"), Some(&Tag::Long(37)));
+    assert!(matches!(entities[0].get("Items"), Some(Tag::List(items)) if items.len() == 1));
+}
+
+#[test]
 #[ignore = "run by tools/test_opened_loot_parity.py"]
 fn opened_loot_parity_fixture() {
     use std::io::Write;

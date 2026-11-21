@@ -31,7 +31,7 @@ pub enum RecipeBookLayout {
 }
 
 impl RecipeBookLayout {
-    /// Engine integration: frozen screen geometry, identical for native/wasm registrations.
+    /// Engine integration: frozen screen geometry.
     // hidden: engine reads the frozen declaration; mods supply their screen through registration.
     #[doc(hidden)]
     pub fn registered_screen(menu: &str) -> Option<crate::Screen> {

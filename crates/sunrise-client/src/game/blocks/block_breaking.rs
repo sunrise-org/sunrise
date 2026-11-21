@@ -8,23 +8,27 @@ impl Game<'_> {
     /// mined the block `name`: an item with a `tool` component counts as used
     /// and loses its `damage_per_block` on a block that doesn't break
     /// instantly (`ShearsItem`: on any block but fire).
-    pub(super) fn mine_block_with_held(&mut self, name: &str, hardness: f32) {
-        let Some(stack) = self.inventory[self.selected].clone() else {
-            return;
-        };
-        let Some(per_block) = self.items().mining_damage(&stack) else {
-            return;
-        };
+    pub(super) fn mine_block_with_held(&mut self, name: &str, hardness: f32) -> Option<ItemStack> {
+        let stack = self.inventory[self.selected].clone()?;
+        let per_block = self.items().mining_damage(&stack)?;
         let max = self.items().mining_damage_capacity(&stack);
         let wears = if &*stack.item == "minecraft:shears" {
             !self.items().block_in_tag("minecraft:fire", name)
         } else {
             hardness != 0.0
         };
-        if wears && per_block > 0 && max > 0 {
-            self.damage_held(per_block);
-        }
+        let broken = if wears && per_block > 0 && max > 0 {
+            self.with_hand(Hand::Main, |game| {
+                game.apply_held_damage(
+                    per_block,
+                    sunrise_core::equipment_slot::EquipmentSlot::MainHand,
+                )
+            })
+        } else {
+            None
+        };
         self.award_stat("used", &stack.item, 1);
+        broken
     }
 
     pub(super) fn break_block(&mut self, pos: [i32; 3]) -> Result<()> {

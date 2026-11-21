@@ -16,7 +16,7 @@ pub trait Hooks {
     /// tracking the other entities the same pass paired. The engine is still
     /// walking its tracker: read the game and send payloads, but don't spawn,
     /// remove or teleport entities from here. No player's state is swapped in.
-    /// Server-side. Named injections request `hook_version = 2`.
+    /// Server-side.
     #[hook(
         side = "server",
         contract = "listen",

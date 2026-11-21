@@ -17,7 +17,6 @@ writes, chunk loading or direct storage writes that bypass `Level.setBlock`. Eac
         side = "server",
         contract = "listen",
         version = 2,
-        non_exhaustive = true,
         event_per_listener = true,
         target = "sunrise_client::game::native_hooks::base::GameLevel<'_>::native_block_changed",
         neoforge = "none (NeoForge has no set-block event; IBlockExtension.onBlockStateChange is the block part hook on_block_state_change, at the end of the write)"

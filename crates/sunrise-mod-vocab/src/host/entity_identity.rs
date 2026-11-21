@@ -33,7 +33,8 @@ pub trait EntityIdentityBackend {
     fn entity_trackers(&self, entity: EntityRef) -> Option<Vec<PlayerRef>>;
     /// Side: server.
     /// The entity's resolved type key (`Entity.getType`). Compare keys directly;
-    /// request `key.id(host)` explicitly when its canonical name is needed. It,
+    /// request `key.id(host)` explicitly when its canonical name is needed.
+    /// A general row returns its declared type. This read,
     /// `entity_uuid` and `entity_level` also answer for a mob a kill credit
     /// names in another loaded level. API 373.
     #[access(WorldOnly)]

@@ -37,9 +37,10 @@ impl Game<'_> {
     /// facing gives (`JigsawBlockEntity.loadAdditional`), which the decode
     /// alone cannot know.
     pub(super) fn decode_block_entity_at(&self, pos: Pos, tag: &Tag) -> Option<(Pos, BlockEntity)> {
-        let (key, mut entity) = sunrise_client::save::decode_block_entity_for_block(
+        let (key, mut entity) = sunrise_client::save::decode_block_entity_replacing(
             tag,
             &self.data_block_name([pos.0, pos.1, pos.2]),
+            self.world.block_entities.get(&pos),
         )?;
         if let BlockEntity::JigsawBlock(b) = &mut entity
             && tag.get("joint").is_none()

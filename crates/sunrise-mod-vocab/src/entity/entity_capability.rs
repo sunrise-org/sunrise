@@ -3,8 +3,8 @@
 //! `Capabilities.Item.ENTITY`). A player's inventory is the game's own answer for a player.
 use crate::{
     Capability, ComponentId, Direction, EnergyHandler, EntityRef, EquipmentSlot, FluidResource,
-    Host, ItemPlace, ItemResource, PREVENT_ARMOR_CHANGE, ProvidedBy, ResourceHandler, ServerHost,
-    Tag, Transaction, backend_of,
+    Host, ItemPlace, ItemResource, Overanswered, PREVENT_ARMOR_CHANGE, ProvidedBy, ResourceHandler,
+    ServerHost, Tag, Transaction, backend_of,
 };
 use std::marker::PhantomData;
 
@@ -163,13 +163,18 @@ impl ResourceHandler<ItemResource> for ContainerItems {
         self.place(host, index)
             .map_or(0, |place| place.amount(host))
     }
-    fn capacity(&self, host: &mut dyn ServerHost, index: usize, resource: &ItemResource) -> u32 {
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
         match self.place(host, index) {
-            Some(_) => max_stack(host, resource),
+            Some(_) => resource.map_or(u32::MAX, |item| max_stack(host, item)),
             None => 0,
         }
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -183,7 +188,7 @@ impl ResourceHandler<ItemResource> for ContainerItems {
         let limit = max_stack(host, resource);
         fill(host, tx, &place, resource, amount, limit)
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -245,19 +250,29 @@ impl ResourceHandler<ItemResource> for LivingEquipment {
         self.place(host, index)
             .map_or(0, |place| place.amount(host))
     }
-    fn capacity(&self, host: &mut dyn ServerHost, index: usize, resource: &ItemResource) -> u32 {
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
         let Some(slot) = self.slot(host, index) else {
             return 0;
         };
         match Self::armour(slot) {
             // `Mob.canEquip`: only what its `equippable` names for this kind,
             // one of it (`ArmorSlot.getMaxStackSize`).
-            Some(slot) if !equips(host, resource, slot, &kind_of(host, self.entity)) => 0,
-            Some(_) => max_stack(host, resource).min(1),
-            None => max_stack(host, resource),
+            Some(slot)
+                if resource
+                    .is_some_and(|item| !equips(host, item, slot, &kind_of(host, self.entity))) =>
+            {
+                0
+            }
+            Some(_) => resource.map_or(1, |item| max_stack(host, item).min(1)),
+            None => resource.map_or(u32::MAX, |item| max_stack(host, item)),
         }
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -268,10 +283,10 @@ impl ResourceHandler<ItemResource> for LivingEquipment {
         let Some(place) = self.place(host, index) else {
             return 0;
         };
-        let limit = self.capacity(host, index, resource);
+        let limit = self.capacity(host, index, Some(resource));
         fill(host, tx, &place, resource, amount, limit)
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -390,19 +405,28 @@ impl ResourceHandler<ItemResource> for PlayerItems {
         self.place(host, index)
             .map_or(0, |place| place.amount(host))
     }
-    fn capacity(&self, host: &mut dyn ServerHost, index: usize, resource: &ItemResource) -> u32 {
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
         match index
             .checked_sub(MAIN)
             .and_then(|armour| ARMOUR.get(armour))
         {
-            Some(slot) if !equips(host, resource, slot, "minecraft:player") => 0,
+            Some(slot)
+                if resource.is_some_and(|item| !equips(host, item, slot, "minecraft:player")) =>
+            {
+                0
+            }
             // `ArmorSlot.getMaxStackSize`.
-            Some(_) => max_stack(host, resource).min(1),
+            Some(_) => resource.map_or(1, |item| max_stack(host, item).min(1)),
             _ if index > OFF_HAND => 0,
-            _ => max_stack(host, resource),
+            _ => resource.map_or(u32::MAX, |item| max_stack(host, item)),
         }
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -413,10 +437,10 @@ impl ResourceHandler<ItemResource> for PlayerItems {
         let Some(place) = self.place(host, index) else {
             return 0;
         };
-        let limit = self.capacity(host, index, resource);
+        let limit = self.capacity(host, index, Some(resource));
         fill(host, tx, &place, resource, amount, limit)
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -440,15 +464,15 @@ impl ResourceHandler<ItemResource> for PlayerItems {
     /// Where `Inventory.add` puts it: onto the same item in the selected slot, then in the off
     /// hand, then in the main inventory in order, then into its empty slots in order; never
     /// the armour.
-    fn insert_any(
+    fn insert(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, Overanswered> {
         if !live(host, self.entity) {
-            return 0;
+            return Ok(0);
         }
         let limit = max_stack(host, resource);
         // The selected slot as a slot, not a hand: a creative player's hand takes anything.
@@ -475,6 +499,6 @@ impl ResourceHandler<ItemResource> for PlayerItems {
                 went += fill(host, tx, &place, resource, amount - went, limit);
             }
         }
-        went
+        Ok(went)
     }
 }

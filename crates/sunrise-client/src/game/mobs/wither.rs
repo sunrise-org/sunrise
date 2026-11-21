@@ -275,6 +275,7 @@ impl Game<'_> {
                     }
                     None => false,
                 };
+                self.settle_mob_hurt(id);
                 if survived_hit && live_owner.is_some() {
                     self.mob_post_attack(
                         id,
@@ -318,7 +319,12 @@ impl Game<'_> {
                     at,
                     1.0,
                     super::explosion::ExplosionSource::default()
-                        .with_silence(g.entity_silent(p.id)),
+                        .with_silence(g.entity_silent(p.id))
+                        .with_entity(
+                            p.id,
+                            "minecraft:wither_skull",
+                            sunrise_client::health::DirectEntity::Projectile,
+                        ),
                 )
             })
         });

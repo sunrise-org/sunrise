@@ -52,7 +52,13 @@ impl ChunkRecord {
         timestamp: u32,
         limits: Limits,
     ) -> io::Result<Self> {
-        let bytes = nbt::write_named(root, limits).map_err(|e| invalid(e.to_string()))?;
+        // `RegionFileStorage.write` is `NbtIo.write`, which has no nesting limit: a tree deeper
+        // than the read limit is written, and its read fails (see `nbt`).
+        let write = Limits {
+            max_depth: nbt::DISK_WRITE_NESTING_GUARD.max(limits.max_depth),
+            ..limits
+        };
+        let bytes = nbt::write_named(root, write).map_err(|e| invalid(e.to_string()))?;
         Ok(Self {
             compression,
             compressed: compression.encode(&bytes)?,
@@ -372,6 +378,15 @@ impl RegionFile {
             return Err(e);
         }
         let old = self.offsets[i];
+        if !external
+            && old != 0
+            && crate::crash_fixture::selected()
+                == Some(crate::crash_fixture::CrashFixture::SaveRegion(chunk))
+            && directory.ends_with("region")
+        {
+            // Kill with the new payload written, but the header still pointing to the old one.
+            crate::crash_fixture::await_save_kill("region");
+        }
         self.offsets[i] = (start as u32) << 8 | sectors as u32;
         self.timestamps[i] = record.timestamp;
         self.write_header()?;
@@ -640,6 +655,12 @@ impl RegionWriter {
         Ok(())
     }
 
+    /// The `c.X.Z.mcc` files of the oversized chunks written so far, next to
+    /// the destination.
+    pub(crate) fn externals(&self) -> &[PathBuf] {
+        &self.externals
+    }
+
     pub fn finish(mut self) -> io::Result<()> {
         if self.failed {
             return Err(invalid("cannot publish a failed region writer"));
@@ -797,5 +818,23 @@ mod tests {
         assert_eq!(saved.compressed, record.compressed);
         assert_eq!(saved.timestamp, record.timestamp);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `NbtIo.write` has no nesting limit, so a chunk tree deeper than the read limit is
+    /// written whole; the read then fails with the depth error and the bytes stay on disk.
+    #[test]
+    fn a_tree_deeper_than_the_read_limit_is_written_and_fails_to_read() {
+        use sunrise_core::nbt::Tag;
+        let mut tag = Tag::compound([("leaf", Tag::Byte(1))]);
+        for _ in 0..600 {
+            tag = Tag::compound([("next", tag)]);
+        }
+        let root = NamedTag {
+            name: Default::default(),
+            tag,
+        };
+        let record = ChunkRecord::from_nbt(&root, Compression::None, 1, Limits::saved()).unwrap();
+        let error = record.nbt(Limits::saved()).unwrap_err();
+        assert!(error.to_string().contains("depth"), "{error}");
     }
 }

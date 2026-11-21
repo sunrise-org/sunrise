@@ -506,7 +506,12 @@ impl SpawnerExt for Spawner {
             };
             let kind = l.mob_type(&id);
             let (species, width, height, category) = match kind {
-                Some((s, w, h, c)) => (Some(s), w, h, c),
+                Some(t) => (
+                    Some(t.species),
+                    t.width as f32,
+                    t.height as f32,
+                    Category::from_name(&t.category),
+                ),
                 // Entity types Sunrise cannot create: a unit box, misc.
                 None => (None, 1.0, 1.0, Category::Misc),
             };
@@ -529,8 +534,14 @@ impl SpawnerExt for Spawner {
                 if !SpawnData::valid_position(rules, l, block[0], block[1], block[2]) {
                     continue;
                 }
-            } else if let Some(s) = species
-                && !spawn_rules::check_spawn_rules(&id, s, l, Reason::Spawner, random, block)
+                // Custom rules skip SpawnPlacements, not the type check in
+                // EntityType.loadEntityRecursive.
+                if l.peaceful() && kind.is_some_and(|t| !t.allowed_in_peaceful()) {
+                    self.delay(random, events);
+                    return;
+                }
+            } else if let Some(t) = kind
+                && !spawn_rules::check_spawn_rules(t, l, Reason::Spawner, random, block)
             {
                 continue;
             }

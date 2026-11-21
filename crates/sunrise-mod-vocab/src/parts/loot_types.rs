@@ -19,7 +19,7 @@ pub trait LootTypesRegistrar {
 }
 impl dyn Registrar + '_ {
     /// Register a map codec in `Registries.LOOT_FUNCTION_TYPE` before data loads.
-    /// Replaces the broadcast loot-function hook. Native and wasm share this route.
+    /// Replaces the broadcast loot-function hook.
     pub fn register_loot_function_type(
         &mut self,
         id: &crate::Identifier,

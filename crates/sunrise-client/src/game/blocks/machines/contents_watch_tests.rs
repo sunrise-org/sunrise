@@ -292,15 +292,15 @@ fn watches_journal_nested_changes_and_preserve_explicit_abort_notices() {
             );
             assert!(
                 game.transaction(|host, tx| {
-                    assert_eq!(items.insert(host, tx, 0, &sticks, 2), 2);
+                    assert_eq!(items.insert_at(host, tx, 0, &sticks, 2), 2);
                     Err::<(), ()>(())
                 })
                 .is_err()
             );
             assert!(take(&watcher).is_empty());
             game.transaction(|host, tx| {
-                assert_eq!(items.insert(host, tx, 0, &sticks, 2), 2);
-                assert_eq!(items.insert(host, tx, 0, &sticks, 3), 3);
+                assert_eq!(items.insert_at(host, tx, 0, &sticks, 2), 2);
+                assert_eq!(items.insert_at(host, tx, 0, &sticks, 3), 3);
                 Ok::<_, ()>(())
             })
             .unwrap();

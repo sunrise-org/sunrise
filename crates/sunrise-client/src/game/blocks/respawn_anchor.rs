@@ -58,13 +58,27 @@ impl RespawnConfig {
             forced: true,
         }
     }
-    pub(super) fn from_saved((dim, pos, yaw, pitch, forced): &SavedRespawn) -> Self {
-        Self {
+    /// The saved point, when this world has its level (`MinecraftServer.getLevel`). A point
+    /// in a level the world lacks resolves as no point at all
+    /// (`findRespawnPositionAndUseSpawnBlock` falls to `TeleportTransition.createDefault`),
+    /// and the save keeps it as it was ([`Self::kept`]).
+    pub(super) fn from_saved((dim, pos, yaw, pitch, forced): &SavedRespawn) -> Option<Self> {
+        Dim::exists(dim).then(|| Self {
             dim: Dim::from_id(dim),
             pos: *pos,
             yaw: *yaw,
             pitch: *pitch,
             forced: *forced,
+        })
+    }
+    /// What the save keeps of a point once play is done with it: `saved` while play left
+    /// unchanged the point loaded from it (one in a missing level stays as saved), else the
+    /// point play set or cleared.
+    pub(super) fn kept(saved: Option<SavedRespawn>, now: Option<Self>) -> Option<SavedRespawn> {
+        if now == saved.as_ref().and_then(Self::from_saved) {
+            saved
+        } else {
+            now.map(|c| c.saved())
         }
     }
     pub(super) fn saved(&self) -> SavedRespawn {
@@ -666,6 +680,35 @@ mod tests {
         // Standing one block east of the bed head (x + 1) looks west (90 deg).
         let east = Vec3::new(11.5, 64.0, 5.5);
         assert!((look_at_yaw(east, head) - 90.0).abs() < 1.0e-4);
+    }
+
+    /// `findRespawnPositionAndUseSpawnBlock`: a point in a level the world lacks resolves as no
+    /// point (the world spawn's transition, no missing-block message), and the save keeps it
+    /// until play sets or clears one.
+    #[test]
+    fn a_point_in_a_missing_level_resolves_as_none_and_stays_saved() {
+        let gone: SavedRespawn = ("example:gone".into(), [4, 70, 4], 90.0, 0.0, false);
+        assert_eq!(RespawnConfig::from_saved(&gone), None);
+        assert_eq!(
+            RespawnConfig::kept(Some(gone.clone()), None),
+            Some(gone.clone())
+        );
+        let anchor = RespawnConfig::wrapped(Dim::Nether, [1, 40, 1], 0.0, false);
+        assert_eq!(
+            RespawnConfig::kept(Some(gone), Some(anchor)),
+            Some(anchor.saved())
+        );
+        let nether = anchor.saved();
+        assert_eq!(RespawnConfig::from_saved(&nether), Some(anchor));
+        assert_eq!(
+            RespawnConfig::kept(Some(nether.clone()), Some(anchor)),
+            Some(nether.clone())
+        );
+        assert_eq!(
+            RespawnConfig::kept(Some(nether), None),
+            None,
+            "play cleared it"
+        );
     }
 }
 

@@ -2,7 +2,6 @@
 use super::*;
 use mod_api::{ChunkDataLoadEvent, ChunkDataSaveEvent, ChunkDiskHost, Hooks};
 use std::sync::atomic::AtomicUsize;
-#[path = "../../../sunrise-mod-wasm/tests/fixture/src/chunk_disk.rs"]
 mod fixture;
 mod writer_stack;
 
@@ -13,9 +12,9 @@ struct Listener {
 }
 #[mod_api::sunrise_mod]
 impl Hooks for Listener {
-    fn chunk_data_save(&self, host: &dyn ChunkDiskHost, event: &mut ChunkDataSaveEvent<'_>) {
+    fn chunk_data_save(&self, _: &dyn ChunkDiskHost, event: &mut ChunkDataSaveEvent<'_>) {
         self.saves.fetch_add(1, Ordering::Relaxed);
-        fixture::save(host, event.data);
+        fixture::save(event.data);
     }
     fn chunk_data_load(&self, host: &dyn ChunkDiskHost, event: &mut ChunkDataLoadEvent<'_>) {
         self.loads.fetch_add(1, Ordering::Relaxed);
@@ -64,7 +63,7 @@ fn with_listener(run: impl FnOnce(Arc<AtomicUsize>, Arc<AtomicUsize>)) {
     let saves = Arc::new(AtomicUsize::new(0));
     let loads = Arc::new(AtomicUsize::new(0));
     let mods = vec![mod_api::ModEntry::new(
-        "wasm_fixture",
+        "chunk_disk_fixture",
         Box::new(Listener {
             saves: saves.clone(),
             loads: loads.clone(),
@@ -199,7 +198,7 @@ use echo::Echo;
 fn with_echo(run: impl FnOnce(Arc<Mutex<Vec<(mod_api::ChunkDiskKind, i32)>>>)) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let mods = vec![mod_api::ModEntry::new(
-        "wasm_fixture",
+        "chunk_disk_fixture",
         Box::new(Echo { seen: seen.clone() }),
     )]
     .into();
@@ -437,7 +436,7 @@ fn failed_load_keeps_stored_8_and_runs_no_save_listener_for_every_save_path() {
                 saves: saves.clone(),
             })
         };
-        let mods = vec![mod_api::ModEntry::new("wasm_fixture", listener)].into();
+        let mods = vec![mod_api::ModEntry::new("chunk_disk_fixture", listener)].into();
         mod_platform::testing::with_mods(mods, || {
             let save = SaveDir::new(
                 path.clone(),

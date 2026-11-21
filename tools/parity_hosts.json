@@ -41,7 +41,10 @@
  "local_only": {
   "save_roundtrip": "runs the game on a virtual screen (vscreen) with a null ALSA device, or offscreen in the logged-in macOS session"
  },
- "linux_only": {},
+ "linux_only": {
+  "save_kill": "uses SIGKILL to stop the server at a save fixture point",
+  "save_corruption": "part of the Linux-only save-fault suite"
+ },
  "solo": {
   "remote_fireball": "two game windows (lan_e2e); on 4 CPUs beside other harnesses, screenshots and control requests take ticks the check needs",
   "remote_fireworks": "two game windows (lan_e2e); a screenshot took ~1.5 s beside 3 other harnesses on playsunrise's runner, past the sparks' life (2026-10-27)",

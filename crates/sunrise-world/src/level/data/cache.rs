@@ -5,10 +5,8 @@
 //! versions, corrupt payloads and write failures always use the normal loader.
 //! Snapshots live in the game's own cache folder ([`set_dir`]), never in the
 //! resource folder: that one is shared by worktrees and copied between installed
-//! versions by the launcher. Its key includes a hash of the code that resolves
-//! the tables (this crate, `sunrise-core`, their dependencies; see `build.rs`),
-//! so a build that resolves them differently never reads another build's
-//! snapshot, while a rebuild that only touched other crates keeps them.
+//! versions by the launcher. Its key is the format version plus a hash of the
+//! resources the snapshot is resolved from, so no build input decides it.
 use super::*;
 use crate::registry::snapshot as registry_snapshot;
 use serde::{Deserialize, Serialize};
@@ -23,6 +21,7 @@ use std::{
     time::SystemTime,
 };
 
+// Bump a version, and its file name, with any change to how its snapshot is resolved, stored or restored.
 const MAGIC: &[u8; 8] = b"HZBEHAV\0";
 const VERSION: u32 = 7;
 const FILE_NAME: &str = "behaviours-v7.bin";
@@ -147,18 +146,9 @@ struct Item {
     game_master: bool,
 }
 
-/// The build that resolves the tables: a hash of this crate's and
-/// `sunrise-core`'s sources, `Cargo.lock` and the profile (`build.rs`). The
-/// version constant alone misses loader changes that keep a snapshot's layout.
-fn hash_build(hasher: &mut Sha256) {
-    hash_str(hasher, env!("SUNRISE_WORLD_SOURCES"));
-}
-
 fn fingerprint(registry: &BlockRegistry, root: &Path) -> io::Result<[u8; 32]> {
     let mut hasher = Sha256::new();
     hasher.update(b"sunrise resolved behaviours 2");
-    // The build that resolved the tables.
-    hash_build(&mut hasher);
     hasher.update(sources_digest(root)?);
     // The registry argument may be modified independently of facts.json.
     hasher.update((registry.len() as u64).to_le_bytes());
@@ -896,7 +886,6 @@ fn write(
 fn registry_fingerprint(root: &Path) -> io::Result<[u8; 32]> {
     let mut hasher = Sha256::new();
     hasher.update(b"sunrise block registry 1");
-    hash_build(&mut hasher);
     hasher.update(paths_digest(root, &[root.join("facts.json")])?);
     Ok(hasher.finalize().into())
 }
@@ -995,6 +984,36 @@ mod tests {
             }
         }
         Some(FixtureDir(dir))
+    }
+
+    /// The key is the format version and the resource bytes: no resources needed.
+    #[test]
+    fn key_follows_the_format_version_and_the_resource_bytes() {
+        let dir = std::env::temp_dir().join(format!(
+            "sunrise-snapshot-key-test-{}-{}",
+            std::process::id(),
+            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed),
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let dir = FixtureDir(dir);
+        fs::write(dir.0.join("facts.json"), b"[1]").unwrap();
+        let key = registry_fingerprint(&dir.0).unwrap();
+        assert_eq!(key, registry_fingerprint(&dir.0).unwrap());
+        write_snapshot(
+            &dir.0,
+            "k.bin",
+            REGISTRY_MAGIC,
+            REGISTRY_VERSION,
+            &key,
+            b"payload",
+        )
+        .unwrap();
+        let bytes = fs::read(dir.0.join("k.bin")).unwrap();
+        let read = |version| decode_snapshot(&bytes, REGISTRY_MAGIC, version, &key);
+        assert_eq!(read(REGISTRY_VERSION).as_deref(), Some(&b"payload"[..]));
+        assert!(read(REGISTRY_VERSION + 1).is_none());
+        fs::write(dir.0.join("facts.json"), b"[1, 2]").unwrap();
+        assert_ne!(key, registry_fingerprint(&dir.0).unwrap());
     }
 
     #[test]

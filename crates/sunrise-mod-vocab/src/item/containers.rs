@@ -7,9 +7,8 @@ use crate::*;
 /// whether what it kept of it (`BlockEntityDraw::keep`) is still right
 /// without comparing the whole entity, and no write can skip that. Its type
 /// identity is fixed at construction and is not part of the mutable fields.
-/// Returned guest snapshots apply only changed mutable fields through the same revision path.
 // exhaustive: its fields are private, so mods cannot build or destructure it
-// no wire: transfers a flattened ModBlockEntitySnapshot, including revision counters and queued client fields, rather than internal fields storage.
+// no wire: live native block entity state.
 pub struct ModBlockEntity {
     pub(crate) id: String,
     pub(crate) fields: ModBlockEntityFields,
@@ -42,47 +41,6 @@ pub struct ModRevision {
     pub(crate) born: u64,
     pub(crate) changes: u64,
 }
-// exhaustive: the game builds the snapshot; mods only read it
-// hidden: the game's snapshot of a mod block entity, read by generated boundary code
-/// An entity's transport form; identity and revision are read-only on writeback.
-#[doc(hidden)]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct ModBlockEntitySnapshot {
-    pub(crate) id: String,
-    pub(crate) fields: ModBlockEntityFields,
-    pub(crate) revision: ModRevision,
-    pub(crate) client_update_fields: Option<Compound>,
-}
-impl From<&ModBlockEntity> for ModBlockEntitySnapshot {
-    fn from(entity: &ModBlockEntity) -> Self {
-        Self {
-            id: entity.id.clone(),
-            fields: entity.fields.clone(),
-            revision: entity.revision,
-            client_update_fields: entity.client_update_fields.clone(),
-        }
-    }
-}
-impl From<ModBlockEntitySnapshot> for ModBlockEntity {
-    fn from(snapshot: ModBlockEntitySnapshot) -> Self {
-        Self {
-            id: snapshot.id,
-            fields: snapshot.fields,
-            revision: snapshot.revision,
-            client_update_fields: snapshot.client_update_fields,
-        }
-    }
-}
-impl ModBlockEntity {
-    /// Apply returned mutable state through the native revision path, never its identity.
-    pub(crate) fn apply_snapshot(&mut self, snapshot: ModBlockEntitySnapshot) {
-        if self.fields != snapshot.fields {
-            *std::ops::DerefMut::deref_mut(self) = snapshot.fields;
-        }
-        self.client_update_fields = snapshot.client_update_fields;
-    }
-}
-
 impl ModRevision {
     // hidden: the game verifies callback snapshots still name their engine entity
     #[doc(hidden)]
@@ -324,86 +282,14 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_preserves_negative_zero_writes() {
-        for (positive, negative) in [
-            (
-                Tag::Float(0.0f32.to_bits()),
-                Tag::Float((-0.0f32).to_bits()),
-            ),
-            (
-                Tag::Double(0.0f64.to_bits()),
-                Tag::Double((-0.0f64).to_bits()),
-            ),
-        ] {
-            let mut entity = ModBlockEntity::default();
-            entity.nbt.insert("value".into(), positive);
-            let before = entity.revision();
-            let mut snapshot = ModBlockEntitySnapshot::from(&entity);
-            snapshot.fields.nbt.insert("value".into(), negative.clone());
-            entity.apply_snapshot(snapshot);
-            assert_eq!(entity.nbt.get(&"value".into()), Some(&negative));
-            assert_ne!(entity.revision(), before);
-        }
-    }
-
-    #[test]
-    fn unchanged_nan_snapshots_do_not_advance_revision() {
-        let mut entity = ModBlockEntity::default();
-        entity.nbt.insert("float".into(), Tag::Float(0x7fc0_0123));
-        entity
-            .nbt
-            .insert("double".into(), Tag::Double(0x7ff8_0000_0000_0123));
-        let before = entity.revision();
-        for _ in 0..20 {
-            entity.apply_snapshot(ModBlockEntitySnapshot::from(&entity));
-            assert_eq!(entity.revision(), before);
-        }
-        let mut snapshot = ModBlockEntitySnapshot::from(&entity);
-        snapshot
-            .fields
-            .nbt
-            .insert("float".into(), Tag::Float(0x7fc0_0124));
-        entity.apply_snapshot(snapshot);
-        assert_ne!(entity.revision(), before);
-    }
-
-    #[test]
-    fn returned_snapshot_changes_only_fields_and_keeps_native_revision_bookkeeping() {
-        let mut entity = ModBlockEntity::new("test:machine".into(), Default::default());
-        let revision = entity.revision();
-        let mut snapshot = ModBlockEntitySnapshot::from(&entity);
-        snapshot.id = "forged:identity".into();
-        snapshot.revision = ModBlockEntity::default().revision();
-        entity.apply_snapshot(snapshot);
-        assert_eq!(entity.id(), "test:machine");
-        assert_eq!(entity.revision(), revision);
-        let mut snapshot = ModBlockEntitySnapshot::from(&entity);
-        snapshot.fields.data = vec![17];
-        entity.apply_snapshot(snapshot);
-        assert_eq!(entity.data, [17]);
-        assert_eq!(entity.id(), "test:machine");
-        assert_ne!(entity.revision(), revision);
-        let restored = ModBlockEntity::from(ModBlockEntitySnapshot::from(&entity));
-        assert_eq!(restored.revision(), entity.revision());
-    }
-
-    #[test]
-    fn client_update_fields_come_back_with_a_snapshot_and_change_nothing_else() {
+    fn queues_client_update_fields_without_changing_revision_or_copying_them() {
         let mut entity = ModBlockEntity::new("test:machine".into(), Default::default());
         let revision = entity.revision();
         let batch = Compound::from([("effect".into(), Tag::Int(23))]);
         crate::ModBlockEntityView::new(&mut entity).set_client_update_fields(batch.clone());
+        assert_eq!(entity.client_update_fields(), Some(&batch));
         assert_eq!(entity.revision(), revision);
         assert_eq!(entity.clone().client_update_fields(), None);
-        let snapshot = ModBlockEntitySnapshot::from(&entity);
-        let mut returned = ModBlockEntity::from_snapshot(
-            entity.id().to_owned(),
-            ModBlockEntityFields::default(),
-            revision,
-        );
-        returned.apply_snapshot(snapshot);
-        assert_eq!(returned.client_update_fields(), Some(&batch));
-        assert_eq!(returned.revision(), revision);
     }
 
     #[test]

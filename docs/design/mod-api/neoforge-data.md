@@ -54,7 +54,7 @@ omits the file with one named error-level log entry, including beneath `not`
 or `or`. Files without the array load normally.
 
 `mod_loaded` reads an immutable snapshot of the owning generation's server-enabled
-mod IDs, including code-only native and WebAssembly mods, plus `minecraft`.
+mod IDs, including code-only native mods, plus `minecraft`.
 Client-only, disabled and refused packages are absent. Namespaces do not imply a
 loaded mod. Changed enabled IDs participate in cache identity and are published
 with successful reloads; failed preparation preserves the old generation, and

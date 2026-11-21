@@ -57,21 +57,6 @@ pub(super) fn player_teleport(game: &mut Game<'_>, had_player: bool, from: Vec3,
     }
 }
 
-pub(super) fn player_before(game: &Game<'_>) -> Option<Vec3> {
-    game.player.as_ref().map(|player| player.position)
-}
-
-pub(super) fn player_after(game: &mut Game<'_>, from: Option<Vec3>) {
-    if let (Some(from), Some(to), Ok(id)) = (
-        from,
-        game.player.as_ref().map(|player| player.position),
-        u32::try_from(game.own_entity_id()),
-    ) && from != to
-    {
-        game.remote_entity_section_step(id, from, to);
-    }
-}
-
 pub(super) fn tick_items(
     game: &mut Game<'_>,
     entered: &mut Vec<sunrise_client::entities::ItemSplash>,

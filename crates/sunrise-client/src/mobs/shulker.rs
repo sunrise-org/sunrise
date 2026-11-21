@@ -1302,7 +1302,7 @@ mod tests {
         let mut fixture = crate::health::TestLevel::new(0);
         let attack = crate::health::Attack {
             projectile: Some(2),
-            projectile_is_arrow: true,
+            projectile_kind: crate::health::DirectEntity::Arrow,
             ..Default::default()
         };
         let mut level = fixture.level().attacked_by(&attack);

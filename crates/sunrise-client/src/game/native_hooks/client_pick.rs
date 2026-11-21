@@ -18,9 +18,17 @@ pub(in crate::game) struct ClientPick {
     pub entity_metadata: (bool, bool),
     pub rider_candidates: Vec<crate::game::pick_accumulator::PickCandidate>,
     dispatching: bool,
+    /// How many picks have been taken.
+    taken: u64,
 }
 
 impl Game<'_> {
+    /// How many picks (a tick's or a frame's) have been taken: an agent command that turned
+    /// waits for the count to move before it reads the target.
+    pub(in crate::game) fn client_picks(&self) -> u64 {
+        self.client_pick.taken
+    }
+
     pub(in crate::game) fn uses_stored_pick(&self) -> bool {
         self.native_window() && self.client_pick.ray.is_none()
     }
@@ -163,6 +171,7 @@ impl Game<'_> {
             _ => block_candidate,
         });
         self.publish_client_pick(original);
+        self.client_pick.taken += 1;
         self.client_pick.ray = None;
         if !mod_api::__private::listened(mod_api::HookId::ClientPick) {
             return;
@@ -191,18 +200,27 @@ impl Game<'_> {
         self.transaction_close(&seal, true);
     }
 
+    /// Whether Pick Block (middle click) can name an item for the entity: a projectile, a dragon
+    /// part, an unmodeled entity or a general row has no `Entity.getPickResult`. This is not
+    /// whether the crosshair can target it, which a general type's `pickable` decides.
+    pub(in crate::game) fn has_pick_result(target: Option<crate::game::commands::Target>) -> bool {
+        use crate::game::commands::Target;
+        !matches!(
+            target,
+            Some(
+                Target::Projectile(_)
+                    | Target::DragonPart(_)
+                    | Target::Other(_)
+                    | Target::General(_)
+            )
+        )
+    }
+
     fn publish_client_pick(&mut self, result: Option<CrosshairTarget>) {
         self.client_pick.result = result;
         self.client_pick.entity_metadata = match result {
             Some(CrosshairTarget::Entity { entity, .. }) => (
-                !matches!(
-                    self.native_client_entity_target(entity),
-                    Some(
-                        crate::game::commands::Target::Projectile(_)
-                            | crate::game::commands::Target::DragonPart(_)
-                            | crate::game::commands::Target::Other(_)
-                    )
-                ),
+                Self::has_pick_result(self.native_client_entity_target(entity)),
                 self.level_dragon_part(entity.id()).is_none(),
             ),
             _ => (false, false),

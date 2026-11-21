@@ -151,6 +151,7 @@ pub(super) struct TransferredEntityState {
     initialized: bool,
     accepted_hit: Option<std::sync::Arc<sunrise_client::health::AcceptedHit>>,
     died: bool,
+    pub(super) transient: bool,
     /// The source id whose attachment map a transaction open at the take kept: the
     /// arrival moves that keeping to the new id.
     journaled: Option<u32>,
@@ -199,6 +200,7 @@ impl Game<'_> {
             attachments,
             accepted_hit,
             died,
+            transient: self.persist.transient.remove(&id),
             journaled,
             rollback,
             source: id,
@@ -226,6 +228,9 @@ impl Game<'_> {
         self.levels.note_travel(state.source, id, now);
         if state.died {
             self.died.insert(id);
+        }
+        if state.transient {
+            self.persist.transient.insert(id);
         }
         // Even an empty map marks this as runtime state for `remember_uuid`.
         let mut map = state.attachments.unwrap_or_default();

@@ -44,11 +44,14 @@ pub trait LivingAirWorld {
 pub fn modified_friction(friction: f32, modifier: f32) -> f32 {
     (1.0 - (1.0 - friction) * modifier).clamp(0.0, 1.0)
 }
+/// `Entity.getInputVector` ignores input below this squared length.
+pub const MIN_INPUT_LENGTH_SQUARED: f64 = 1.0e-7;
+
 /// Entity.getInputVector: normalize only above unit length, then rotate using
 /// the native float-angle sine table. Tiny input returns canonical positive zero.
 pub fn input_vector(input: Vec3, speed: f32, yaw: f32) -> Vec3 {
     let length = input.length_squared();
-    if length < 1.0e-7 {
+    if length < MIN_INPUT_LENGTH_SQUARED {
         return Vec3::ZERO;
     }
     let input = if length > 1.0 {

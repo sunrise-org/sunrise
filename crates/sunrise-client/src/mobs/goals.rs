@@ -64,6 +64,20 @@ pub trait Goal: std::fmt::Debug + Send + Sync {
         false
     }
     fn tick(&mut self, _m: &mut Mob, _cx: &mut Cx) {}
+    /// Goals that move the body itself can stop for the owning level to apply
+    /// a landing decision. The ordinary goal path runs without a pause.
+    fn tick_until_trample(
+        &mut self,
+        mob: &mut Mob,
+        cx: &mut Cx,
+    ) -> Option<super::living::TravelTrample> {
+        self.tick(mob, cx);
+        None
+    }
+    /// Finish a goal that stopped in its own movement; false for a different goal.
+    fn after_trample(&mut self, _m: &mut Mob, _cx: &mut Cx) -> bool {
+        false
+    }
     fn box_clone(&self) -> Box<dyn Goal>;
     /// The goal's name for debugging (`Goal.toString`).
     fn name(&self) -> &'static str {
@@ -107,6 +121,13 @@ pub struct GoalSelector {
     locked: [Option<usize>; 4],
     pub disabled: u8,
 }
+#[derive(Debug)]
+pub(super) struct GoalTrample {
+    pub(super) movement: super::living::TravelTrample,
+    slot: usize,
+    force: bool,
+}
+
 impl GoalSelector {
     pub fn add(&mut self, priority: i32, goal: impl Goal + 'static) {
         self.add_boxed(priority, Box::new(goal));
@@ -155,6 +176,11 @@ impl GoalSelector {
     }
     /// GoalSelector.tick
     pub fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.prepare_tick(m, cx);
+        self.tick_running(m, cx, true);
+    }
+
+    fn prepare_tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         for i in 0..self.goals.len() {
             if self.goals[i].running
                 && (self.goals[i].goal.flags() & self.disabled != 0
@@ -199,7 +225,6 @@ impl GoalSelector {
                 self.goals[i].goal.start(m, cx);
             }
         }
-        self.tick_running(m, cx, true);
     }
     pub fn tick_running(&mut self, m: &mut Mob, cx: &mut Cx, force: bool) {
         for g in &mut self.goals {
@@ -208,6 +233,57 @@ impl GoalSelector {
             }
         }
     }
+    pub(super) fn tick_until_trample(
+        &mut self,
+        m: &mut Mob,
+        cx: &mut Cx,
+        force: bool,
+    ) -> Option<GoalTrample> {
+        if force {
+            self.prepare_tick(m, cx);
+        }
+        self.tick_from(m, cx, force, 0)
+    }
+
+    fn tick_from(
+        &mut self,
+        m: &mut Mob,
+        cx: &mut Cx,
+        force: bool,
+        start: usize,
+    ) -> Option<GoalTrample> {
+        for (slot, g) in self.goals.iter_mut().enumerate().skip(start) {
+            if g.running
+                && (force || g.goal.every_tick())
+                && let Some(movement) = g.goal.tick_until_trample(m, cx)
+            {
+                return Some(GoalTrample {
+                    movement,
+                    slot,
+                    force,
+                });
+            }
+        }
+        None
+    }
+
+    pub(super) fn resume_after_trample(
+        &mut self,
+        m: &mut Mob,
+        cx: &mut Cx,
+        paused: GoalTrample,
+    ) -> Option<GoalTrample> {
+        paused.movement.resume(m, cx.w, cx.level, cx.events);
+        // An owning-host listener can remove or shift the running goal. Only
+        // the still-resident goal holding this pause can finish its path update.
+        let next = self
+            .goals
+            .iter_mut()
+            .position(|g| g.goal.after_trample(m, cx))
+            .map_or(paused.slot, |slot| slot + 1);
+        self.tick_from(m, cx, paused.force, next)
+    }
+
     pub fn stop_all(&mut self, m: &mut Mob, cx: &mut Cx) {
         for i in 0..self.goals.len() {
             self.stop(i, m, cx);
@@ -3237,6 +3313,7 @@ mod breeding_variant_tests {
             let partner = [mate.seen(None, &crate::items::Items::empty())];
             for asks_baby_spawn in [false, true] {
                 let w = MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     goal_host: None,
                     asks_baby_spawn,
                     mob_drops: false,
@@ -3299,6 +3376,7 @@ mod breeding_variant_tests {
                     [(false, true), (false, false), (true, true), (true, false)]
                 {
                     let world = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         asks_baby_spawn: ask_mods,
                         mob_drops,

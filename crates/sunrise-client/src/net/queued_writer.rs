@@ -22,6 +22,8 @@ enum WriteJob {
     Packet(Vec<u8>),
     Contents(Vec<u8>),
     Disconnect(Vec<u8>),
+    /// A `Droppable` send is waiting: the thread frames what it has room for.
+    Droppable,
 }
 
 #[derive(Clone)]
@@ -32,12 +34,15 @@ pub(crate) struct Inner {
     // ConnWriter::send_contents returns after write_all; it does not flush.
     probe: Arc<[std::sync::atomic::AtomicUsize; 4]>,
     sender: Mutex<Option<Sender<WriteJob>>>,
+    droppable: Arc<std::sync::OnceLock<Arc<crate::raw_payloads::droppable::Queue>>>,
+    /// A wake-up is already in the channel.
+    droppable_woken: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<ConnWriter>>>,
     framing: Framing,
     closer: Arc<Closer>,
     alive: Arc<AtomicBool>,
     retired: AtomicBool,
-    terminal: AtomicBool,
+    terminal: Arc<AtomicBool>,
     phase: Mutex<(u64, Phase)>,
 }
 impl std::ops::Deref for QueuedWriter {
@@ -179,6 +184,12 @@ impl QueuedWriter {
         #[cfg(any(test, feature = "test-payload-probe"))]
         let writing = probe.clone();
         let running = alive.clone();
+        let terminal = Arc::new(AtomicBool::new(false));
+        let closing = terminal.clone();
+        let droppable: Arc<std::sync::OnceLock<Arc<crate::raw_payloads::droppable::Queue>>> =
+            Arc::default();
+        let droppable_woken = Arc::new(AtomicBool::new(false));
+        let (serving, woken) = (droppable.clone(), droppable_woken.clone());
         let worker = std::thread::Builder::new()
             .name("sunrise-net-write".into())
             .spawn(move || {
@@ -190,15 +201,32 @@ impl QueuedWriter {
                             WriteJob::Packet(b)
                             | WriteJob::Contents(b)
                             | WriteJob::Disconnect(b) => b.len(),
+                            WriteJob::Droppable => 0,
                         };
                         writing[0].fetch_add(1, Ordering::Relaxed);
                         writing[2].store(bytes, Ordering::Relaxed);
                         writing[3].store(1, Ordering::Relaxed);
                     }
-                    let result = match job {
+                    let mut result = match job {
                         WriteJob::Packet(body) | WriteJob::Disconnect(body) => writer.send(&body),
                         WriteJob::Contents(contents) => writer.send_contents(&contents),
+                        WriteJob::Droppable => {
+                            woken.store(false, Ordering::Release);
+                            Ok(())
+                        }
                     };
+                    // The writer is free: frame the waiting `Droppable` sends before the next job.
+                    if result.is_ok()
+                        && !disconnect
+                        && let Some(queue) = serving.get()
+                    {
+                        while let Some(body) = queue.pop(std::time::Instant::now()) {
+                            result = writer.send(&body);
+                            if result.is_err() {
+                                break;
+                            }
+                        }
+                    }
                     #[cfg(any(test, feature = "test-payload-probe"))]
                     {
                         if result.is_ok() {
@@ -213,6 +241,10 @@ impl QueuedWriter {
                         break;
                     }
                 }
+                if closing.load(Ordering::Acquire) {
+                    running.store(false, Ordering::Release);
+                    writer.shutdown();
+                }
                 writer
             })
             .map_err(|error| Error::new(format!("cannot start client writer: {error}")))?;
@@ -220,9 +252,11 @@ impl QueuedWriter {
             #[cfg(any(test, feature = "test-payload-probe"))]
             probe,
             sender: Mutex::new(Some(sender)),
+            droppable,
+            droppable_woken,
             worker: Mutex::new(Some(worker)),
             retired: AtomicBool::new(false),
-            terminal: AtomicBool::new(false),
+            terminal,
             framing,
             closer,
             alive,
@@ -247,8 +281,29 @@ impl QueuedWriter {
         }
         Ok(writer)
     }
+    /// Serve `queue`'s `Droppable` sends from this writer's thread.
+    pub(crate) fn attach_droppable(&self, queue: Arc<crate::raw_payloads::droppable::Queue>) {
+        let inner = Arc::downgrade(&self.0);
+        queue.set_wake(Box::new(move || {
+            let Some(inner) = inner.upgrade() else { return };
+            if inner.droppable_woken.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            let sender = inner.sender.lock().unwrap();
+            let sent = sender
+                .as_ref()
+                .is_some_and(|s| s.try_send(WriteJob::Droppable, 0).is_ok());
+            if !sent {
+                inner.droppable_woken.store(false, Ordering::Release);
+            }
+        }));
+        let _ = self.droppable.set(queue);
+    }
     pub(crate) fn is_terminal(&self) -> bool {
         self.terminal.load(Ordering::Acquire)
+    }
+    pub(crate) fn accepts_packets(&self) -> bool {
+        !self.is_terminal() && self.alive.load(Ordering::Acquire)
     }
     pub(crate) fn framing(&self) -> Framing {
         self.framing
@@ -286,8 +341,29 @@ impl QueuedWriter {
             Err(TrySendError::Disconnected(_)) => Err(Error::new("client writer disconnected")),
         }
     }
+    /// Disconnect/transfer reached in an ordered bundle: stop accepting new
+    /// writes, but let the writer send replies that came before the close.
+    pub(crate) fn close_after_pending(&self) {
+        let mut sender = self.sender.lock().unwrap();
+        if self.seal_droppable()
+            && let Some(sender) = sender.as_ref()
+            && let Ok(marker) = sender.reserve_terminal(0)
+        {
+            // Unpublished reliable reservations can fill the channel without
+            // leaving any queued job to wake the writer and poll this lane.
+            let _ = marker.publish(WriteJob::Droppable);
+        }
+        self.terminal.store(true, Ordering::Release);
+        sender.take();
+    }
+
+    fn seal_droppable(&self) -> bool {
+        self.droppable.get().is_some_and(|queue| queue.seal())
+    }
+
     pub(crate) fn disconnect(&self, body: Vec<u8>) {
         let mut sender = self.sender.lock().unwrap();
+        self.seal_droppable();
         self.terminal.store(true, Ordering::Release);
         let Some(queue) = sender.take() else {
             return;
@@ -344,6 +420,7 @@ impl QueuedWriter {
             WriteJob::Packet(bytes) | WriteJob::Contents(bytes) | WriteJob::Disconnect(bytes) => {
                 bytes.capacity()
             }
+            WriteJob::Droppable => 0,
         };
         let sender = self.sender.lock().unwrap();
         let permit = sender

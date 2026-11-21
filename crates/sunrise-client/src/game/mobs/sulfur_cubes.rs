@@ -209,7 +209,7 @@ impl Game<'_> {
         let id = self.mobs[index].id;
         // Leashable.dropLeash, then discard.
         self.break_leash(id, true, false);
-        self.mobs[index].removed = true;
+        self.remove_mob_now(id, false);
         // ItemUtils.createFilledResult.
         self.filled_result(filled);
         if let (Some(player), Some(name)) = (self.lan_acting_uuid, self.lan_acting_name.clone()) {

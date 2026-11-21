@@ -1,7 +1,6 @@
 use super::*;
 
 /// Server-level helpers for native mods.
-#[allow(dead_code)]
 impl GameLevel<'_> {
     /// This level's own random (vanilla's `Level.random`): the stream
     /// `native_level_random(dimension)` hands a server hook, for a world hook
@@ -17,7 +16,6 @@ impl GameLevel<'_> {
 
 /// Helpers for native mods, kept as stable as the hook points.
 // Native mods use these; nothing in Sunrise does.
-#[allow(dead_code)]
 impl Game<'_> {
     /// The random of the server level `level` names: vanilla's `Level.random`
     /// (`level.getRandom()`), the one its explosions, block drops and other
@@ -26,8 +24,9 @@ impl Game<'_> {
     /// Overworld) answers with its own stream. This is a copy of it as it
     /// stands: draw with `LevelRef::with_random`, which stores the stream
     /// back, so the draws move the level's own. `None` on a client of a
-    /// server, for a stale handle and for a level not open: the Nether and
-    /// the End open when someone first goes there and close after 300 ticks
+    /// server, for a stale handle and for a custom level not open: the
+    /// built-in levels (Overworld, Nether, End) open at server startup and
+    /// stay open until shutdown, while custom levels close after 300 ticks
     /// with nobody in them (`close_idle_levels`).
     pub(in crate::game) fn level_random(
         &self,

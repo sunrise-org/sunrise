@@ -17,7 +17,6 @@ use super::{
 use crate::health::DamageLevel;
 use crate::projectiles::{Projectile, ProjectileKind};
 use sunrise_core::{geometry::Vec3, random::RandomSource};
-use sunrise_world::move_gate::MoveGate;
 
 /// `ZombifiedPiglin.alertOthers` keeps the source's player identity.
 #[derive(Clone, Debug)]
@@ -259,21 +258,18 @@ pub fn drowned_move_control(m: &mut Mob, w: &super::MobWorld) {
     }
 }
 /// Drowned.travelInWater: swimming under water slowly when it wants to.
-pub fn drowned_travel(
+pub(super) fn drowned_travel(
     m: &mut Mob,
     w: &super::MobWorld,
     level: &mut DamageLevel<'_>,
     input: Vec3,
     events: &mut Vec<MobEvent>,
-) -> bool {
-    // isUnderWater: wasEyeInWater && isInWater.
-    if !(m.was_eye_in_water && m.fluids.in_water && drowned_wants_to_swim(m, w)) {
-        return false;
-    }
+    pause: bool,
+) -> Result<(), super::living::TravelTrample> {
     m.move_relative(0.01, input);
-    m.do_move(w, level, events, &mut MoveGate::new());
-    m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
-    true
+    m.travel_move(w, level, events, pause, |m, _, _, _| {
+        m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
+    })
 }
 /// `RangedAttackMob.rangedAttackUncertainty`: 14 on peaceful, four less per
 /// difficulty step, so a hard drowned throws its trident almost straight.

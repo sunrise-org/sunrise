@@ -427,7 +427,7 @@ impl View<'_> {
 /// `LocatorBar.extractBackground`: the nine-sliced sprite and its rectangle.
 pub fn background(gui_width: i32, gui_height: i32) -> (&'static str, [i32; 4]) {
     (
-        "gui/sprites/hud/locator_bar_background",
+        "hud/locator_bar_background",
         [gui_width / 2 - 91, gui_height - 32 + 3, 182, 5],
     )
 }

@@ -1,6 +1,5 @@
 //! The item panel beside container screens: the items a recipe viewer mod
-//! lists (a native mod's `panel_items`, or WIT `interface browser`
-//! of a WebAssembly mod, docs/modding/src/how-to/content-mods.md), drawn as the game's own item slots
+//! lists through `panel_items`, drawn as the game's own item slots
 //! in pages right of the screen's window, with a search box under them. The
 //! mod says what the panel holds; the game pages it and tells the mod what
 //! the player clicked, typed, and which keys went down over an item
@@ -409,7 +408,7 @@ impl Game<'_> {
     }
     /// `panel_search`: the text in mod `mod_id`'s search box, heard as the
     /// player's typing is when its box next draws. Only the mod whose hook or
-    /// part is running (native or wasm alike) and owns the panel can set it.
+    /// part is running and owns the panel can set it.
     pub(in crate::game) fn panel_search(&mut self, mod_id: &str, text: &str) {
         let caller = mod_api::content::crash::current_native_mod();
         self.panel.set_search(caller, mod_id, text);
@@ -427,8 +426,10 @@ impl Game<'_> {
         if !matches!(self.screen, Screen::Inventory | Screen::Creative) || self.title.is_some() {
             return None;
         }
-        let disabled = &self.settings.mods.disabled;
-        let Some(shown) = self.panel.shown(|id| !disabled.contains(id)) else {
+        let Some(shown) = self
+            .panel
+            .shown(|id| !self.mods.code_disabled(&self.settings.mods.disabled, id))
+        else {
             self.panel.of = None;
             self.panel.stacks.clear();
             return None;
@@ -457,8 +458,8 @@ impl Game<'_> {
     }
     /// What the panel shows now.
     fn panel_shown(&self) -> Option<&Shown> {
-        let disabled = &self.settings.mods.disabled;
-        self.panel.shown(|id| !disabled.contains(id))
+        self.panel
+            .shown(|id| !self.mods.code_disabled(&self.settings.mods.disabled, id))
     }
     /// The player did `event` on `owner`'s panel.
     pub(super) fn panel_event(&mut self, owner: &Owner, event: BrowserEvent) {
@@ -620,12 +621,7 @@ impl Game<'_> {
             } else if on {
                 let name = ["page_backward", "page_forward"][i];
                 let suffix = if hovered { "_highlighted" } else { "" };
-                batch.sprite(
-                    atlas,
-                    &format!("gui/sprites/recipe_book/{name}{suffix}"),
-                    x,
-                    y,
-                );
+                batch.sprite(atlas, &format!("recipe_book/{name}{suffix}"), x, y);
             } else {
                 continue;
             }
@@ -777,9 +773,9 @@ impl Game<'_> {
                 batch.sprite_scaled(atlas, icon, x + 2.0, y + 2.0, 16.0, 16.0, u32::MAX);
             } else {
                 let sprite = if hovered {
-                    "gui/sprites/widget/button_highlighted"
+                    "widget/button_highlighted"
                 } else {
-                    "gui/sprites/widget/button"
+                    "widget/button"
                 };
                 sunrise_client::ui::nine_slice(batch, atlas, sprite, x, y, width, height, u32::MAX);
                 batch.sprite_scaled(
@@ -1527,6 +1523,61 @@ mod tests {
                 );
                 assert_eq!(frame(game, WINDOW), []);
                 assert_eq!(game.panel.search.as_ref().unwrap().value, "golds");
+            });
+        });
+    }
+
+    static GATED_BEFORE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static GATED_AFTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    /// Asks the Host for a level in its panel hook, and counts the calls that came back.
+    struct Gated;
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for Gated {
+        fn panel_event(
+            &self,
+            host: &mut dyn mod_api::ClientHost,
+            _: &mut mod_api::PanelEventEvent<'_>,
+        ) {
+            GATED_BEFORE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let _ = host.level("minecraft:overworld");
+            GATED_AFTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// The panel's events fire on input, after the thread reached World. Fired in Setup and in
+    /// Reloading anyway, a listener's world read is refused inside the hook's own containment
+    /// (the listener never gets past it), never the no-scope panic; in World it is answered.
+    #[test]
+    #[ignore = "daily"]
+    fn the_panel_outside_the_world_is_refused_not_a_panic() {
+        use mod_api::__private::{ModPhase, PhaseOwner};
+        use std::sync::atomic::Ordering;
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            let mods: mod_api::Mods = vec![mod_api::ModEntry::new("gated", Box::new(Gated))].into();
+            mod_platform::testing::with_mods(mods, || {
+                let owner = Owner::Native("gated".into());
+                for reloading in [false, true] {
+                    let setup = PhaseOwner::scope(ModPhase::Setup);
+                    let _reload = reloading.then(|| setup.reloading().unwrap());
+                    GATED_BEFORE.store(0, Ordering::Relaxed);
+                    GATED_AFTER.store(0, Ordering::Relaxed);
+                    game.panel_event(&owner, crate::game::native_hooks::PanelEvent::Back);
+                    assert_eq!(GATED_BEFORE.load(Ordering::Relaxed), 1, "the hook fired");
+                    assert_eq!(
+                        GATED_AFTER.load(Ordering::Relaxed),
+                        0,
+                        "the read is refused"
+                    );
+                }
+                let _world = PhaseOwner::scope(ModPhase::World);
+                GATED_BEFORE.store(0, Ordering::Relaxed);
+                GATED_AFTER.store(0, Ordering::Relaxed);
+                game.panel_event(&owner, crate::game::native_hooks::PanelEvent::Back);
+                assert_eq!(
+                    GATED_AFTER.load(Ordering::Relaxed),
+                    1,
+                    "in World it is answered"
+                );
             });
         });
     }

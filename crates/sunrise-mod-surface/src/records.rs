@@ -112,9 +112,6 @@ pub struct Hook {
     pub engine: HookEngine,
     #[serde(default, skip_serializing_if = "Counterparts::is_empty")]
     pub counterparts: Counterparts,
-    /// The name a built wasm mod exports a listener as ([`crate::call`]); outside the hash.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub call: Option<String>,
     #[serde(flatten)]
     pub contract: HookContract,
     /// Its arguments and output as member records, `hook:<name>.<argument>`, in declaration
@@ -219,8 +216,6 @@ pub struct MethodContract {
     pub signature: String,
     /// It has no default body.
     pub required: bool,
-    /// A WebAssembly mod can call or implement it.
-    pub wasm: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<String>,
 }
@@ -232,13 +227,6 @@ pub struct Method {
     pub hash: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub doc: String,
-    /// Why it is not on wasm, when it is not; documentation, outside the hash.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasm_reason: Option<String>,
-    /// The name a built wasm mod imports or exports this method as ([`crate::call`]), when it
-    /// crosses; outside the hash. Two builds' exports say offline whether a built mod loads.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub call: Option<String>,
     #[serde(flatten)]
     pub contract: MethodContract,
 }
@@ -251,8 +239,6 @@ pub struct FunctionContract {
     /// An inherent item's `impl` generics and where clause (`<T: Clone> where T: Send`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub impl_generics: String,
-    /// A WebAssembly mod can call it.
-    pub wasm: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<String>,
 }
@@ -265,8 +251,6 @@ pub struct Function {
     pub hash: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub doc: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasm_reason: Option<String>,
     /// A free function's public paths; outside the hash.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<String>,
@@ -331,10 +315,9 @@ pub struct TypeContract {
     pub kind: TypeKind,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub generics: String,
-    /// It crosses the WebAssembly boundary: it derives `Wire` or has a `Wire` impl. Outside the
-    /// hash, with `wire_form`: a native mod cannot observe how a type crosses.
+    /// It derives `Wire` or has a `Wire` impl. The encoding is outside the Rust contract hash.
     pub wire: bool,
-    /// How it crosses: `derive` (its Rust fields), `fields` (a hand-written impl's declared
+    /// Its encoding: `derive` (its Rust fields), `fields` (a hand-written impl's declared
     /// `layout_fields!`), `via:<type>` (as another type), or `manual` (a hand-written impl that
     /// declares no layout).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -372,7 +355,7 @@ pub struct Type {
     /// The traits it implements, derived or written in the API's crates alike (`Clone`,
     /// `From<String>`, `Default`), by normalised trait path, sorted; `Wire` is `wire`'s. A set
     /// outside the hash: gaining one is additive, and the fit test checks the set itself
-    /// ([`crate::uses::fits`]).
+    /// ([`crate::uses::UsesTable::fits`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub impls: Vec<String>,
     /// For a struct, tuple struct or union: [`crate::fields_hash`] of its public fields, outside
@@ -516,10 +499,6 @@ impl EngineItem {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EngineContract {
-    Point {
-        name: String,
-        signature_hash: String,
-    },
     Loop {
         entry: String,
         generic: String,

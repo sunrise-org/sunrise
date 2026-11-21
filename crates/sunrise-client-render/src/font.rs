@@ -18,6 +18,9 @@ use std::{cell::RefCell, collections::HashMap, sync::Arc};
 /// `FontDescription.DEFAULT`.
 pub const DEFAULT: &str = "minecraft:default";
 
+/// Advance and both sides of an inline object glyph, in font pixels.
+pub(crate) const INLINE_OBJECT_SIZE: f32 = 8.0;
+
 /// A glyph ready to draw: atlas UVs and its box relative to the pen
 /// position (GlyphBitmap left/top/right/bottom), in GUI pixels.
 #[derive(Clone, Copy, Debug, Default)]
@@ -1085,7 +1088,7 @@ impl Font {
     }
     pub fn advance(&self, c: char, style: &Style) -> f32 {
         if c == '\u{fffc}' && style.inline_object.is_some() {
-            return 8.0;
+            return INLINE_OBJECT_SIZE;
         }
         let g = self.glyph_styled(c, style);
         g.advance + if style.is_bold() { g.offset } else { 0.0 }

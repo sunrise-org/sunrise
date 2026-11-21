@@ -5,16 +5,14 @@
 //! keeps the registrations from start and resolves each type's renderer on every resource load, so
 //! a frame hands an entity to the renderer of its type's slot and to no other mod.
 use crate::BlockEntityDrawContext;
-use crate::wire::{Reader, Wire, WireError, Writer};
 use std::{collections::BTreeMap, sync::Arc};
 
 /// One entity's frame, as `EntityRenderer.extractRenderState` fills an `EntityRenderState`:
 /// what a renderer reads to place and turn its model. Angles are in degrees, interpolated to the
 /// frame's partial tick, except for primed TNT and experience orbs, which supply their current
-/// rotation. Plain numbers, so a frame allocates nothing, and one value for native and
-/// wasm mods alike.
+/// rotation.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
+#[derive(Clone, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
 pub struct EntityRenderState {
     /// The entity's network id, as mod messages name it.
     pub id: u32,
@@ -39,12 +37,14 @@ pub struct EntityRenderState {
     /// An item frame or glow item frame's own frame ([`ItemFrameRenderState`]); none for any
     /// other entity.
     pub item_frame: Option<ItemFrameRenderState>,
+    /// A general entity's immutable synced fields; none for other families.
+    pub attachments: Option<crate::EntityRenderAttachments>,
 }
 
 /// What a living entity's frame adds to [`EntityRenderState`], as
 /// `LivingEntityRenderer.extractRenderState` fills a `LivingEntityRenderState`: what a model
 /// reads to pose and animate a body. Angles are in degrees, interpolated to the frame's partial
-/// tick. Plain values, so a frame allocates nothing, and one value for native and wasm mods alike.
+/// tick. Plain values, so a frame allocates nothing.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
 pub struct LivingRenderState {
@@ -124,28 +124,26 @@ pub struct ItemFrameRenderState {
 /// type it is registered for. Entities of a type share one renderer, so what differs between them
 /// comes from [`EntityRenderState`].
 ///
-/// A frame has no `Host`: drawing reads nothing of the world but what the state and `draw` give.
-/// A renderer that needs more reads it in a hook and keeps what it read.
+/// [`submit`](Self::submit) has no `Host`: it draws from what the state and `draw` give. A
+/// renderer that needs more reads it in a hook and keeps what it read. A general entity type's
+/// renderer (`declare_general_entity`) reads its synced fields from the snapshot in
+/// [`EntityRenderState::attachments`].
 pub trait EntityRenderer: Send + Sync + 'static {
     /// `EntityRenderer.submit`: draw `entity` with `draw`'s helpers (`quad`, `cube`, `block`,
     /// `item`, `model_part`) under its pose stack, which starts at the entity's position, not
     /// turned: turn it by `entity.yaw` and `entity.pitch` as the model needs. `draw` also has
     /// the partial tick, the game time and the entity's light. Asked once a frame for each entity
     /// of the type in view; what it draws replaces the type's own drawing. A frame is drawn
-    /// afresh: `draw.keep()` does nothing here. A native implementation returns `Ok(())` in the
-    /// normal case, and that keeps what it drew. Diverges: Sunrise's `submit` returns a `Result`
-    /// so a refused or trapped call is visible. An `Err`, a panic, and a wasm call that is
-    /// refused or traps all mean the same: what it drew this frame is dropped, the error is
-    /// logged once, and the renderer is asked no more until the next resource load resolves it
-    /// again; until then its type draws as it would without one.
+    /// afresh: `draw.keep()` does nothing here. `Ok(())` keeps what it drew. On an `Err` or
+    /// panic, what it drew this frame is dropped, the error is logged once, and the renderer
+    /// is asked no more until the next resource load resolves it again. Until then its type
+    /// draws as it would without a registered renderer.
     fn submit(
         &self,
         entity: &EntityRenderState,
         draw: &mut dyn BlockEntityDrawContext,
     ) -> Result<(), String>;
 }
-
-crate::wire::wire_handlers::handler!(dyn EntityRenderer, "EntityRenderer");
 
 /// The entity renderer registry `register_entity_renderers` hands out: NeoForge's
 /// `EntityRenderersEvent.RegisterRenderers`.
@@ -221,6 +219,7 @@ mod tests {
             orb_value: None,
             painting: None,
             item_frame: None,
+            attachments: None,
         };
         let (mut bolt, mut dart) = (Light::default(), Light::default());
         renderers["mymod:bolt"].submit(&state, &mut bolt).unwrap();

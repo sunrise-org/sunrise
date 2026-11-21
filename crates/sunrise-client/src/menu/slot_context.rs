@@ -19,10 +19,6 @@ impl SlotSnapshot {
     pub fn get_or_init(&self, build: impl FnOnce() -> MenuSlotContext) -> &MenuSlotContext {
         self.0.get_or_init(build)
     }
-    /// Whether the copy was built.
-    pub fn is_built(&self) -> bool {
-        self.0.get().is_some()
-    }
     pub(crate) fn clear(&mut self) {
         self.0.take();
     }

@@ -41,12 +41,8 @@ pub trait Hooks {
     /// allocated. With one, the cost is one held report for each moving player
     /// a tick.
     ///
-    /// A fault or an epoch timeout in a wasm listener answers nothing: it is
-    /// not a veto and the report is committed, like every cancellable hook; the
-    /// fault is logged, counted against the mod, and stops the mod's group for
-    /// the session. A native listener that never returns is out of scope: it
-    /// blocks the game thread like any native code, and the 20-tick deadline
-    /// covers only a report held pending across ticks. Server-side.
+    /// The 20-tick deadline covers only a report held pending across ticks.
+    /// A listener that never returns blocks the game thread. Server-side.
     #[notes = r#"## Player move
 
 - **`player_move(host, event)`**: Bukkit's `PlayerMoveEvent` for a guest's own movement, fired from `ServerGamePacketListenerImpl.handlePlayerPositionChange`'s place: after the server validated the report, before it is committed. Cancelling vetoes it; the client is sent back to the accepted position and rotation. The engine applies no threshold: a mod that wants Paper's 1/256 square block or ten degrees compares `from` and `to` itself."#]

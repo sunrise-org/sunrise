@@ -54,7 +54,7 @@ fn frame_pick_is_shared_ordered_and_refuses_stale_or_invalid_output() {
                 .reader
                 .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                 .unwrap();
-            finish_login(&mut server);
+            finish_login(game, &mut server);
             game.native_lifecycle
                 .begin_open(mod_api::Authority::RemoteClient);
             game.title = None;
@@ -203,7 +203,7 @@ fn frame_pick_without_listeners_keeps_the_vanilla_result() {
     mod_platform::testing::with_mods(Vec::new().into(), || {
         with_client_game(|game| {
             let mut server = sunrise_protocol::connection::Connection::local(logged_client(game));
-            finish_login(&mut server);
+            finish_login(game, &mut server);
             game.native_lifecycle
                 .begin_open(mod_api::Authority::RemoteClient);
             game.title = None;
@@ -234,7 +234,10 @@ fn frame_pick_without_listeners_keeps_the_vanilla_result() {
     });
 }
 
-fn finish_login(server: &mut sunrise_protocol::connection::Connection) {
+fn finish_login(
+    game: &mut crate::game::Game<'_>,
+    server: &mut sunrise_protocol::connection::Connection,
+) {
     use sunrise_protocol::packets::{Empty, configuration as cfg, login};
     server.recv().unwrap();
     server.recv().unwrap();
@@ -257,6 +260,7 @@ fn finish_login(server: &mut sunrise_protocol::connection::Connection) {
     server
         .send(&cfg::Clientbound::FinishConfiguration(Empty).encode())
         .unwrap();
+    game.acknowledge_test_configuration();
     server.recv().unwrap();
 }
 
@@ -298,7 +302,7 @@ fn with_pick_game(
             .reader
             .set_read_timeout(Some(std::time::Duration::from_secs(5)))
             .unwrap();
-        finish_login(&mut server);
+        finish_login(game, &mut server);
         game.native_lifecycle
             .begin_open(mod_api::Authority::RemoteClient);
         game.title = None;
@@ -628,6 +632,7 @@ fn a_click_on_a_cushion_with_a_synced_passenger_passes_to_the_item() {
     with_picked_cushion(|game, server, target| {
         game.refresh_client_pick(1.0);
         assert_eq!(game.crosshair_target(), Some(target));
+        game.spawn_entity(77, "minecraft:marker", [0.5, 70.0, 0.5], [0.0; 3]);
         game.handle_packet(C::SetPassengers(play::SetPassengers {
             vehicle: 31,
             passengers: vec![77],
@@ -872,7 +877,7 @@ fn rider_pick_rejects_shared_passengers_unless_their_part_allows_them() {
                     data: 0,
                 }))
                 .unwrap();
-                game.remote_set_passengers(32, &[7, 31]);
+                game.remote_set_passengers(32, vec![7, 31]);
                 game.refresh_client_pick(1.0);
                 assert_eq!(
                     matches!(game.crosshair_target(),
@@ -892,12 +897,12 @@ fn rider_pick_rejects_shared_passengers_unless_their_part_allows_them() {
                 game.refresh_client_pick(1.0);
                 assert_eq!(game.client_pick.rider_candidates.capacity(), capacity);
 
-                game.remote_set_passengers(32, &[]);
+                game.remote_set_passengers(32, vec![]);
                 game.refresh_client_pick(1.0);
                 assert!(matches!(game.crosshair_target(),
                     Some(CrosshairTarget::Entity { entity, .. }) if entity.id() == 31));
                 assert_eq!(*calls.lock().unwrap(), 2 * usize::from(subscribed));
-                game.remote_set_passengers(32, &[7, 31]);
+                game.remote_set_passengers(32, vec![7, 31]);
 
                 // AttackRange uses its own geometry, with no root-vehicle filter.
                 game.inventory[game.selected] = Some(ranged_stack());
@@ -954,7 +959,7 @@ fn rider_pick_refuses_a_camera_changed_by_its_listener() {
                 data: 0,
             }))
             .unwrap();
-            game.remote_set_passengers(32, &[7, 31]);
+            game.remote_set_passengers(32, vec![7, 31]);
             assert_eq!(game.pick_camera_id(), Some(7));
             let stone = game
                 .pack

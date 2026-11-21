@@ -8,7 +8,7 @@
 //! - `sunrise_carrier_<uuid>-<gen>.nbt`: one file per live carrier.
 //!
 //! Every file is published whole through
-//! [`sunrise_server_files::durable`]: a synced temporary, then a
+//! [`sunrise_mod_package::durable`]: a synced temporary, then a
 //! write-through move on Windows or `rename` plus a directory `fsync` on
 //! Unix. The journal holds `next_op_id`, the index of live carriers, at
 //! most one in-progress operation and tombstones, each record numbered
@@ -37,7 +37,7 @@ use sunrise_core::{
     crc32::Crc32,
     nbt::{self, JavaString, Limits, NamedTag, Tag},
 };
-use sunrise_server_files::durable;
+use sunrise_mod_package::durable;
 use sunrise_world::compression::{Compression, decode_single_gzip_member};
 
 /// The journal slot file names, in slot order.

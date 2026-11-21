@@ -7,7 +7,7 @@ use sunrise_protocol::{
 #[test]
 fn every_registered_engine_codec_refuses_a_hostile_oversized_body() {
     type Rejects = fn(&[u8]) -> bool;
-    let cases: [(&str, Rejects); 14] = [
+    let cases: [(&str, Rejects); 15] = [
         ("minecraft:brand", |body| {
             let mut packet = Writer::new();
             packet.string("minecraft:brand");
@@ -25,6 +25,9 @@ fn every_registered_engine_codec_refuses_a_hostile_oversized_body() {
         }),
         ("sunrise:attachment_sync", |body| {
             protocol::attachment_sync::decode(body).is_err()
+        }),
+        ("sunrise:connection_groups", |body| {
+            protocol::connection_groups::Section::decode(body).is_err()
         }),
         ("sunrise:menu_extra", |body| {
             protocol::menu_extra::decode(body).is_err()

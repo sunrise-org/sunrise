@@ -16,7 +16,7 @@ use std::{
 /// Finished tile meshes not uploaded yet, the tiles they replace (removed
 /// once every mesh is in) and the columns they leave out.
 #[derive(Default)]
-pub(super) struct Pending {
+pub(crate) struct Pending {
     meshes: FxHashMap<TileKey, SectionMesh>,
     /// The order they go up in: as handed over (`Lod::update`: finer tiles
     /// first, so no tile clipped around a finer one is drawn before it).
@@ -53,7 +53,7 @@ impl Pending {
 
 /// Small, its meshes boxed: `draw_frame` walks every tile each frame (thousands at long far
 /// distances), and that walk is bound by the memory it reads.
-pub(super) struct Tile {
+pub(crate) struct Tile {
     pub mesh: Box<SectionGpu>,
     bounds: Bounds,
     /// When it began to fade in; none while the rest of its job uploads.
@@ -192,7 +192,7 @@ const CELL: i32 = 128;
 /// changes it, so it is never a frame behind, and the camera moving changes
 /// nothing it holds.
 #[derive(Default)]
-pub(super) struct TileGrid {
+pub(crate) struct TileGrid {
     cells: FxHashMap<(i32, i32), Cell>,
 }
 
@@ -312,7 +312,7 @@ pub(super) fn instance(origin: [f32; 3], fade: u32) -> [f32; 4] {
     ]
 }
 
-pub(super) struct Visible {
+pub(crate) struct Visible {
     pub key: TileKey,
     pub distance: u64,
     pub origin: [f32; 3],

@@ -2,7 +2,7 @@
 //! a mod's `gui_paint`. A mod's buffer is checked first ([`undrawable`]): one op the paint
 //! cannot draw refuses the buffer, and nothing of it is drawn.
 use super::{Blend, GuiDraw, paint_with};
-use crate::hud::{HudAtlas, HudBatch};
+use crate::hud::{GuiSprite, HudAtlas, HudBatch};
 
 /// What draws a `GuiDraw::Item`: the stack of hotbar slot `slot` (0-8, 40 = the off hand).
 pub trait GuiItems {
@@ -39,16 +39,15 @@ pub fn item_slot(slot: u32) -> bool {
 }
 
 /// The first op of `draws` [`paint_checked`] cannot draw, with its index. It reads the buffer
-/// and allocates only a sprite's name, once.
+/// and allocates a sprite's name only to report its refusal.
 pub fn undrawable(atlas: &HudAtlas, draws: &[GuiDraw]) -> Option<(usize, Undrawable)> {
-    let mut name = String::new();
     draws
         .iter()
         .enumerate()
-        .find_map(|(i, d)| refusal(atlas, d, &mut name).map(|why| (i, why)))
+        .find_map(|(i, d)| refusal(atlas, d).map(|why| (i, why)))
 }
 
-fn refusal(atlas: &HudAtlas, draw: &GuiDraw, name: &mut String) -> Option<Undrawable> {
+fn refusal(atlas: &HudAtlas, draw: &GuiDraw) -> Option<Undrawable> {
     match draw {
         GuiDraw::Item {
             slot, scale, pivot, ..
@@ -64,7 +63,7 @@ fn refusal(atlas: &HudAtlas, draw: &GuiDraw, name: &mut String) -> Option<Undraw
         GuiDraw::Blit {
             texture, uv, tex, ..
         } => {
-            if !atlas.sprites.contains_key(texture.as_ref()) {
+            if atlas.blit_rect(texture.as_ref()).is_none() {
                 Some(Undrawable::BlitTexture(texture.to_string()))
             } else if tex[0] <= 0 || tex[1] <= 0 || !uv.iter().all(|v| v.is_finite()) {
                 Some(Undrawable::BlitSize)
@@ -84,19 +83,9 @@ fn refusal(atlas: &HudAtlas, draw: &GuiDraw, name: &mut String) -> Option<Undraw
             if region.is_some_and(|[sw, sh, ..]| sw <= 0 || sh <= 0) {
                 return Some(Undrawable::SpriteRegion);
             }
-            // As `paint` looks it up: a mob effect sprite (namespaced or not) by its own name,
-            // the others under `gui/sprites/`. A mod's missing effect sprite is refused, not
-            // drawn as the missing texture.
-            let effect = sprite.starts_with("mob_effect/")
-                || sprite
-                    .split_once(':')
-                    .is_some_and(|(_, path)| path.starts_with("mob_effect/"));
-            name.clear();
-            if !effect {
-                name.push_str("gui/sprites/");
-            }
-            name.push_str(sprite);
-            let known = atlas.sprites.contains_key(name.as_str());
+            // As `paint` looks it up, by GUI id. A sprite the GUI atlas lists as missing, or does
+            // not own, is refused, not drawn as the missing texture.
+            let known = matches!(atlas.gui_lookup(sprite), Some(GuiSprite::Present { .. }));
             (!known).then(|| Undrawable::Sprite(sprite.to_string()))
         }
         GuiDraw::AtlasSprite { sprite, .. } => {

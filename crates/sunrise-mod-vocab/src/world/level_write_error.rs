@@ -19,6 +19,11 @@ pub enum LevelWriteError {
     /// This placement completes a wither pattern and cannot run inside a Host transaction.
     InTransaction,
 }
+impl crate::AccessRefusal for LevelWriteError {
+    fn unavailable() -> Self {
+        Self::Unavailable
+    }
+}
 impl From<LevelReadError> for LevelWriteError {
     fn from(error: LevelReadError) -> Self {
         match error {

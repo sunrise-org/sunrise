@@ -3,8 +3,7 @@
 //! `item_stacked_on_other` (`stacked_pickup`). The trading menu builds its own and does the same
 //! in `lan_trading.rs`.
 use super::{Game, lan_crafting::input};
-use crate::game::stacked_on_other::plan_click;
-use std::rc::Rc;
+use crate::game::stacked_on_other::{Pickup, plan_click};
 use sunrise_client::menu::{Env, Input, Menu, RuleAnswers, StoredRules};
 use sunrise_protocol::packets::play;
 
@@ -14,19 +13,6 @@ pub(in crate::game) type Click = (i32, i32, Input);
 /// The click a packet makes.
 pub(in crate::game) fn click_of(p: &play::ContainerClick) -> Click {
     (i32::from(p.slot), i32::from(p.button), input(p.input))
-}
-
-/// `op` on the guest's menu, then `write_back`: the click with no decision to run inside.
-fn plain<R>(
-    game: &mut Game<'_>,
-    gi: usize,
-    menu: &mut Menu,
-    op: impl FnOnce(&mut Menu, &Env) -> R,
-    write_back: impl FnOnce(&mut Game<'_>, &mut Menu, &R),
-) -> Option<R> {
-    let ran = game.guest_menu_op(gi, menu, op)?;
-    write_back(game, menu, &ran);
-    Some(ran)
 }
 
 impl Game<'_> {
@@ -60,14 +46,36 @@ impl Game<'_> {
         op: impl FnOnce(&mut Menu, &Env) -> R,
         write_back: impl FnOnce(&mut Game<'_>, &mut Menu, &R),
     ) -> Option<R> {
+        self.guest_menu_action(gi, menu, click, prepare, |game, menu, rules, stacked| {
+            let ran = game.guest_menu_op_with(gi, menu, rules, stacked, op)?;
+            write_back(game, menu, &ran);
+            Some(ran)
+        })
+    }
+
+    /// Run an authoritative menu action with a pickup's rule answers, when it needed a decision.
+    /// The action can release the menu's `Env` between takes and continue inside the savepoint.
+    pub(super) fn guest_menu_action<R>(
+        &mut self,
+        gi: usize,
+        menu: &mut Menu,
+        click: Option<Click>,
+        prepare: Option<&dyn Fn(&mut Menu, &Env)>,
+        action: impl FnOnce(
+            &mut Game<'_>,
+            &mut Menu,
+            Option<&dyn sunrise_client::menu::SlotRules>,
+            Option<&sunrise_client::menu::StackedOutcome>,
+        ) -> Option<R>,
+    ) -> Option<R> {
         let Some((slot, button, mode)) = click.filter(|c| c.2 == Input::Pickup) else {
-            return plain(self, gi, menu, op, write_back);
+            return action(self, menu, None, None);
         };
         if !Self::stacked_listened() {
-            return plain(self, gi, menu, op, write_back);
+            return action(self, menu, None, None);
         }
-        // Plan on a copy: what the click finds, and what the slot rules say to it.
-        let answers = Rc::new(RuleAnswers::default());
+        // Freeze what the click finds on a copy; the answer determines its slot rules.
+        let answers = RuleAnswers::default();
         let mut found = None;
         let mut copy = menu.clone();
         let planned = self.guest_menu_op(gi, &mut copy, |menu, env| {
@@ -75,18 +83,15 @@ impl Game<'_> {
                 prepare(menu, env);
             }
             found = menu.stacked_click(env, slot, button, mode);
-            if found.is_some() {
-                plan_click(menu, env, slot, button, &answers);
-            }
         });
         let (Some(frozen), Some(())) = (found, planned) else {
-            return plain(self, gi, menu, op, write_back);
+            return action(self, menu, None, None);
         };
         let conn = self.lan.as_ref()?.hub.guests[gi].conn;
         let route = self.lan.as_mut()?.menus.entry(conn).or_default().hub.id();
         let mut ran = None;
         let (carried, same) = (frozen.carried.clone(), frozen.clone());
-        self.stacked_pickup(
+        let pickup = self.stacked_pickup(
             route,
             frozen,
             move |game| {
@@ -94,15 +99,25 @@ impl Game<'_> {
                 (now == carried).then(|| same.clone())
             },
             |game, answer| {
-                game.journal_guest_click(conn);
-                let rules = StoredRules(&answers);
-                ran = game.guest_menu_op_with(gi, menu, Some(&rules), answer, op);
-                if let Some(ran) = &ran {
-                    write_back(game, menu, ran);
+                if game
+                    .guest_menu_op(gi, &mut copy, |menu, env| {
+                        plan_click(menu, env, slot, button, &answers, answer);
+                    })
+                    .is_none()
+                {
+                    answer.refused.set(true);
                 }
             },
+            |game, answer| {
+                game.journal_guest_click(conn);
+                let rules = StoredRules(&answers);
+                ran = action(game, menu, Some(&rules), answer);
+            },
         );
-        ran
+        match pickup {
+            Pickup::Ran => ran,
+            Pickup::Refused => None,
+        }
     }
 
     /// Click `p` on the guest `gi`'s `menu`, after `prepare` has set the menu up as the click finds

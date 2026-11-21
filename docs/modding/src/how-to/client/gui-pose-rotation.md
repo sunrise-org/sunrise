@@ -27,4 +27,3 @@ draw.gui_paint(&[
   non-zero cosine vanilla's does.
 - **Refusal.** A NaN or infinite angle is refused: the pose stays as it was, the rest of the buffer still draws,
   and the log names it once with `E_GUI_POSE_ROTATE_NOT_FINITE`.
-- **Wire layout.** `PoseOp` gained the `Rotate` variant: rebuild wasm mods against the new SDK.

@@ -1,5 +1,9 @@
 # Design: resource-backed special item renderers
 
+> The native contract below still applies. WebAssembly mods were removed; the parts about guests are history.
+> The native contract is in “Settled on the build”; the original proposal below it is historical.
+> See [special item renderers](../../modding/src/how-to/client/special-item-renderers.md) for the current native API.
+
 Provisional answer to [#876](https://github.com/arismoko/horizon/issues/876):
 what resource-backed baked geometry and typed stack-derived state may a special
 renderer submit? Geometry belongs in resources; callbacks select and pose baked
@@ -35,7 +39,7 @@ says otherwise, this section wins; "ours" marks what Sunrise adds.
 - **Threads.** The node's `config` decodes, and models bake, on the reload's
   worker threads; extraction and drawing run on the client's main thread.
 - **Failures.** The reference doesn't catch a throw. Ours is stricter in the safe
-  direction: a renderer that errors, panics or traps is refused with one log line
+  direction: a renderer that errors or panics is refused with one log line
   naming the id, and the item draws the missing model; a decode or bake failure
   loses only that item. The callback gets a `ClientHost` (every hook gets a host).
 - **Out of scope.** The block side is a separate reference registration that runs
@@ -58,6 +62,10 @@ says otherwise, this section wins; "ours" marks what Sunrise adds.
   typed HDR tint exists (the limit `WorldQuad::color` has); it is not part of #876.
 
 ## Reference and boundary
+
+The sections below record the original proposal, including the guest route and its
+acceptance matrix. Where they differ from “Settled on the build” above, they do
+not describe the current contract.
 
 Vanilla 26.3 `SpecialModelRenderers.bootstrap` registers type identifiers and
 unbaked codecs. `SpecialModelWrapper.update` extracts an argument from the stack,

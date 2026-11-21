@@ -31,9 +31,10 @@ pub trait FluidsEnergyBackend {
     /// How much of `fluid` tank `tank` of those `at`'s side reaches holds when empty: a mod
     /// block's fillable tank its capacity, a cauldron a bucket; none for another tank, a
     /// drain-only one, or a fluid the tanks there don't take: other than water and lava, or
-    /// with components into a mod block's tanks.
+    /// with components into a mod block's tanks. `None` queries the general capacity,
+    /// represented by `u32::MAX` where no fluid-independent limit is known.
     #[access(WorldOnly)]
-    fn fluid_tank_capacity(&self, at: BlockSide, tank: usize, fluid: &FluidStack) -> u32;
+    fn fluid_tank_capacity(&self, at: BlockSide, tank: usize, fluid: Option<&FluidStack>) -> u32;
 }
 /// The handles' writes of the `fluids_energy` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

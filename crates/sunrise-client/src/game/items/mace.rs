@@ -350,9 +350,11 @@ impl Game<'_> {
         if absorbed > 0 {
             self.award_custom_stat("damage_dealt_absorbed", absorbed);
         }
+        let id = self.mobs[index].id;
         if hurt && self.mobs[index].health != old_health {
-            self.mob_damage_event(self.mobs[index].id);
+            self.mob_damage_event(id);
         }
+        self.settle_mob_hurt(id);
         hurt
     }
     /// Takes the absorbed tenths a projectile's hit left on the mobs; the shooter gets them

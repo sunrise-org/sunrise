@@ -175,7 +175,7 @@ impl SkinFrame {
 /// Jobs per row of workgroups (the dispatch limit is 65535 per dimension).
 const ROW: u32 = 32_768;
 
-pub(super) struct EntitySkin {
+pub(crate) struct EntitySkin {
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
     model: Vec<SkinVertex>,

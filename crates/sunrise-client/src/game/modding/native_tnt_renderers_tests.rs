@@ -43,7 +43,7 @@ impl EntityRenderer for Tnt {
         entity: &EntityRenderState,
         draw: &mut dyn BlockEntityDrawContext,
     ) -> Result<(), String> {
-        self.0.lock().unwrap().state = Some(*entity);
+        self.0.lock().unwrap().state = Some(entity.clone());
         raised_quad(draw, 100.0);
         Ok(())
     }
@@ -227,7 +227,7 @@ fn primed(id: u32, fuse: i32) -> super::tnt::PrimedTnt {
         velocity: Vec3::ZERO,
         fuse,
         ticks: 0,
-        on_ground: false,
+        ground: Default::default(),
         fall_distance: 0.0,
         stuck: Vec3::ZERO,
         in_water: false,
@@ -245,7 +245,13 @@ fn tnt_frame(game: &mut Game<'_>, id: u32, fuse: i32) -> Vec<Vertex> {
     game.tnts.clear();
     game.tnts.push(primed(id, fuse));
     let mut out = Vec::new();
-    game.tnt_geometry(CAMERA, ALPHA, &mut out);
+    game.tnt_geometry(
+        CAMERA,
+        ALPHA,
+        &mut out,
+        0..game.tnts.len(),
+        game.tnt_face_sprites(),
+    );
     out
 }
 
@@ -265,10 +271,13 @@ fn a_tnt_registration_resolves_to_the_tnt_slot() {
         "minecraft:tnt".to_owned(),
         Arc::new(Mark) as Arc<dyn EntityRenderer>,
     )]);
-    let (table, unknown) =
-        EntityRendererTable::resolve(&registered, &[], &Default::default(), |id| {
-            ["minecraft:tnt", "minecraft:oak_boat"].contains(&id)
-        });
+    let (table, unknown) = EntityRendererTable::resolve(
+        &registered,
+        &[],
+        &Default::default(),
+        &crate::game::general::GeneralTypeCatalog::freeze(&[]).unwrap(),
+        |id| ["minecraft:tnt", "minecraft:oak_boat"].contains(&id),
+    );
     assert!(table.tnt().is_some());
     assert_eq!(unknown, Vec::<String>::new());
 }
@@ -362,7 +371,13 @@ fn a_registered_tnt_draws_its_renderer_in_place_of_the_cube() {
             game.tnts.clear();
             game.tnts.push(tnt);
             let mut drawn = Vec::new();
-            game.tnt_geometry(CAMERA, ALPHA, &mut drawn);
+            game.tnt_geometry(
+                CAMERA,
+                ALPHA,
+                &mut drawn,
+                0..game.tnts.len(),
+                game.tnt_face_sprites(),
+            );
             assert_eq!(drawn.len(), 4, "one quad and no cube: {drawn:?}");
             // Interpolated position [1.0, 64.5, 1.5] minus CAMERA [0.5, 64.0, -4.5] is
             // [0.5, 0.5, 6.0]; the raised quad sits 100..101 above that origin, 0..1 in x, at z.
@@ -380,7 +395,12 @@ fn a_registered_tnt_draws_its_renderer_in_place_of_the_cube() {
                     "quad z at the interpolated pose: {v:?}"
                 );
             }
-            let state = heard.lock().unwrap().state.expect("the renderer was asked");
+            let state = heard
+                .lock()
+                .unwrap()
+                .state
+                .take()
+                .expect("the renderer was asked");
             assert_eq!(state.id, 91);
             assert_eq!(state.partial, 0.5);
             assert_eq!(state.age, 6.5);

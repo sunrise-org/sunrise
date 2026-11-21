@@ -47,7 +47,7 @@ fn biome_key_world_install_reload_and_unavailable_sides() {
                 assert_eq!(game.biome_key("test:nope"), None);
                 assert_eq!(
                     plains.data(game, &VillagerTypes),
-                    Ok(Some(Tag::Compound(std::collections::BTreeMap::from([(
+                    Ok(Some(Tag::Compound(sunrise_core::nbt::Compound::from([(
                         "villager_type".into(),
                         Tag::String(value.into())
                     )]))))

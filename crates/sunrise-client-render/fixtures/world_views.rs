@@ -956,6 +956,7 @@ fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
         world_primitives: Default::default(),
         shadow_only: &[],
         celestial: &[],
+        celestial_bodies: &[],
         stars: None,
         hand: &[],
         hand_items: &[],

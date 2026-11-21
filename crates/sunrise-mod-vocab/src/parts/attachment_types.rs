@@ -1,19 +1,21 @@
 //! Load-owned attachment identities. Owner declarations authorize cross-package use.
 use super::*;
 
-/// Attachment declarations shared by native and wasm registration.
+/// Attachment declarations.
 pub trait AttachmentTypesRegistrar {
-    /// Declare an explicitly namespaced attachment owned by this package.
+    /// Declare an explicitly namespaced attachment in a namespace owned by this
+    /// package (its manifest namespaces or a content package it serves via `served_by`).
     /// `has_sync_codec` means the type synchronizes to clients, not merely that
     /// it has a persistence codec. At load, declaration conflicts are checked
-    /// first, then undeclared uses, then server packages declaring true.
+    /// first, then undeclared uses, then server packages (or `side = "server"`
+    /// served namespace suppliers) declaring true.
     /// A server package may use another package's synced attachment.
     /// A refusal fails installation even when the caller ignores this result.
     fn register_attachment_type(&mut self, id: &str, has_sync_codec: bool) -> Result<(), String>;
 }
 
 /// Read-only access to the load-owned attachment registry, including without a world host.
-// hidden: generated guest metadata validation; authors use typed keys and snapshots.
+// hidden: attachment metadata lookup; authors use typed keys and snapshots.
 #[doc(hidden)]
 pub trait AttachmentDeclarations {
     fn validate_attachment_type(
@@ -32,27 +34,18 @@ pub fn validate_attachment_use(
     name: &str,
     sync: bool,
 ) -> Result<(), crate::AttachmentError> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let backend =
-            crate::dispatch_scope::backend().ok_or(crate::AttachmentError::MissingHolder)?;
-        (backend.validate_attachment_use)(namespace, name, sync)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        // Engine-owned storage work has no package identity. Every mod dispatch
-        // enters its owning package scope before reaching this boundary.
-        let Some(package) = crate::content::crash::current_native_mod() else {
-            return Ok(());
-        };
-        validate_declared_attachment(
-            installed().map(|parts| &parts.attachment_types),
-            package,
-            namespace,
-            name,
-            sync,
-        )
-    }
+    // Engine-owned storage work has no package identity. Every mod dispatch
+    // enters its owning package scope before reaching this boundary.
+    let Some(package) = crate::content::crash::current_native_mod() else {
+        return Ok(());
+    };
+    validate_declared_attachment(
+        installed().map(|parts| &parts.attachment_types),
+        package,
+        namespace,
+        name,
+        sync,
+    )
 }
 
 // Owner policy: the owner's declaration suffices for all callers.

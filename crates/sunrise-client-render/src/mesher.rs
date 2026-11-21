@@ -15,10 +15,16 @@ pub mod part_tables;
 #[cfg(test)]
 mod part_tables_tests;
 mod sides;
+mod visibility_plan;
+pub(crate) use visibility_plan::MAX_RESIDENT_VISIBILITY_BYTES;
+pub use visibility_plan::{
+    ANSWER_BYTES, Lease, PLAN_BYTES, SectionAnswer, SectionPlanBuilder, SectionVisibilityPlan,
+    capture_input, plan_section,
+};
 #[cfg(test)]
 #[path = "mesher/source_tests.rs"]
 mod source_tests;
-use crate::connected::{Pick, TileLayer};
+use crate::connected::{FaceNeighbours, Pick, TileLayer};
 use crate::{
     assets::{Assets, RenderAssets},
     biome::{Biomes, GrassModifier},
@@ -38,8 +44,9 @@ pub(crate) use sides::sort_tinted;
 pub use sides::{Part, Sides, group_parts};
 use std::sync::Arc;
 use sunrise_assets::model::Direction as ModelDirection;
+use sunrise_connected::{Axes as CtmAxes, Face as CtmFace};
 use sunrise_core::{biome::BiomeZoom, geometry::Direction, position::BlockPos};
-use sunrise_optifine::ctm::connect::{Axes as CtmAxes, Face as CtmFace};
+pub use sunrise_render_core::UV_STEPS;
 use sunrise_world::{
     block_render::FaceVisibility,
     fluid::{FluidKind, FluidState},
@@ -49,6 +56,15 @@ use sunrise_world::{
 /// `Vertex::normal` of a baked-colour quad of an `entitySolid` model: the render type culls
 /// back faces, which the entity pipelines here do not, so `entity.wgsl` discards them.
 pub const CULL_BACK: [i8; 4] = [0, 0, 0, 1];
+const _: () = {
+    assert!(CtmFace::ALL.len() == 6);
+    assert!(CtmFace::Down as u8 == ModelDirection::Down as u8);
+    assert!(CtmFace::Up as u8 == ModelDirection::Up as u8);
+    assert!(CtmFace::North as u8 == ModelDirection::North as u8);
+    assert!(CtmFace::South as u8 == ModelDirection::South as u8);
+    assert!(CtmFace::West as u8 == ModelDirection::West as u8);
+    assert!(CtmFace::East as u8 == ModelDirection::East as u8);
+};
 /// `Vertex::normal.w` of a shaded quad of an `entityCutoutCull` model (the bat): shaded by the
 /// normal like -127, and `entity.wgsl` also discards its back-facing pixels.
 pub const SHADED_CULL_W: i8 = -126;
@@ -102,8 +118,6 @@ fn round_to_u16(v: f32) -> u16 {
     let whole = v as u32;
     (whole + u32::from(v - whole as f32 >= 0.5)) as u16
 }
-/// Fixed-point steps per unit of `TerrainVertex` UVs, which span `[0, 2)`.
-pub const UV_STEPS: f32 = 32768.0;
 /// A model quad's own UVs in `TerrainVertex` fixed point, the packing
 /// `TerrainVertex::new` does, baked once per face (`BakedFace::uv_fixed`).
 pub(crate) fn baked_uv(uv: [[f32; 2]; 4]) -> [[u16; 2]; 4] {
@@ -747,8 +761,8 @@ struct Info {
     overlay: bool,
     /// `LeavesBlock`: with opaque leaves the faces between two leaf blocks are skipped.
     leaves: bool,
-    /// A glass pane: connected-texture tiles take the cube's UVs on it (OptiFine's pane models
-    /// drop vanilla's mirrored faces).
+    /// A pane-shaped block (`StateFacts::is_pane`): connected-texture tiles take the cube's
+    /// UVs on it (OptiFine's pane models drop vanilla's mirrored faces).
     pane: bool,
     /// A full opaque cube: `RenderShape::Model`, `can_occlude`, `solid_render`
     /// and a full collision shape. The only block leaf culling treats as solid.
@@ -1069,7 +1083,7 @@ impl MeshTables {
                 legacy_solid: s.legacy_solid,
                 overlay: s.has_class("HalfTransparentBlock") || s.has_class("LeavesBlock"),
                 leaves: s.has_class("LeavesBlock"),
-                pane: s.has_class("IronBarsBlock") && name.ends_with("glass_pane"),
+                pane: s.is_pane(),
                 opaque_cube: leaf_culling::opaque_cube(
                     s.render_shape,
                     s.can_occlude,
@@ -1435,10 +1449,15 @@ impl Padded {
     #[cfg(test)]
     fn new(region: &[[Option<&Chunk>; 3]; 3], sy: i32) -> Self {
         let mut pad = Self::default();
-        pad.fill(region, sy, &mut Box::new([0; 4096]));
+        pad.fill::<false>(region, sy, &mut Box::new([0; 4096]));
         pad
     }
-    fn fill(&mut self, region: &[[Option<&Chunk>; 3]; 3], sy: i32, own: &mut [u32; 4096]) {
+    fn fill<const MISSING_AS_AIR: bool>(
+        &mut self,
+        region: &[[Option<&Chunk>; 3]; 3],
+        sy: i32,
+        own: &mut [u32; 4096],
+    ) {
         self.blocks.resize(P * P * P, 0);
         self.light.resize(P * P * P, 0);
         let (blocks, light) = (&mut self.blocks, &mut self.light);
@@ -1457,10 +1476,12 @@ impl Padded {
             // Where each chunk column's cells of this layer come from, found once.
             let sources: [[Source; 3]; 3] = std::array::from_fn(|rz| {
                 std::array::from_fn(|rx| match region[rz][rx] {
+                    None if MISSING_AS_AIR => Source::Outside(0),
                     None => Source::Missing,
                     Some(c) => match c.section_at(wy) {
                         Ok(section) => Source::Section(section),
-                        Err(light) => Source::Outside(light),
+                        Err(crate::chunk::Outside::Row(section)) => Source::Row(section),
+                        Err(crate::chunk::Outside::Uniform(light)) => Source::Outside(light),
                     },
                 })
             });
@@ -1489,6 +1510,8 @@ enum Source<'a> {
     Missing,
     /// Above or below the column's sections: air with this light.
     Outside(u8),
+    /// Above or below the column's sections: air lit by the sky light of this section's bottom row.
+    Row(&'a crate::chunk::Section),
     Section(&'a crate::chunk::Section),
 }
 /// Fills one run of a padded row, `blocks.len()` cells from x = `x0`, starting
@@ -1514,6 +1537,11 @@ fn fill_run(
         Source::Outside(v) => {
             blocks.fill(0);
             light.fill(*v);
+        }
+        Source::Row(section) => {
+            blocks.fill(0);
+            section.light.copy_run(at & 255, light);
+            light.iter_mut().for_each(|l| *l &= 0xF0);
         }
         // A neighbour not loaded continues this chunk's edge column. As lit
         // air, the outermost chunks' water drew a wall toward it (fluids show
@@ -1559,13 +1587,14 @@ const OFFSETS: [isize; 6] = {
     out
 };
 /// Per-worker temporary arrays. They never hold resource-pack references or
-/// geometry still owned by the renderer, and total about 150 KiB per worker
-/// (the leaf mask adds 8,000 cells, depths and a queue).
+/// geometry still owned by the renderer. Group cells are allocated only by workers
+/// that mesh a region with group rules and data.
 #[derive(Default)]
 pub struct MeshScratch {
     padded: Padded,
     own: Option<Box<[u32; 4096]>>,
     leaf: leaf_culling::LeafMask,
+    groups: Option<GroupCells>,
     /// Per padded row (`pi(-B, y, z) / P`), bit `x + B` set where the block
     /// is `isSolidRender` (`MeshTables::solid`).
     solid_rows: Vec<u32>,
@@ -2136,6 +2165,72 @@ pub struct Mesher<'a> {
     /// no part subscribes.
     pub part_tables: &'a part_tables::PartTables,
 }
+/// A direct-indexed view using the same padded strides as states. The mask is
+/// independent of the ID, so both zero and every other u64 remain usable.
+struct GroupCells {
+    values: Box<[u64; P * P * P]>,
+    present: [u32; P * P],
+}
+
+impl GroupCells {
+    fn new() -> Self {
+        Self {
+            values: Box::new([0; P * P * P]),
+            present: [0; P * P],
+        }
+    }
+
+    fn fill(&mut self, region: &[[Option<&Chunk>; 3]; 3], base_y: i32) {
+        self.present.fill(0);
+        let span = -B..16 + B;
+        for (dz, row) in region.iter().enumerate() {
+            for (dx, chunk) in row.iter().enumerate() {
+                let Some(chunk) = chunk.filter(|c| !c.connection_groups.is_empty()) else {
+                    continue;
+                };
+                let (ox, oz) = ((dx as i32 - 1) * 16, (dz as i32 - 1) * 16);
+                let x = span.start.max(ox)..span.end.min(ox + 16);
+                let z = span.start.max(oz)..span.end.min(oz + 16);
+                let y =
+                    span.start.max(chunk.min_y() - base_y)..span.end.min(chunk.max_y() - base_y);
+                // Sparse columns cost one visit per group; dense tall columns cost at
+                // most one hash lookup per padded cell, never one per face or rule.
+                if chunk.connection_groups.len() <= x.len() * y.len() * z.len() {
+                    for (&cell, &group) in &chunk.connection_groups {
+                        let (lx, wy, lz) = chunk.dynamic_cell_coords(cell);
+                        let (xx, yy, zz) = (ox + i32::from(lx), wy - base_y, oz + i32::from(lz));
+                        if x.contains(&xx) && y.contains(&yy) && z.contains(&zz) {
+                            self.put(pi(xx, yy, zz), group);
+                        }
+                    }
+                } else {
+                    for yy in y {
+                        for zz in z.clone() {
+                            for xx in x.clone() {
+                                if let Some(group) =
+                                    chunk.connection_group(xx - ox, yy + base_y, zz - oz)
+                                {
+                                    self.put(pi(xx, yy, zz), group);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn put(&mut self, cell: usize, group: u64) {
+        self.values[cell] = group;
+        self.present[cell / P] |= 1 << (cell % P);
+    }
+
+    #[inline]
+    fn at(&self, cell: usize) -> Option<u64> {
+        (self.present[cell / P] & (1 << (cell % P)) != 0).then(|| self.values[cell])
+    }
+}
+
 impl Mesher<'_> {
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
     #[sunrise_mod_api_macros::replaceable]
@@ -2153,8 +2248,50 @@ impl Mesher<'_> {
         &mut self,
         region: &[[Option<&Chunk>; 3]; 3],
         sy: i32,
+        out: SectionMesh,
+        scratch: &mut MeshScratch,
+    ) -> SectionMesh {
+        self.mesh_masked::<_, false>(region, sy, out, scratch, &visibility_plan::NoMasks, 0)
+    }
+    /// Mesh a section prepared for `section_visibility`. The raw snapshot's missing neighbours
+    /// are nonoccluding air, whether the listeners returned a mask or abstained. `visibility_bytes`
+    /// is this section's preparation charge against its shared section-geometry ceiling.
+    pub fn mesh_planned(
+        &mut self,
+        region: &[[Option<&Chunk>; 3]; 3],
+        sy: i32,
+        out: SectionMesh,
+        scratch: &mut MeshScratch,
+        plan: Option<&SectionVisibilityPlan>,
+        visibility_bytes: usize,
+    ) -> SectionMesh {
+        match plan {
+            None => self.mesh_masked::<_, true>(
+                region,
+                sy,
+                out,
+                scratch,
+                &visibility_plan::NoMasks,
+                visibility_bytes,
+            ),
+            Some(plan) if plan.hides_terrain() => {
+                visibility_plan::hidden_terrain(self, region, sy, out)
+            }
+            Some(plan) => {
+                self.mesh_masked::<_, true>(region, sy, out, scratch, plan, visibility_bytes)
+            }
+        }
+    }
+    /// The mesher's one body: `M` is `NoMasks` on the no-mod path, a constant that compiles
+    /// every visibility step out of it.
+    fn mesh_masked<M: visibility_plan::CellMasks, const MISSING_AS_AIR: bool>(
+        &mut self,
+        region: &[[Option<&Chunk>; 3]; 3],
+        sy: i32,
         mut out: SectionMesh,
         scratch: &mut MeshScratch,
+        masks: &M,
+        visibility_bytes: usize,
     ) -> SectionMesh {
         out.clear();
         let center = region[1][1].expect("centre chunk");
@@ -2169,13 +2306,13 @@ impl Mesher<'_> {
                     self.blend_radius,
                     [center.x, center.z, base_y],
                 );
-                mod_geometry::add(self, &mut tints, &mut out);
+                mod_geometry::add(self, &mut tints, &mut out, visibility_bytes);
                 out.finish_sprite_layers();
             }
             return out;
         }
         let own = scratch.own.get_or_insert_with(|| Box::new([0; 4096]));
-        scratch.padded.fill(region, sy, own);
+        scratch.padded.fill::<MISSING_AS_AIR>(region, sy, own);
         if !self.hidden_states.is_empty() {
             for id in &mut scratch.padded.blocks {
                 if self.hidden_states[*id as usize] {
@@ -2185,6 +2322,9 @@ impl Mesher<'_> {
         }
         let pad = &scratch.padded;
         solid_rows(pad, &self.tables.solid, &mut scratch.solid_rows);
+        if M::ACTIVE {
+            visibility_plan::open_masked(masks, &mut scratch.solid_rows);
+        }
         let opaque = &scratch.solid_rows;
         let (open, hidden) = row_masks(opaque);
         out.visibility = visibility_rows(&open);
@@ -2204,6 +2344,19 @@ impl Mesher<'_> {
         let info = &self.tables.info;
         let full_faces = &self.tables.full_faces;
         let catalog = &self.render.model_catalog;
+        let groups = if self.render.connected.has_group_rules()
+            && region
+                .iter()
+                .flatten()
+                .flatten()
+                .any(|c| !c.connection_groups.is_empty())
+        {
+            let groups = scratch.groups.get_or_insert_with(GroupCells::new);
+            groups.fill(region, base_y);
+            Some(&*groups)
+        } else {
+            None
+        };
         let mut models = Vec::new();
         for y in 0..16 {
             for z in 0..16 {
@@ -2228,7 +2381,9 @@ impl Mesher<'_> {
                     if hidden[(y * 16 + z) as usize] >> x & 1 != 0 {
                         continue;
                     }
-                    if state.fluid.kind() != FluidKind::Empty {
+                    let kept = masks.at(cell);
+                    if state.fluid.kind() != FluidKind::Empty && kept & visibility_plan::FLUID != 0
+                    {
                         let start = [out.solid.len(), out.translucent.len()];
                         let water = tints.water(x, y, z);
                         let shade = (
@@ -2245,6 +2400,7 @@ impl Mesher<'_> {
                             water,
                             &mut out,
                             [x, y, z],
+                            masks,
                         );
                         if self.shader_pack {
                             out.record_source(
@@ -2253,7 +2409,7 @@ impl Mesher<'_> {
                             );
                         }
                     }
-                    if !state.model {
+                    if !state.model || kept & visibility_plan::MODEL == 0 {
                         continue;
                     }
                     let world = BlockPos::new(center.x * 16 + x, base_y + y, center.z * 16 + z);
@@ -2282,7 +2438,13 @@ impl Mesher<'_> {
                         && self.leaf_culling.is_interior()
                         && scratch.leaf.interior(self.leaf_culling, x, y, z);
                     for (d, [dx, dy, dz], opposite) in DIRECTIONS {
-                        let neighbor = pad.blocks[(cell as isize + OFFSETS[d as usize]) as usize];
+                        let next = (cell as isize + OFFSETS[d as usize]) as usize;
+                        let neighbor = pad.blocks[next];
+                        // A neighbour a mod took this face's occluder from hides nothing here.
+                        if M::ACTIVE && !visibility_plan::occludes(masks.at(next), opposite) {
+                            visible[d as usize] = true;
+                            continue;
+                        }
                         // `should_render_face`'s first test, without its lookups: a
                         // full occlusion face toward this block hides the face.
                         if full_faces[neighbor as usize] >> opposite & 1 != 0 {
@@ -2323,6 +2485,9 @@ impl Mesher<'_> {
                                 )
                                 .unwrap_or(true);
                     }
+                    if M::ACTIVE {
+                        visibility_plan::keep_faces(kept, &mut visible);
+                    }
                     let connected = &self.render.connected;
                     let start = [out.solid.len(), out.translucent.len()];
                     for model in &models {
@@ -2355,6 +2520,7 @@ impl Mesher<'_> {
                             }
                             self.face(
                                 pad,
+                                groups,
                                 &mut tints,
                                 &mut out,
                                 [x, y, z],
@@ -2378,7 +2544,7 @@ impl Mesher<'_> {
             }
         }
         if !self.tables.section_geometry.is_empty() {
-            mod_geometry::add(self, &mut tints, &mut out);
+            mod_geometry::add(self, &mut tints, &mut out, visibility_bytes);
         }
         out.finish_sprite_layers();
         out
@@ -2387,6 +2553,7 @@ impl Mesher<'_> {
     fn face(
         &self,
         pad: &Padded,
+        groups: Option<&GroupCells>,
         tints: &mut Tints,
         out: &mut SectionMesh,
         pos: [i32; 3],
@@ -2465,10 +2632,12 @@ impl Mesher<'_> {
         };
         let neighbour = |n: [i32; 3]| pad.blocks[(cell as isize + step_index(n)) as usize];
         let fused = face.fusion.and_then(|rule| {
+            let ctm_face = CtmFace::from_direction_index(q.facing as u8)
+                .expect("a model quad faces one of the six directions");
             fusion.pick(
                 rule,
                 id,
-                CtmFace::ALL[q.facing as usize],
+                ctm_face,
                 q.tint_index,
                 neighbour,
                 |s| {
@@ -2485,21 +2654,30 @@ impl Mesher<'_> {
         } else if connected.is_empty() {
             Pick::Keep
         } else {
+            let ctm_face = CtmFace::from_direction_index(q.facing as u8)
+                .expect("a model quad faces one of the six directions");
             let tints = &*tints;
             connected.pick(
                 id,
                 face.layer as u16,
-                CtmFace::ALL[q.facing as usize],
+                ctm_face,
                 [world.x, world.y, world.z],
-                neighbour,
-                || Some(tints.biome(pos[0], pos[1], pos[2])),
-                // A pane's tiles are drawn with the cube's UVs (below), so that is its texture.
-                || {
-                    if state.pane {
-                        Some(CtmAxes::cube(CtmFace::ALL[q.facing as usize]))
-                    } else {
-                        CtmAxes::texture(&q.positions, &q.uv)
-                    }
+                FaceNeighbours {
+                    state: neighbour,
+                    group: |n| {
+                        groups
+                            .and_then(|groups| groups.at((cell as isize + step_index(n)) as usize))
+                    },
+                    full_faces: |s| self.tables.full_faces[s as usize],
+                    biome: || Some(tints.biome(pos[0], pos[1], pos[2])),
+                    // A pane's tiles are drawn with the cube's UVs (below), so that is its texture.
+                    texture: || {
+                        if state.pane {
+                            Some(CtmAxes::cube(ctm_face))
+                        } else {
+                            CtmAxes::texture(&q.positions, &q.uv)
+                        }
+                    },
                 },
                 &mut push,
             )
@@ -2910,5 +3088,28 @@ mod quarter_tests {
         assert_eq!(standard_uv(D::North, [1.0, 1.0, 0.0]), [0.0, 0.0]);
         assert_eq!(standard_uv(D::East, [1.0, 0.0, 1.0]), [0.0, 1.0]);
         assert_eq!(standard_uv(D::Down, [0.0, 0.0, 1.0]), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn group_cells_index_the_padded_region_and_forget_old_values_on_reuse() {
+        let mut centre = Chunk::empty(0, 0);
+        let mut east = Chunk::empty(1, 0);
+        let mut north = Chunk::empty(0, -1);
+        centre.set_connection_group(15, 64, 0, Some(0));
+        east.set_connection_group(0, 64, 0, Some(u64::MAX));
+        north.set_connection_group(15, 63, 15, Some(88));
+        let mut region = [[None; 3]; 3];
+        region[1][1] = Some(&centre);
+        region[1][2] = Some(&east);
+        region[0][1] = Some(&north);
+        let mut cells = GroupCells::new();
+        cells.fill(&region, 64);
+        assert_eq!(cells.at(pi(15, 0, 0)), Some(0));
+        assert_eq!(cells.at(pi(16, 0, 0)), Some(u64::MAX));
+        assert_eq!(cells.at(pi(15, -1, -1)), Some(88));
+        assert_eq!(cells.at(pi(15, 1, 0)), None);
+        region[1][2] = None;
+        cells.fill(&region, 64);
+        assert_eq!(cells.at(pi(16, 0, 0)), None);
     }
 }

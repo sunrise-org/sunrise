@@ -21,7 +21,7 @@ lists every public path a mod can name it by. Types inside signatures are normal
 ## What a hash covers
 
 A record's hash covers its contract, not its `doc`, its `paths`, a hook's `engine` (where it fires) or
-`counterparts` (its names in NeoForge, Fabric and Paper), nor the wasm crossing details of a type. Each member has
+`counterparts` (its names in NeoForge, Fabric and Paper). Each member has
 its own hash, so most additions change no existing hash: a new `Host` method, a new hook, a new hook argument or a
 new field on a type change nothing for a mod that doesn't use them. A container's hash covers its members only where
 a new member breaks users:
@@ -41,21 +41,20 @@ changes nothing, one lost is named by the fit test. The document's own `hash` is
 ## What a change is
 
 `sunrise-stage surface-diff OLD NEW` compares two documents by id. A record only in the new one is added, only in the
-old one removed; in both with another hash, changed. A rename or a move to a different point path shows as a removal
-and an addition, even within the same crate. Each change is in one of four classes:
+old one removed; in both with another hash, changed. A rename or a move that changes the record's id appears as a
+removal and an addition, even within the same crate. Each change is in one of four classes:
 
 - **Breaking**: it can stop any mod that uses the item from compiling or meaning the same. A record removed; a
-  contract changed (a hook's side or kind, a retyped field or argument, a signature, a method no longer on wasm); a
+  contract changed (a hook's side or kind, a retyped field or argument, a signature); a
   variant added to an exhaustive enum; a required item added to a trait mods implement; an impl a type no longer
-  has; a behaviour removed. An injection point or published loop removed or changed is breaking.
+  has; a behaviour removed. Removing or changing a published loop is breaking.
 - **Conditional**: it breaks only some mods, which the [fit test](04-fit.md) finds from each mod's source (except a
   behaviour's `version`, which no fit report shows: a mod relies on a behaviour without naming it). A field
   added to a struct mods can build, or an argument added to a hook (only a mod that writes it out in full); a struct
   no longer constructible; a public path that goes (only a mod that writes that path); a hook's `version` (only a mod
-  whose manifest names it) or a behaviour's `version` (only a mod that relies on it); a type's wire form or layout
-  (wasm mods only).
-- **Additive**: a new API record, behaviour, injection point or published loop, or a change that only widens an item:
-  now on wasm, an impl gained, a new public path, an item no longer required, an enum no longer `#[non_exhaustive]`.
+  whose manifest names it) or a behaviour's `version` (only a mod that relies on it).
+- **Additive**: a new API record, behaviour or published loop, or a change that only widens an item:
+  an impl gained, a new public path, an item no longer required, an enum no longer `#[non_exhaustive]`.
 - **Advisory**: all listed internal changes are reported, not gated, because native internals are pinned to an exact
   build and the [fit test](04-fit.md) tells each mod whether it still fits.
 
@@ -65,12 +64,10 @@ same report for two published builds.
 
 ## CI and local audits
 
-CI exports the stable API plus injection points and published loops using `--with-points-and-loops`, then compares
-its merge base with its head. The extra records are for comparison, never shipped in the SDK's `surface.json`;
-`points.json`, `loops.json` and `internals.json` remain separate build data. The audit reads the same declarations:
+CI exports the stable API plus published loops using `--with-loops`, then compares its merge base with its head.
+Loop records are for comparison, never shipped in the SDK's `surface.json`; `loops.json` and `internals.json`
+remain separate build data. The audit reads the same declarations:
 
-- A point's id is `point:<target>`, using the function path as listed in `points.json`. Functions that refuse all API
-  listeners are not injection points. Its contract includes the published place name and signature hash.
 - A loop's id is `loop:<name>`, using its `[[native.loop]]` name. The report compares its entry path, generic method,
   slot trait and side.
 - In a local audit that includes listed internals, an internal's id is `internal:<kind>:<path>` as listed in
@@ -82,6 +79,8 @@ removals and changes, and names removed or changed items, subject to its length 
 only when:
 
 - the head's tree cannot be exported;
+- the base can be read neither by the head's `sunrise-stage` nor by the base's own (which the report builds when the
+  head's cannot read it), or the base's own writes a surface the head's cannot compare;
 - a change note cannot be read, or names an item that did not change;
 - a breaking change has no change note: every breaking record the report lists, members included (a removed field is
   its own line), must be named by a note the pull request adds. Conditional, additive and advisory changes need none.
@@ -96,14 +95,16 @@ SUNRISE_STAGE_TOOL=target/debug/sunrise-stage \
 ```
 
 `BASE` and `HEAD` are source directories, such as two Git worktrees. The option adds advisory internal changes to
-the report without changing the gate.
+the report without changing the gate. The audit only reads both trees. When this `sunrise-stage` cannot read an older
+`BASE`, add `--build-base-tool` to build `BASE`'s own `sunrise-stage` from that tree and export it with that. This
+compiles and runs `BASE`'s code, so use it only on a whole checkout you trust. The build needs POSIX file locking
+(Linux or macOS); elsewhere it refuses and the report says so.
 
 ## Command completion layouts
 
 `CommandSuggestion` now carries an optional `replace_start` byte offset into the prefix. `None` replaces the whole
 prefix; `Some(offset)` preserves the text before that offset, which must be on a UTF-8 character boundary and not
-past the prefix. This changes the type's Wire layout: wasm mods using it must rebuild against this SDK. The
-optional tooltip is retained. See [Server commands](../../how-to/entities/server-commands.md) for replacement
+past the prefix. The optional tooltip is retained. See [Server commands](../../how-to/entities/server-commands.md) for replacement
 examples and the `id` argument's `tab_complete` completion route.
 
 `CommandArgumentType::suggest` also requires the optional sender before the prefix. Providers own their sender
@@ -120,18 +121,16 @@ why = "The hook now fires on the server only."
 migrate = "Take `ServerPlayerRef` instead of `PlayerRef`."   # optional
 ```
 
-Use the exact id printed by `surface-diff`, including `point:` or `loop:` for a breaking engine catalog item. For a
-move, give the removed ids in `ids` and the replacement paths in `migrate`. For example, this is the note for the tick
-methods' move within the game crate:
+Use the exact id printed by `surface-diff`, including a published loop's `loop:` prefix. For a move, give the
+removed ids in `ids` and the replacement names in `migrate`.
 
-```toml
-ids = [
-    "point:sunrise_client::game::Game<'_>::tick_world",
-    "point:sunrise_client::game::Game<'_>::tick_mobs",
-]
-why = "Commit e0e8269d76a moved the world and mob tick methods into game::level_tick."
-migrate = "Replacement ids: point:sunrise_client::game::level_tick::Game<'_>::tick_world and point:sunrise_client::game::level_tick::Game<'_>::tick_mobs. In [[inject]], set at to the corresponding path without point: and update hash if pinned."
-```
+A note can also say that a merge already changed its ids, without a note, with `landed = "<full merge sha>"`. Its ids are
+then checked against that merge's first parent and the merge itself, not against the pull request that adds the note,
+and must have changed there: a wrong `landed` fails the report, naming the note and the id. The merge must have two
+parents, and both the merge and its first parent must use the native-only surface schema (3 or later). Put notes for
+older merges in `changes/history/`. The notes that merge brought itself count as coverage, apart from the late ones; their
+ids are not checked again for staleness, since they were when the merge landed. The pull request's own comparison
+leaves notes with `landed` out, and a note without `landed` is checked as before.
 
 The reader checks new top-level notes; a note with an unknown key, a missing `ids` or `why`, an empty `ids`, or an id
 that did not change is refused. `changes/history/` holds backfilled notes in the same format. The reader does not
@@ -154,8 +153,9 @@ tests = ["crates/sunrise-client/src/some_tests.rs::the_test_that_pins_it"]
 ```
 
 `version` starts at 1 and goes up when a mod that relies on the behaviour can see a different meaning. `tests` lists
-the tests that pin the promise, each as `<file path from the repository root>::<fn name>`; the export refuses a behaviour whose
-test has no `fn` of that name, and a malformed file, naming it. `doc` and `tests` are outside the record's hash.
+the tests that pin the promise, each as `<file path from the repository root>::<fn name>`. The export validates the
+TOML and link syntax without opening the proof files. The separate `published_behaviour_proofs_exist` test checks
+that each file parses as Rust and contains the named function. `doc` and `tests` are outside the record's hash.
 
 The diff treats a behaviour like any record: a new one is additive, a removed one is breaking (so it needs a change
 note that names `behaviour:<name>`), and a `version` change is conditional, for the mods that rely on it. Nothing in a

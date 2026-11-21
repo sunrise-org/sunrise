@@ -11,23 +11,26 @@ pub fn atlas_key_of_gui_sprite(id: &str) -> String {
 }
 
 impl HudAtlas {
-    /// `AtlasGlyphProvider`: the sprite `sprite` of the atlas named `atlas`
-    /// (`minecraft:gui` keeps its sprites under `gui/sprites/`), or the missing
-    /// sprite when that atlas has none by that name.
+    /// `AtlasGlyphProvider`: the sprite `sprite` of the atlas named `atlas`,
+    /// or the missing sprite when that atlas has none by that name.
     pub fn inline_sprite(&self, atlas: &str, sprite: &str) -> Option<Rect> {
+        self.find_inline_sprite(atlas, sprite)
+            .or_else(|| self.sprites.get(MISSING_SPRITE).copied())
+    }
+
+    /// Resolve an inline sprite without substituting the missing sprite.
+    pub fn find_inline_sprite(&self, atlas: &str, sprite: &str) -> Option<Rect> {
         let plain = sprite.strip_prefix("minecraft:").unwrap_or(sprite);
-        let gui = atlas_key_of_gui_sprite(sprite);
         let gui_atlas = atlas.strip_prefix("minecraft:").unwrap_or(atlas) == "gui";
-        let (first, second) = if gui_atlas {
-            (gui.as_str(), plain)
+        // The GUI atlas's sprites are found by GUI id; another atlas's by its packed name, then
+        // as a GUI sprite. A GUI entry the list removed or failed has no sprite to give.
+        let gui = || self.gui_present(plain).map(|(rect, _)| rect);
+        let found = if gui_atlas {
+            gui()
         } else {
-            (plain, gui.as_str())
+            self.sprites.get(plain).or_else(gui)
         };
-        self.sprites
-            .get(first)
-            .or_else(|| self.sprites.get(second))
-            .or_else(|| self.sprites.get(MISSING_SPRITE))
-            .copied()
+        found.copied()
     }
     /// `inline_sprite` for an inline atlas object; `None` for any other object.
     pub(super) fn inline_object_sprite(&self, object: &crate::text::InlineObject) -> Option<Rect> {

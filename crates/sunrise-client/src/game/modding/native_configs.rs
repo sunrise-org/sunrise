@@ -286,13 +286,23 @@ mod tests {
                 let refused =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read.entity(1)))
                         .unwrap_err();
-                assert!(refused.downcast_ref::<String>().unwrap().contains("Config"));
+                assert_eq!(
+                    refused
+                        .downcast_ref::<mod_api::__private::PhaseRefusal>()
+                        .map(|refusal| refusal.phase),
+                    Some(mod_api::__private::ModPhase::Config)
+                );
                 if let HostSide::Server(host) = &mut host {
                     let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         let _: Result<(), ()> = host.transaction(|_, _| Ok(()));
                     }))
                     .unwrap_err();
-                    assert!(refused.downcast_ref::<String>().unwrap().contains("Config"));
+                    assert_eq!(
+                        refused
+                            .downcast_ref::<mod_api::__private::PhaseRefusal>()
+                            .map(|refusal| refusal.phase),
+                        Some(mod_api::__private::ModPhase::Config)
+                    );
                 }
                 self.0.lock().unwrap().push((true, event.config.kind));
             }

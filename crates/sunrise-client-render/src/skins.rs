@@ -64,13 +64,28 @@ fn discovery_texture_uris(doc: &serde_json::Value) -> Option<Vec<String>> {
 /// `java.util.Base64.getDecoder().decode`.
 pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
     use base64::{
-        Engine,
-        engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
+        Engine, alphabet,
+        engine::{
+            DecodePaddingMode,
+            general_purpose::{GeneralPurpose, GeneralPurposeConfig},
+        },
     };
-    STANDARD
-        .decode(text)
-        .or_else(|_| STANDARD_NO_PAD.decode(text))
-        .ok()
+
+    // Java's basic decoder allows nonzero unused bits and missing padding,
+    // but if an '=' is present the padding quantum must be complete.
+    const CONFIG: GeneralPurposeConfig =
+        GeneralPurposeConfig::new().with_decode_allow_trailing_bits(true);
+    const PADDED: GeneralPurpose = GeneralPurpose::new(&alphabet::STANDARD, CONFIG);
+    const UNPADDED: GeneralPurpose = GeneralPurpose::new(
+        &alphabet::STANDARD,
+        CONFIG.with_decode_padding_mode(DecodePaddingMode::RequireNone),
+    );
+    let engine = if text.ends_with('=') {
+        &PADDED
+    } else {
+        &UNPADDED
+    };
+    engine.decode(text).ok()
 }
 
 /// `unpackTextures(property)`: the textures of a `textures` property's
@@ -1889,6 +1904,20 @@ mod tests {
             texture_hash("http://textures.minecraft.net/texture/abc.png?x=1").unwrap(),
             "abc"
         );
+    }
+
+    #[test]
+    fn base64_padding_and_unused_bits_match_the_jdk_basic_decoder() {
+        // Observed with Java 25.0.5's Base64.getDecoder(). Unused low bits
+        // in the final sextet don't contribute to the decoded output.
+        for text in ["aGm=", "aGm"] {
+            assert_eq!(base64_decode(text).as_deref(), Some(b"hi".as_slice()));
+        }
+        for text in ["Zh=", "Zh===", "Z h==", "Zg==\n"] {
+            assert!(base64_decode(text).is_none(), "{text:?}");
+        }
+        assert_eq!(base64_decode("Zh==").as_deref(), Some(b"f".as_slice()));
+        assert_eq!(base64_decode("Zh").as_deref(), Some(b"f".as_slice()));
     }
 
     /// `SkinManager.registerTextures` waits on the skin, cape and elytra

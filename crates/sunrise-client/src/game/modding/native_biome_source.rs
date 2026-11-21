@@ -134,16 +134,4 @@ mod tests {
             assert!(error.contains(expected), "{error}");
         }
     }
-
-    /// A wasm mod's registrar has only the dimension operations that cross to
-    /// wasm; its registration of a biome source stops loading, naming the source.
-    #[test]
-    #[should_panic(expected = "biome source \"chaos\": a wasm mod cannot register a biome source")]
-    fn a_wasm_mods_biome_source_is_refused_by_name() {
-        struct Guest;
-        impl mod_api::DimensionsRegistrar for Guest {
-            fn add_dimension(&mut self, _: &str, _: DimensionSettings) {}
-        }
-        mod_api::DimensionsRegistrar::add_biome_source(&mut Guest, "chaos", Arc::new(Stripes));
-    }
 }

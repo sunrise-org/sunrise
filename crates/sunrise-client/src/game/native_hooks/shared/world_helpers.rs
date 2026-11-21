@@ -170,13 +170,43 @@ impl Game<'_> {
     /// A mod's own screen closes (Escape, or `mod_screen_close`).
     pub(in crate::game) fn close_mod_screen(&mut self) {
         if self.screen == Screen::Mod {
-            self.set_screen(Screen::Playing);
+            if self.title.is_some() {
+                self.close_mod_screen_to_title();
+            } else {
+                self.set_screen(Screen::Playing);
+                self.capture(true);
+            }
             if self.screen == Screen::Mod {
-                // `screen_opening` kept it open.
+                // `screen_opening` kept it open, or opened a mod's own.
                 return;
             }
-            self.capture(true);
         }
         self.native_mod_screen = None;
+    }
+    /// `Screen.onClose`'s `setScreen(null)` with no world: the title screen
+    /// opens, asked for once as `mod` to `title`, and a mod's answer applies
+    /// as on any title screen. Told to the frame's observer, so it doesn't
+    /// announce it again.
+    fn close_mod_screen_to_title(&mut self) {
+        let decision = if self.screen_hooks_heard() {
+            let current = self.screen_change_view(Screen::Mod);
+            let none = self.screen_change_view(Screen::Playing);
+            self.decide_screen(&current, &screen_view_with_id(&none, "title"), true)
+        } else {
+            ScreenDecision::Open
+        };
+        match decision {
+            ScreenDecision::Keep => return,
+            ScreenDecision::ModScreen(mod_id) => self.apply_screen(Screen::Mod, Some(mod_id)),
+            ScreenDecision::Vanilla(target) => self.open_screen_target(target),
+            ScreenDecision::Open => {
+                if let Some(title) = self.title.as_mut() {
+                    title.open_by_id("title");
+                }
+                self.apply_screen(Screen::Playing, None);
+            }
+        }
+        self.screen_state.observed = self.observed_now();
+        self.shown_init_post();
     }
 }

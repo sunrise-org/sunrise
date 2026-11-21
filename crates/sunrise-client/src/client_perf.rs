@@ -275,11 +275,6 @@ impl ClientPerf {
     pub fn status(&self, t: f64) -> Option<CaptureStatus> {
         self.perf.status(t)
     }
-
-    /// The seconds left in the running capture's window.
-    pub fn remaining_s(&self, t: f64) -> Option<f64> {
-        self.window.map(|(end, _)| (end - t).max(0.0))
-    }
 }
 
 /// A benchmark report as the capture embeds it, minus its local-only label and paths; anything but a `sunrise-benchmark-report` is refused.

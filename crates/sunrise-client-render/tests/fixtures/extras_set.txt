@@ -11,6 +11,8 @@ mouseTweaks:false
 mouseTweaksWheel:true
 sort:false
 sortKey:key.keyboard.unknown
+shaderPackKey:key.keyboard.k
+lastShaderPack:
 chatAnimation:false
 chatIndicator:true
 noAi:false

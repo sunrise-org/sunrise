@@ -46,3 +46,24 @@ fn a_refused_arrow_reverses_without_a_hit_sound() {
         "the deflect branch plays no hit sound"
     );
 }
+
+/// A bounced arrow goes back where its tick had it, not by join number: a
+/// spawn restored ahead of the survivors leaves the live rows `[3, 1]` out of
+/// join order, and the arrow (2) that ticked before projectile 1 goes back
+/// between them, never ahead of the newer 3 or after 1.
+#[test]
+fn a_bounced_arrow_keeps_its_place_in_a_mixed_batch() {
+    let row = |id| {
+        let mut p = Projectile::new(ProjectileKind::Snowball, Vec3::new(0.0, 1.0, 0.0), None);
+        p.id = id;
+        p
+    };
+    let live = [row(3), row(1)];
+    // It ticked before 1.
+    assert_eq!(bounced_place(&live, &[1]), 1);
+    // Its first follower left the batch: the next one still listed.
+    assert_eq!(bounced_place(&live, &[9, 1]), 1);
+    // Nothing that stayed ticked after it: last.
+    assert_eq!(bounced_place(&live, &[]), 2);
+    assert_eq!(bounced_place(&live, &[9]), 2);
+}

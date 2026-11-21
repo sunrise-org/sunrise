@@ -13,8 +13,18 @@ pub(crate) fn call<T>(
         return Err(format!("{kind} owner is disabled"));
     }
     let _guard = crate::mark_mod(owner, operation);
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(invoke)).map_err(|_| {
-        poisoned.store(true, Ordering::Release);
-        format!("{kind} callback panicked; it is disabled")
-    })
+    // A refusal by the phase gate refuses this call and nothing more; a real panic disables the owner.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::world::phase_refusal::contain_refusal(owner, invoke)
+    })) {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(refusal)) => {
+            refusal.report();
+            Err(format!("{kind} callback refused: {refusal}"))
+        }
+        Err(_) => {
+            poisoned.store(true, Ordering::Release);
+            Err(format!("{kind} callback panicked; it is disabled"))
+        }
+    }
 }

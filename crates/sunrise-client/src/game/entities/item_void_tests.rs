@@ -49,7 +49,7 @@ fn items_fall_to_each_dimensions_own_void_floor() {
                 "{dim:?}: an item at y {y}, against the floor {floor}"
             );
             let mut saved = HashMap::new();
-            game.save_every_entity(&keys, &mut saved);
+            game.save_every_entity(&keys, &mut saved, false);
             assert_eq!(
                 saved.values().map(Vec::len).sum::<usize>() > 0,
                 survives,

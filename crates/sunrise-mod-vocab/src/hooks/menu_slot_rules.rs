@@ -20,7 +20,7 @@ pub trait Hooks {
     /// copy of the menu's own containers' slots, keyed by the same container
     /// (`context.slot(container, index)`), built once per click plan and
     /// filled the same on the server and on the client's prediction. Parts that read `context.setting(..)` or `side()` have no
-    /// counterpart on the Host. Named injections request `hook_version = 5`.
+    /// counterpart on the Host.
     /// A client without this mod predicts vanilla here; the server corrects it.
     ///
     /// `may_pickup` is `Slot.mayPickup`, answered only for a registered mod
@@ -46,7 +46,7 @@ pub trait Hooks {
     /// answering both. A shift-click a part answers with `menu_quick_move` is
     /// asked the pickup rule before that hook.
     /// Parts that read `context.setting(..)` or `side()` have no counterpart
-    /// on the Host. Named injections request `hook_version = 5`.
+    /// on the Host.
     #[hook(
         side = "both",
         contract = "listen",

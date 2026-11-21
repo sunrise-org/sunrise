@@ -409,17 +409,16 @@ impl<const N: usize> Codec<String> for StrN<N> {
 }
 /// Identifier.STREAM_CODEC: a validated resource location, with the default namespace.
 pub struct Ident;
-impl Codec<String> for Ident {
-    fn read(r: &mut Reader) -> Result<String> {
-        let value = r.string(32767)?;
-        // A namespaced identifier (what vanilla writes) goes back as read.
-        let qualified = value.find(':').is_some_and(|i| i > 0);
-        let (namespace, path) = value.split_once(':').unwrap_or(("", &value));
-        let namespace = if namespace.is_empty() {
-            "minecraft"
-        } else {
-            namespace
-        };
+impl Ident {
+    /// Borrow the validated spelling on the wire. An empty namespace still denotes `minecraft`.
+    pub(crate) fn read_borrowed<'a>(r: &mut Reader<'a>) -> Result<&'a str> {
+        const MAX: usize = 32767;
+        let len = r.count(MAX * 3)?;
+        let value = r.bytes(len)?;
+        // All valid identifiers are ASCII, so byte and UTF-16 unit counts agree.
+        let value =
+            std::str::from_utf8(value).map_err(|_| Error::new("invalid resource identifier"))?;
+        let (namespace, path) = value.split_once(':').unwrap_or(("", value));
         if !namespace
             .bytes()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_.-".contains(&c))
@@ -429,10 +428,20 @@ impl Codec<String> for Ident {
         {
             return Err(Error::new("invalid resource identifier"));
         }
-        if qualified {
-            return Ok(value);
+        if value.len() > MAX {
+            return Err(Error::new(format!("string longer than {MAX} chars")));
         }
-        Ok(format!("{namespace}:{path}"))
+        Ok(value)
+    }
+}
+impl Codec<String> for Ident {
+    fn read(r: &mut Reader) -> Result<String> {
+        let value = Self::read_borrowed(r)?;
+        match value.split_once(':') {
+            Some(("", path)) => Ok(format!("minecraft:{path}")),
+            Some(_) => Ok(value.to_owned()),
+            None => Ok(format!("minecraft:{value}")),
+        }
     }
     fn write(v: &String, w: &mut Writer) {
         w.string(v)
@@ -651,12 +660,6 @@ impl LpVec3 {
     }
     fn pack(v: f64) -> u64 {
         ((v * 0.5 + 0.5) * 32766.0).round() as u64
-    }
-    /// `v` as a reader decodes it after it was written.
-    pub fn quantize(v: [f64; 3]) -> [f64; 3] {
-        let mut w = Writer::new();
-        Self::write(&v, &mut w);
-        Self::read(&mut Reader::new(&w.data)).unwrap_or([0.0; 3])
     }
     fn sanitize(v: f64) -> f64 {
         if v.is_nan() {

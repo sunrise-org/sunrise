@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""State-digest scene with players: BINARY RESOURCES TEMPLATE OUT BOTS [--integrated] [--nether] [--detail] [--ticks N] [--no-digest], or --compare OUT_A OUT_B; template from `state_digest_scene.py --generate`, gate in SUNRISE_SCENE_GATE."""
+"""State-digest scene with players: BINARY RESOURCES TEMPLATE OUT BOTS [--integrated] [--nether] [--detail] [--ticks N] [--no-digest] [--coverage], or --compare OUT_A OUT_B; template from `state_digest_scene.py --generate`, gate in SUNRISE_SCENE_GATE. --coverage adds the base scene's coverage commands, stands Alice in its village and Bob south of it, makes both immune to damage, gives Alice a returning Loyalty trident, defaults --ticks to 2500 and fails when a spot of coverage.txt is missed; its digest is not reproducible run to run, so only its spots are checked."""
 import json
 import os
 import re
@@ -14,6 +14,7 @@ from pathlib import Path
 
 import lab
 import state_digest_scene as base
+from state_digest_compare import compare_coverage
 
 STATE_PATHS = ('Pos', 'Health', 'foodLevel', 'XpLevel', 'XpTotal', 'Inventory', 'active_effects[0].id', 'active_effects[1].id', 'Dimension')
 PLAYERS = ['Alice0', 'Bob0']  # dedicated: two scripted bots; integrated: Alice0 joins the host's LAN
@@ -26,13 +27,30 @@ def free_port():
         return s.getsockname()[1]
 
 
-def player_commands(names, nether):
+NETHER_SPOT = (8.5, 70, 8.5)  # Bob's spot with --nether
+
+
+def spots(coverage):
+    """Where Alice and Bob stand (x, z): among the mobs, or (--coverage) Alice by the village bell and Bob south of the village."""
+    vx, vz = base.VILLAGE
+    return ((vx - 0.5, vz + 1.5), (vx + 1.5, vz + 21.5)) if coverage else ((16.5, 9.5), (66.5, 61.5))
+
+
+def stand(coverage, nether):
+    """Each player's (x, y, z, dimension) once the scene put them there."""
+    (ax, az), (bx, bz) = spots(coverage)
+    bob = (*NETHER_SPOT, 'minecraft:the_nether') if nether else (bx, base.Y, bz, 'minecraft:overworld')
+    return (ax, base.Y, az, 'minecraft:overworld'), bob
+
+
+def player_commands(names, nether, coverage=False):
     """The scene after the bots joined: each one among the mobs, hurt, fed, given items and a pickup, one in the Nether."""
     a, b = names[0], names[-1]
     y = base.Y
+    (ax, az), (bx, bz) = spots(coverage)
     commands = [
         f'gamemode survival {a}', f'gamemode survival {b}',
-        f'tp {a} 16.5 {y} 9.5', f'tp {b} 66.5 {y} 61.5',
+        f'tp {a} {ax} {y} {az}', f'tp {b} {bx} {y} {bz}',
         f'give {a} minecraft:iron_sword', f'give {a} minecraft:bread 16', f'give {a} minecraft:cooked_beef 8',
         f'give {b} minecraft:diamond_pickaxe', f'give {b} minecraft:cobblestone 64', f'give {b} minecraft:oak_planks 32',
         f'item replace entity {a} armor.chest with minecraft:iron_chestplate',
@@ -43,24 +61,43 @@ def player_commands(names, nether):
         f'setblock 66 {y} 58 minecraft:chest{{Items:[{{Slot:0b,id:"minecraft:apple",count:5}}]}}',
         f'setblock 64 {y} 58 minecraft:furnace',
         f'setblock 70 {y} 65 minecraft:crafting_table',
-        f'time set 1000',
+        f'time set {base.DAY_TIME if coverage else 1000}',
     ]
     if nether:
-        commands.append(f'execute in minecraft:the_nether run tp {b} 8.5 70 8.5')
+        commands.append(f'execute in minecraft:the_nether run tp {b} {NETHER_SPOT[0]} {NETHER_SPOT[1]} {NETHER_SPOT[2]}')
+    if coverage:  # the run is long enough for the hostiles and the TNT to kill a standing bot
+        commands += [f'effect give {n} minecraft:resistance infinite 4 true' for n in names]
     return commands
 
 
-def near_player_commands():
-    """After the settle (a wall-clock number of frozen ticks in which players act): randoms pinned, then what reaches them."""
-    y = base.Y
-    return [
+def near_player_commands(at, owner=None):
+    """After the settle (frozen ticks in which players act): randoms pinned, then what reaches each player at `at` (`stand`), and Alice's Loyalty trident when `owner` (her UUID ints) is given."""
+    def put(spot, what, dx, dy, dz, data=''):
+        x, y, z, dim = spot
+        command = f'summon minecraft:{what} {x + dx:.1f} {y + dy} {z + dz:.1f}' + (f' {data}' if data else '')
+        return command if dim == 'minecraft:overworld' else f'execute in {dim} run {command}'
+    alice, bob = at[0], at[-1]
+    commands = [
         f'digest-sync {base.SYNC[0]} {base.SYNC[1] + 1000} {base.SYNC[2]}',
-        f'summon minecraft:item 17.5 {y + 1} 9.5 {{Item:{{id:"minecraft:emerald",count:3}}}}',
-        f'summon minecraft:experience_orb 15.5 {y + 1} 10.5 {{Value:7s}}',
-        f'summon minecraft:zombie 20.5 {y} 9.5', f'summon minecraft:skeleton 12.5 {y} 12.5',
-        f'summon minecraft:zombie 70.5 {y} 61.5', f'summon minecraft:spider 62.5 {y} 58.5',
-        f'summon minecraft:tnt 66.5 {y} 64.5 {{fuse:60s}}',
+        put(alice, 'item', 1, 1, 0, '{Item:{id:"minecraft:emerald",count:3}}'),
+        put(alice, 'experience_orb', -1, 1, 1, '{Value:7s}'),
+        put(alice, 'zombie', 4, 0, 0), put(alice, 'skeleton', -4, 0, 3),
+        put(bob, 'zombie', 4, 0, 0), put(bob, 'spider', -4, 0, -3),
+        put(bob, 'tnt', 0, 0, 3, '{fuse:60s}'),
     ]
+    if owner:
+        loyal = '{"minecraft:enchantments":{"minecraft:loyalty":3}}'
+        commands.append(put(alice, 'trident', 2, 4, -1, f'{{Tags:["cov_loyal"],pickup:1b,Owner:[I;{",".join(map(str, owner))}],'
+                                                       f'item:{{id:"minecraft:trident",count:1,components:{loyal}}},Motion:[0.0d,-1.0d,0.0d]}}'))
+    return commands
+
+
+def uuid_ints(lines):
+    """The four ints of a `data get entity <player> UUID` reply."""
+    match = re.search(r'\[I;\s*(-?\d+),\s*(-?\d+),\s*(-?\d+),\s*(-?\d+)\]', '\n'.join(lines))
+    if not match:
+        raise SystemExit('no UUID in:\n' + '\n'.join(lines))
+    return [int(v) for v in match.groups()]
 
 
 class Bots:
@@ -153,6 +190,10 @@ def compare(a, b):
                 print('no stepped tick digested in this level (frozen ticks only)')
                 continue
             status |= subprocess.run([sys.executable, Path(__file__).with_name('state_digest_compare.py'), *paths]).returncode
+    coverage = compare_coverage(a, b)
+    if coverage:
+        print('\n'.join(coverage[0]))
+        status |= 0 if coverage[1] else 1
     same = (a / 'players.txt').read_text() == (b / 'players.txt').read_text()
     print('== players\n' + ('identical' if same else 'different (the settle\'s frozen ticks vary run to run; not a failure)'))
     return status
@@ -173,22 +214,29 @@ def run_dedicated(args, home, out, timings):
     (run_dir / 'eula.txt').write_text('eula=true\n')
     shutil.copytree(template / 'world', run_dir / 'world')
     (run_dir / 'world' / 'session.lock').unlink(missing_ok=True)
+    coverage = '--coverage' in sys.argv
+    if coverage:
+        base.seed_coverage_world(run_dir / 'world')
     digest = None if '--no-digest' in sys.argv else out / 'digest.txt'
     server = base.Server(binary, resources, run_dir, lab.game_env(base.scratch_env(home, digest, '--detail' in sys.argv)), freeze=True)
     players = Bots(bots, port, out)
-    ticks = int(sys.argv[sys.argv.index('--ticks') + 1]) if '--ticks' in sys.argv else 200
+    ticks = base.default_ticks()
+    nether = '--nether' in sys.argv
+    missed = []
     try:
         server.wait_for('Done (')
         server.run(['forceload query'])
         time.sleep(3)
-        server.run(base.scene_commands(False))
+        server.run(base.scene_commands(False, coverage))
         players.join(server, 'Alice')
         players.join(server, 'Bob')
-        server.run(player_commands(PLAYERS, '--nether' in sys.argv))
-        settle(server, PLAYERS, [(16.5, 9.5), (66.5, 61.5) if '--nether' not in sys.argv else (8.5, 8.5)])
-        if '--nether' in sys.argv:
-            wait_loaded(server, 'minecraft:the_nether', (8, 70, 8))
-        server.run(near_player_commands())
+        server.run(player_commands(PLAYERS, nether, coverage))
+        at = stand(coverage, nether)
+        settle(server, PLAYERS, [(x, z) for x, _, z, _ in at])
+        if nether:
+            wait_loaded(server, 'minecraft:the_nether', tuple(int(v) for v in NETHER_SPOT))
+        owner = uuid_ints(server.run([f'data get entity {PLAYERS[0]} UUID'])) if coverage else None
+        server.run(near_player_commands(at, owner))
         before = server.game_time()
         start = time.time()
         server.run(['tick rate 10000', f'tick step {ticks}'])
@@ -196,9 +244,17 @@ def run_dedicated(args, home, out, timings):
             time.sleep(0.05)
         timings['step_seconds'] = time.time() - start
         (out / 'players.txt').write_text(final_state(server))
+        if coverage:
+            lines, missed = base.coverage_checks(server.run, run_dir / 'world', PLAYERS[0])
     finally:
         players.stop()
         server.stop()
+    if coverage:
+        more, also = base.pickup_stat_check(run_dir / 'world', PLAYERS[0], base.uuid_text(owner))
+        (out / 'coverage.txt').write_text('\n'.join(lines + more) + '\n')
+        missed += also
+    if missed:
+        raise SystemExit(f'--coverage missed: {", ".join(missed)} (see {out / "coverage.txt"})')
 
 
 def ctl_run(ctl, socket_path, env, cwd, *words, timeout=600):
@@ -219,8 +275,12 @@ def run_integrated(args, home, out, timings):
     if work.exists():
         shutil.rmtree(work)
     (work / 'game' / 'saves').mkdir(parents=True)
-    shutil.copytree(template / 'world', work / 'game' / 'saves' / 'T')
-    (work / 'game' / 'saves' / 'T' / 'session.lock').unlink(missing_ok=True)
+    world = work / 'game' / 'saves' / 'T'
+    shutil.copytree(template / 'world', world)
+    (world / 'session.lock').unlink(missing_ok=True)
+    coverage = '--coverage' in sys.argv
+    if coverage:
+        base.seed_coverage_world(world)
     digest = None if '--no-digest' in sys.argv else out / 'digest.txt'
     env = lab.game_env(base.scratch_env(home, digest, '--detail' in sys.argv), SUNRISE_HOME=work / 'home')
     sock = work / 'c.sock'
@@ -234,7 +294,8 @@ def run_integrated(args, home, out, timings):
     run('launch', '--world', 'T', '--headless', '--wait', '--game', binary, '--game-dir', work / 'game', '--resources', resources)
     bot_log = open(out / 'bot-Alice.log', 'w')
     players = Bots(bots, None, out)
-    ticks = int(sys.argv[sys.argv.index('--ticks') + 1]) if '--ticks' in sys.argv else 200
+    ticks = base.default_ticks()
+    missed = []
     try:
         run('wait-ready', 400)
         command('tick freeze')
@@ -248,7 +309,7 @@ def run_integrated(args, home, out, timings):
             timings['digest_sync'] = 'ok'
         except SystemExit as e:
             timings['digest_sync'] = f'unavailable on the integrated server, so its digest is not comparable run to run: {e}'
-        for line in base.scene_commands(False)[1:]:
+        for line in base.scene_commands(False, coverage)[1:]:
             command(line)
         players.processes.append(subprocess.Popen(
             [bots, '--server', f'127.0.0.1:{port}', '--bots', '1', '--behaviour', 'stand', '--name', 'Alice', '--seconds', '3600',
@@ -258,9 +319,10 @@ def run_integrated(args, home, out, timings):
             if time.time() > deadline:
                 raise SystemExit('Alice0 did not join the LAN')
             time.sleep(0.5)
-        for line in player_commands(['Alice0'], False):
+        for line in player_commands(['Alice0'], False, coverage):
             command(line)
-        for line in near_player_commands()[1:]:
+        owner = uuid_ints([json.dumps(command('data get entity Alice0 UUID'))]) if coverage else None
+        for line in near_player_commands(stand(coverage, False), owner)[1:]:
             command(line)
         host = run('lan', 'status').get('host', 'Player')
         command(f'tp {host} 40.5 {base.Y} 40.5')
@@ -274,12 +336,20 @@ def run_integrated(args, home, out, timings):
             time.sleep(0.05)
         timings['step_seconds'] = time.time() - start
         (out / 'players.txt').write_text(integrated_state(command, host).replace(host, 'HOST'))
+        if coverage:
+            lines, missed = base.coverage_checks(lambda cs: [json.dumps(command(c)) for c in cs], world, 'Alice0')
     finally:
         players.stop()
         try:
             run('quit')
         except SystemExit:
             pass
+    if coverage:
+        more, also = base.pickup_stat_check(world, 'Alice0', base.uuid_text(owner))
+        (out / 'coverage.txt').write_text('\n'.join(lines + more) + '\n')
+        missed += also
+    if missed:
+        raise SystemExit(f'--coverage missed: {", ".join(missed)} (see {out / "coverage.txt"})')
 
 
 def game_time(command):

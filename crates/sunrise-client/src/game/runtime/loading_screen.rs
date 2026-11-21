@@ -65,7 +65,7 @@ pub(super) struct Loading {
     /// The bar as drawn, easing toward `progress` (`LoadingOverlay.currentProgress`).
     pub(super) bar: f32,
     pub(super) receiver: Receiver<LoaderMsg>,
-    pub(super) loaded: Option<std::result::Result<Loaded, String>>,
+    pub(super) loaded: Option<std::result::Result<Loaded, super::resource_loader::LoaderFailure>>,
     /// The loader's `Done` arrived: its channel closing afterwards is expected.
     pub(super) delivered: bool,
     pub(super) handle: Option<JoinHandle<()>>,
@@ -82,6 +82,11 @@ pub(super) struct Loading {
 /// world renderer anyway (a hidden window may never be asked to redraw).
 pub(super) const TITLE_FRAME_WAIT: Duration = Duration::from_secs(1);
 impl Loading {
+    /// Reconstitute the main-thread error without erasing declaration refusals.
+    pub(super) fn take_worker_result(&mut self) -> Option<Result<Loaded>> {
+        self.loaded.take().map(|result| result.map_err(Into::into))
+    }
+
     /// The world renderer is built on the main thread, so building it before
     /// the title is on the screen holds the title back by that build. Wait for
     /// one title frame first, unless a world is waiting to open.
@@ -103,8 +108,9 @@ impl Loading {
             .map_or([1280, 720], |o| o.window_size)
             .map(f64::from);
         self.fullscreen = sunrise_client::window::FullscreenState::new(fullscreen);
-        let attributes =
-            sunrise_client::window::with_icon(Window::default_attributes().with_title("Sunrise"));
+        let attributes = sunrise_client::window::with_icon(
+            Window::default_attributes().with_title(super::window_title::base()),
+        );
         // Wayland names the window by its app id, which the horizon.desktop entry matches.
         #[cfg(target_os = "linux")]
         let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(
@@ -456,10 +462,10 @@ impl ApplicationHandler for App {
                 match if loading.menu.reload_packs || !loading.ready_for_handoff() {
                     None
                 } else {
-                    loading.loaded.take()
+                    loading.take_worker_result()
                 } {
                     None => Step::Waiting,
-                    Some(Err(e)) => Step::Failed(e.into()),
+                    Some(Err(e)) => Step::Failed(e),
                     Some(Ok(loaded)) => match loading.finish(loaded) {
                         Ok(Some(game)) => Step::Ready(Box::new(game)),
                         Ok(None) => Step::Done,

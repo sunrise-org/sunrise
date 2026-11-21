@@ -1,1 +1,0 @@
-The tickets one controller loaded, as `validate_tickets` hands them out (NeoForge's `TicketHelper`, one for each controller).

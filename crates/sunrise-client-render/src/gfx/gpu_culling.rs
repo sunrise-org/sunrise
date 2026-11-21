@@ -91,7 +91,7 @@ use std::{
 /// One section (`gpu_culling.wgsl`'s `Section`).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub(super) struct Record {
+pub(crate) struct Record {
     /// Section x, y (from the level's bottom), z and arena page; -1: a free id.
     key: [i32; 4],
     /// The first vertex of its solid quads (a draw's base vertex, an i32: a
@@ -338,7 +338,7 @@ const TEST_READ: wgpu::BufferUsages = if cfg!(test) {
 
 /// What a frame's pass works from.
 #[derive(Clone, Copy)]
-pub(super) struct FrameInputs<'a> {
+pub(crate) struct FrameInputs<'a> {
     pub(super) camera: DVec3,
     /// The level's lowest block y and its height in sections.
     pub(super) min_y: i32,
@@ -418,7 +418,7 @@ impl<'a> FrameInputs<'a> {
 
 /// What `GpuCulling::prepare` made of a frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Prepared {
+pub(crate) enum Prepared {
     /// The pass is ready: `dispatch` it, and `draw`.
     Gpu,
     /// The frame's frustum planes would leave the test's integers (`HEADROOM`),
@@ -678,7 +678,7 @@ impl Grown {
 /// The section table as the CPU keeps it, by id, and what changed since
 /// `GpuCulling::prepare` last wrote it.
 #[derive(Default)]
-pub(super) struct Records {
+pub(crate) struct Records {
     records: Vec<Record>,
     /// Free ids below the table's end, a bit each (64 a word, lowest bit first).
     free: Vec<u64>,
@@ -851,7 +851,7 @@ impl Records {
 /// until a frame has decided them, just after GPU culling was switched on.
 /// The ends of sections that went or were handed back are skipped as they come.
 #[derive(Default)]
-pub(super) struct Fades {
+pub(crate) struct Fades {
     due: BinaryHeap<Reverse<(Instant, SectionKey)>>,
     pub fade_ms: Option<u64>,
 }
@@ -1036,7 +1036,7 @@ impl BoxTest {
 
 /// The pass, its buffers and the records it draws from: made when GPU culling
 /// is switched on, dropped when it is switched off.
-pub(super) struct GpuCulling {
+pub(crate) struct GpuCulling {
     /// `gpu_culling.wgsl`'s entry points: apply, cull, scan, scatter.
     pipelines: [wgpu::ComputePipeline; 4],
     layout: wgpu::BindGroupLayout,
@@ -1631,12 +1631,10 @@ impl GpuCulling {
     /// The statistics that came back, their readbacks freed: the newest
     /// frame's, as (frame, [sections drawn, section draws, draw calls]), the
     /// pass's counts added to the CPU's part. Called as a frame starts, so a
-    /// copy no submission took (a frame that failed on the way) is dropped.
-    pub fn collect(&mut self, device: &wgpu::Device) -> Option<(u64, [usize; 3])> {
+    /// copy no submission took (a frame that failed on the way) is dropped. The caller polls
+    /// the device first (the frame's one poll, `Renderer::draw_frame`).
+    pub fn collect(&mut self) -> Option<(u64, [usize; 3])> {
         self.current = None;
-        if device.poll(wgpu::PollType::Poll).is_err() {
-            return None;
-        }
         let mut newest: Option<(u64, [usize; 3])> = None;
         for r in &self.readbacks {
             if r.state.load(Ordering::Acquire) != MAPPED {
@@ -3049,7 +3047,13 @@ mod tests {
             }
             let whole = gpu.records.all_dirty;
             if let Some(t) = &mut timing {
-                t.begin(device, queue);
+                t.begin(
+                    device,
+                    queue,
+                    &std::sync::atomic::AtomicBool::new(false),
+                    super::super::in_flight::poll_live,
+                )
+                .unwrap();
             }
             let mut encoder = device.create_command_encoder(&Default::default());
             let input = FrameInputs::new(camera, min_y, height, radius, &frustum)
@@ -3175,7 +3179,7 @@ mod tests {
             // The reads above waited for the GPU.
             let (kept, drawn) = (kept_sections as usize, draw_count as usize);
             assert_eq!(
-                gpu.collect(device),
+                gpu.collect(),
                 Some((case as u64, [cpu[0] + kept, cpu[1] + drawn, cpu[2]])),
                 "case {case}: statistics"
             );
@@ -3255,7 +3259,13 @@ mod tests {
                 let mut out = Vec::new();
                 for frame in 0..12 {
                     if let Some(t) = timing {
-                        t.begin(device, queue);
+                        t.begin(
+                            device,
+                            queue,
+                            &std::sync::atomic::AtomicBool::new(false),
+                            super::super::in_flight::poll_live,
+                        )
+                        .unwrap();
                     }
                     let mut encoder = device.create_command_encoder(&Default::default());
                     let input = FrameInputs::new(DVec3::new(0.5, 70.0, 0.5), -64, 24, 5, &frustum)
@@ -3342,6 +3352,7 @@ mod tests {
                         encoder,
                         surface: None,
                         after,
+                        lost: None,
                     };
                     if let Err(back) = queue.submit_later(job) {
                         queue.submit([back.encoder.finish()]);
@@ -3354,14 +3365,14 @@ mod tests {
                 let landed = |gpu: &mut GpuCulling| {
                     queue.landed();
                     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-                    gpu.collect(device)
+                    gpu.collect()
                 };
                 for f in 1..=3 {
                     assert!(frame(&mut gpu, f), "frame {f}, threaded {threaded}");
                 }
                 assert!(!frame(&mut gpu, 4), "a full ring, threaded {threaded}");
                 assert_eq!(landed(&mut gpu), Some((3, [3 + 5, 10 + 7, 3])));
-                assert_eq!(gpu.collect(device), None);
+                assert_eq!(gpu.collect(), None);
                 assert!(frame(&mut gpu, 5));
                 assert_eq!(landed(&mut gpu), Some((5, [5 + 5, 10 + 7, 3])));
                 // Frame 6's buffer destroyed after its mapping (#6320).
@@ -3370,7 +3381,7 @@ mod tests {
                 queue.landed();
                 device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
                 gpu.readbacks[lost].buffer.destroy();
-                assert_eq!(gpu.collect(device), None);
+                assert_eq!(gpu.collect(), None);
                 for f in 7..=12 {
                     let sent = frame(&mut gpu, f);
                     let back = landed(&mut gpu);

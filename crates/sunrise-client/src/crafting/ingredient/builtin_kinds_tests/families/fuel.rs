@@ -397,7 +397,7 @@ fn compostable_layers_compile_real_recipes_and_match_borrowed_values() {
     let mut items = Items::empty();
     items.component_defaults = std::sync::Arc::new(std::collections::HashMap::from([(
         "minecraft:apple".into(),
-        std::collections::BTreeMap::from([(
+        sunrise_core::nbt::Compound::from([(
             COMPONENT.into(),
             Tag::compound([("layers", Tag::Short(2)), ("ignored", Tag::Byte(1))]),
         )]),
@@ -625,7 +625,7 @@ fn food_codec_compiles_recipes_and_matches_borrowed_values() {
     let mut items = Items::empty();
     items.component_defaults = std::sync::Arc::new(std::collections::HashMap::from([(
         "minecraft:apple".into(),
-        std::collections::BTreeMap::from([(
+        sunrise_core::nbt::Compound::from([(
             COMPONENT.into(),
             Tag::compound([
                 ("nutrition", Tag::Long(4_294_967_300)),

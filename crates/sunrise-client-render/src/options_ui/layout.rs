@@ -49,6 +49,7 @@ impl OptionsUi {
         w: f32,
         h: f32,
     ) -> std::sync::Arc<OptionsLayout> {
+        self.refresh_added_rows();
         // The scroll is an input too: a drag, the wheel or a focus move can
         // change it without a revision bump, and the rows move with it.
         let key = (w, h, self.rev, self.scroll.to_bits());

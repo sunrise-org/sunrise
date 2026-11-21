@@ -729,29 +729,63 @@ impl PacketNames<'_> {
     /// The stacks a slot display shows, in order (`SlotDisplay.resolveForStacks`):
     /// what a display builds from a component or a dye is not reproduced, it
     /// shows its source.
-    fn stacks(&self, display: &SlotDisplay, out: &mut Vec<ItemStack>) {
+    fn stacks(
+        &self,
+        display: &SlotDisplay,
+        out: &mut Vec<ItemStack>,
+        decode_stack: &impl Fn(&sunrise_protocol::item::Stack) -> Option<ItemStack>,
+    ) {
         match display {
             SlotDisplay::Empty | SlotDisplay::AnyFuel => {}
             SlotDisplay::Item(id) => out.extend((self.item)(*id).map(|n| ItemStack::new(&n, 1))),
-            SlotDisplay::ItemStack(stack) => out.extend(
-                (self.item)(stack.item).map(|n| ItemStack::new(&n, stack.count.max(1) as u32)),
-            ),
+            SlotDisplay::ItemStack(stack) => out.extend(decode_stack(stack)),
             SlotDisplay::Tag(set) => {
                 out.extend(self.holder_set(set).iter().map(|n| ItemStack::new(n, 1)))
             }
             SlotDisplay::WithAnyPotion(source) | SlotDisplay::OnlyWithComponent(source, _) => {
-                self.stacks(source, out)
+                self.stacks(source, out, decode_stack)
             }
-            SlotDisplay::Dyed { target, .. } => self.stacks(target, out),
-            SlotDisplay::SmithingTrim { base, .. } => self.stacks(base, out),
-            SlotDisplay::WithRemainder { input, .. } => self.stacks(input, out),
-            SlotDisplay::Composite(list) => list.iter().for_each(|d| self.stacks(d, out)),
+            SlotDisplay::Dyed { target, .. } => self.stacks(target, out, decode_stack),
+            SlotDisplay::SmithingTrim { base, .. } => self.stacks(base, out, decode_stack),
+            SlotDisplay::WithRemainder { input, .. } => self.stacks(input, out, decode_stack),
+            SlotDisplay::Composite(list) => {
+                list.iter().for_each(|d| self.stacks(d, out, decode_stack))
+            }
         }
     }
+    /// The stonecutter list a server sent (`SelectableRecipe.SingleInputSet`s), as recipes in its
+    /// order: the menu lists and numbers its buttons by it. An item this client's registry
+    /// lacks keeps its entry's place, so the numbers stay the server's.
+    pub fn stonecutting(
+        &self,
+        sent: &[(HolderSet, SlotDisplay)],
+        decode_stack: impl Fn(&sunrise_protocol::item::Stack) -> Option<ItemStack>,
+    ) -> Vec<crate::stations::Stonecutting> {
+        sent.iter()
+            .enumerate()
+            .map(|(index, (input, result))| {
+                let mut shown = Vec::new();
+                self.stacks(result, &mut shown, &decode_stack);
+                crate::stations::Stonecutting {
+                    id: format!("server:{index}"),
+                    input: Ingredient::of(self.holder_set(input)),
+                    result: shown
+                        .into_iter()
+                        .next()
+                        .unwrap_or_else(|| ItemStack::new("minecraft:air", 1)),
+                }
+            })
+            .collect()
+    }
+    /// A recipe-book preview without item contents (the book filters by item ID).
+    fn bare_stack(&self, stack: &sunrise_protocol::item::Stack) -> Option<ItemStack> {
+        (self.item)(stack.item).map(|name| ItemStack::new(&name, stack.count.max(1) as u32))
+    }
+
     /// A slot display as an ingredient: the items it shows, without repeats.
     fn ingredient(&self, display: &SlotDisplay) -> Ingredient {
         let mut stacks = Vec::new();
-        self.stacks(display, &mut stacks);
+        self.stacks(display, &mut stacks, &|stack| self.bare_stack(stack));
         let mut items: Vec<String> = Vec::new();
         for stack in stacks {
             if !items.iter().any(|i| **i == *stack.item) {
@@ -816,7 +850,7 @@ fn shown(e: &RecipeBookEntry, names: &PacketNames, category_name: &str) -> Optio
         RecipeDisplay::Stonecutter { .. } | RecipeDisplay::Smithing { .. } => return None,
     };
     let mut results = Vec::new();
-    names.stacks(result, &mut results);
+    names.stacks(result, &mut results, &|stack| names.bare_stack(stack));
     let first = results.first()?.clone();
     let variants = if results.len() > 1 {
         results
@@ -1082,6 +1116,9 @@ impl RecipeIndex {
     ) -> Self {
         let mut recipes = std::collections::BTreeMap::new();
         let mut insert = |id: String, v: &serde_json::Value| {
+            if !Ingredient::validate_persistence(v, &id) {
+                return;
+            }
             let kind = v["type"].as_str().unwrap_or_default();
             let special = mod_api::__private::parts_installation::crafting_recipe(kind).is_some()
                 || kind.starts_with("minecraft:crafting_special_")

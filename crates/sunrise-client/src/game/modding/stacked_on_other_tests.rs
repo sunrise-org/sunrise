@@ -27,6 +27,8 @@ struct Script {
     /// Set the cursor to this stack (item, count); `Some(None)` empties it.
     set_carried: Option<Option<(&'static str, u32)>>,
     set_clicked: Option<Option<(&'static str, u32)>>,
+    dirt_rule: Option<(bool, u32)>,
+    write_scoreboard: bool,
 }
 
 thread_local! {
@@ -41,8 +43,14 @@ thread_local! {
 struct Rules;
 #[mod_api::sunrise_part]
 impl mod_api::MenuPart for Rules {
-    fn menu_slot_rules(&self, _: &dyn mod_api::Host, _: &mut mod_api::MenuSlotRulesEvent<'_>) {
+    fn menu_slot_rules(&self, _: &dyn mod_api::Host, event: &mut mod_api::MenuSlotRulesEvent<'_>) {
         ASKS.set(ASKS.get() + 1);
+        if mod_api::__private::item_key_id(event.stack.item()) == Some("minecraft:dirt")
+            && let Some((may_place, max_stack)) = SCRIPT.with(|s| s.borrow().dirt_rule)
+        {
+            event.may_place = may_place;
+            event.max_stack = max_stack;
+        }
     }
 }
 
@@ -63,6 +71,7 @@ struct Listener;
 impl Hooks for Listener {
     fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
         r.menu_part("minecraft:generic_9x3", Rules);
+        r.menu_part("minecraft:crafting", Rules);
     }
     fn item_stacked_on_other(
         &self,
@@ -92,6 +101,18 @@ impl Hooks for Listener {
                     2
                 );
             }
+        }
+        if s.write_scoreboard
+            && let HostSide::Server(host) = &mut host
+        {
+            mod_api::prelude::ScoreboardServerHost::add_objective(
+                &mut **host,
+                "pickup",
+                "dummy",
+                mod_api::Text::literal("pickup"),
+                mod_api::ObjectiveRenderType::Integer,
+            )
+            .unwrap();
         }
         if s.panic {
             panic!("a listener failed");
@@ -388,8 +409,7 @@ fn a_lan_hub_click_is_decided_the_same_way() {
             assert_eq!(click(game, window), (3, 0, 0));
             // The slot rules were asked while the click was planned and nowhere else: once for
             // each distinct question the click consults (a plain click asks the same one twice,
-            // may place and capacity), though the plan tried both ways the hook can leave it and
-            // the click ran after it with the stored answer.
+            // may place and capacity), and the click ran with the stored answer.
             assert_eq!(ASKS.get(), 1);
             assert_eq!(SEEN.with(|s| s.borrow().clone()), [(3, 0)]);
             assert!(game.lan.is_some());
@@ -407,6 +427,28 @@ fn a_lan_hub_click_is_decided_the_same_way() {
             let window = open(game);
             script(Script::default());
             assert_eq!(click(game, window), (3, 0, 0));
+
+            // The listener proposes dirt, not the stone a plain click would place. Both a
+            // permission refusal and an undersized limit keep the cursor and the container.
+            for (may_place, limit, count) in [(false, 64, 0), (true, 1, 0), (true, 2, 2)] {
+                let window = open(game);
+                script(Script {
+                    cancel: true,
+                    handled: true,
+                    set_carried: Some(None),
+                    set_clicked: Some(Some(("minecraft:dirt", 2))),
+                    dirt_rule: Some((may_place, limit)),
+                    write_scoreboard: true,
+                    ..Script::default()
+                });
+                ASKS.set(0);
+                assert_eq!(
+                    click(game, window),
+                    (count, if count == 0 { 3 } else { 0 }, 0)
+                );
+                assert_eq!(ASKS.get(), 1);
+                assert_eq!(game.score.board.objective("pickup").is_some(), count != 0);
+            }
         });
     });
 }
@@ -561,6 +603,48 @@ mod families {
             |game| game.lan_guest_packet(12, packet(window.get(), 1)),
             None,
         );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn the_menu_path_asks_rules_for_the_handled_replacement() {
+        with_mod(|| {
+            with_guests(|game| {
+                game.world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
+                );
+                block(game, "minecraft:crafting_table", (1, 64, 1));
+                game.lan_open_crafting(12, [1, 64, 1]);
+                let host = game.lan.as_mut().unwrap();
+                let window = host.menus[&12].crafting.table.as_ref().unwrap().0;
+                host.hub.guests.update(0, |guest| {
+                    guest.carried = Some(ItemStack::new("minecraft:stone", 3))
+                });
+                for limit in [1, 2] {
+                    script(Script {
+                        cancel: true,
+                        handled: true,
+                        set_carried: Some(None),
+                        set_clicked: Some(Some(("minecraft:dirt", 2))),
+                        dirt_rule: Some((true, limit)),
+                        ..Script::default()
+                    });
+                    ASKS.set(0);
+                    game.lan_guest_packet(12, packet(window, 1));
+                    let host = game.lan.as_ref().unwrap();
+                    let menu = &host.menus[&12].crafting.table.as_ref().unwrap().2;
+                    if limit == 1 {
+                        assert_eq!(menu.slot(1), None);
+                        assert_eq!(cursor(game), Some(("minecraft:stone".to_owned(), 3)));
+                    } else {
+                        assert_eq!(menu.slot(1), Some(&ItemStack::new("minecraft:dirt", 2)));
+                        assert_eq!(cursor(game), None);
+                    }
+                    assert_eq!(ASKS.get(), 1);
+                }
+            });
+        });
     }
 
     #[test]
@@ -839,7 +923,8 @@ fn an_outer_abort_after_an_applied_lan_click_restores_the_guest_and_the_containe
             assert_eq!(state(game), (3, 0, 0));
             game.transaction_close(&seal, false);
             assert_eq!(state(game), (0, 3, 0));
-            // The guest's inventory menu: slot 9 and the cursor.
+            // The guest's inventory menu: close the chest before the window-0 click.
+            game.guest_close_all(12);
             give(game);
             let seal = game.transaction_open();
             game.lan_guest_packet(12, packet(0, 9));

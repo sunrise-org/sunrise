@@ -1,5 +1,5 @@
 //! Original synthetic rendering controls for ordinary uniform initial values.
-use sunrise_client_render::gfx::pack_uniforms::Value;
+use sunrise_render_shaderpack::pack_uniforms::Value;
 use sunrise_shaders::{Origin, Preprocessed, Target, translate_composite};
 use wgpu::util::DeviceExt;
 

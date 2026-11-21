@@ -357,7 +357,27 @@ pub struct StartInfo {
     pub game_rules: Option<GameRulesInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sunrise_options: Option<SunriseOptionsInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_settings: Option<ClientSettingsInfo>,
     pub mods: Vec<ModInfo>,
+}
+
+/// The client options that set how much world it keeps and draws; an absent one was not recorded.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientSettingsInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_distance: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loaded_view_distance: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub simulation_distance: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub far_terrain_distance: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub far_terrain_active: Option<bool>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub graphics_preset: String,
 }
 
 /// The game rules the capture recorded; an absent rule is one the game did not fill.

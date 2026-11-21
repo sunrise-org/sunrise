@@ -7,8 +7,12 @@ use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,
+    sync::Arc,
 };
-use sunrise_protocol::buf::Writer;
+use sunrise_protocol::{
+    buf::Writer,
+    packets::recipes::{HolderSet, SlotDisplay},
+};
 
 /// RecipeManager.RECIPE_PROPERTY_SETS: each set and the ingredients it takes
 /// from a recipe of the given type.
@@ -208,19 +212,35 @@ fn normalize_ingredients(r: &mut Value, items: &sunrise_client::items::Items) ->
     parsed
 }
 
-/// The packet's payload for the network copy's recipes (`network_recipes`).
+/// For each item, the packet's matching holder-set entries in button order. Values are
+/// actual server recipe IDs, not a promise that the item's full stack passes the predicate.
+#[derive(Debug, Default, PartialEq)]
+pub struct StonecutterButtons(HashMap<Arc<str>, Vec<Arc<str>>>);
+
+impl StonecutterButtons {
+    pub fn recipe(&self, input: &str, index: usize) -> Option<&str> {
+        self.0.get(input)?.get(index).map(AsRef::as_ref)
+    }
+}
+
+/// The packet's payload and its stonecutter button map, built from the same projection.
 pub fn update_recipes(
     all: &BTreeMap<String, Box<str>>,
     sync: &SyncData,
-    additions: &sunrise_client::crafting::PropertyAdditions,
-) -> Vec<u8> {
+    sources: &sunrise_client::crafting::ResolvedSources,
+) -> (Vec<u8>, StonecutterButtons) {
     // The copy is already filtered and swapped (`network_recipes`); the
     // filters never run twice, so one swap cannot feed a later one again.
-    // Parsing every recipe takes about a millisecond.
-    let chosen: Vec<Value> = registration_order(all)
-        .into_iter()
-        .filter_map(|text| serde_json::from_str::<Value>(text).ok())
+    let chosen: Vec<_> = sources
+        .recipes
+        .iter()
+        .filter_map(|recipe| {
+            let id = sunrise_client::crafting::qualified(&recipe.name);
+            let text = all.get(&id)?;
+            Some((id, serde_json::from_str::<Value>(text).ok()?))
+        })
         .collect();
+    let additions = &sources.property_additions;
     let tags: BTreeMap<&str, &[i32]> = sync
         .tags
         .registries
@@ -260,7 +280,7 @@ pub fn update_recipes(
     w.varint((PROPERTY_SETS.len() + custom.len()) as i32);
     for (key, kind, fields) in PROPERTY_SETS {
         let mut set = BTreeSet::new();
-        for recipe in &chosen {
+        for (_, recipe) in &chosen {
             let t = recipe["type"].as_str().unwrap_or("");
             let matches = if *kind == "smithing" {
                 t.starts_with("minecraft:smithing_")
@@ -297,41 +317,55 @@ pub fn update_recipes(
             w.varint(id);
         }
     }
-    // SelectableRecipe.SingleInputSet: each stonecutting recipe's input and
-    // its result as an ItemStackSlotDisplay.
-    let stonecutting: Vec<&Value> = chosen
-        .iter()
-        .filter(|r| r["type"] == "minecraft:stonecutting" && placeable(r))
-        .collect();
-    let item_stack = sync
-        .id("minecraft:slot_display", "minecraft:item_stack")
-        .unwrap_or(0);
-    w.varint(stonecutting.len() as i32);
-    for r in stonecutting {
-        match ingredient(&r["ingredient"]) {
-            Some(Ingredient::Tag(t)) => {
-                w.varint(0);
-                w.string(&t);
-            }
-            Some(i) => {
-                let ids = items(&i);
-                w.varint(ids.len() as i32 + 1);
-                for id in ids {
-                    w.varint(id);
-                }
-            }
-            None => w.varint(1),
+    // SelectableRecipe.SingleInputSet preserves the resolved source order. The server
+    // numbers the same candidate items the packet shows; it still tests the real recipe.
+    let mut buttons = StonecutterButtons::default();
+    let mut stonecutting = Vec::new();
+    let item_names = sync.builtin.get("minecraft:item");
+    for (id, recipe) in chosen {
+        if recipe["type"] != "minecraft:stonecutting" {
+            continue;
         }
-        w.varint(item_stack);
-        w.varint(
-            item(sunrise_world::loot::recipe_result_id(&r["result"]).unwrap_or("minecraft:air"))
-                .unwrap_or(0),
+        let Some(input) = ingredient(&recipe["ingredient"]) else {
+            continue;
+        };
+        let candidates = items(&input);
+        if candidates.is_empty() {
+            continue;
+        }
+        let Some(template) = sunrise_client::crafting::Template::parse(&recipe["result"])
+            .filter(|template| template.item.is_some())
+        else {
+            continue;
+        };
+        let result = template.create();
+        if item(&result.item).is_none() {
+            continue;
+        }
+        let id: Arc<str> = id.into();
+        // HolderSets represent membership; an ID only gets this button once.
+        for item_id in candidates.iter().copied().collect::<BTreeSet<_>>() {
+            if let Some(name) = item_names.and_then(|names| names.name(item_id)) {
+                buttons.0.entry(name.into()).or_default().push(id.clone());
+            }
+        }
+        let holders = match input {
+            Ingredient::Tag(tag) => HolderSet::Tag(sunrise_client::crafting::qualified(&tag)),
+            Ingredient::Items(_) => HolderSet::Items(candidates),
+        };
+        let stack = super::guest::network_stack(
+            &|name| item(name).unwrap_or(0),
+            &|registry, name| sync.id(registry, name),
+            &result,
         );
-        w.varint(r["result"]["count"].as_i64().unwrap_or(1) as i32);
-        w.varint(0); // no components added
-        w.varint(0); // nor removed
+        stonecutting.push((holders, SlotDisplay::ItemStack(stack)));
     }
-    w.data
+    w.varint(stonecutting.len() as i32);
+    for (input, result) in stonecutting {
+        input.write(&mut w);
+        result.write(&mut w);
+    }
+    (w.data, buttons)
 }
 
 /// The Sunrise channel a server sends its clients the recipes its native mods
@@ -1000,7 +1034,7 @@ fn empty_ingredient_network_consumers_exclude_whole_unplaceable_recipes() {
             true,
         ),
     ] {
-        let mut all = BTreeMap::new();
+        let mut all = BTreeMap::<String, Value>::new();
         for kind in [
             "minecraft:stonecutting",
             "minecraft:smelting",
@@ -1016,12 +1050,45 @@ fn empty_ingredient_network_consumers_exclude_whole_unplaceable_recipes() {
                     assert_eq!(recipe["ingredient"], json!([]));
                 }
                 sunrise_client::crafting::Ingredient::forget_answers(&mut recipe);
-                all.insert(kind.into(), recipe.to_string().into_boxed_str());
+                all.insert(kind.into(), recipe);
             }
         }
-        let bytes = update_recipes(&all, &sync, &Default::default());
+        all.insert(
+            "fixture:placeable".into(),
+            json!({
+                "type":"minecraft:stonecutting", "ingredient":"minecraft:stone",
+                "result":{"id":"minecraft:stick"}
+            }),
+        );
+        use sunrise_client::crafting::{ResolvedRecipe, ResolvedSources};
+        let mut sources = ResolvedSources::default();
+        let all: BTreeMap<String, Box<str>> = all
+            .into_iter()
+            .map(|(name, value)| {
+                let text = value.to_string().into_boxed_str();
+                let value = Arc::new(value);
+                sources.recipes.push(ResolvedRecipe {
+                    name: name.clone(),
+                    file: value.clone(),
+                    resolved: value,
+                });
+                (name, text)
+            })
+            .collect();
+        let (bytes, buttons) = update_recipes(&all, &sync, &sources);
         let packet = UpdateRecipes::read(&mut Reader::new(&bytes)).unwrap();
-        assert!(packet.stonecutter.is_empty());
+        assert_eq!(
+            packet.stonecutter,
+            [(
+                HolderSet::Items(vec![1]),
+                SlotDisplay::ItemStack(sunrise_protocol::item::Stack::new(2, 1)),
+            )]
+        );
+        assert_eq!(
+            buttons.recipe("minecraft:stone", 0),
+            Some("fixture:placeable")
+        );
+        assert_eq!(buttons.recipe("minecraft:stone", 1), None);
         assert!(packet.properties.iter().all(|(_, ids)| ids.is_empty()));
     }
 }

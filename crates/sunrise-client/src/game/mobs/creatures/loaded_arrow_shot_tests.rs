@@ -138,7 +138,7 @@ fn a_landing_orb_posts_hit_ground_after_a_fall() {
         let down = Vec3::new(0.0, -0.5, 0.0);
         start_events();
         // In the air: the drop adds to the fall.
-        game.orbs[i].on_ground = false;
+        game.orbs[i].ground.on_ground = false;
         game.orb_moved(
             i,
             OrbMove {
@@ -149,7 +149,7 @@ fn a_landing_orb_posts_hit_ground_after_a_fall() {
         );
         assert_eq!(game.orbs[i].fall_distance, 2.5);
         // On the ground: HIT_GROUND, then the fall is gone.
-        game.orbs[i].on_ground = true;
+        game.orbs[i].ground.on_ground = true;
         game.orb_moved(
             i,
             OrbMove {

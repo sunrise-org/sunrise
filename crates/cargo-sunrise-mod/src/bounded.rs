@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 pub use sunrise_mod_package::manifest::MAX_MANIFEST;
-// points.json is already about 9 MiB; leave ample growth room.
+// Bound the decoded internals catalog before parsing it.
 pub const MAX_CATALOG: u64 = 256 << 20;
 // The largest checked-in slot list is sunrise.txt (2,839 bytes). Lists contain
 // declarations, not source; 4 MiB leaves substantial room for mod declarations.

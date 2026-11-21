@@ -396,7 +396,8 @@ fn progress_events_capture_each_players_full_mutation_state() {
             if reload {
                 game.run_native_advancement_grants();
             } else {
-                game.tick_lan(false);
+                game.world_root = game.options.game_dir.clone().unwrap();
+                game.tick_server(false).unwrap();
             }
             let events = observed.lock().unwrap();
             assert_eq!(

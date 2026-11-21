@@ -118,23 +118,71 @@ pub struct HeightmapArea {
 }
 
 /// The heightmap's heights on the CPU, for the GPU particle types drawn as quads that die under
-/// it (`kill_below_heightmap`).
+/// it (`kill_below_heightmap`), and the snapshot a renderer uploads for the shaders that sample
+/// it. Its heights always fill its area ([`Surface::new`]).
 #[derive(Clone, Debug)]
 pub struct Surface {
-    pub area: HeightmapArea,
+    area: HeightmapArea,
     /// `size` × `size` heights above `min_y`, x along a row and z down the rows.
-    pub heights: Box<[u16]>,
+    heights: std::sync::Arc<[u16]>,
 }
 
+/// Why heights can't make a [`Surface`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfaceSizeError {
+    /// An area of no columns (`size` 0): nothing for a column to read.
+    NoColumns,
+    /// `heights` heights for an area of `size` × `size` columns.
+    WrongCount { size: u32, heights: usize },
+}
+
+impl std::fmt::Display for SurfaceSizeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::NoColumns => write!(f, "a heightmap area needs at least one column a side"),
+            Self::WrongCount { size, heights } => write!(
+                f,
+                "a heightmap of {size} by {size} columns needs {} heights, not {heights}",
+                u64::from(size).pow(2)
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SurfaceSizeError {}
+
 impl Surface {
+    /// `heights` over `area`: refused unless the area has columns and they are `size` × `size`.
+    pub fn new(
+        area: HeightmapArea,
+        heights: std::sync::Arc<[u16]>,
+    ) -> Result<Self, SurfaceSizeError> {
+        if area.size == 0 {
+            return Err(SurfaceSizeError::NoColumns);
+        }
+        if (area.size as usize).checked_pow(2) != Some(heights.len()) {
+            return Err(SurfaceSizeError::WrongCount {
+                size: area.size,
+                heights: heights.len(),
+            });
+        }
+        Ok(Self { area, heights })
+    }
+
+    pub fn area(&self) -> HeightmapArea {
+        self.area
+    }
+
+    /// The heights, x along a row and z down the rows.
+    pub fn heights(&self) -> &std::sync::Arc<[u16]> {
+        &self.heights
+    }
+
     /// Whether `at` is under the motion-blocking surface of its column; a column outside the
     /// area (any finite or infinite place) takes its nearest edge, as the shaders' clamped
     /// sampler does.
     pub fn covers(&self, at: [f64; 3]) -> bool {
         let size = self.area.size;
-        if size == 0 || self.heights.len() < (size as usize).pow(2) {
-            return false;
-        }
         // In floats: a place far outside saturates no integer, and NaN takes the first column.
         let last = f64::from(size - 1);
         let column =
@@ -240,6 +288,26 @@ mod tests {
         }
     }
 
+    /// Heights that don't fill their area are refused when the surface is made, with the
+    /// reason as a value, so its quads never check their lengths: an empty area, too few
+    /// heights and too many.
+    #[test]
+    fn a_surface_is_refused_unless_its_heights_fill_its_area() {
+        let area = |size| HeightmapArea {
+            origin: [0, 0],
+            size,
+            min_y: 0,
+        };
+        let surface = |size, n: usize| Surface::new(area(size), vec![0u16; n].into());
+        assert_eq!(surface(4, 16).unwrap().heights().len(), 16);
+        assert_eq!(surface(4, 16).unwrap().area(), area(4));
+        assert_eq!(surface(0, 0).unwrap_err(), SurfaceSizeError::NoColumns);
+        assert_eq!(surface(0, 1).unwrap_err(), SurfaceSizeError::NoColumns);
+        let wrong = |heights| SurfaceSizeError::WrongCount { size: 4, heights };
+        assert_eq!(surface(4, 15).unwrap_err(), wrong(15));
+        assert_eq!(surface(4, 17).unwrap_err(), wrong(17));
+    }
+
     /// Rain dies at the surface of its own column (wiki "GPU Particles": the motion-blocking
     /// heightmap), not where the sky is shaded: in front of a hill it falls to the grass.
     #[test]
@@ -248,14 +316,12 @@ mod tests {
         // up to 80.
         let mut heights = vec![128u16; 16];
         heights[4 + 2] = 144;
-        let surface = Surface {
-            area: HeightmapArea {
-                origin: [10, 20],
-                size: 4,
-                min_y: -64,
-            },
-            heights: heights.into(),
+        let area = HeightmapArea {
+            origin: [10, 20],
+            size: 4,
+            min_y: -64,
         };
+        let surface = Surface::new(area, heights.into()).unwrap();
         assert!(!surface.covers([11.5, 64.0, 20.5]));
         assert!(surface.covers([11.5, 63.9, 20.5]));
         assert!(surface.covers([12.5, 79.0, 21.5]));
@@ -276,14 +342,12 @@ mod tests {
                 _ => 30,
             })
             .collect();
-        let surface = Surface {
-            area: HeightmapArea {
-                origin: [-2, -2],
-                size: 4,
-                min_y: 0,
-            },
-            heights: heights.into(),
+        let area = HeightmapArea {
+            origin: [-2, -2],
+            size: 4,
+            min_y: 0,
         };
+        let surface = Surface::new(area, heights.into()).unwrap();
         for x in [
             f64::MIN,
             -1.0e300,

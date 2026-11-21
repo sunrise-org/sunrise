@@ -54,15 +54,20 @@ fn a_saved_book_loads_exactly_and_the_vanilla_pairs_stay() {
 }
 
 #[test]
-fn both_flags_are_written_zero_too_in_id_order() {
+fn both_flags_are_written_for_each_book_including_zero() {
     let mut books = CustomBooks::default();
     books.set(POT, FILTERING).unwrap();
     books.set("demo:anvil", OPEN).unwrap();
     let Some(Tag::Compound(written)) = books.write() else {
         panic!("an extension");
     };
-    let ids: Vec<String> = written.keys().map(JavaString::to_string_lossy).collect();
+    let ids: Vec<_> = books.iter().map(|(id, _)| id).collect();
     assert_eq!(ids, ["demo:anvil", POT]);
+    assert_eq!(written.len(), 2);
+    assert_eq!(
+        written.get(&JavaString::from("demo:anvil")),
+        Some(&entry(Tag::Byte(1), Tag::Byte(0)))
+    );
     assert_eq!(
         written.get(&JavaString::from(POT)),
         Some(&entry(Tag::Byte(0), Tag::Byte(1)))

@@ -4,8 +4,8 @@
 //! through a writer and a reader that enforce the codec's bounds. A decoder
 //! reads untrusted bytes: every length, count, depth and allocation is
 //! checked before anything is reserved or copied, and nothing here panics on
-//! any input. The codec touches no `Host` and no world, so it runs the same
-//! in a native mod and in a wasm guest. Registration and delivery are separate from encoding.
+//! any input. The codec touches no `Host` and no world. Registration and delivery are separate
+//! from encoding.
 use super::payload_budget::Budget;
 // The helpers a derived codec's schema calls, beside the codec it names as its crate.
 pub use super::payload_schema::{payload_schema_leaf, payload_schema_mix, payload_schema_named};

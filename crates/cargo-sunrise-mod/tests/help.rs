@@ -29,9 +29,23 @@ fn help_lists_the_everyday_commands_and_each_command_says_its_usage() {
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(
-        text.starts_with("usage: cargo sunrise-mod build [--wasm]"),
+        text.starts_with("usage: cargo sunrise-mod build [--update-lock]"),
         "{text}"
     );
+    for (subcommand, usage) in [("plan", "--releases"), ("scripts", "--out")] {
+        for flag in ["--help", "-h"] {
+            let output = run(&["release", subcommand, flag]);
+            assert!(output.status.success(), "{subcommand} {flag}");
+            let text = String::from_utf8(output.stdout).unwrap();
+            assert!(
+                text.starts_with(&format!(
+                    "usage: cargo sunrise-mod release {subcommand} {usage}"
+                )),
+                "{text}"
+            );
+            assert!(output.stderr.is_empty());
+        }
+    }
 }
 
 #[test]
@@ -40,4 +54,9 @@ fn an_unknown_command_is_an_error() {
     let output = run(&["frobnicate"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("not a cargo sunrise-mod command"));
+    let output = run(&["release", "frobnicate", "--help"]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unknown release command \"frobnicate\"")
+    );
 }

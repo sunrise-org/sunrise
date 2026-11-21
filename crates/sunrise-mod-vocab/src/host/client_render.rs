@@ -37,9 +37,12 @@ pub trait ClientRenderClientHost {
     fn item_uses_block_light(&self, stack: &ItemStack, context: ItemDisplayContext) -> bool;
     /// Side: client.
     /// Asks `block_render_visibility` again for every state and, when the answers differ
-    /// from those in use, remeshes every loaded section with them. Call it when your answer changes (a toggle key, a scan
-    /// finishing) and once when the player joins, not every frame: a rebuild takes the workers a
-    /// few seconds. With no part answering, nothing is asked and the mesher keeps its no-mod path.
+    /// from those in use, remeshes every loaded section with them. While a mod listens to
+    /// `section_visibility`, rebuilds meshes in the player's current level and asks about them
+    /// again, except for a first all-air compile with no section geometry contributors. Other
+    /// viewed levels do not call that hook; no NeoForge counterpart has been verified. Call it
+    /// when a decision changes (a toggle key, a scan finishing), not every frame. With no part
+    /// answering or listener, the mesher keeps its no-mod path.
     #[access(WorldOnly)]
     fn refresh_render_visibility(&mut self);
     /// Side: client.
@@ -65,13 +68,13 @@ pub trait ClientRenderClientHost {
     ///
     /// Refused by name, with nothing changed and nothing allocated, as [`DynamicTextureError`]
     /// lists: `Unavailable` when the atlas has no pool, `NotOwned` for an id outside the mod's
-    /// namespace, `BadSize` for a side of 0 or pixels that are not `width * height * 4` bytes,
+    /// owned namespaces (its manifest namespaces or a content package it serves via `served_by`),
+    /// `BadSize` for a side of 0 or pixels that are not `width * height * 4` bytes,
     /// `TooLarge` for a side past [`DYNAMIC_TEXTURE_MAX_SIDE`], `NameTaken` for an id that
     /// already names an image or a GUI sprite, `OverBudget` past the mod's
     /// [`DYNAMIC_TEXTURE_MOD_IMAGES`] images or [`DYNAMIC_TEXTURE_MOD_BYTES`] of pixels, and
     /// `NoSlot` when every slot of the image's class is held. The game keeps a copy of the
-    /// pixels, counted in the byte budget, to upload them again into a rebuilt atlas. Native
-    /// and wasm mods make the same call; the pixels cross as bytes.
+    /// pixels, counted in the byte budget, to upload them again into a rebuilt atlas.
     #[access(WorldOnly)]
     fn create_dynamic_texture(
         &mut self,
@@ -138,15 +141,19 @@ pub trait ClientRenderClientHost {
     fn block_sprites(&self, blocks: &[BlockState]) -> Vec<Option<BlockSprites>>;
     /// Side: client.
     /// Published asset/data read: available in Setup, Reloading and World.
-    /// For a client mod: each texture's sprite by name (`minecraft:block/stone`, `block/stone`), none for one no
-    /// model uses. API 380.
+    /// For a client mod: each texture's sprite by name (`minecraft:block/stone`, `block/stone`) in the blocks
+    /// atlas, none for one it lacks. The blocks atlas holds the sprites block models name and every sprite a
+    /// mod's sprite source made in it, though no model names it; a sprite only the items atlas lists is not
+    /// in it. API 380.
     #[access(PublishedResources)]
     fn texture_sprites(&self, textures: &[&str]) -> Vec<Option<SpriteRef>>;
     /// Side: client.
     /// Published asset/data read: available in Setup, Reloading and World.
     /// For a client mod: where GUI sprite `sprite` lies in the GUI atlas and its size, none for one the atlas lacks
-    /// (a server's metrics-only atlas lacks them all). The atlas names vanilla's sprites by path alone
-    /// (`gui/sprites/container/slot`) and a mod's with its namespace (`mymod:gui/panel`).
+    /// or whose entry its definition removed (a server's metrics-only atlas lacks them all). The atlas names its
+    /// sprites by GUI id, the id its definition lists them under: `minecraft:container/slot` (also given as
+    /// `container/slot`), a mod's `mymod:panel`; a sprite a registered sprite source made in `gui.json` is found
+    /// by the id it named, and a live texture (`create_dynamic_texture`) by its own.
     #[access(PublishedResources)]
     fn gui_sprite(&self, sprite: &Identifier) -> Option<AtlasRegion>;
     /// Side: client.

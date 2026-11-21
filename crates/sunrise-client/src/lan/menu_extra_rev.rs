@@ -50,11 +50,12 @@ mod tests {
     #[test]
     fn an_answer_is_kept_only_when_asked_and_once() {
         let mut cap = Capability::default();
-        assert!(cap.receive(&menu_extra::answer()).is_err(), "unasked");
+        let answer = menu_extra::answer(menu_extra::REVISION);
+        assert!(cap.receive(&answer).is_err(), "unasked");
         let _ = cap.query();
-        assert_eq!(cap.receive(&menu_extra::answer()).unwrap(), ());
+        assert_eq!(cap.receive(&answer).unwrap(), ());
         assert_eq!(cap.revision(), menu_extra::REVISION);
-        assert!(cap.receive(&menu_extra::answer()).is_err(), "second");
+        assert!(cap.receive(&answer).is_err(), "second");
     }
 
     #[test]

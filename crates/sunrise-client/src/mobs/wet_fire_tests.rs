@@ -176,7 +176,8 @@ fn wet_fire_damage_and_extinguishing_follow_the_full_mob_tick() {
                         &rain,
                         &mut crate::health::TestLevel::new(0).level(),
                         &mut events,
-                    );
+                    )
+                    .was_on_fire();
                     assert_eq!(was_on_fire, fire > 1);
                     let mut expected_random = mob.random.clone();
                     let sounds = usize::from(fire > 1);

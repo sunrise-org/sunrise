@@ -3,7 +3,7 @@
 //! (`checkSpawnRules`), read through [`SpawnLevel`] so the game's world and a
 //! differential test world answer the same questions. Random draws follow
 //! vanilla's order.
-use super::{Species, data};
+use super::{MobType, Species, data};
 use crate::blocks::{BlockFacts, Fluid};
 use sunrise_core::random::{RandomSource, slime_chunk_random};
 use sunrise_world::{dimension_type::DimensionFacts, registry::BlockStateId};
@@ -118,51 +118,6 @@ pub fn fire_immune(s: Species) -> bool {
             | S::Wither
             | S::WitherSkeleton
             | S::Zoglin
-            | S::ZombifiedPiglin
-    )
-}
-/// `EntityType.isAllowedInPeaceful`.
-pub fn allowed_in_peaceful(s: Species) -> bool {
-    use Species as S;
-    !matches!(
-        s,
-        S::Blaze
-            | S::Bogged
-            | S::Breeze
-            | S::CaveSpider
-            | S::Creaking
-            | S::Creeper
-            | S::Drowned
-            | S::ElderGuardian
-            | S::Enderman
-            | S::Endermite
-            | S::Evoker
-            | S::Ghast
-            | S::Giant
-            | S::Guardian
-            | S::Hoglin
-            | S::Husk
-            | S::Illusioner
-            | S::MagmaCube
-            | S::Parched
-            | S::Phantom
-            | S::PiglinBrute
-            | S::Pillager
-            | S::Ravager
-            | S::Silverfish
-            | S::Skeleton
-            | S::Slime
-            | S::Spider
-            | S::Stray
-            | S::Vex
-            | S::Vindicator
-            | S::Warden
-            | S::Witch
-            | S::Wither
-            | S::WitherSkeleton
-            | S::Zoglin
-            | S::Zombie
-            | S::ZombieVillager
             | S::ZombifiedPiglin
     )
 }
@@ -305,22 +260,21 @@ fn surface_water<L: SpawnLevel>(l: &L, x: i32, y: i32, z: i32) -> bool {
 /// can stand for several types), then `MobSpawnEvent.SpawnPlacementCheck`
 /// through [`SpawnLevel::placement_check`].
 pub fn check_spawn_rules<L: SpawnLevel>(
-    entity: &str,
-    s: Species,
+    kind: &MobType,
     l: &L,
     reason: Reason,
     random: &mut impl RandomSource,
     at: [i32; 3],
 ) -> bool {
-    if !allowed_in_peaceful(s) && l.peaceful() {
+    if !kind.allowed_in_peaceful() && l.peaceful() {
         return false;
     }
     let [x, y, z] = at;
-    let vanilla = match l.mob_data().mod_spawns.get(entity) {
+    let vanilla = match l.mob_data().mod_spawns.get(&kind.id) {
         Some(rule) => mod_predicate(rule, l, reason, random, x, y, z),
-        None => placement_predicate(s, l, reason, random, x, y, z),
+        None => placement_predicate(kind.species, l, reason, random, x, y, z),
     };
-    l.placement_check(entity, reason, at, vanilla)
+    l.placement_check(&kind.id, reason, at, vanilla)
 }
 /// A mod type's spawn predicate (`SpawnPlacements.Data.predicate`): the ground
 /// tag, the biome tag, then the light, which draws last as vanilla's do.
@@ -703,6 +657,9 @@ mod underwater_sky_tests {
             |w, _| {
                 // Sea level in this world is 63, so y=55 sits in the scan.
                 assert_eq!(w.sea_level(), 63);
+                let mut guardian = (*super::super::sensor_scan_tests::kind()).clone();
+                guardian.id = "minecraft:guardian".into();
+                guardian.species = Species::Guardian;
                 let mut probe = LegacyRandom::new(1);
                 assert_ne!(
                     probe.next_int_bound(20).unwrap(),
@@ -711,26 +668,12 @@ mod underwater_sky_tests {
                 );
                 let mut random = LegacyRandom::new(1);
                 assert!(
-                    check_spawn_rules(
-                        "minecraft:guardian",
-                        Species::Guardian,
-                        w,
-                        Reason::Natural,
-                        &mut random,
-                        [0, 50, 0]
-                    ),
+                    check_spawn_rules(&guardian, w, Reason::Natural, &mut random, [0, 50, 0]),
                     "kelp between the guardian and the sea hides the sky"
                 );
                 let mut random = LegacyRandom::new(1);
                 assert!(
-                    !check_spawn_rules(
-                        "minecraft:guardian",
-                        Species::Guardian,
-                        w,
-                        Reason::Natural,
-                        &mut random,
-                        [1, 50, 0]
-                    ),
+                    !check_spawn_rules(&guardian, w, Reason::Natural, &mut random, [1, 50, 0]),
                     "a bubble column is liquid(), so the sky still shows"
                 );
             },
@@ -769,6 +712,7 @@ mod light_draw_tests {
                         ("minecraft:the_end", &[32][..]),
                     ] {
                         let level = MobWorld {
+                            side: sunrise_client::motion::dry_side(),
                             dimension_type: DimensionFacts::vanilla(type_id).unwrap(),
                             ..w.clone()
                         };
@@ -869,6 +813,7 @@ mod mod_spawn_rule_tests {
         data: data::MobData,
         sky: i32,
         block: i32,
+        peaceful: bool,
         /// The biome tags the spot's biome is in.
         biome_tags: Vec<&'static str>,
         /// What the hook is told the rule answered, and what it answers.
@@ -896,6 +841,7 @@ mod mod_spawn_rule_tests {
                 data,
                 sky: 15,
                 block: 0,
+                peaceful: false,
                 biome_tags: vec!["test:haunted"],
                 heard: RefCell::default(),
                 hook: None,
@@ -903,14 +849,10 @@ mod mod_spawn_rule_tests {
         }
         /// `SpawnPlacements.checkSpawnRules` for a type of the zombie species.
         fn check(&self, entity: &str, reason: Reason, at: [i32; 3]) -> bool {
-            check_spawn_rules(
-                entity,
-                Species::Zombie,
-                self,
-                reason,
-                &mut LegacyRandom::new(7),
-                at,
-            )
+            let mut kind = (*super::super::sensor_scan_tests::kind()).clone();
+            kind.id = entity.into();
+            kind.species = Species::Zombie;
+            check_spawn_rules(&kind, self, reason, &mut LegacyRandom::new(7), at)
         }
     }
     impl SpawnLevel for Flat {
@@ -952,7 +894,7 @@ mod mod_spawn_rule_tests {
             1
         }
         fn peaceful(&self) -> bool {
-            false
+            self.peaceful
         }
         fn dimension_type(&self) -> &DimensionFacts {
             DimensionFacts::vanilla("minecraft:overworld").unwrap()
@@ -980,6 +922,33 @@ mod mod_spawn_rule_tests {
             light,
             biome_tag: Some("test:haunted".to_owned()),
         }
+    }
+
+    #[test]
+    fn natural_placement_uses_the_types_peaceful_flag_not_its_species() {
+        let mut trader = (*super::super::sensor_scan_tests::kind()).clone();
+        trader.id = "test:trader".into();
+        trader.species = Species::WanderingTrader;
+        trader.flags.not_in_peaceful = true;
+
+        let mut level = Flat::new(&[("test:trader", rule(SpawnLight::Any))]);
+        let check = |level: &Flat| {
+            check_spawn_rules(
+                &trader,
+                level,
+                Reason::Natural,
+                &mut LegacyRandom::new(7),
+                [0, 1, 0],
+            )
+        };
+        assert!(check(&level));
+        level.heard.borrow_mut().clear();
+        level.peaceful = true;
+        assert!(!check(&level));
+        assert!(
+            level.heard.borrow().is_empty(),
+            "Peaceful admission comes before placement rules"
+        );
     }
 
     /// Ground, biome and light each refuse on their own, and the rule's

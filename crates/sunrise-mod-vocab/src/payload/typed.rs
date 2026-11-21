@@ -81,8 +81,8 @@ macro_rules! token {
     ($name:ident, $direction:ident, $doc:literal) => {
         #[doc = $doc]
         ///
-        /// Keep it from registration and send with it; a wasm mod keeps and passes it like any
-        /// Wire value. Each send checks the token against the frozen table before it encodes.
+        /// Keep the token from registration and use it to send payloads. Each send checks the
+        /// token against the frozen table before encoding.
         // exhaustive: its fields are private; the registrar is the only constructor.
         // no wire: a manual codec below, the token's own; the value type is only a parameter.
         pub struct $name<T> {
@@ -384,6 +384,7 @@ impl PayloadRegistrar<'_> {
             direction,
             optional: self.optional,
             thread: self.thread,
+            delivery: self.delivery,
         };
         self.registrar.borrow_mut().add_typed_payload(
             declaration,

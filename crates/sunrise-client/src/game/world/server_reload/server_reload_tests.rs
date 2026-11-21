@@ -171,14 +171,14 @@ fn reload_command_prepares_world_before_applying_listeners_and_preserves_tables_
                 .unwrap();
         }
         fn data_pack_files(&self, _: &mut dyn ServerHost, event: &mut DataPackFilesEvent<'_>) {
-            let item = if self.0.load(Ordering::SeqCst) == 1 {
+            let block = if self.0.load(Ordering::SeqCst) == 1 {
                 "minecraft:stone"
             } else {
-                "minecraft:diamond"
+                "minecraft:diamond_block"
             };
             event.files.push((
                 "tags/reload_order:block/derived".into(),
-                format!(r#"{{"values":["{item}"]}}"#).into_bytes(),
+                format!(r#"{{"values":["{block}"]}}"#).into_bytes(),
             ));
         }
     }
@@ -205,7 +205,8 @@ fn reload_command_prepares_world_before_applying_listeners_and_preserves_tables_
                     mod_api::__private::tag_key(&Identifier::parse("sunrise:class/fence").unwrap())
                         .unwrap();
                 let fence = mod_api::__private::block_key("minecraft:oak_fence").unwrap();
-                assert!(mod_api::Tags::blocks(game, class).unwrap().contains(&fence));
+                assert!(matches!(mod_api::Tags::blocks(game, class),
+                    mod_api::TagMembers::Members(blocks) if blocks.contains(&fence)));
                 assert!(
                     game.items()
                         .block_in_tag("sunrise:class/fence", "minecraft:oak_fence")
@@ -216,9 +217,11 @@ fn reload_command_prepares_world_before_applying_listeners_and_preserves_tables_
                 assert_eq!(state.load(Ordering::SeqCst), 1);
                 // World preparation sees the previous listener generation.
                 assert!(
-                    game.items().block_tags["reload_order:derived"].contains("minecraft:diamond")
+                    game.items().block_tags["reload_order:derived"]
+                        .contains("minecraft:diamond_block")
                 );
-                assert!(mod_api::Tags::blocks(game, class).unwrap().contains(&fence));
+                assert!(matches!(mod_api::Tags::blocks(game, class),
+                    mod_api::TagMembers::Members(blocks) if blocks.contains(&fence)));
                 let old_bound = crate::game::native_world_read::installed_block_tag_snapshot();
                 let old_order = game.items().block_tag_order.clone();
                 let old_sets = game.items().block_tags.clone();
@@ -235,7 +238,8 @@ fn reload_command_prepares_world_before_applying_listeners_and_preserves_tables_
                     game.world_tables.as_ref().map(|tables| tables as *const _)
                 );
                 assert!(
-                    game.items().block_tags["reload_order:derived"].contains("minecraft:diamond")
+                    game.items().block_tags["reload_order:derived"]
+                        .contains("minecraft:diamond_block")
                 );
                 assert_eq!(
                     crate::game::native_world_read::installed_block_tag_snapshot(),
@@ -924,12 +928,12 @@ fn server_completion_reads_published_data_without_world_access_on_first_open() {
             assert!(!host.recipes_of_type("minecraft:smelting").is_empty());
             let refused =
                 catch_unwind(AssertUnwindSafe(|| host.level("minecraft:overworld"))).unwrap_err();
-            let text = refused
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| refused.downcast_ref::<&str>().copied())
-                .unwrap();
-            assert!(text.contains("Reloading"), "{text}");
+            assert_eq!(
+                refused
+                    .downcast_ref::<mod_api::__private::PhaseRefusal>()
+                    .map(|refusal| refusal.phase),
+                Some(ModPhase::Reloading)
+            );
             self.0.lock().unwrap().push(event.cause);
         }
     }

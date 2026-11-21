@@ -45,7 +45,7 @@ struct Vertex {
     cell: [f32; 4],
 }
 
-pub(super) struct CustomSky {
+pub(crate) struct CustomSky {
     pipelines: Vec<wgpu::RenderPipeline>,
     /// SUNRISE_HDR_DEBUG on the float frame: the layers' light turns grey, as the sky's does.
     written_debug: bool,

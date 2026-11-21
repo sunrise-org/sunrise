@@ -2,13 +2,20 @@
 //! records aren't in the native particle count, and the frame still builds their quads when no
 //! renderer draws the type's shader; rain that dies under the heightmap reads heights taken
 //! before those quads, from its first frame.
-use crate::game::native_entity_refs::tests::with_game;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use sunrise_assets::resource_source::{Resource, ResourceSource};
 use sunrise_client::hud::Rect;
 use sunrise_client::particles::polytone::Registry;
 use sunrise_client::particles::{ParticleEngine, ParticleOptions};
+
+/// A game over the prepared resources that registers no mod tables of the process (the
+/// particles here are the pack's): `server_game`, not the mod fixture's `with_game`.
+fn with_game(test: impl FnOnce(&mut crate::game::Game<'_>)) {
+    let mut resources = None;
+    let mut game = crate::game::game_tests::tests::server_game(&mut resources);
+    test(&mut game);
+}
 
 /// A pack with one GPU particle type, `test:rain`, drawn with a vanilla particle sprite and
 /// no shader of its own; `kill_below_heightmap` when `dies_under`.
@@ -88,5 +95,25 @@ fn rain_under_the_surface_is_hidden_from_its_first_frame() {
         let mut out = Vec::new();
         game.client_particle_geometry(camera, 0.0, 70.0, &mut out);
         assert_eq!(out.len(), 4, "the drop above the surface only");
+    });
+}
+
+/// A mod's clear asked before the frame is applied before the heightmap's readers are counted,
+/// in the same call: the cleared rain is gone when they are.
+#[test]
+#[ignore = "daily"]
+fn a_pending_clear_goes_before_the_heightmap_is_read() {
+    with_game(|game| {
+        let bottom = f64::from(game.world.bottom_y());
+        let camera = [0.5, bottom + 4.0, 0.5];
+        rain_particles(game, &rain_pack(true), camera);
+        game.particles.add(
+            &ParticleOptions::named("test:rain"),
+            [0.5, bottom + 2.0, 0.5],
+            [0.0; 3],
+        );
+        game.mod_clear_particles.set(true);
+        game.polytone_gpu_decide(glam::DVec3::from_array(camera));
+        assert_eq!(game.particles.polytone_gpu_records(), 0, "cleared first");
     });
 }

@@ -361,8 +361,14 @@ fn hit_attempts_reach_the_listener_once_including_refusals() {
             ghast.invulnerable_flag = false;
             let mut fireball = Damage::of(DamageKind::Fireball);
             fireball.attacker = Some(Who::Player);
+            let reflected = sunrise_client::health::Attack {
+                attacker: 7,
+                projectile: Some(12),
+                projectile_kind: sunrise_client::health::DirectEntity::LargeFireball,
+                ..Default::default()
+            };
             assert!(ghast.damage(
-                damage_level_of!(game, &sunrise_client::health::NO_ATTACK, no_push, None),
+                damage_level_of!(game, &reflected, no_push, None),
                 2.0,
                 fireball
             ));

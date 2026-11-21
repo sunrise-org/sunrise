@@ -23,7 +23,4 @@ sunrise-client game::creatures::pending_birth_tests::credit_goes_to_the_player_o
 sunrise-client game::creatures::pending_birth_tests::a_waiting_baby_publishes_its_uuid_only_when_it_joins lib daily game-boot
 sunrise-client game::creatures::pending_birth_tests::a_panicking_baby_listener_leaves_no_reserved_state_behind lib daily game-boot
 sunrise-client game::creatures::pending_birth_tests::a_parent_changed_during_dispatch_refuses_the_baby_and_nothing_is_rebuilt lib daily game-boot
-sunrise-client game::creatures::pending_birth_wasm_tests::native_pending_children_shared_matrix lib daily game-boot
-sunrise-client game::creatures::pending_birth_wasm_tests::wasm_pending_children_shared_matrix lib daily wasm-fixture
-sunrise-client game::creatures::pending_birth_wasm_tests::wasm_trapped_split_listener_commits_nothing lib daily wasm-fixture
-sunrise-client game::creatures::pending_birth_wasm_tests::wasm_trapped_baby_listener_commits_nothing lib daily wasm-fixture
+sunrise-client game::creatures::pending_birth_matrix_tests::native_pending_children_shared_matrix lib daily game-boot

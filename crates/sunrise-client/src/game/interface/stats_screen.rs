@@ -164,12 +164,12 @@ fn format(f: Format, v: i32) -> String {
 }
 /// The item columns: (stat type, header sprite).
 const COLUMNS: [(&str, &str); 6] = [
-    ("mined", "gui/sprites/statistics/block_mined"),
-    ("broken", "gui/sprites/statistics/item_broken"),
-    ("crafted", "gui/sprites/statistics/item_crafted"),
-    ("used", "gui/sprites/statistics/item_used"),
-    ("picked_up", "gui/sprites/statistics/item_picked_up"),
-    ("dropped", "gui/sprites/statistics/item_dropped"),
+    ("mined", "statistics/block_mined"),
+    ("broken", "statistics/item_broken"),
+    ("crafted", "statistics/item_crafted"),
+    ("used", "statistics/item_used"),
+    ("picked_up", "statistics/item_picked_up"),
+    ("dropped", "statistics/item_dropped"),
 ];
 /// `ItemStatisticsList`'s rows: items with a positive item column, plus
 /// `Block.asItem` (`block_item`) of blocks with a positive `mined` count,
@@ -494,10 +494,10 @@ impl Game<'_> {
                 tab_tip = true;
             }
             let sprite = match (selected, hover) {
-                (true, true) => "gui/sprites/widget/tab_selected_highlighted",
-                (true, false) => "gui/sprites/widget/tab_selected",
-                (false, true) => "gui/sprites/widget/tab_highlighted",
-                (false, false) => "gui/sprites/widget/tab",
+                (true, true) => "widget/tab_selected_highlighted",
+                (true, false) => "widget/tab_selected",
+                (false, true) => "widget/tab_highlighted",
+                (false, false) => "widget/tab",
             };
             ui::nine_slice(batch, atlas, sprite, x, 0.0, tw, TAB_H, u32::MAX);
             ui::menu_tab_label(
@@ -616,9 +616,9 @@ impl Game<'_> {
                             .child_of(list_key, 0)
                         });
                         let bg = if hover {
-                            "gui/sprites/statistics/header"
+                            "statistics/header"
                         } else {
-                            "gui/sprites/container/slot"
+                            "container/slot"
                         };
                         batch.sprite(atlas, bg, x, y + 1.0);
                         batch.sprite(atlas, sprite, x, y + 1.0);
@@ -626,9 +626,9 @@ impl Game<'_> {
                             && sc == c
                         {
                             let s = if order < 0 {
-                                "gui/sprites/statistics/sort_down"
+                                "statistics/sort_down"
                             } else {
-                                "gui/sprites/statistics/sort_up"
+                                "statistics/sort_up"
                             };
                             batch.sprite(atlas, s, x, y + 1.0);
                         }
@@ -651,12 +651,7 @@ impl Game<'_> {
                         .child_of(list_key, i + 1)
                         .without_tooltip()
                     });
-                    batch.sprite(
-                        &self.gui.atlas,
-                        "gui/sprites/container/slot",
-                        left + 1.0,
-                        y + 1.0,
-                    );
+                    batch.sprite(&self.gui.atlas, "container/slot", left + 1.0, y + 1.0);
                     self.draw_item(batch, &stack, left + 2.0, y + 2.0);
                     // `ItemRowWidget.extractTooltip`: the item's tooltip at the slot's corner.
                     if ui::hovered(self.cursor, left + 1.0, y + 1.0, 18.0, 18.0) {

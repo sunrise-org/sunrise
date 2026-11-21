@@ -34,12 +34,6 @@ pub struct ParticleOptions {
     /// `SimpleParticleType` plus the provider `particles/<name>.json` names.
     /// API requests borrow the immutable load table; native file input can own its name.
     pub mod_particle: Option<std::borrow::Cow<'static, str>>,
-    /// Pre-1.20.5 entity-effect providers use spawn velocity as RGB; true is ambient.
-    pub legacy_entity_effect: Option<bool>,
-    /// A pre-1.21.4 trail, which had no duration: TrailParticle.Provider chose
-    /// `nextInt(40) + 10` after constructing the particle. Set only through the mod API,
-    /// never read from the wire.
-    pub legacy_trail_lifetime: bool,
     pub source: Option<std::sync::Arc<str>>,
     pub polytone_seed: Option<std::sync::Arc<super::polytone::Seed>>,
 }
@@ -57,8 +51,6 @@ impl ParticleOptions {
             geyser: None,
             vibration: None,
             mod_particle: None,
-            legacy_entity_effect: None,
-            legacy_trail_lifetime: false,
             polytone_seed: None,
             source: None,
         }

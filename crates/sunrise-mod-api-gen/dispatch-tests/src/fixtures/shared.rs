@@ -54,7 +54,9 @@ mod content {
 struct BlockEntityDraw(Vec<u32>);
 use serde_json::{Map, Value};
 use stubs::*;
+#[derive(Clone)]
 struct Text;
+#[derive(Clone)]
 struct ScreenshotImage;
 #[derive(Debug, PartialEq)]
 struct Zoom(u32);
@@ -128,23 +130,21 @@ mod generated {
         // The generated standalone-model dispatch builds the stub `Answered` and names the type through this path.
         pub(super) use super::super::Answered;
         pub(super) use super::super::{
-            Command, Config, Dispensed, InteractionResult, MapDecoration, MapInfo, Screen, Zoom,
+            Command, Config, DeclarationError, Dispensed, Hand, InteractionResult, MapDecoration,
+            MapInfo, Screen, Zoom,
         };
+        #[derive(Clone)]
         pub struct FluidModel;
         #[derive(Clone, Copy)]
         pub struct EntityRef;
         include!(concat!(env!("OUT_DIR"), "/dispatch_fixtures_api.rs"));
     }
     include!(concat!(env!("OUT_DIR"), "/mod_api_generated.rs"));
+    pub(super) use self::mod_api::InlineImageReplacement;
     pub(super) use self::mod_api::{
         BlockEntityTickReply, BlockFace, BlockKey, BlockState, CrosshairTarget,
     };
     pub use sunrise_mod_api_macros::__subscriptions;
-    // What `#[__subscriptions]` marks each implemented hook with: these listeners are not built for wasm.
-    macro_rules! __sunrise_mark {
-        ($owner:literal $method:ident) => {};
-    }
-    pub(crate) use __sunrise_mark;
 }
 use generated::*;
 struct Installed {
@@ -566,18 +566,6 @@ impl BlockEntityPart for Mod {
     fn block_entity_subscribed(&self) -> &'static [Option<HookId>] {
         &[]
     }
-    fn menu_button(&self, _: &mut dyn ServerHost, event: &mut MenuButtonEvent<'_>) {
-        assert_eq!(event.context.player, 123);
-        assert_eq!(event.context.player_entity_id, 42);
-        assert_eq!(event.context.pos, [1, 2, 3]);
-        assert_eq!(event.context.id, 9);
-        assert_eq!(event.entity.id(), "machine");
-        event.entity.data.push(9);
-        *event.carried = Some(ItemStack {
-            item: "bucket".into(),
-            count: 1,
-        });
-    }
     fn block_entity_submit(&self, _: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
         assert_eq!(event.pos, [1, 2, 3]);
         assert_eq!(event.block, "example:machine");
@@ -587,6 +575,22 @@ impl BlockEntityPart for Mod {
 impl MenuPart for Mod {
     fn menu_subscribed(&self) -> &'static [Option<HookId>] {
         &[]
+    }
+    fn menu_button(&self, _: &mut dyn ServerHost, event: &mut MenuButtonEvent<'_>) {
+        assert_eq!(event.context.player, 123);
+        assert_eq!(event.context.player_entity_id, 42);
+        assert_eq!(event.context.id, 9);
+        if let Some(entity) = event.entity.as_mut() {
+            assert_eq!(event.context.pos, Some([1, 2, 3]));
+            assert_eq!(entity.id(), "machine");
+            entity.data.push(9);
+        } else {
+            assert_eq!(event.context.pos, None);
+        }
+        *event.carried = Some(ItemStack {
+            item: "bucket".into(),
+            count: 1,
+        });
     }
     fn menu_slot_rules(&self, _: &dyn Host, event: &mut MenuSlotRulesEvent<'_>) {
         // The context arrives as the game passed it: who, where and the other slots.

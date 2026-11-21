@@ -62,7 +62,7 @@ fn picture(gpu: &Gpu, boss_world_fog: bool) -> Vec<[u8; 4]> {
             hand: false,
         },
         sunrise_shaders::GameInputs {
-            sky: Some(super::super::pack_sky::inputs()),
+            sky: Some(crate::gfx::pack_sky::inputs()),
             ..Default::default()
         },
     );

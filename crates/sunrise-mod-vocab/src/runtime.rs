@@ -7,34 +7,17 @@ use crate::*;
 pub struct ModEntry {
     pub(crate) id: &'static str,
     pub(crate) hooks: Box<dyn Hooks>,
-    /// Whether the game loaded it as a wasm module: what its registrations are checked against,
-    /// whatever the module says of itself.
-    pub(crate) wasm: bool,
 }
 
 impl ModEntry {
     /// Bind a hook implementation to its nonempty bundle id.
     pub fn new(id: &'static str, hooks: Box<dyn Hooks>) -> Self {
         assert!(!id.is_empty(), "native mod id must not be empty");
-        Self {
-            id,
-            hooks,
-            wasm: false,
-        }
-    }
-
-    /// Bind a loaded wasm module's hook proxy to its bundle id.
-    // hidden: the wasm runtime's side, not part of the mod surface
-    #[doc(hidden)]
-    pub fn wasm(id: &'static str, hooks: Box<dyn Hooks>) -> Self {
-        Self {
-            wasm: true,
-            ..Self::new(id, hooks)
-        }
+        Self { id, hooks }
     }
 
     /// Marks the thread as inside this mod's `hook` until the guard drops, so a panic in it
-    /// names both. A trait injection's generated dispatch calls it.
+    /// names both. The generated hook dispatcher calls it.
     // hidden: a game-side helper, not part of the mod surface
     #[doc(hidden)]
     pub fn enter(&self, hook: &'static str) -> crate::content::crash::ModGuard {
@@ -166,11 +149,22 @@ pub(crate) fn install(mods: Mods) -> &'static Installed {
     }
 }
 
+/// Checkpoint for an owning action around isolated dispatch. A trapped listener
+/// resets its outputs, but the owner must also abort any tentative Host writes.
+/// Unrelated threads do not affect the checkpoint.
+// hidden: the game's own decide/fire/apply actions read it; it is not a mod-facing call.
+#[doc(hidden)]
+pub fn isolated_failures() -> u64 {
+    LISTENER_SERIAL.get().1
+}
+
 /// Mark `id`'s listener of `hook` poisoned for the session (#2414 ruling):
 /// it is skipped by that one hook alone — its other hooks and Parts are
 /// untouched, unlike a whole-mod disable. Called only from a listener's
 /// `catch_unwind` handler, so an installation is always in place.
 pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
+    let (entered, trapped) = LISTENER_SERIAL.get();
+    LISTENER_SERIAL.set((entered, trapped.wrapping_add(1)));
     let installed = installed().expect("a poison lands inside a dispatch");
     let mut poisons = installed.poisons.lock().unwrap();
     let sets =
@@ -198,6 +192,30 @@ pub(crate) fn poisoned(hook: generated::HookId, id: &str) -> bool {
                 .and_then(|poisons| poisons[hook as usize].as_ref())
                 .is_some_and(|poisoned| poisoned.contains(id))
     })
+}
+
+/// How many listeners of `hook` are poisoned for the session.
+pub(crate) fn poisoned_count(hook: generated::HookId) -> usize {
+    installed().map_or(0, |installed| {
+        if installed
+            .poison_free
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return 0;
+        }
+        installed
+            .poisons
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|poisons| poisons[hook as usize].as_ref())
+            .map_or(0, |poisoned| poisoned.len())
+    })
+}
+
+pub(crate) fn first_output_refusal(hook: generated::HookId, id: &'static str) -> bool {
+    crate::dispatch_scope::backend()
+        .is_none_or(|backend| (backend.diagnostics.first_output_refusal)(hook, id))
 }
 
 /// The process-wide list in dispatch order, or an empty list before installation.
@@ -352,6 +370,16 @@ pub(crate) fn entered(
     entered_subscribers(hook_id, hook).map(|entry| &*entry.hooks)
 }
 
+/// [`entered`] filtered by `allow`, skipping rejected subscribers before entering their crash
+/// scope or advancing the listener serial.
+pub(crate) fn entered_matching<'a>(
+    hook_id: generated::HookId,
+    hook: &'static str,
+    allow: impl FnMut(&str) -> bool + 'a,
+) -> impl Iterator<Item = &'static dyn Hooks> + 'a {
+    entered_subscribers_matching(hook_id, hook, allow).map(|entry| &*entry.hooks)
+}
+
 /// [`entered`] with each mod's own `[mod] id`, for a hook that names the mod that answered.
 pub(crate) fn entered_with_id(
     hook_id: generated::HookId,
@@ -367,9 +395,17 @@ pub(crate) fn entered_subscribers(
     hook_id: generated::HookId,
     hook: &'static str,
 ) -> impl Iterator<Item = &'static ModEntry> {
+    entered_subscribers_matching(hook_id, hook, |_| true)
+}
+
+fn entered_subscribers_matching<'a>(
+    hook_id: generated::HookId,
+    hook: &'static str,
+    allow: impl FnMut(&str) -> bool + 'a,
+) -> impl Iterator<Item = &'static ModEntry> + 'a {
     let mut crash_guard = crate::dispatch_scope::ModGuard::empty();
     let scope = crate::dispatch_scope::snapshot();
-    listening(hook_id).map(move |(_, entry)| {
+    listening_matching(hook_id, allow).map(move |(_, entry)| {
         scope.replace(
             &mut crash_guard,
             crate::content::crash::ModCall {
@@ -380,6 +416,30 @@ pub(crate) fn entered_subscribers(
         );
         entry
     })
+}
+
+/// Whether this thread is outside `World`, where a Host call can be refused: the generated
+/// dispatch reads it once and runs its listeners through [`refusable`] only then.
+#[inline]
+pub(crate) fn outside_world() -> bool {
+    crate::world::phase::current_phase() != crate::world::phase::ModPhase::World
+}
+
+/// Runs a listener's call. With `contained` (outside `World`) a Host call the phase gate refuses
+/// comes back as `Err`. In `World` the listener is called directly.
+#[inline]
+pub(crate) fn refusable<T>(
+    contained: bool,
+    call: impl FnOnce() -> T,
+) -> Result<T, crate::world::phase_refusal::PhaseRefusal> {
+    if contained {
+        crate::world::phase_refusal::contain_refusal(
+            crate::content::crash::current_native_mod().unwrap_or("unknown"),
+            call,
+        )
+    } else {
+        Ok(call())
+    }
 }
 
 pub(crate) fn mark_mod(id: &'static str, hook: &'static str) -> crate::content::crash::ModGuard {
@@ -495,22 +555,37 @@ pub(crate) fn receives_cancelled(hook: generated::HookId) -> bool {
 pub(crate) fn listening(
     hook_id: generated::HookId,
 ) -> impl Iterator<Item = (bool, &'static ModEntry)> {
-    installed().into_iter().flat_map(move |installed| {
-        installed
-            .subscribers
-            .subscribers(hook_id as usize)
-            .filter(move |subscriber| {
-                !installed.disabled[subscriber.index].load(std::sync::atomic::Ordering::Relaxed)
-            })
-            .map(move |subscriber| {
-                // Every listener of a hook the loop reaches is one more entered: scoped
-                // resources end the previous listener's lease on it.
-                bump_listener_serial();
-                (
-                    subscriber.receives_cancelled,
-                    &installed.mods[subscriber.index],
-                )
-            })
+    listening_matching(hook_id, |_| true)
+}
+
+/// Like [`listening`], skipping any subscriber that `allow` rejects before entering it or
+/// advancing the listener serial.
+pub(crate) fn listening_matching<'a>(
+    hook_id: generated::HookId,
+    mut allow: impl FnMut(&str) -> bool + 'a,
+) -> impl Iterator<Item = (bool, &'static ModEntry)> + 'a {
+    let mut subscribers = installed().map(|installed| {
+        (
+            installed,
+            installed.subscribers.subscribers(hook_id as usize),
+        )
+    });
+    std::iter::from_fn(move || {
+        let (installed, subscribers) = subscribers.as_mut()?;
+        for subscriber in subscribers.by_ref() {
+            if installed.disabled[subscriber.index].load(std::sync::atomic::Ordering::Relaxed) {
+                continue;
+            }
+            let entry = &installed.mods[subscriber.index];
+            if !allow(entry.id) {
+                continue;
+            }
+            // Every listener of a hook the loop reaches is one more entered: scoped
+            // resources end the previous listener's lease on it.
+            bump_listener_serial();
+            return Some((subscriber.receives_cancelled, entry));
+        }
+        None
     })
 }
 
@@ -560,17 +635,18 @@ impl ListenerScope {
 }
 
 thread_local! {
-    /// Every listener entered on this thread, including listeners of different nested hooks.
-    static LISTENER_SERIAL: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Listener entries (including nested hooks) and poisoned traps on this thread.
+    static LISTENER_SERIAL: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 #[inline]
 fn bump_listener_serial() {
-    LISTENER_SERIAL.with(|serial| serial.set(serial.get().wrapping_add(1)));
+    let (entered, trapped) = LISTENER_SERIAL.get();
+    LISTENER_SERIAL.set((entered.wrapping_add(1), trapped));
 }
 
 pub(crate) fn listener_serial() -> u64 {
-    LISTENER_SERIAL.with(std::cell::Cell::get)
+    LISTENER_SERIAL.get().0
 }
 
 #[cfg(test)]

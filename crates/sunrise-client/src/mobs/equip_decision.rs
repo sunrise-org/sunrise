@@ -106,14 +106,6 @@ impl<'a> EquipDecision<'a> {
         self.invalidate(false);
         self.source.as_mut().map(|stack| &mut stack.count)
     }
-    pub fn damage_mut(&mut self) -> Option<&mut u32> {
-        self.invalidate(false);
-        self.source.as_mut().map(|stack| &mut stack.damage)
-    }
-    pub fn item_mut(&mut self) -> Option<&mut std::sync::Arc<str>> {
-        self.invalidate(false);
-        self.source.as_mut().map(|stack| &mut stack.item)
-    }
     pub fn data_mut(&mut self) -> Option<&mut sunrise_items::item_data::StackData> {
         self.invalidate(false);
         self.source.as_mut().map(ItemStack::data_mut)

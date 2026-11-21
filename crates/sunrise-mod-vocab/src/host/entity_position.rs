@@ -29,11 +29,11 @@ pub trait EntityPositionBackend {
     #[access(WorldOnly)]
     fn entity_on_ground(&self, entity: EntityRef) -> Option<bool>;
     /// Side: server.
-    /// The block the entity stands on (`Entity.getOnPos`): the supporting block
-    /// of an entity on the ground (`Entity.mainSupportingBlockPos`, the solid
-    /// block under its box nearest its position), else the block just under
-    /// its feet. A dragon part, which never stands, has the block under its
-    /// feet. None for a stale handle.
+    /// `Entity.getOnPos()`: the supporting block when available, otherwise the feet block with
+    /// vanilla's `1.0E-5F` subtracted from Y. Players and nonliving bodies that keep ground
+    /// support use the last move's retained `Entity.mainSupportingBlockPos`, not the current
+    /// ground flag or a new collision query.
+    /// A dragon part, which never stands, has the block under its feet. None for a stale handle.
     #[access(WorldOnly)]
     fn entity_on_block(&self, entity: EntityRef) -> Option<[i32; 3]>;
     /// Side: server.
@@ -66,7 +66,8 @@ pub trait EntityPositionBackend {
 pub trait EntityPositionBackendMut {
     /// Side: server.
     /// Moves the entity to `pos` in its level (`Entity.teleportTo`), as
-    /// `/tp` does: a player is placed there and told, a rider gets off. With
+    /// `/tp` does: a player is placed there and told, a rider gets off, and a
+    /// vehicle (including a general entity) takes its riders with it. With
     /// `rotation` (yaw, pitch in degrees) it also turns. False for a position
     /// outside the world's bounds, for wall-mounted entities or dragon parts, or when the
     /// requested rotation cannot be stored.
@@ -81,8 +82,9 @@ pub trait EntityPositionBackendMut {
     /// Moves the entity by `delta` blocks as `Entity.move(cause, delta)` does: the block,
     /// entity and world border collision scan stops it at what is in the way, it steps up what
     /// its step height allows, and its ground flag follows the move. It is not a teleport
-    /// (nothing is skipped over) and not a velocity: the entity's velocity is left as it is,
-    /// blocked components included. The `entity_move` hook fires for it with `cause`, once, so
+    /// or a velocity setter: when the body simulates a collided move, the collision response
+    /// can change its velocity, including through block restitution. The `entity_move` hook
+    /// fires for it with `cause`, once, so
     /// a listener may replace or cancel the delta as for any other move; a cancelled move is
     /// `Some([0.0; 3])`. A body with no physics (a marker or `NoGravity` armor stand, or one a
     /// mod set) moves the whole delta with no collision. `MoveCause::Piston` also applies a
@@ -91,8 +93,8 @@ pub trait EntityPositionBackendMut {
     /// the entity moved, `delta` less what the collisions took. None for a stale handle, on a
     /// client, for an entity outside the game's entity walk (a display, a painting, an item
     /// frame, an End crystal, a dragon part) and for a delta that is not finite or has a
-    /// component beyond 64 blocks. The entity's own tick still does what follows a move: fall
-    /// damage, block effects and triggers.
+    /// component beyond 64 blocks. The base move's fall handling can remove a body before
+    /// restitution. Block effects and triggers outside the base move still run at their own moments.
     ///
     /// A player moves as `Entity.move` with `MoverType.SELF` would, whatever `cause` the hook
     /// hears: blocks, entity and moving colliders and the player's collision exclusions stop
@@ -151,6 +153,7 @@ pub trait EntityPositionBackendMut {
     /// Turns the entity to `yaw` and `pitch` in degrees (`Entity.setYRot`,
     /// `setXRot`): the pitch wraps and is clamped to -90..90. False for kinds
     /// whose rotation Sunrise does not fully store, or an unavailable player.
+    /// Works for general entities; the new angles are tracked to clients.
     /// Does not teleport or dismount.
     #[access(WorldOnly)]
     fn entity_set_rotation(&mut self, entity: EntityRef, yaw: f32, pitch: f32) -> bool;

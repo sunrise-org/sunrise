@@ -84,14 +84,14 @@ impl Game<'_> {
             let (x, y) = slot_origin(w, h, index);
             batch.sprite(
                 &self.gui.atlas,
-                "gui/sprites/gamemode_switcher/slot",
+                "gamemode_switcher/slot",
                 x as f32,
                 y as f32,
             );
             if mode == selected {
                 batch.sprite(
                     &self.gui.atlas,
-                    "gui/sprites/gamemode_switcher/selection",
+                    "gamemode_switcher/selection",
                     x as f32,
                     y as f32,
                 );

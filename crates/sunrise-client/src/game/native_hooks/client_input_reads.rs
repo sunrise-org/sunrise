@@ -3,7 +3,6 @@ use crate::game::api_values::TryIntoApi;
 
 /// Helpers for native mods, kept as stable as the hook points.
 // Native mods use these; nothing in Sunrise does.
-#[allow(dead_code)]
 impl Game<'_> {
     /// Playing, with nothing over the world: keys and zoom apply.
     pub(in crate::game) fn playing(&self) -> bool {
@@ -44,6 +43,17 @@ impl Game<'_> {
         let mut binding = std::collections::hash_map::DefaultHasher::new();
         self.settings.keys.get(name).hash(&mut binding);
         Some((down, binding.finish()))
+    }
+    /// Whether the key or mouse button the vanilla mapping `name` is bound to is physically down.
+    pub(in crate::game) fn mapping_physical_down(
+        &self,
+        name: &str,
+    ) -> Result<Option<bool>, mod_api::LevelReadError> {
+        // The mappings `mapping` and `mapping_state` answer for, and no others.
+        if self.mapping_held(name).is_none() {
+            return Ok(None);
+        }
+        Ok(Some(self.is_key_down(self.settings.keys.get(name))))
     }
     /// Whether the vanilla mapping `name` is held, for `mapping` and `mapping_state`.
     fn mapping_held(&self, name: &str) -> Option<bool> {

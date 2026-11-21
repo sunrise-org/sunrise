@@ -19,7 +19,7 @@ A client without this mod predicts vanilla here; the server corrects it.
 
 ## Ingredient data
 
-Read `event.data` as an API `Compound`, using typed `Tag` variants such as `Int`, `Long`, `List` and `Compound`, not JSON accessors.
+Read `event.data` as an API `Compound`, using typed `Tag` variants such as `Int`, `Long`, `List` and `Compound`, not JSON accessors. A compound's traversal order depends on its construction and mutation history; equality compares entries regardless of order.
 
 A `Compound`'s keys and `Tag::String` values are `JavaString`s: UTF-16 text that can keep Java's unpaired surrogates, so they are not Rust `String`s. Build one from a Rust string with `JavaString::from("key")` (a `&str` converts), for example to look up `data.get(&JavaString::from("count"))`.
 

@@ -1,4 +1,4 @@
-//! Reload-stable definitions, shared by native and wasm mods.
+//! Reload-stable recipe definitions.
 use mod_api::*;
 use std::sync::RwLock;
 

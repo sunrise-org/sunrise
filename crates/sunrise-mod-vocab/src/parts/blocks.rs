@@ -29,7 +29,7 @@ fn set(bits: &mut Vec<u64>, key: crate::BlockKey) {
 
 impl ListenIndex {
     /// The index of the resolved hook tables (`block_keys` filled).
-    pub(crate) fn of(hooks: &[Option<HookParts>]) -> Self {
+    pub(crate) fn of(hooks: &[Option<Box<HookParts>>]) -> Self {
         let listening = hooks
             .iter()
             .map(|table| {

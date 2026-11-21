@@ -489,10 +489,14 @@ impl ChunkTickets {
     /// had left, as `addTicket` adds them in turn.
     pub fn with_saved_portal(saved: Vec<PortalTicket>) -> Self {
         let mut tickets = Self::default();
-        for ticket in saved {
-            tickets.add(ticket);
-        }
+        tickets.restore_portal(saved);
         tickets
+    }
+    /// Activate saved portal tickets without replacing the level's live tickets.
+    pub fn restore_portal(&mut self, saved: Vec<PortalTicket>) {
+        for ticket in saved {
+            self.add(ticket);
+        }
     }
     /// `TicketStorage.addTicket`: one of the same level already on the chunk
     /// only starts its timeout again.

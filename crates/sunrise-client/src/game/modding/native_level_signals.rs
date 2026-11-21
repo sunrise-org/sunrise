@@ -189,6 +189,9 @@ impl SignalAccess for ReadLevel<'_, '_> {
 }
 
 impl LevelHost for ReadLevel<'_, '_> {
+    fn block_states(&self) -> mod_api::BlockStates<'_> {
+        mod_api::BlockStates::of(self.game)
+    }
     fn block_face_sturdy(
         &self,
         pos: [i32; 3],

@@ -14,6 +14,10 @@ fn game<'a>(resources: &'a mut Option<Arc<Resources>>) -> Game<'a> {
         std::env::var_os("SUNRISE_TEST_RESOURCES")
             .expect("set SUNRISE_TEST_RESOURCES to prepared resources"),
     );
+    game_at(resources, root)
+}
+
+fn game_at<'a>(resources: &'a mut Option<Arc<Resources>>, root: std::path::PathBuf) -> Game<'a> {
     let settings = Settings::default();
     let loaded = load_resources(
         sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
@@ -119,6 +123,62 @@ fn milk_sounds_carry_pitch_one_and_draw_no_level_random() {
             "{kind} milk drew the level random"
         );
     }
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_brown_mooshroom_milks_the_effects_of_a_mod_block_item() {
+    use crate::game::api_values::TryIntoEngine;
+    use sunrise_client::mod_content::{ContentMod, resource_root};
+    use sunrise_mod_package::{content::Content, enabled::EnabledMods};
+
+    let base = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+    let scratch =
+        std::env::temp_dir().join(format!("sunrise-mooshroom-stew-{}", std::process::id()));
+    let mut block = mod_api::Block::new("stewtest:herb", "minecraft:stone");
+    block.suspicious_stew_effects = Some(vec![
+        ("minecraft:luck".into(), 81),
+        ("minecraft:speed".into(), 24),
+    ]);
+    let mut content = Content::declared("stewtest");
+    content
+        .declare(&[block.try_into_engine(&()).unwrap()], &[])
+        .unwrap();
+    let root = resource_root(
+        &base,
+        &scratch.join("jars"),
+        &[ContentMod {
+            id: "stewtest".into(),
+            content,
+            jars: Vec::new(),
+        }],
+        &scratch,
+        &EnabledMods::new([("stewtest".into(), mod_api::Side::Both)]),
+    )
+    .unwrap();
+
+    let mut resources = None;
+    let mut game = game_at(&mut resources, root);
+    spawn(&mut game, "minecraft:mooshroom", 7, [2.5, 64.0, 2.5]);
+    game.mobs[0].extra.variant = 1;
+    game.inventory[0] = Some(ItemStack::new("stewtest:herb", 1));
+    assert!(game.interact_mob(target(7)).unwrap());
+    assert!(game.inventory[0].is_none());
+
+    game.inventory[0] = Some(ItemStack::new("minecraft:bowl", 1));
+    assert!(game.interact_mob(target(7)).unwrap());
+    let stew = game.inventory[0].as_ref().unwrap();
+    assert_eq!((&*stew.item, stew.count), ("minecraft:suspicious_stew", 1));
+    assert_eq!(
+        stew.data().unwrap().stew_effects,
+        [
+            (Arc::from("minecraft:luck"), 81),
+            (Arc::from("minecraft:speed"), 24)
+        ]
+    );
+    assert!(game.mobs[0].extra.stew_effects.is_none());
+    drop(game);
+    std::fs::remove_dir_all(scratch).unwrap();
 }
 
 #[test]

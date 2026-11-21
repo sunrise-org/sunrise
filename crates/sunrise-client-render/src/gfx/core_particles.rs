@@ -1,12 +1,14 @@
 //! Polytone GPU particle types with their own core shader (wiki "GPU Particles", `shader`): each
 //! type's live records go to its shader as the vertex format, the same record on the quad's four
 //! corners, and the shader places, colours and kills them on the graphics card. Types without a
-//! shader, and those whose shader doesn't build here, are built on the CPU with the engine's
-//! particles (`particles::polytone_gpu`).
+//! shader, and those whose shader doesn't build here or that the frame has no room for, are built
+//! on the CPU with the engine's particles (`particles::polytone_gpu`).
 
-use crate::particles::polytone_gpu::{GpuShader, ShaderBatch, ShaderVertex};
+use crate::particles::polytone_gpu::{
+    FALLBACK_QUADS, GpuParticleRenderer, GpuShader, ShaderBatch, ShaderRequest, ShaderVertex,
+};
 use std::sync::Arc;
-use sunrise_polytone::gpu_particle::{GPU_BLOCK, GPU_BLOCK_SIZE};
+use sunrise_polytone::gpu_particle::{GPU_BLOCK, GPU_BLOCK_SIZE, Surface};
 use sunrise_polytone::particles::RenderType;
 
 /// Each vanilla block's offset in a pipeline's uniform buffer (`core_shader::BLOCKS` order), as
@@ -20,6 +22,20 @@ const OTHER_OFFSET: u64 = 1024;
 const FLOAT_BLOCK: u64 = 16;
 /// The heightmap `Sampler1` holds: this many columns a side around the camera.
 pub const HEIGHTMAP_SIZE: u32 = 128;
+/// The most quads a frame draws with the types' own shaders, all types together: a type's ring
+/// of records times its `area`'s copies is the pack's to choose.
+const MAX_QUADS: usize = 1 << 20;
+/// A quad's bytes in the record buffer: the record on its four corners.
+const QUAD_BYTES: u64 = std::mem::size_of::<ShaderVertex>() as u64 * 4;
+
+/// The quads the types drawn on the CPU may add to a frame on a device whose buffers hold
+/// `max_buffer_size` bytes: [`FALLBACK_QUADS`], or a quarter of the entity vertex buffer the
+/// device allows, leaving the rest to the frame's other quads and the buffer's growth to a
+/// power of two (`gfx::entity_buffer_vertices`).
+pub(super) fn fallback_quads(max_buffer_size: u64) -> usize {
+    let quad = std::mem::size_of::<crate::mesher::Vertex>() as u64 * 4;
+    FALLBACK_QUADS.min((max_buffer_size / quad / 4) as usize)
+}
 
 /// The record as vertex attributes 0 to 5 (`polytone_gpu::GLUE`).
 const ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
@@ -61,7 +77,7 @@ struct Draw {
     quads: u32,
 }
 
-pub(super) struct CoreParticles {
+pub(crate) struct CoreParticles {
     /// By shader: `None` for one that doesn't build, or can't draw into this frame (logged once).
     pipelines: Vec<(Arc<GpuShader>, Option<Pipeline>)>,
     /// The frame the pipelines draw into: its format, and whether it holds linear light.
@@ -70,8 +86,14 @@ pub(super) struct CoreParticles {
     /// (`Renderer::set_polytone_batches`).
     batches: Vec<ShaderBatch>,
     vertices: wgpu::Buffer,
+    /// The quads a frame's batches may hold together: [`MAX_QUADS`], or fewer when a vertex
+    /// buffer can't hold them.
+    budget: usize,
     heightmap: wgpu::Texture,
     heightmap_view: wgpu::TextureView,
+    /// The snapshot `heightmap` holds, none until the first upload (a new renderer's texture
+    /// is unfilled).
+    uploaded: Option<Surface>,
     sampler: wgpu::Sampler,
     blank: wgpu::TextureView,
     draws: Vec<Draw>,
@@ -104,6 +126,8 @@ impl CoreParticles {
             target,
             batches: Vec::new(),
             vertices: vertex_buffer(device, 1 << 16),
+            budget: MAX_QUADS.min((device.limits().max_buffer_size / QUAD_BYTES) as usize),
+            uploaded: None,
             heightmap_view: heightmap.create_view(&Default::default()),
             heightmap,
             sampler: device.create_sampler(&wgpu::SamplerDescriptor {
@@ -116,14 +140,19 @@ impl CoreParticles {
     }
 
     /// The motion-blocking heights `Sampler1` holds: [`HEIGHTMAP_SIZE`] columns a side, x along
-    /// a row and z down the rows, each the height above the world's bottom.
-    fn set_heightmap(&self, queue: &wgpu::Queue, heights: &[u16]) {
-        let size = HEIGHTMAP_SIZE as usize;
-        if heights.len() != size * size {
-            return;
+    /// a row and z down the rows, each the height above the world's bottom. Uploaded when it
+    /// isn't the snapshot the texture already holds (whether it was).
+    fn set_heightmap(&mut self, queue: &wgpu::Queue, surface: &Surface) -> bool {
+        if surface.area().size != HEIGHTMAP_SIZE
+            || self.uploaded.as_ref().is_some_and(|held| {
+                held.area() == surface.area() && Arc::ptr_eq(held.heights(), surface.heights())
+            })
+        {
+            return false;
         }
         // Wiki "GPU Particles": r is the low byte, g the high byte.
-        let texels: Vec<u8> = heights
+        let texels: Vec<u8> = surface
+            .heights()
             .iter()
             .flat_map(|h| {
                 let [low, high] = h.to_le_bytes();
@@ -140,11 +169,14 @@ impl CoreParticles {
             },
             self.heightmap.size(),
         );
+        self.uploaded = Some(surface.clone());
+        true
     }
 
-    /// The renderer's verdict on `shaders` (the GPU particle types with live records) for the
+    /// The renderer's verdict on `requests` (the GPU particle types with live records) for the
     /// frame about to be built, before its quads are: a shader whose pipeline builds for a
-    /// frame of `target` (format, linear light) is drawn, and its type leaves its quads out;
+    /// frame of `target` (format, linear light) is drawn when all of its type's quads fit in
+    /// what the types before it left of the frame's budget, and its type leaves its quads out;
     /// any other keeps them. Pipelines are built the first time; a verdict is given again every
     /// frame, so a type's state is always this renderer's for this frame.
     pub(super) fn decide(
@@ -153,7 +185,7 @@ impl CoreParticles {
         queue: &wgpu::Queue,
         target: (wgpu::TextureFormat, bool),
         lightmap: (&wgpu::TextureView, &wgpu::Sampler),
-        shaders: &[Arc<GpuShader>],
+        requests: &[ShaderRequest],
     ) {
         if self.target != target {
             self.pipelines.clear();
@@ -161,7 +193,8 @@ impl CoreParticles {
         }
         // The shaders of packs no longer loaded: only this cache holds them.
         self.pipelines.retain(|(s, _)| Arc::strong_count(s) > 1);
-        for shader in shaders {
+        let mut room = self.budget;
+        for ShaderRequest { shader, quads } in requests {
             let built = match self.pipelines.iter().find(|(s, _)| Arc::ptr_eq(s, shader)) {
                 Some((_, pipeline)) => pipeline.is_some(),
                 None => {
@@ -171,7 +204,11 @@ impl CoreParticles {
                     built
                 }
             };
-            shader.set_drawn(built);
+            let drawn = built && *quads <= room;
+            if drawn {
+                room -= quads;
+            }
+            shader.set_drawn(drawn);
         }
     }
 
@@ -182,14 +219,14 @@ impl CoreParticles {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         title: bool,
-        vanilla: impl FnOnce() -> Vec<u8>,
+        vanilla: impl FnOnce() -> [u8; 1024],
     ) {
         let mut batches = std::mem::take(&mut self.batches);
         if title {
             batches.clear();
         }
         let vanilla = if batches.is_empty() {
-            Vec::new()
+            [0; 1024]
         } else {
             vanilla()
         };
@@ -206,9 +243,8 @@ impl CoreParticles {
         vanilla: &[u8],
     ) {
         self.draws.clear();
-        // The records a vertex buffer can hold at most.
-        let stride = std::mem::size_of::<ShaderVertex>() as u64 * 4;
-        let mut room = (device.limits().max_buffer_size / stride) as usize;
+        // What `decide` granted: never past the budget, whatever the batches hold.
+        let mut room = self.budget;
         let mut vertices: Vec<ShaderVertex> = Vec::new();
         for batch in batches {
             let Some(index) = self
@@ -240,8 +276,8 @@ impl CoreParticles {
                 }
             }
             queue.write_buffer(&pipeline.uniform, 0, &data);
-            let quads = (batch.vertices.len() / 4).min(room);
-            if quads == 0 {
+            let quads = batch.vertices.len() / 4;
+            if quads == 0 || quads > room {
                 continue;
             }
             room -= quads;
@@ -277,7 +313,6 @@ impl CoreParticles {
         if index_quads == 0 {
             return;
         }
-        pass.set_vertex_buffer(0, self.vertices.slice(..));
         pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
         for draw in &self.draws {
             let Some(pipeline) = &self.pipelines[draw.pipeline].1 else {
@@ -285,11 +320,15 @@ impl CoreParticles {
             };
             pass.set_pipeline(&pipeline.pipeline);
             pass.set_bind_group(0, &pipeline.group, &[]);
-            // More quads than indices: the same indices over the next corners.
+            // The type's own records from its first: `gl_VertexIndex` counts from 0 in each
+            // type, as a pack's shader spreads an `area`'s copies by it.
+            let first = u64::from(draw.first) * QUAD_BYTES;
+            pass.set_vertex_buffer(0, self.vertices.slice(first..));
+            // More quads than indices: the same indices over the type's next corners.
             let mut done = 0;
             while done < draw.quads {
                 let n = (draw.quads - done).min(index_quads);
-                pass.draw_indexed(0..n * 6, ((draw.first + done) * 4) as i32, 0..1);
+                pass.draw_indexed(0..n * 6, (done * 4) as i32, 0..1);
                 done += n;
             }
         }
@@ -517,35 +556,35 @@ impl CoreParticles {
     }
 }
 
-/// The game's side: the verdict it asks for before building the frame's quads, the batches and
-/// heightmap it hands over, and the world frame's preparing and drawing of them.
-impl super::Renderer {
-    /// Decides, for the frame about to be built, which of `shaders` (the GPU particle types
-    /// with live records, `ParticleEngine::polytone_shaders`) this renderer draws: the others'
-    /// types draw their quads (`GpuShader::drawn`).
-    pub fn decide_polytone_shaders(&mut self, shaders: &[Arc<GpuShader>]) {
+/// The game's side: the verdict it asks for before building the frame's quads, the heightmap
+/// and batches it hands over.
+impl GpuParticleRenderer for super::Renderer {
+    fn polytone_fallback_quads(&self) -> usize {
+        fallback_quads(self.device.limits().max_buffer_size)
+    }
+
+    fn decide_polytone_shaders(&mut self, requests: &[ShaderRequest]) {
         let frame = &self.output.frame;
         self.core_particles.decide(
             &self.device,
             &self.queue,
             (frame.format, frame.linear_light),
             (&self.lightmap_view, &self.lightmap_sampler),
-            shaders,
+            requests,
         );
     }
 
-    /// The Polytone GPU particle batches drawn by their own shaders in the frame being built
-    /// (`ParticleEngine::polytone_shader_batches`): the game sets them each frame.
-    pub fn set_polytone_batches(&mut self, batches: Vec<ShaderBatch>) {
+    fn set_polytone_heightmap(&mut self, surface: &Surface) {
+        self.core_particles.set_heightmap(&self.queue, surface);
+    }
+
+    fn set_polytone_batches(&mut self, batches: Vec<ShaderBatch>) {
         self.core_particles.batches = batches;
     }
+}
 
-    /// The motion-blocking heights those shaders read as `Sampler1`
-    /// ([`HEIGHTMAP_SIZE`] columns a side, x along a row, above the world's bottom).
-    pub fn set_polytone_heightmap(&self, heights: &[u16]) {
-        self.core_particles.set_heightmap(&self.queue, heights);
-    }
-
+/// The world frame's preparing and drawing of the batches.
+impl super::Renderer {
     /// Whether this frame has GPU particle batches to draw.
     pub(super) fn core_particles_drawing(&self) -> bool {
         self.core_particles.drawing()

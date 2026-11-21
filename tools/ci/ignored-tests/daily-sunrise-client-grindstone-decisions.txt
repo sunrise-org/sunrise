@@ -1,0 +1,13 @@
+# The grindstone_place and grindstone_take decision tests use prepared resources.
+sunrise-client game::grindstone_decisions_tests::a_cancelled_place_leaves_no_grindstone_result lib daily resources
+sunrise-client game::grindstone_decisions_tests::a_cancelled_take_keeps_the_click_and_undoes_the_listener_write lib daily resources
+sunrise-client game::grindstone_decisions_tests::a_grindstone_without_a_listener_keeps_the_vanilla_result lib daily resources
+sunrise-client game::grindstone_decisions_tests::a_panicking_take_listener_leaves_the_grindstone_as_it_was lib daily resources
+sunrise-client game::grindstone_decisions_tests::a_place_listener_sets_the_grindstone_result lib daily resources
+sunrise-client game::grindstone_decisions_tests::a_refused_quick_move_take_puts_the_moved_result_back lib daily resources
+sunrise-client game::grindstone_decisions_tests::a_refused_throw_take_does_not_drop_the_result lib daily resources
+sunrise-client game::grindstone_decisions_tests::a_stale_place_is_refused_and_the_listener_write_undone lib daily resources
+sunrise-client game::grindstone_decisions_tests::an_invalid_place_answer_is_refused lib daily resources
+sunrise-client game::grindstone_decisions_tests::an_outer_abort_undoes_an_accepted_grindstone_take lib daily resources
+sunrise-client game::grindstone_decisions_tests::equal_state_backing_replacement_refuses_place_and_take lib daily resources
+sunrise-client game::grindstone_decisions_tests::panicking_grindstone_listeners_roll_back_place_and_take lib daily resources

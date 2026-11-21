@@ -2,7 +2,7 @@
 
 Use `host.schedule_task` to receive a callback after a delay in server ticks. It corresponds to
 vanilla's `MinecraftServer.tell(new TickTask(getTickCount() + delay, runnable))`. A closure cannot
-cross into a wasm mod or outlive the host a hook borrows, so the callback is a hook: the mod passes
+outlive the host a hook borrows, so the callback is a hook: the mod passes
 a `u64` token and `Hooks::scheduled_task` hands it back.
 
 ```rust,ignore

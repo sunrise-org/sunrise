@@ -1,4 +1,4 @@
-"""CI, the launcher's native-mod toolchain and the wasm mods' toolchain use one Rust: tools/ci/rust-version.
+"""CI and the launcher's native-mod toolchain use one Rust: tools/ci/rust-version.
 
 A workflow names no floating channel (`stable`, `beta`, `nightly`) and no release of its own. The allowed forms:
 - `bash tools/ci/rustup_install.sh [rustup toolchain install options]`: installs the pin and makes it the job's
@@ -54,11 +54,6 @@ def violations(name: str, text: str) -> list[str]:
 class RustPinTests(unittest.TestCase):
     def test_the_pin_is_one_exact_release(self):
         self.assertRegex((ROOT / "tools/ci/rust-version").read_text(), r"^\d+\.\d+\.\d+\n?$")
-
-    def test_the_wasm_toolchain_reads_the_pin(self):
-        for path, include in (("crates/cargo-sunrise-mod/src/wasm.rs", '"../../../tools/ci/rust-version"'),):
-            with self.subTest(path=path):
-                self.assertIn(f"include_str!({include}).trim_ascii()", (ROOT / path).read_text())
 
     def test_active_workflows_use_the_pin(self):
         found = []

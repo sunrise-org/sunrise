@@ -1,6 +1,41 @@
 //! Local click, cursor, drag and pick-all algorithms.
 use super::*;
 
+/// One take from a block-backed menu: slot, stack taken and remainder in that slot.
+pub type SlotTake = (usize, ItemStack, Option<ItemStack>);
+
+/// The remainder of one click, suspended only when the server has a take to deliver.
+pub struct ClickContinuation(ClickStep);
+
+impl ClickContinuation {
+    /// Only an already displaced swap stack is owed after the backing menu is gone.
+    /// This continuation uses player inventory and drops, not container slots.
+    pub fn after_menu_closed(self) -> Option<Self> {
+        matches!(self.0, ClickStep::SwapOverflow(_)).then_some(self)
+    }
+}
+
+enum ClickStep {
+    QuickMove {
+        slot: usize,
+        previous: Option<ItemStack>,
+    },
+    Throw {
+        slot: usize,
+        amount: u32,
+        previous: Option<ItemStack>,
+    },
+    PickAll {
+        next: i32,
+        step: i32,
+        pass: u8,
+    },
+    SwapOverflow(ItemStack),
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct TakeTracker(Option<SlotTake>);
+
 impl Menu {
     pub(super) fn quick_replace(&self, s: usize, stack: &ItemStack, env: &Env) -> bool {
         match self.slot(s) {
@@ -74,7 +109,7 @@ impl Menu {
         slot_index: i32,
         button: i32,
         input: Input,
-    ) -> Result<(), &'static str> {
+    ) -> Result<Option<ClickContinuation>, &'static str> {
         self.touch();
         let size = self.state.slots.len() as i32;
         let in_range = |i: i32| (0..size).contains(&i);
@@ -118,7 +153,7 @@ impl Menu {
                         let s = self.state.quick_slots[0] as i32;
                         let ty = self.state.quick_type;
                         self.reset_quick_craft();
-                        return self.click(env, s, ty, Input::Pickup);
+                        return self.click(env, s, ty, Input::Pickup).map(|()| None);
                     }
                     let mut source = self.state.carried.clone().expect("checked");
                     let mut remaining = source.count as i64;
@@ -142,7 +177,7 @@ impl Menu {
                         )
                     {
                         self.reset_quick_craft();
-                        return Ok(());
+                        return Ok(None);
                     }
                     for s in self.state.quick_slots.clone() {
                         let proof = self.equip_placement(env, s, carried);
@@ -185,15 +220,15 @@ impl Menu {
             } else {
                 self.reset_quick_craft();
             }
-            return Ok(());
+            return Ok(None);
         }
         if self.state.quick_status != 0 {
             self.reset_quick_craft();
-            return Ok(());
+            return Ok(None);
         }
         // A slot the mod's screen leaves out takes no click.
         if in_range(slot_index) && self.state.slots[slot_index as usize].role == Role::Hidden {
-            return Ok(());
+            return Ok(None);
         }
         if matches!(input, Input::Pickup | Input::QuickMove) && (button == 0 || button == 1) {
             let primary = button == 0;
@@ -210,25 +245,22 @@ impl Menu {
                 }
             } else if input == Input::QuickMove {
                 if slot_index < 0 {
-                    return Ok(());
+                    return Ok(None);
                 }
                 if !in_range(slot_index) {
                     return Err(OUT_OF_BOUNDS);
                 }
                 let s = slot_index as usize;
-                if !self.may_pickup(env, s) {
-                    return Ok(());
-                }
-                let mut clicked = self.quick_move(env, s);
-                while let Some(c) = &clicked {
-                    if !self.slot(s).is_some_and(|now| same_item(now, c)) {
-                        break;
-                    }
-                    clicked = self.quick_move(env, s);
-                }
+                return Ok(self.run_click_step(
+                    env,
+                    ClickStep::QuickMove {
+                        slot: s,
+                        previous: None,
+                    },
+                ));
             } else {
                 if slot_index < 0 {
-                    return Ok(());
+                    return Ok(None);
                 }
                 if !in_range(slot_index) {
                     return Err(OUT_OF_BOUNDS);
@@ -239,7 +271,7 @@ impl Menu {
             if !in_range(slot_index) {
                 return Err(OUT_OF_BOUNDS);
             }
-            self.swap(env, slot_index as usize, button as usize);
+            return Ok(self.swap(env, slot_index as usize, button as usize));
         } else if input == Input::Clone
             && self.state.creative
             && self.state.carried.is_none()
@@ -267,28 +299,81 @@ impl Menu {
             } else {
                 self.slot(s).map_or(0, |c| c.count)
             };
-            let mut taken = self.safe_take(env, s, amount, u32::MAX);
-            if let Some(t) = &taken {
-                self.drop_stack(t, env.items);
-            }
             if button == 1 {
-                while let Some(t) = &taken {
-                    if !self.slot(s).is_some_and(|now| same_item(now, t)) {
-                        break;
-                    }
-                    taken = self.safe_take(env, s, amount, u32::MAX);
-                    if let Some(t) = &taken {
-                        self.drop_stack(t, env.items);
-                    }
-                }
+                return Ok(self.run_click_step(
+                    env,
+                    ClickStep::Throw {
+                        slot: s,
+                        amount,
+                        previous: None,
+                    },
+                ));
             }
+            self.throw_step(env, s, amount, None);
         } else if input == Input::PickupAll && slot_index >= 0 {
             if !in_range(slot_index) {
                 return Err(OUT_OF_BOUNDS);
             }
-            self.pickup_all(env, slot_index as usize, button);
+            let s = slot_index as usize;
+            if self.carried.is_some() && !(self.has_item(s) && self.may_pickup(env, s)) {
+                let (next, step) = if button == 0 { (0, 1) } else { (size - 1, -1) };
+                return Ok(self.run_click_step(
+                    env,
+                    ClickStep::PickAll {
+                        next,
+                        step,
+                        pass: 0,
+                    },
+                ));
+            }
         }
-        Ok(())
+        Ok(None)
+    }
+
+    /// Starts take recording for an authoritative block-backed mod menu click.
+    pub fn track_takes(&mut self, track: bool) {
+        self.takes = track.then_some(TakeTracker(None));
+    }
+
+    /// The one take performed before the click yielded or finished.
+    pub fn take_notice(&mut self) -> Option<SlotTake> {
+        self.takes.as_mut()?.0.take()
+    }
+
+    fn take_pending(&self) -> bool {
+        self.takes
+            .as_ref()
+            .is_some_and(|tracker| tracker.0.is_some())
+    }
+
+    fn tracks_take(&self, s: usize) -> bool {
+        self.takes.is_some() && matches!(self.kind, Kind::Mod(t) if t.owns_slot(s))
+    }
+
+    /// `Slot.onTake`, with the slot's remainder before a crafting result recomputes.
+    pub(super) fn note_take(&mut self, s: usize, taken: &ItemStack) {
+        if taken.count > 0 && self.tracks_take(s) {
+            let left = self.slot(s).cloned();
+            self.takes.as_mut().unwrap().0 = Some((s, taken.clone(), left));
+        }
+    }
+
+    /// The crafting result's `onTake` records itself. Record other positive quick moves only
+    /// while this source has a listener.
+    fn quick_move_noted(&mut self, env: &Env, s: usize) -> Option<ItemStack> {
+        if !self.tracks_take(s) || self.state.slots[s].role == Role::CraftResult {
+            return self.quick_move(env, s);
+        }
+        let before = self.slot(s).map_or(0, |held| held.count);
+        let moved = self.quick_move(env, s)?;
+        let left = self.slot(s).map_or(0, |now| now.count);
+        let count = before.saturating_sub(left);
+        if count > 0 {
+            let mut taken = moved.clone();
+            taken.count = count;
+            self.note_take(s, &taken);
+        }
+        Some(moved)
     }
 
     /// The PICKUP branch of `doClick`: a bundle's override, else the
@@ -299,6 +384,40 @@ impl Menu {
         if let Some(outcome) = env.stacked {
             (canceled, handled) = (outcome.canceled, outcome.handled);
             if canceled && handled {
+                // The replacement goes through the clicked slot's rules: a result slot's or
+                // filled potion slot's `onTake` would not run; `mayPickup` and `mayPlace` still
+                // answer, and the stack fits
+                // `Slot.getMaxStackSize`. A replacement they refuse changes nothing.
+                if let Some(clicked) = &outcome.clicked
+                    && clicked.as_ref() != self.slot(s)
+                {
+                    let held = self.slot(s).is_some();
+                    let result = matches!(
+                        self.state.slots[s].role,
+                        Role::Output
+                            | Role::CraftResult
+                            | Role::Inert
+                            | Role::LoomResult
+                            | Role::MerchantResult
+                            | Role::StoneResult
+                            | Role::GrindResult
+                            | Role::CombineResult
+                            | Role::CartoResult
+                            | Role::ModResult
+                    );
+                    if result
+                        || (held
+                            && (self.state.slots[s].role == Role::Potion
+                                || !self.may_pickup(env, s)))
+                        || clicked.as_ref().is_some_and(|stack| {
+                            !self.may_place(env, s, stack)
+                                || stack.count > self.slot_max(env, s, stack)
+                        })
+                    {
+                        outcome.refused.set(true);
+                        return;
+                    }
+                }
                 if let Some(carried) = outcome.carried.clone() {
                     self.state.carried = carried;
                 }
@@ -402,20 +521,20 @@ impl Menu {
     }
 
     /// The SWAP branch of `doClick`.
-    pub(super) fn swap(&mut self, env: &Env, target: usize, button: usize) {
+    fn swap(&mut self, env: &Env, target: usize, button: usize) -> Option<ClickContinuation> {
         self.touch();
         let inv_slot = button;
         let target_slot = self.state.slots[target];
         if target_slot.container == PLAYER && target_slot.index == inv_slot {
-            return;
+            return None;
         }
         if self.swap_equip_source(env, target, inv_slot) {
-            return;
+            return None;
         }
         let source = self.state.containers[PLAYER][inv_slot].clone();
         let target_stack = self.slot(target).cloned();
         if source.is_none() && target_stack.is_none() {
-            return;
+            return None;
         }
         match (source, target_stack) {
             (None, Some(mut taken)) => {
@@ -453,9 +572,12 @@ impl Menu {
                         self.state.containers[PLAYER][inv_slot] = Some(source);
                         self.set_by_player(env, target, Some(part));
                         self.on_take(env, target, &mut taken);
-                        if !self.inventory_add(env, &mut taken) {
-                            self.drop_stack(&taken, env.items);
-                        }
+                        let rest = ClickStep::SwapOverflow(taken);
+                        return if self.take_pending() {
+                            Some(ClickContinuation(rest))
+                        } else {
+                            self.run_click_step(env, rest)
+                        };
                     } else {
                         self.state.containers[PLAYER][inv_slot] = Some(taken.clone());
                         self.set_by_player(env, target, Some(source));
@@ -464,6 +586,74 @@ impl Menu {
                 }
             }
             (None, None) => {}
+        }
+        None
+    }
+
+    fn quick_move_step(
+        &mut self,
+        env: &Env,
+        slot: usize,
+        previous: Option<&ItemStack>,
+    ) -> Option<ItemStack> {
+        let allowed = match previous {
+            None => self.may_pickup(env, slot),
+            Some(previous) => self.slot(slot).is_some_and(|now| same_item(now, previous)),
+        };
+        allowed.then(|| self.quick_move_noted(env, slot)).flatten()
+    }
+
+    fn throw_step(
+        &mut self,
+        env: &Env,
+        slot: usize,
+        amount: u32,
+        previous: Option<&ItemStack>,
+    ) -> Option<ItemStack> {
+        if previous
+            .is_some_and(|previous| !self.slot(slot).is_some_and(|now| same_item(now, previous)))
+        {
+            return None;
+        }
+        let taken = self.safe_take(env, slot, amount, u32::MAX)?;
+        self.drop_stack(&taken, env.items);
+        Some(taken)
+    }
+
+    /// One iteration of a merchant result click, so the authority can finish each actual
+    /// trade and publish its offer back to this menu before deciding the next iteration.
+    /// Only quick-move and throw-all may repeat; each continuation checks the result item.
+    pub fn merchant_result_step(
+        &mut self,
+        env: &Env,
+        button: i32,
+        input: Input,
+        previous: Option<&ItemStack>,
+        throw_amount: u32,
+    ) -> Option<ItemStack> {
+        if self.quick_crafting() {
+            self.reset_quick_craft();
+            return None;
+        }
+        match input {
+            Input::QuickMove if (0..=1).contains(&button) => {
+                self.planned(Asked::default(), |menu| {
+                    menu.quick_move_step(env, 2, previous)
+                })
+                .0
+            }
+            Input::Throw if self.carried.is_none() => {
+                let taken = self
+                    .planned(Asked::default(), |menu| {
+                        menu.throw_step(env, 2, throw_amount, previous)
+                    })
+                    .0;
+                taken.filter(|_| button == 1)
+            }
+            _ => {
+                let _ = self.click(env, 2, button, input);
+                None
+            }
         }
     }
 
@@ -586,42 +776,89 @@ impl Menu {
         self.state.slots[s].role != Role::CreativeDisplay
     }
 
-    pub(super) fn pickup_all(&mut self, env: &Env, s: usize, button: i32) {
-        self.touch();
-        let Some(carried) = self.state.carried.clone() else {
-            return;
-        };
-        if self.has_item(s) && self.may_pickup(env, s) {
-            return;
-        }
-        let total = self.state.slots.len() as i32;
-        let (start, step) = if button == 0 { (0, 1) } else { (total - 1, -1) };
-        let carried_max = Self::max_stack(env, &carried);
-        for pass in 0..2 {
-            let mut i = start;
-            while i >= 0
-                && i < total
-                && self.state.carried.as_ref().map_or(0, |c| c.count) < carried_max
-            {
-                let t = i as usize;
-                i += step;
-                let have = self.state.carried.clone().expect("some");
-                if self.has_item(t)
-                    && self.quick_replace(t, &have, env)
-                    && self.may_pickup(env, t)
-                    && self.can_take_for_pick_all(t)
-                {
-                    let item = self.slot(t).expect("has item").clone();
-                    if pass != 0 || item.count != Self::max_stack(env, &item) {
-                        let room = carried_max - have.count;
-                        if let Some(removed) = self.safe_take(env, t, item.count, room)
-                            && let Some(c) = self.state.carried.as_mut()
-                        {
-                            c.count += removed.count;
-                        }
+    /// Run until the next take or the end of this click. The menu and its rules are borrowed
+    /// anew after dispatch, so a listener can change the next step's inputs.
+    fn run_click_step(&mut self, env: &Env, step: ClickStep) -> Option<ClickContinuation> {
+        match step {
+            ClickStep::QuickMove { slot, mut previous } => {
+                while let Some(now) = self.quick_move_step(env, slot, previous.as_ref()) {
+                    previous = Some(now);
+                    if self.take_pending() {
+                        return Some(ClickContinuation(ClickStep::QuickMove { slot, previous }));
                     }
                 }
             }
+            ClickStep::Throw {
+                slot,
+                amount,
+                mut previous,
+            } => {
+                while let Some(now) = self.throw_step(env, slot, amount, previous.as_ref()) {
+                    previous = Some(now);
+                    if self.take_pending() {
+                        return Some(ClickContinuation(ClickStep::Throw {
+                            slot,
+                            amount,
+                            previous,
+                        }));
+                    }
+                }
+            }
+            ClickStep::PickAll {
+                mut next,
+                step,
+                mut pass,
+            } => {
+                let max = Self::max_stack(env, self.carried.as_ref()?);
+                let total = self.state.slots.len() as i32;
+                let start = if step > 0 { 0 } else { total - 1 };
+                while pass < 2 {
+                    while (0..total).contains(&next) {
+                        let have = self.carried.clone().filter(|c| c.count < max)?;
+                        let t = next as usize;
+                        next += step;
+                        if self.has_item(t)
+                            && self.quick_replace(t, &have, env)
+                            && self.may_pickup(env, t)
+                            && self.can_take_for_pick_all(t)
+                        {
+                            let item = self.slot(t).expect("has item").clone();
+                            if (pass != 0 || item.count != Self::max_stack(env, &item))
+                                && let Some(removed) =
+                                    self.safe_take(env, t, item.count, max - have.count)
+                                && let Some(c) = self.carried.as_mut()
+                            {
+                                c.count += removed.count;
+                                if self.take_pending() {
+                                    return Some(ClickContinuation(ClickStep::PickAll {
+                                        next,
+                                        step,
+                                        pass,
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                    pass += 1;
+                    next = start;
+                }
+            }
+            ClickStep::SwapOverflow(mut taken) => {
+                if !self.inventory_add(env, &mut taken) {
+                    self.drop_stack(&taken, env.items);
+                }
+            }
         }
+        None
+    }
+
+    /// Continue the suspended click with the same slot-rule answers.
+    pub fn resume_click(
+        &mut self,
+        env: &Env,
+        rest: ClickContinuation,
+        asked: Asked,
+    ) -> (Option<ClickContinuation>, Asked) {
+        self.planned(asked, |menu| menu.run_click_step(env, rest.0))
     }
 }

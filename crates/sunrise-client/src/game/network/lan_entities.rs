@@ -253,6 +253,25 @@ impl Game<'_> {
                 pass.insert(0, d);
             }
         }
+        let mut mixed = sunrise_client::fast_hash::FxHashSet::default();
+        for row in &self.resident_entities.general.rows {
+            if let Some(vehicle) = row.mount
+                && !self
+                    .persist
+                    .removals
+                    .contains(&super::commands::Target::General(row.id))
+            {
+                riding.add(vehicle as i32, row.id as i32);
+                mixed.insert(vehicle);
+            }
+        }
+        for vehicle in mixed {
+            let seats = self.seated_passengers(vehicle);
+            if let Some(passengers) = riding.passengers.get_mut(&(vehicle as i32)) {
+                passengers
+                    .sort_by_key(|&id| seats.iter().position(|&(_, rider, _)| rider == id as u32));
+            }
+        }
         // Players carry passengers only when a mod seated a mob on one.
         self.tell_vehicle_players(riding);
     }
@@ -284,7 +303,7 @@ impl Game<'_> {
                 &b.entity_type(),
                 [p.x, p.y, p.z],
                 b.yaw,
-                b.on_ground,
+                b.ground.on_ground,
             );
             // Leashable.setLeashedTo / dropLeash: who holds the boat's lead.
             e.leash = leash;
@@ -744,6 +763,9 @@ impl Game<'_> {
         // A bare state is never paired: its UUID is never read.
         for e in states.as_mut_slice().iter_mut().filter(|e| !e.bare) {
             e.uuid = ints_uuid(self.uuid_for(e.id as u32));
+            if !self.persist.sync_body_position.is_empty() {
+                e.sync_position |= self.persist.sync_body_position.contains(&(e.id as u32));
+            }
             if let Some(bits) = self.persist.forced_meta.get(&(e.id as u32)) {
                 e.forced_meta = *bits;
             }
@@ -754,13 +776,16 @@ impl Game<'_> {
     /// SteppedInterpolationTracker.updateTracking clears syncPosition: once the states for the
     /// tracking pass are taken.
     pub(super) fn lan_syncs_looked(&mut self) {
+        self.persist.sync_body_position.clear();
         for m in &mut self.mobs {
             m.needs_sync = false;
             m.sync_position = false;
         }
-        self.creatures
-            .projectiles
-            .for_each_mut(|p| p.needs_sync = false);
+        self.creatures.projectiles.for_each_mut(|p| {
+            p.needs_sync = false;
+            p.sync_velocity = false;
+        });
+        self.falling.for_each_mut(|f| f.sync_velocity = false);
         for d in &mut self.dropped {
             d.needs_sync = false;
         }
@@ -844,14 +869,21 @@ impl Game<'_> {
             add_state(out, b.id, "minecraft:lightning_bolt", b.at, 0.0, false);
         }
         for t in self.tnts.iter().filter(|t| t.id > after) {
-            let e = add_state(out, t.id, "minecraft:tnt", at(t.position), 0.0, t.on_ground);
+            let e = add_state(
+                out,
+                t.id,
+                "minecraft:tnt",
+                at(t.position),
+                0.0,
+                t.ground.on_ground,
+            );
             e.velocity = at(t.velocity);
             // PrimedTnt.DATA_FUSE_ID, 80 by default; requiresPrecisePosition
             // while it touches a block.
             if t.fuse != 80 {
                 e.meta.push((8, serializer::INT, Value::Int(t.fuse)));
             }
-            e.precise = t.on_ground;
+            e.precise = t.ground.on_ground;
         }
         for f in self.falling.iter().filter(|f| f.id > after) {
             let e = add_state(
@@ -860,9 +892,10 @@ impl Game<'_> {
                 "minecraft:falling_block",
                 at(f.position),
                 0.0,
-                f.on_ground,
+                f.ground.on_ground,
             );
             e.velocity = at(f.velocity);
+            e.sync_velocity = f.sync_velocity;
             // getAddEntityPacket: the block state; DATA_START_POS.
             e.data = f.state.0 as i32;
             if f.no_gravity {
@@ -885,6 +918,7 @@ impl Game<'_> {
             e.pitch = p.pitch;
             e.velocity = at(p.velocity);
             e.needs_sync = p.needs_sync;
+            e.sync_velocity = p.sync_velocity;
             // Projectile.getAddEntityPacket: the owner's id.
             e.data = data;
             let uuid = e.uuid;
@@ -1027,7 +1061,7 @@ impl Game<'_> {
                 "minecraft:trident",
                 at(t.position),
                 t.yaw,
-                t.on_ground,
+                t.ground.on_ground,
             );
             e.pitch = t.pitch;
             e.velocity = at(t.velocity);
@@ -1068,7 +1102,7 @@ impl Game<'_> {
                 "minecraft:firework_rocket",
                 at(r.position),
                 0.0,
-                r.on_ground,
+                r.ground.on_ground,
             );
             e.velocity = at(r.velocity);
             // DATA_ID_FIREWORKS_ITEM once set from a stack, DATA_ATTACHED_TO_TARGET,

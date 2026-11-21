@@ -7,10 +7,11 @@ use super::Game;
 use mod_api::EntityRef;
 use sunrise_client::blocks::RenderShape;
 use sunrise_client::effects::effect_particle;
-use sunrise_client::mobs::{MobEvent, ambient};
+use sunrise_client::mobs::MobEvent;
 use sunrise_client::motion::{LAVA, WATER};
 use sunrise_client::particles::{ParticleEngine, ParticleOptions, ParticleType};
 use sunrise_client::pose::Pose;
+use sunrise_client_gameplay::mob_ambient as ambient;
 use sunrise_core::{geometry::Vec3, random::RandomSource};
 
 impl Game<'_> {

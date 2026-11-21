@@ -1,5 +1,9 @@
 # Design: server read tier for handles
 
+> Historical: this design predates the removal of WebAssembly mods.
+> See [level hosts](../../modding/src/concepts/hooks-and-the-host.md#level-hosts) for the current native API.
+> The proposed guest import checks, generated guest adapters and target fixtures below are historical; refer to the Host and handle signatures for native access.
+
 Proposed contract for [#2809](https://github.com/arismoko/horizon/issues/2809).
 This is a design, not an implemented guarantee. Recommend option A: immutable
 server reads take `&dyn ServerHost`; shared reads retain `&dyn Host`.

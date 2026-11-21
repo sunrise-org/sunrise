@@ -1,4 +1,4 @@
-//! Named registry entries shared unchanged by native and wasm mods.
+//! Named registry entries.
 use crate::Identifier;
 
 /// A registry and entry name, not a process-local key or a protocol numeric id.

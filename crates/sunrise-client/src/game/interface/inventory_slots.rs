@@ -311,11 +311,11 @@ impl Game<'_> {
     /// 16 x 16 item box), the `_front` one over its item.
     pub(super) fn draw_slot_highlight(&self, batch: &mut HudBatch, front: bool, x: f32, y: f32) {
         let sprite = if front {
-            "gui/sprites/container/slot_highlight_front"
+            "container/slot_highlight_front"
         } else {
-            "gui/sprites/container/slot_highlight_back"
+            "container/slot_highlight_back"
         };
-        sunrise_client::ui::blit_sprite(
+        sunrise_client::ui::nine_slice(
             batch,
             &self.gui.atlas,
             sprite,
@@ -419,18 +419,13 @@ impl Game<'_> {
         for i in self.slots() {
             let (sx, sy) = self.slot_position(i);
             if i == 504 && self.offhand.is_none() {
-                batch.sprite(
-                    &self.gui.atlas,
-                    "gui/sprites/container/slot/shield",
-                    ox + sx,
-                    oy + sy,
-                );
+                batch.sprite(&self.gui.atlas, "container/slot/shield", ox + sx, oy + sy);
             }
             if (500..504).contains(&i) && self.armor[i - 500].is_none() {
                 let icon = ["helmet", "chestplate", "leggings", "boots"][i - 500];
                 batch.sprite(
                     &self.gui.atlas,
-                    &format!("gui/sprites/container/slot/{icon}"),
+                    &format!("container/slot/{icon}"),
                     ox + sx,
                     oy + sy,
                 );
@@ -456,7 +451,7 @@ impl Game<'_> {
                         h: f32,
                         dx: f32,
                         dy: f32| {
-                if let Some(mut r) = atlas.sprites.get(name).copied() {
+                if let Some(mut r) = atlas.gui_rect(name).copied() {
                     let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
                     r.u0 += sx * du;
                     r.v0 += sy * dv;
@@ -518,7 +513,7 @@ impl Game<'_> {
                         let h = ((f.lit_remaining as f32 / total as f32) * 13.0).ceil() + 1.0;
                         part(
                             batch,
-                            "gui/sprites/container/furnace/lit_progress",
+                            "container/furnace/lit_progress",
                             0.0,
                             14.0 - h,
                             14.0,
@@ -531,7 +526,7 @@ impl Game<'_> {
                         let w = ((f.cooking_timer as f32 / f.cooking_total as f32) * 24.0).ceil();
                         part(
                             batch,
-                            "gui/sprites/container/furnace/burn_progress",
+                            "container/furnace/burn_progress",
                             0.0,
                             0.0,
                             w,
@@ -654,8 +649,8 @@ impl Game<'_> {
             return n;
         }
         let inventory = 36;
-        if let Some(shown) = self.native_screen_slot_count() {
-            return inventory + shown;
+        if let Some(screen) = self.shown_native_screen() {
+            return screen.visible_slots().count();
         }
         let container = match self.container_kind() {
             Some(BlockEntity::Chest(_)) => self.open_container_size(),
@@ -711,11 +706,10 @@ impl Game<'_> {
         if let Some(v) = self.station_slots().or_else(|| self.mount_slots()) {
             return v;
         }
-        let mut v: Vec<usize> = (0..36).collect();
-        if let Some(shown) = self.native_screen_slots() {
-            v.extend(shown);
-            return v;
+        if let Some(screen) = self.shown_native_screen() {
+            return screen.visible_slots().collect();
         }
+        let mut v: Vec<usize> = (0..36).collect();
         match self.container_kind() {
             Some(BlockEntity::Chest(_)) => {
                 v.extend((0..self.open_container_size()).map(|i| 300 + i))

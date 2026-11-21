@@ -34,6 +34,35 @@ pub struct Payloads {
     /// The load these declarations belong to, never 0 (a refused registration's); tokens of
     /// another load are stale.
     pub(crate) load: u64,
+    /// The drop counters of each `Droppable` channel, shared by every copy of this table.
+    pub(crate) drops: HashMap<String, Arc<DropCounters>>,
+}
+
+// no wire: engine-internal atomics, read by mods only through `PayloadDropCounts`.
+/// Why `Droppable` sends of one channel were dropped, counted by the engine's queues.
+#[derive(Default)]
+#[non_exhaustive]
+pub struct DropCounters {
+    /// Waited past the stale limit.
+    pub stale: std::sync::atomic::AtomicU64,
+    /// Pushed out past the queue's byte watermark.
+    pub watermark: std::sync::atomic::AtomicU64,
+    /// Over the byte budget.
+    pub budget: std::sync::atomic::AtomicU64,
+    /// Still waiting at the switch to play or the end of the connection.
+    pub switch: std::sync::atomic::AtomicU64,
+}
+impl DropCounters {
+    /// The counts so far.
+    pub fn read(&self) -> crate::PayloadDropCounts {
+        use std::sync::atomic::Ordering::Relaxed;
+        crate::PayloadDropCounts {
+            stale: self.stale.load(Relaxed),
+            watermark: self.watermark.load(Relaxed),
+            budget: self.budget.load(Relaxed),
+            switch: self.switch.load(Relaxed),
+        }
+    }
 }
 
 /// What a typed token must match: its declaration as registered, before protocol splitting.
@@ -178,6 +207,10 @@ impl Payloads {
             Err(PayloadSendError::StaleToken(token.id.clone()))
         }
     }
+    /// The drop counters of `Droppable` channel `id`, which the engine's queues increment.
+    pub fn drop_counters(&self, id: &str) -> Option<&Arc<DropCounters>> {
+        self.drops.get(id)
+    }
     /// The raw play channels an enabled mod declared, by exact id.
     pub fn raw_channels(&self) -> impl Iterator<Item = &str> {
         self.raw
@@ -240,6 +273,16 @@ impl Payloads {
 #[doc(hidden)]
 pub fn installed_payloads() -> Option<Arc<Payloads>> {
     installed().and_then(|installed| installed.keys.payloads.clone())
+}
+
+/// The drop counts of `Droppable` channel `id`, which `payload_drop_counts` answers; `None` for
+/// any other channel.
+// hidden: engine read exported only through __private::game.
+#[doc(hidden)]
+pub fn payload_drop_counts(id: &PayloadId) -> Option<crate::PayloadDropCounts> {
+    installed_payloads()?
+        .drop_counters(&id.0)
+        .map(|counters| counters.read())
 }
 
 /// Check `token` against the installed load: what the host runs before every typed send.

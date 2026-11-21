@@ -19,7 +19,7 @@ refused at load. Refused native block, item or block entity declarations stop st
 known-components input; the game does not fall back to vanilla content. An explicitly declared mod
 template block uses its declared type; undeclared template blocks retain their vanilla behavior. Adding mod blocks to vanilla types is not supported by this builder.
 The hooks about the entity (`block_entity_tick`, `block_entity_update_tag`, `pre_remove_side_effects`,
-`on_chunk_unloaded`, `menu_button`, `menu_quick_move`) find it by that declared type; the others (`block_entity`, the
+`on_chunk_unloaded`, `menu_quick_move`) find it by that declared type; the others (`block_entity`, `screen`, the
 block hooks) by block. The factory is a `BlockEntityPart` method, not a global `Hooks` method.
 
 `r.block_entity_type_key("other:press")` looks up another mod's type, and
@@ -38,13 +38,16 @@ Parts are expanded after every mod has registered, so a Part can target a type d
 
 A Part attaches by type id, whoever declared the type: `r.block_entity_type_key("owner:press")` then
 `r.block_entity_part(&press, MyPart)`. Only a package that lists the declaring package in its
-`[dependencies]` (required or optional) may do so. Otherwise load is refused by name, even when that
-package is installed:
+`[dependencies]` (required or optional) may do so, and that row must apply on the current
+installation side and survive instance overrides. Otherwise load is refused by name,
+even when that package is installed:
 `mod b attached <Part> to block entity type owner:press, declared by package owner; declare owner as a dependency`.
 A type that no package declares keeps the refusal `mod b attached <Part> to undeclared native block entity type owner:press`;
 when `b` lists the installed package that owns the type's namespace (its id or one of its manifest `namespaces`) as a
-required dependency, the refusal says that dependency does not declare it. An optional dependency is recognised for an absent package by a type whose namespace is that package's id. Then the Part is skipped, without a refusal, when that package is not installed
-(a compatibility Part); when it is installed, the Part attaches.
+required dependency, the refusal says that dependency does not declare it. If the type's namespace is
+the ID of an absent package, its Part and the associated key request are skipped only when an optional
+dependency row applies on the installation side and survives instance overrides. A capability
+provider using that key still requires the type. A present package must declare the requested type.
 This keeps resolution independent of what else is installed. Parts of several packages on one type run in
 dispatch order (`mod_index`, then registration order), the same on every load.
 
@@ -55,7 +58,8 @@ A `side = "server"` package whose Part on such a type listens to a client hook i
 client-side Part.
 
 The Part's state (`block_entity_part_with_state`) is a key the attaching package declared with
-`register_attachment_type`, which accepts only that package's own namespace. It is saved in the block entity's
+`register_attachment_type`, which accepts any namespace that package owns (its manifest namespaces
+or a content package it serves via `served_by`). It is saved in the block entity's
 attachment compound under that package's id, not under the owner's. A Part reaches the owner's state only through an
 attachment the owner declared (the public attachment API); a key nobody declared is refused at load, naming the
 package. When the attaching package is removed, what it saved stays in the block entity, unread (the saved
@@ -78,7 +82,7 @@ The engine applies the answers after the level write, in this order:
 
 Each list accepts at most 1024 entries; positions must be finite. Invalid list sizes or
 positions refuse the outputs. Stack writes use the usual checked item boundary. The same
-fields cross to native and wasm. A part that answers nothing consumes no random draws.
+fields go to the Part. A part that answers nothing consumes no random draws.
 Version 2 uses optional drops to represent empty slots; wrap a filled slot in `Some`.
 
 ## Part state
@@ -117,7 +121,7 @@ let done = Press::edit_state(host, entity, |_, progress| {
   under the new handle.
 - An edit stores nothing, and its transaction aborts with everything the closure wrote, in these
   cases:
-  - the closure panics and the panic unwinds (a wasm trap counts the same). A panic that aborts
+  - the closure panics and the panic unwinds. A panic that aborts
     the process cannot be rolled back;
   - the value was replaced while the closure ran (`Changed`);
   - the value does not encode.
@@ -129,18 +133,13 @@ let done = Press::edit_state(host, entity, |_, progress| {
   removed, with its attachment map still bound. Handles of block entities made inside it stay
   `Stale`. Removed block entities retire only when the outermost transaction commits. No save runs
   while a value may still be tentative, and a chunk unload waits until no transaction is open.
-- A wasm closure that traps ends the call like a native panic that unwinds: nothing is stored and
-  the transaction aborts. The runtime then stops calling that module's link group, since the trap
-  may have left its own state half-written.
 - No size or depth limit of its own applies to a value. A saved value follows the chunk's NBT rules:
   vanilla 26.3 reads region files with `NbtAccounter.unlimitedHeap`, an unbounded byte budget and
   depth 512. The 2 MiB quota of a chunk packet's block entity data is a network limit and does not
   cap saved state.
 - Registration refuses a declaration that syncs, copies on death, lies outside the mod's namespaces
   or reuses a key with a type of another Rust type name. It refuses a type whose Wire form holds a resource
-  handle (an erased handler such as `Arc<dyn BlockPart>`) on every target: such a value crosses
-  only into one link group and cannot be saved. It also refuses a declaration without a codec from
-  a mod the game loaded as wasm, whatever the module says of itself. The refusal names the Part,
+  handle (an erased handler such as `Arc<dyn BlockPart>`): such a value cannot be saved. The refusal names the Part,
   the key, the type and the reason.
 - Values without a codec last for the session. Part state is server-side for now. A client reads the
   default, because nothing is sent to it yet.
@@ -149,14 +148,18 @@ let done = Press::edit_state(host, entity, |_, progress| {
 
 Implement `BlockEntityPart::block_entity_save_additional` to serialize live mod state when the server
 captures this type's data. `event.tag` starts with the stored payload. Change that copy to write the
-value that goes into a chunk, a command read, or a copy into an item, loot or a structure. This does
-not update the live entity, change the stored inventory, or affect the separate client update tag.
+value that goes into a chunk, a command read, or a copy into an item, loot or a structure. For a
+holder without declared slots, this copy includes any saved `Items`, and the listener can replace
+or remove that field. For a declared container, the game writes its inventory instead. Neither path
+changes the live entity or the separate client update tag.
 Malformed payloads, including names or strings too long for NBT, are refused before any copy uses
 that output. If the region writer cannot encode or admit the complete chunk
 record, it retries with the stored block-entity payloads from the same snapshot. Other changes in
 the snapshot are kept. The read-only level host cannot write to the world or request another save.
 During unload or a removed block's loot roll, the entity
-may no longer be readable through the host; the event still carries its payload and identity.
+may no longer be readable through the host; the event still carries its payload, identity and its
+position and level (`event.pos`, `event.level`), so a mod that keeps live state per dimension and
+position can look it up and write it into `event.tag`.
 `block_drops` and `player_destroyed_block` read the stored data, not the loot copy.
 Changing output does not mark a chunk dirty: mark the entity changed when the live state changes.
 
@@ -173,7 +176,7 @@ load or an unchanged result.
 
 Implement `BlockEntityPart::block_entity_load_additional` to refresh mod-owned state after the server
 applies a saved payload, including `/data merge` and `/data modify`, cloning, structure and item
-placement, falling-block landing, and chunk load. `event.tag` is the applied mod payload and the
+placement, falling-block landing, and chunk load. `event.tag` is the applied mod payload, `event.pos` and `event.level` name the instance, and the
 read-only level host already sees the updated instance. `block_entity_on_load` follows when that
 instance is new; it also fires for a fresh placement that had no saved data.
 
@@ -183,8 +186,7 @@ notice. Client sync instead uses `block_entity_data_received`.
 ## Transform saved data with a structure
 
 Add an optional `.transform(...)` step to the declaration when the saved payload contains a facing
-or relative positions that must turn with a structure. The same declaration works for native and
-wasm mods:
+or relative positions that must turn with a structure:
 
 ```rust,ignore
 use mod_api::{Compound, StructureMirror, StructureRotation, StructureTransform, Tag, TransformRefusal};
@@ -232,7 +234,7 @@ The engine restores the original `id` and any original `x`, `y`, `z` fields over
 payload transform cannot change the saved entity's identity or original coordinates. With no step,
 data is unchanged. A `TransformRefusal` logs the type and position and keeps the original data;
 placement succeeds. Invalid output exceeding standard NBT limits (64 MiB, one million nodes,
-depth 512), native unwinding panics and wasm traps also keep the original data.
+depth 512), or unwinding panics also keep the original data.
 
 Callbacks are registered at startup and frozen with the block registry snapshot. A data-pack
 `/reload` keeps that registry and its existing callbacks; it does not register replacement code.

@@ -245,6 +245,8 @@ pub struct SoundInstance {
     pub delay: i32,
     pub attenuation: Attenuation,
     pub relative: bool,
+    /// How the mixer shapes it (`SoundPlay::effects`): none unless a mod asks.
+    pub effects: mod_api::SoundEffects,
     pub random: LegacyRandom,
     pub can_start_silent: bool,
     pub ticking: Ticking,
@@ -287,6 +289,7 @@ impl SoundInstance {
             delay,
             attenuation,
             relative,
+            effects: mod_api::SoundEffects::NONE,
             random,
             can_start_silent: false,
             ticking: Ticking::No,
@@ -992,11 +995,19 @@ pub trait Backend {
     fn unpause(&mut self, channel: ChannelId);
     /// `Channel.stopped`.
     fn stopped(&mut self, channel: ChannelId) -> bool;
-    /// Update volume, pitch, and position in a single backend call.
-    fn update_channel(&mut self, channel: ChannelId, volume: f32, pitch: f32, position: [f64; 3]) {
+    /// Update volume, pitch, position, and effects in a single backend call.
+    fn update_channel(
+        &mut self,
+        channel: ChannelId,
+        volume: f32,
+        pitch: f32,
+        position: [f64; 3],
+        effects: mod_api::SoundEffects,
+    ) {
         self.set_volume(channel, volume);
         self.set_pitch(channel, pitch);
         self.set_position(channel, position);
+        self.set_effects(channel, effects);
     }
     /// Filter which handles have stopped playing in a single pass.
     fn filter_stopped(&mut self, live: &[(u64, ChannelId)], stopped: &mut Vec<u64>) {
@@ -1009,6 +1020,9 @@ pub trait Backend {
     /// Whether the channel plays clearly through a mod's muffle (`Audio::muffle`): its sound
     /// event is one the mod exempted. A backend without a muffle ignores it.
     fn set_unmuffled(&mut self, _channel: ChannelId, _unmuffled: bool) {}
+    /// The channel's effects (`SoundPlay::effects`), gliding there from what it had. A backend
+    /// without effects ignores them.
+    fn set_effects(&mut self, _channel: ChannelId, _effects: mod_api::SoundEffects) {}
 }
 /// A `SoundEventListener.onPlaySound` call.
 #[derive(Clone, Debug, PartialEq)]
@@ -1141,11 +1155,18 @@ impl SoundEngine {
     pub fn set_test_playback_hook(&mut self, hook: PlaybackHook) {
         self.playback_hook = Some(hook);
     }
-    fn playback_parameters(&self, id: InstanceId, starting: bool) -> Option<(f32, f32)> {
+    /// The volume, pitch and effects to play instance `id` with, after the mods' `play_sound`
+    /// edits; None when a hook cancelled it.
+    fn playback_parameters(
+        &self,
+        id: InstanceId,
+        starting: bool,
+    ) -> Option<(f32, f32, mod_api::SoundEffects)> {
         let instance = self.instances.get(&id)?;
-        let (mut volume, mut pitch) = (instance.volume, instance.pitch);
+        let (mut volume, mut pitch, mut effects) =
+            (instance.volume, instance.pitch, instance.effects);
         if !starting {
-            (volume, pitch) = self.playback_update_parameters(id)?;
+            (volume, pitch, effects) = self.playback_update_parameters(id)?;
         }
         if let Some(hook) = self.playback_hook {
             let sound = SoundPlayback {
@@ -1167,7 +1188,7 @@ impl SoundEngine {
                 return None;
             }
         }
-        Some((volume, pitch))
+        Some((volume, pitch, effects))
     }
     fn cancel_playback(&mut self, id: InstanceId, backend: &mut impl Backend) {
         if let Some(instance) = self.instances.get_mut(&id) {
@@ -1269,7 +1290,7 @@ impl SoundEngine {
             };
             if source == instance.source || source == MASTER {
                 let original_pitch = instance.pitch;
-                let Some((base_volume, base_pitch)) = self.playback_parameters(id, false) else {
+                let Some((base_volume, base_pitch, _)) = self.playback_parameters(id, false) else {
                     self.cancel_playback(id, backend);
                     continue;
                 };
@@ -1501,7 +1522,7 @@ impl SoundEngine {
         if sound.sentinel != Sentinel::None {
             return PlayResult::NotStarted;
         }
-        let Some((base_volume, base_pitch)) = self.playback_parameters(id, true) else {
+        let Some((base_volume, base_pitch, effects)) = self.playback_parameters(id, true) else {
             return PlayResult::NotStarted;
         };
         let instance = self.instances.get_mut(&id).expect("present");
@@ -1576,6 +1597,7 @@ impl SoundEngine {
         backend.set_position(channel, position);
         backend.set_relative(channel, relative);
         backend.set_unmuffled(channel, unmuffled);
+        backend.set_effects(channel, effects);
         backend.start(channel, &sound, looping);
         self.notify_source_started(id, channel, streaming);
         if tickable {
@@ -1661,7 +1683,8 @@ impl SoundEngine {
                 self.stop(id, backend);
                 continue;
             }
-            let Some((base_volume, base_pitch)) = self.playback_parameters(id, false) else {
+            let Some((base_volume, base_pitch, effects)) = self.playback_parameters(id, false)
+            else {
                 self.cancel_playback(id, backend);
                 continue;
             };
@@ -1678,7 +1701,7 @@ impl SoundEngine {
                 h.pitch_edited = pitch_edited;
             }
             if let Some(c) = self.handles.get(&handle).and_then(handle_channel) {
-                backend.update_channel(c, volume, pitch, position);
+                backend.update_channel(c, volume, pitch, position, effects);
             }
             let instance = self.instances.get_mut(&id).expect("present");
             if instance.looping
@@ -1858,6 +1881,7 @@ pub mod test_backend {
         pub volume: HashMap<ChannelId, f32>,
         pub pitch: HashMap<ChannelId, f32>,
         pub position: HashMap<ChannelId, [f64; 3]>,
+        pub effects: HashMap<ChannelId, mod_api::SoundEffects>,
     }
     impl Backend for Null {
         fn create(&mut self, _streaming: bool) -> Option<ChannelId> {
@@ -1888,6 +1912,9 @@ pub mod test_backend {
         fn unpause(&mut self, _: ChannelId) {}
         fn stopped(&mut self, c: ChannelId) -> bool {
             self.stopped.get(&c).copied().unwrap_or(true)
+        }
+        fn set_effects(&mut self, c: ChannelId, effects: mod_api::SoundEffects) {
+            self.effects.insert(c, effects);
         }
     }
 }

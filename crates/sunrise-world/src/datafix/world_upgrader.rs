@@ -5,7 +5,7 @@
 //! screen reads. Unlike [`super::files::upgrade_world`] (the converter that
 //! runs when an older world opens) it works on a world that is already at the
 //! current layout and decides per chunk whether anything changed.
-use super::dynamic::{as_int, has, remove};
+use super::dynamic::{as_int, has, take};
 use super::files::{generators, subdirectories};
 use super::progress::{UpgradeDataFixType, UpgradeProgress, UpgradeStatus, UpgradeType};
 use super::schema::Ty;
@@ -77,16 +77,16 @@ pub fn verify_chunk_pos(pos: ChunkPos, upgraded: &mut Tag) -> bool {
 pub fn verify_chunk_pos_and_erase_cache(pos: ChunkPos, upgraded: &mut Tag) -> bool {
     verify_chunk_pos(pos, upgraded);
     let mut changed = has(upgraded, "Heightmaps");
-    remove(upgraded, "Heightmaps");
+    take(upgraded, "Heightmaps");
     changed = changed || has(upgraded, "isLightOn");
-    remove(upgraded, "isLightOn");
+    take(upgraded, "isLightOn");
     if let Some(Tag::List(sections)) = upgraded.get_mut("sections") {
         for section in sections {
             if matches!(section, Tag::Compound(_)) {
                 changed = changed || has(section, "BlockLight");
-                remove(section, "BlockLight");
+                take(section, "BlockLight");
                 changed = changed || has(section, "SkyLight");
-                remove(section, "SkyLight");
+                take(section, "SkyLight");
             }
         }
     }

@@ -2,6 +2,39 @@
 //! submitted, keeping offscreen frames at most two ahead of the GPU, and a screenshot's copy.
 
 use super::{Renderer, ScreenshotRequest, copy_frame, submit};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// The error of a wait that found the device lost.
+pub(super) const LOST: &str = "the graphics device was lost";
+
+/// `Device::poll`, unless the device is lost (`lost`, set by its loss callback). wgpu has no
+/// error result for a poll that finds the device lost (it panics), so that panic is contained;
+/// the callback has set `lost` by then. Any other panic goes on.
+pub(crate) fn poll_live(
+    device: &wgpu::Device,
+    lost: &AtomicBool,
+    poll: wgpu::PollType,
+) -> Result<(), String> {
+    contain_loss(lost, || {
+        device.poll(poll).map(|_| ()).map_err(|e| e.to_string())
+    })
+}
+
+/// `wait`, unless `lost` is set; a panic in it while `lost` is set is the loss, a panic with
+/// `lost` clear goes on.
+fn contain_loss(
+    lost: &AtomicBool,
+    wait: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if lost.load(Ordering::Relaxed) {
+        return Err(LOST.into());
+    }
+    match crate::crash::contain(wait) {
+        Ok(waited) => waited,
+        Err(_) if lost.load(Ordering::Relaxed) => Err(LOST.into()),
+        Err(message) => panic!("{message}"),
+    }
+}
 
 impl Renderer {
     /// The frame's readbacks to start right after its submission (on the submit thread when
@@ -34,15 +67,19 @@ impl Renderer {
         self.frame_serial - self.stats_frame
     }
     /// Take in the frame the submit thread submitted: start its readbacks and, offscreen,
-    /// keep at most two frames ahead of the GPU, as a frame submitted in place does.
+    /// keep at most two frames ahead of the GPU, as a frame submitted in place does. Nothing
+    /// more once the device is lost: that submission is often where the loss shows. The
+    /// readbacks come back through the next frame's poll (`draw_frame`).
     pub(super) fn land_frame(&mut self) {
         let Some(offscreen) = self.deferred.take() else {
             return;
         };
         let submission = self.queue.landed();
+        if self.device_lost() {
+            return;
+        }
         if let Some(timer) = &mut self.gpu_timer {
             timer.submitted(&self.queue);
-            timer.collect(&self.device, &mut self.gpu_times);
         }
         if let Some(Some(timer)) = Self::pass_timer(&mut self.pack_post, &mut self.native) {
             timer.submitted(&self.queue);
@@ -68,10 +105,15 @@ impl Renderer {
     pub(super) fn wait_frames(&mut self) {
         while self.in_flight.len() > 2 {
             let index = self.in_flight.pop_front();
-            let _ = self.device.poll(wgpu::PollType::Wait {
-                submission_index: index,
-                timeout: Some(std::time::Duration::from_secs(5)),
-            });
+            // A frame that doesn't finish in time, or a lost device, isn't waited for again.
+            let _ = poll_live(
+                &self.device,
+                &self.device_lost,
+                wgpu::PollType::Wait {
+                    submission_index: index,
+                    timeout: Some(std::time::Duration::from_secs(5)),
+                },
+            );
         }
     }
     /// Take a screenshot request: queue the frame's copy, or report why the
@@ -148,5 +190,44 @@ mod chain_tests {
         chain(None, read(4)).expect("the second")();
         assert!(chain(None, None).is_none());
         assert_eq!(*ran.lock().unwrap(), [1, 2, 3, 4]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_lost_device_is_not_waited_on() {
+        let lost = AtomicBool::new(true);
+        let result = contain_loss(&lost, || unreachable!("waited on a lost device"));
+        assert_eq!(result, Err(LOST.into()));
+    }
+
+    #[test]
+    fn a_panic_that_comes_with_the_loss_is_the_loss() {
+        let lost = AtomicBool::new(false);
+        let result = contain_loss(&lost, || {
+            lost.store(true, Ordering::Relaxed);
+            panic!("device lost")
+        });
+        assert_eq!(result, Err(LOST.into()));
+    }
+
+    #[test]
+    #[should_panic(expected = "not a loss")]
+    fn a_panic_on_a_live_device_goes_on() {
+        let lost = AtomicBool::new(false);
+        let _ = contain_loss(&lost, || panic!("not a loss"));
+    }
+
+    #[test]
+    fn a_wait_on_a_live_device_returns_its_result() {
+        let lost = AtomicBool::new(false);
+        assert_eq!(contain_loss(&lost, || Ok(())), Ok(()));
+        assert_eq!(
+            contain_loss(&lost, || Err("timed out".into())),
+            Err("timed out".into())
+        );
     }
 }

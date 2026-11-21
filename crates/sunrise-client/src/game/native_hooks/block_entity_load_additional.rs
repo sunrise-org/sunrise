@@ -29,7 +29,8 @@ impl Game<'_> {
             && let Some((id, entity, tag)) = loaded_payload(&self.world, level, pos)
         {
             let host = ReadLevel { game: self, level };
-            mod_api::dispatch_block_entity_load_additional(&host, id, entity, tag);
+            let pos = [pos.0, pos.1, pos.2];
+            mod_api::dispatch_block_entity_load_additional(&host, id, entity, pos, level, tag);
         }
     }
 
@@ -54,7 +55,8 @@ impl GameLevel<'_> {
             && let Some(level) = self.api_level
             && let Some((id, entity, tag)) = loaded_payload(self.world, level, pos)
         {
-            self.native_block_entity_load_additional(id, entity, tag);
+            let pos = [pos.0, pos.1, pos.2];
+            self.native_block_entity_load_additional(id, entity, pos, level, tag);
         }
     }
 
@@ -63,8 +65,10 @@ impl GameLevel<'_> {
         &self,
         id: mod_api::BlockEntityTypeKey,
         entity: BlockEntityRef,
+        pos: [i32; 3],
+        level: LevelRef,
         tag: &Compound,
     ) {
-        self.fire_block_entity_load_additional(id, entity, tag);
+        self.fire_block_entity_load_additional(id, entity, pos, level, tag);
     }
 }

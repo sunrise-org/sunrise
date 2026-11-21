@@ -1,1 +1,0 @@
-sunrise-mod-wasm tests::a_wasm_package_with_an_edited_runtime_file_is_refused_alone lib daily child-process

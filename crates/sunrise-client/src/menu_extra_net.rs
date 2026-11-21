@@ -10,10 +10,13 @@ pub fn asked(payload: &cfg::CustomPayload) -> bool {
 }
 
 /// The answer to the query `data`, or the reason that closes the connection.
-pub fn answer(data: &[u8]) -> Result<cfg::Serverbound, String> {
-    menu_extra::read_query(data).map_err(|error| error.to_string())?;
-    Ok(cfg::Serverbound::CustomPayload(cfg::CustomPayload {
-        channel: menu_extra::CHANNEL.into(),
-        data: menu_extra::answer(),
-    }))
+pub fn answer(data: &[u8]) -> Result<(u8, cfg::Serverbound), String> {
+    let revision = menu_extra::read_query(data).map_err(|error| error.to_string())?;
+    Ok((
+        revision,
+        cfg::Serverbound::CustomPayload(cfg::CustomPayload {
+            channel: menu_extra::CHANNEL.into(),
+            data: menu_extra::answer(revision),
+        }),
+    ))
 }

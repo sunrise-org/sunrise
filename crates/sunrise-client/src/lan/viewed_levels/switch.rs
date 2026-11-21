@@ -49,9 +49,7 @@ impl Hub {
         let watching = self.chunk_watches.recording();
         let kept = self.guests.update(i, |g| {
             let own = std::mem::take(&mut g.sent_chunks);
-            g.far_sent_chunks.clear();
             g.chunk_queue.clear();
-            g.far_queue.clear();
             // The client drops both levels' entities: the server sends them again.
             g.tracker.clear();
             let answer = g.sender.viewed_levels;

@@ -264,6 +264,7 @@ mod sweep_tests {
             Some("minecraft:overworld"),
             || {
                 let mut w = MotionWorld {
+                    side: sunrise_client::motion::dry_side(),
                     tag_items: None,
                     block_registries: Some(&pack.block_registries),
                     loop_context,

@@ -237,6 +237,7 @@ impl Game<'_> {
                 block,
                 pose,
                 light,
+                None,
                 out,
                 |draw| layer.inner.submit(&entity, parts, draw),
             );

@@ -336,6 +336,8 @@ fn a_stop_waiting_for_a_sound_is_heard_after_its_removal() {
             source: 7,
             entity: Some(entity),
             except_entity: None,
+            seed: 0,
+            particles_before: 0,
         };
         game.audio.capture = Some(vec![sound(fresh), sound(near)]);
         let told = tick_until_heard(game, heard);

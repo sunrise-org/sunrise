@@ -186,20 +186,52 @@ fn advancement_progress_reports_grant_and_revoke_identity() {
 fn menu_button_mutates_entity_and_cursor_once() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     install_parts(Parts {
-        block_entities: vec![part(1, &calls)],
+        menus: vec![part(1, &calls)],
         ..Parts::default()
     });
     let context = generated::mod_api::item::menu::MenuButtonContext {
         player: 123,
         player_entity_id: 42,
-        pos: [1, 2, 3],
+        pos: Some([1, 2, 3]),
         id: 9,
     };
     let mut entity = ModBlockEntity::new("machine");
     let mut carried = None;
-    dispatch_menu_button(&mut TestHost, &context, &mut entity, &mut carried);
+    dispatch_menu_button(
+        &mut TestHost,
+        "test:menu",
+        None,
+        &context,
+        Some(&mut entity),
+        &mut carried,
+    );
     assert_eq!(entity.id(), "machine");
     assert_eq!(entity.data, [9]);
+    assert_eq!(carried.unwrap().item.as_ref(), "bucket");
+}
+
+#[test]
+fn menu_button_reaches_a_blockless_menu() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    install_parts(Parts {
+        menus: vec![part(1, &calls)],
+        ..Parts::default()
+    });
+    let context = generated::mod_api::item::menu::MenuButtonContext {
+        player: 123,
+        player_entity_id: 42,
+        pos: None,
+        id: 9,
+    };
+    let mut carried = None;
+    dispatch_menu_button(
+        &mut TestHost,
+        "test:menu",
+        None,
+        &context,
+        None,
+        &mut carried,
+    );
     assert_eq!(carried.unwrap().item.as_ref(), "bucket");
 }
 

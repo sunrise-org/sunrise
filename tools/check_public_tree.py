@@ -22,6 +22,9 @@ ORIGINAL_JDK_TOOLS = {
     # Original differential-fuzz driver for vanilla's math helpers: no game source; it calls the 26.3 jar's methods at
     # run time (public ones, and Entity's private getInputVector by reflection) from the player's own prepared jars.
     "tools/jmath_fuzz/VanillaMathFuzz.java",
+    # HISTORY-ONLY: the modified UTF-8 speed driver moved to mods/sunrise/src/test/java/dev/sunriselab/parity/.
+    # Keep its old path allowed so --history/--pre-push accept its legitimate historical addition.
+    "tools/modified_utf8_kit/java/Mutf8Bench.java",
     # HISTORY-ONLY: this original comparison driver is no longer in the current tree.
     # Keep its old path allowed so --history/--pre-push accept its legitimate historical addition.
     "tools/refactors/api-pr3/JsonNbtOracle.java",

@@ -95,6 +95,8 @@ fn every_root_splits_after_outer_functions_with_one_random_draw() {
                 id,
                 &registry,
                 BlockStateId(0),
+                None,
+                None,
                 &mut random,
                 &mut crate::random_sequences::RandomSequences::default(),
                 0,
@@ -177,6 +179,8 @@ fn public_block_and_interaction_roots_complete_on_the_selected_random() {
                         id,
                         &registry,
                         BlockStateId(0),
+                        None,
+                        None,
                         &mut random,
                         &mut sequences,
                         0,
@@ -483,6 +487,8 @@ fn queried_ability_tags_use_prepared_item_sets() {
         entity_levels: None,
         block_levels: None,
         target: None,
+        target_entity: None,
+        interacting_entity: None,
         location: None,
         keep_empty: false,
     };
@@ -611,6 +617,8 @@ fn root_modifiers_chain_before_unsigned_caller_consumption() {
                 "minecraft:entities/zombie",
                 &registry,
                 BlockStateId(0),
+                None,
+                None,
                 &mut random,
                 &mut crate::random_sequences::RandomSequences::default(),
                 0,
@@ -857,4 +865,86 @@ fn an_advancement_reward_roll_names_the_player_and_their_position() {
             Some([10.5, 70.0, -3.25])
         )
     );
+}
+
+/// `Block.dropFromBlockInteractLootTable`: `entity_properties` on
+/// `interacting_entity` reads the clicking player, and `this` (not a
+/// `block_interact` parameter) stays unselected.
+#[test]
+fn an_interaction_drop_selects_the_interacting_entity() {
+    let named = |who: &str| {
+        json!({"pools":[{"rolls":1,
+            "conditions":[{"type":"minecraft:entity_properties","entity":who,"predicate":{"type":"minecraft:player"}}],
+            "entries":[{"type":"minecraft:item","name":"minecraft:gold_ingot"}]}]})
+    };
+    let items = data(vec![
+        ("test:interacting", named("interacting_entity")),
+        ("test:this", named("this")),
+    ]);
+    let registry = BlockRegistry::from_facts_json(&br#"{"defaults":{"minecraft:stone":0},"states":[["stone",false,false,"","minecraft:stone"]]}"#[..]).unwrap();
+    let player = sunrise_world::loot::LootEntity::new("minecraft:player");
+    let zombie = sunrise_world::loot::LootEntity::new("minecraft:zombie");
+    let matcher: &EntityMatcher = &|predicate, entity| predicate["type"] == entity.kind;
+    let roll = |id: &str, actor: Option<&sunrise_world::loot::LootEntity>| {
+        items
+            .interact_loot(
+                id,
+                &registry,
+                BlockStateId(0),
+                actor.map(|a| (a, matcher)),
+                None,
+                &mut LegacyRandom::new(0),
+                &mut crate::random_sequences::RandomSequences::default(),
+                0,
+            )
+            .len()
+    };
+    assert_eq!(roll("test:interacting", Some(&player)), 1);
+    assert_eq!(roll("test:interacting", Some(&zombie)), 0);
+    assert_eq!(roll("test:interacting", None), 0);
+    assert_eq!(roll("test:this", Some(&player)), 0);
+}
+
+/// `copy_components` names its source as a `LootContext.EntityTarget`: the
+/// clicking player's custom data reaches the drop, and an interaction without
+/// that entity copies nothing.
+#[test]
+fn an_interaction_drop_copies_components_from_the_interacting_entity() {
+    let items = data(vec![(
+        "test:copy",
+        json!({"pools":[{"rolls":1,"entries":[{
+            "type":"minecraft:item","name":"minecraft:gold_ingot",
+            "modifier":{"type":"minecraft:copy_components","source":"interacting_entity",
+                "include":["minecraft:custom_data"]}}]}]}),
+    )]);
+    let registry = BlockRegistry::from_facts_json(&br#"{"defaults":{"minecraft:stone":0},"states":[["stone",false,false,"","minecraft:stone"]]}"#[..]).unwrap();
+    let mut player = sunrise_world::loot::LootEntity::new("minecraft:player");
+    player.components.insert(
+        "minecraft:custom_data".into(),
+        sunrise_core::nbt::Tag::compound([("flag", sunrise_core::nbt::Tag::Long(7))]),
+    );
+    let matcher: &EntityMatcher = &|_, _| true;
+    let roll = |actor: Option<&sunrise_world::loot::LootEntity>| {
+        let mut stacks = items.interact_loot(
+            "test:copy",
+            &registry,
+            BlockStateId(0),
+            actor.map(|a| (a, matcher)),
+            None,
+            &mut LegacyRandom::new(0),
+            &mut crate::random_sequences::RandomSequences::default(),
+            0,
+        );
+        assert_eq!(stacks.len(), 1);
+        crate::item_data::component_snapshot(&stacks.remove(0))
+    };
+    let copied = roll(Some(&player)).expect("the player's custom data was copied");
+    assert_eq!(
+        copied.get("minecraft:custom_data"),
+        Some(&sunrise_core::nbt::Tag::compound([(
+            "flag",
+            sunrise_core::nbt::Tag::Long(7)
+        )]))
+    );
+    assert_eq!(roll(None), None, "no interacting entity, nothing to copy");
 }

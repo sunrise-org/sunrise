@@ -25,20 +25,6 @@ impl Culler {
         self.remaining.get()
     }
 
-    /// Remove only this entity's completed camera-relative mesh when hidden.
-    pub fn cull_vertices(
-        &self,
-        vertices: &mut Vec<crate::mesher::Vertex>,
-        start: usize,
-        opaque: impl FnMut([i32; 3]) -> bool,
-    ) -> bool {
-        let hidden = self.hidden(vertices, start, opaque);
-        if hidden {
-            vertices.truncate(start);
-        }
-        hidden
-    }
-
     /// Whether this entity's completed camera-relative mesh (`vertices[start..]`) is hidden.
     pub fn hidden(
         &self,

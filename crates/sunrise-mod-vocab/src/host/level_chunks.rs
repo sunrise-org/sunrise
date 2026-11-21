@@ -42,8 +42,7 @@ pub trait LevelChunksBackend {
     /// `ChunkMap.getPlayers(pos, false)`: the players watching this chunk, those
     /// it is inside the view of and was sent to, in the order the server keeps
     /// its players. A player watches it from its `chunk_watch` until it leaves
-    /// the view; Sunrise's far-ring columns past the view distance are not
-    /// watched. Fake players watch nothing. Loaded or not, a chunk nobody
+    /// the view. Fake players watch nothing. Loaded or not, a chunk nobody
     /// watches gives an empty list. None on a client and for a stale handle.
     #[access(WorldOnly)]
     fn chunk_watchers(&self, chunk: ChunkRef) -> Option<Vec<PlayerRef>>;

@@ -367,6 +367,60 @@ fn journal_level_host_stages_block_entity_random_and_effect_changes() {
 
 #[test]
 #[ignore = "daily"]
+fn journalled_removal_keeps_fluid_and_restores_a_block_entity_on_abort() {
+    with_level(|game, level| {
+        let chest = game
+            .pack
+            .assets
+            .registry
+            .resolve(&sunrise_world::chunk::BlockState {
+                name: "minecraft:chest".into(),
+                properties: [
+                    ("facing".into(), "north".into()),
+                    ("type".into(), "single".into()),
+                    ("waterlogged".into(), "true".into()),
+                ]
+                .into(),
+            })
+            .unwrap();
+        let water = state(game, "minecraft:water");
+        let [x, y, z] = AT;
+        let pos = (x, y, z);
+        let stack = sunrise_client::items::ItemStack::new("minecraft:diamond", 3);
+        let mut slots = vec![None; 27];
+        slots[0] = Some(stack.clone());
+        game.world.set(x, y, z, chest).unwrap();
+        game.world
+            .block_entities
+            .insert(pos, BlockEntity::Chest(slots));
+        game.world.block_log = Some(Vec::new());
+        let drops = game.dropped.len();
+
+        for commit in [false, true] {
+            let seal = game.transaction_open();
+            assert!(level.remove_block(game, AT, false));
+            assert_eq!(block(game), water);
+            assert!(game.world.block_entities.get(&pos).is_none());
+            assert!(game.world.block_log.as_ref().unwrap().is_empty());
+            assert_eq!(game.dropped.len(), drops);
+            game.transaction_close(&seal, commit);
+
+            assert_eq!(block(game), if commit { water } else { chest });
+            assert_eq!(
+                game.world.block_log.as_ref().unwrap().contains(&pos),
+                commit
+            );
+            if !commit {
+                let restored = game.world.block_entities.get(&pos).unwrap();
+                assert_eq!(restored.slots()[0].as_ref(), Some(&stack));
+                assert_eq!(game.dropped.len(), drops);
+            }
+        }
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn journal_level_host_retains_neighbour_updates_from_earlier_writes() {
     use crate::game::journal_level_write::JournalLevelWrite;
     use mod_api::{BlockUpdateFlags, LevelHost, LevelWriteHost};

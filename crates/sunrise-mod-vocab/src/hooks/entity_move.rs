@@ -25,8 +25,7 @@ pub trait Hooks {
     /// Version 2: `MoveCause::Carried`, a moving collider carrying a body that stands on it
     /// once a tick (`EntityRef::set_collider`), is a new cause under the same signature, so a
     /// listener written for version 1 hears moves it never heard. `MoveCause` is
-    /// `#[non_exhaustive]`: match it with a wildcard arm. A wasm mod built before this
-    /// change is refused at load with a layout mismatch: rebuild it.
+    /// `#[non_exhaustive]`: match it with a wildcard arm.
     #[hook(
         version = 2,
         side = "server",

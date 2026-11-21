@@ -5,33 +5,16 @@ impl Items {
     /// station rules and loot functions are built from), for tools that need
     /// tag membership.
     pub fn tags_only(root: &Path, overlay: &PackOverlay, defaults: &ItemDefaults) -> Result<Self> {
+        let block_items = block_items(root)?;
         let mut items = Self {
-            items: HashMap::new(),
-            block_items: Default::default(),
             component_registry: component_registry(
                 root,
                 &load_tags(root, "entity_type", overlay)?,
             )?,
             component_defaults: component_defaults(defaults)?,
-            mob_visibility: HashMap::new(),
-            order: Vec::new(),
-            registry_order: Vec::new(),
-            block_tags: load_tags(root, "block", overlay)?,
-            block_tag_flags: Default::default(),
-            item_tags: load_tags(root, "item", overlay)?,
-            fluid_tags: load_tags(root, "fluid", overlay)?,
-            item_tag_order: load_tag_lists(root, "item", overlay)?,
-            block_tag_order: load_tag_lists(root, "block", overlay)?,
-            fluid_tag_order: load_tag_lists(root, "fluid", overlay)?,
-            loot: Default::default(),
-            loot_types: Default::default(),
-            loot_modifiers: Default::default(),
-            global_modifiers: Arc::default(),
-            predicates: Default::default(),
-            songs: HashMap::new(),
-            instruments: HashMap::new(),
-            enchantments: Default::default(),
+            ..Self::default()
         };
+        items.bind_tags(root, overlay, defaults, |id| block_items.contains_key(id))?;
         items.install_registries(
             crate::enchant::Enchantments::load_with(root, overlay, defaults)?,
             HashMap::new(),

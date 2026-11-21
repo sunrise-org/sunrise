@@ -24,46 +24,74 @@ pub(in crate::game) fn collect_texture_atlases() -> Vec<TextureAtlasRegistration
 
 /// The root with every registered atlas's sprites added as GUI textures: a file sprite as the
 /// texture itself (with its `.mcmeta`), a generated one (`unstitch`, `paletted_permutations`)
-/// encoded once. The runtime block sprites and passive data stay as they were.
+/// encoded once. Passive data stays as it was.
 pub(in crate::game) fn stage_texture_atlases(
     root: ResourceRoot,
     atlases: &[TextureAtlasRegistration],
+) -> ResourceRoot {
+    stage_with(
+        root,
+        atlases,
+        &sunrise_client_render::mod_sprite_sources::Registered,
+    )
+}
+
+/// [`stage_texture_atlases`] asking `mods` for the sources' answers.
+fn stage_with(
+    root: ResourceRoot,
+    atlases: &[TextureAtlasRegistration],
+    mods: &dyn atlas_sources::ModSources,
 ) -> ResourceRoot {
     if atlases.is_empty() {
         return root;
     }
     let source = root.source();
-    let mut textures = atlas_sources::list_textures(source);
-    textures.sort_unstable();
-    let mut files = BTreeMap::new();
+    // The game's atlases are listed (and the mods' sources asked for them) over the stack the packs
+    // gave, before the staged textures extend it: no reader or directory source sees one.
+    atlas_sources::shared(source, mods);
+    // The atlases admitted, then each listed from its own definition and asked of the mods under
+    // its own id, once.
     let mut seen = Vec::new();
-    let mut sprites = 0;
+    let mut admitted = Vec::new();
     for registration in atlases {
-        let atlas = &registration.atlas;
-        if let Err(error) = admit(registration, &seen) {
-            log::warn!("Sunrise: texture atlas {atlas} skipped: {error}");
-            continue;
-        }
-        let file = definition_file(&registration.definition);
-        let Ok(text) = source.read_to_string(&file) else {
-            log::warn!("Sunrise: texture atlas {atlas} skipped: no definition {file}");
-            continue;
-        };
-        let sources = match atlas_sources::decode(&text) {
-            Ok(sources) => sources,
-            Err(error) => {
-                log::warn!("Sunrise: texture atlas {atlas} skipped: {file}: {error}");
-                continue;
+        match admit(registration, &seen) {
+            Ok(()) => {
+                seen.push(registration.atlas.clone());
+                admitted.push(registration);
             }
+            Err(error) => {
+                log::warn!(
+                    "Sunrise: texture atlas {} skipped: {error}",
+                    registration.atlas
+                );
+            }
+        }
+    }
+    let mut listed = atlas_sources::registered(
+        source,
+        mods,
+        &admitted
+            .iter()
+            .map(|registration| (&registration.atlas, &registration.definition))
+            .collect::<Vec<_>>(),
+    );
+    let mut files = BTreeMap::new();
+    let mut sprites = 0;
+    for registration in admitted {
+        let atlas = &registration.atlas;
+        let Some(listed) = listed.remove(atlas) else {
+            log::warn!(
+                "Sunrise: texture atlas {atlas} skipped: no usable definition {}",
+                definition_file(&registration.definition)
+            );
+            continue;
         };
-        seen.push(atlas.clone());
-        let mut ask = sunrise_client_render::mod_sprite_sources::ask(atlas);
-        for (id, origin) in atlas_sources::list(&sources, &textures, &mut ask) {
+        for (id, origin) in &listed.sprites {
             if sprites == MAX_SPRITES {
                 log::warn!("Sunrise: texture atlas {atlas}: sprites past {MAX_SPRITES} skipped");
                 break;
             }
-            let Ok(sprite) = Identifier::parse(&id) else {
+            let Ok(sprite) = Identifier::parse(id) else {
                 continue;
             };
             let name = registration.sprite_name(&sprite);
@@ -71,15 +99,14 @@ pub(in crate::game) fn stage_texture_atlases(
             if source.contains(&path) || files.contains_key(&path) {
                 continue;
             }
-            if stage_sprite(source, &origin, &path, &mut files) {
+            if stage_sprite(source, origin, &path, &mut files) {
                 sprites += 1;
             } else {
                 log::warn!("Sunrise: texture atlas {atlas}: sprite {id} could not be loaded");
             }
         }
     }
-    let blocks = root.runtime_block_sprites().to_vec();
-    root.with_runtime_textures(files, blocks)
+    root.with_runtime_textures(files)
 }
 
 fn admit(registration: &TextureAtlasRegistration, seen: &[Identifier]) -> Result<(), &'static str> {
@@ -149,8 +176,19 @@ fn encode((width, height, pixels): atlas_sources::Image) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::fixture_png;
     use super::*;
+
+    fn fixture_png(width: u32, height: u32, channel: u8) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&vec![channel; (width * height * 4) as usize])
+            .unwrap();
+        bytes
+    }
 
     fn registration(atlas: &str, definition: &str) -> TextureAtlasRegistration {
         TextureAtlasRegistration {
@@ -458,6 +496,102 @@ mod tests {
         });
     }
 
+    /// Source types a test registers for itself, recording what each question's reader could
+    /// list of the load's resources.
+    struct Recording {
+        /// The folder each question's reader lists.
+        prefix: &'static str,
+        seen: std::sync::Mutex<Vec<(String, Vec<String>)>>,
+    }
+    impl atlas_sources::ModSources for Recording {
+        fn is_registered(&self, kind: &str) -> bool {
+            kind == "staged_mod:own"
+        }
+        fn ask(
+            &self,
+            atlas: &Identifier,
+            _: &str,
+            _: &sunrise_core::nbt::Tag,
+            resources: &std::sync::Arc<dyn mod_api::ResourceReader>,
+        ) -> Vec<mod_api::SpriteSourceOutput> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((atlas.to_string(), resources.list(self.prefix)));
+            Vec::new()
+        }
+    }
+
+    /// The game's atlases and the registered ones are all listed over the stack the packs gave:
+    /// no reader sees a texture staged for a registered atlas, and no directory source of a game
+    /// atlas lists one; two atlases sharing a definition that is no game atlas's are each asked
+    /// under their own id, and that definition is asked of nobody as an atlas of the game.
+    #[test]
+    fn the_staged_textures_join_the_generation_after_every_listing() {
+        let blocks = r#"{"sources":[
+            {"type":"directory","source":"gui/atlases","prefix":"leak/"},
+            {"type":"staged_mod:own"}]}"#;
+        let icons = r#"{"sources":[
+            {"type":"directory","source":"icons","prefix":"icons/"},
+            {"type":"staged_mod:own"}]}"#;
+        let unasked = r#"{"sources":[{"type":"staged_mod:own"}]}"#;
+        let staged_root = root(&[
+            ("assets/minecraft/atlases/blocks.json", blocks.into()),
+            ("assets/minecraft/atlases/pack_icons.json", icons.into()),
+            ("assets/icons_mod/atlases/unregistered.json", unasked.into()),
+            (
+                "assets/icons_mod/textures/icons/heart.png",
+                fixture_png(2, 2, 1),
+            ),
+        ]);
+        let mods = Recording {
+            prefix: "assets/icons_mod/textures/",
+            seen: Default::default(),
+        };
+        let staged = stage_with(
+            staged_root,
+            &[
+                registration("icons_mod:first", "minecraft:pack_icons"),
+                registration("icons_mod:second", "minecraft:pack_icons"),
+            ],
+            &mods,
+        );
+        assert!(
+            staged
+                .source()
+                .list("assets/icons_mod/textures/")
+                .iter()
+                .any(|name| name.contains("gui/atlases")),
+            "the sprites are staged"
+        );
+        let mut seen = mods.seen.lock().unwrap().clone();
+        seen.sort();
+        let listed = vec!["assets/icons_mod/textures/icons/heart.png".to_owned()];
+        assert_eq!(
+            seen,
+            [
+                ("icons_mod:first".to_owned(), listed.clone()),
+                ("icons_mod:second".to_owned(), listed.clone()),
+                ("minecraft:blocks".to_owned(), listed),
+            ],
+            "each asked once, none of them over a staged texture"
+        );
+        let listing = atlas_sources::shared(staged.source(), &mods);
+        assert_eq!(
+            listing
+                .sprites("minecraft:blocks")
+                .keys()
+                .collect::<Vec<_>>(),
+            Vec::<&String>::new(),
+            "the blocks atlas's directory source lists no staged texture"
+        );
+        assert_eq!(
+            mods.seen.lock().unwrap().len(),
+            3,
+            "and nothing is asked again"
+        );
+    }
+
     #[test]
     fn no_registration_leaves_the_root_as_it_was() {
         let base = root(&[("assets/icons_mod/atlases/icons.json", ICONS.into())]);
@@ -495,11 +629,9 @@ mod tests {
                 height: 2,
                 rgba: [shade, shade, shade, 255].repeat(4),
             });
-            for sprite in event.listed.iter().filter(|id| id.path().ends_with("star")) {
-                event.output.push(mod_api::SpriteSourceOutput::Remove {
-                    sprite: sprite.clone(),
-                });
-            }
+            event.output.push(mod_api::SpriteSourceOutput::Remove {
+                sprite: Identifier::parse("icons_mod:icons/star").unwrap(),
+            });
         }
     }
 

@@ -11,7 +11,7 @@ mod tests {
     };
     use sunrise_client::{chunk::Chunk, containers::BlockEntity};
     type Log = Arc<Mutex<Vec<(&'static str, i32)>>>;
-    type Payloads = Arc<Mutex<Vec<(BlockEntityRef, i32)>>>;
+    type Payloads = Arc<Mutex<Vec<(BlockEntityRef, i32, [i32; 3], LevelRef)>>>;
     struct Listener {
         air: BlockKey,
         replacement: BlockKey,
@@ -95,7 +95,10 @@ mod tests {
             let Some(Tag::Int(count)) = event.tag.get(&"count".into()) else {
                 panic!("the second Part did not read the applied payload");
             };
-            self.0.lock().unwrap().push((event.entity, *count));
+            self.0
+                .lock()
+                .unwrap()
+                .push((event.entity, *count, event.pos, event.level));
         }
     }
 
@@ -132,14 +135,15 @@ mod tests {
         fn items(&self, _: &RegistrationContext, e: &mut ItemsEvent<'_>) {
             let mut item = Item::new("test:box_shulker_box", "minecraft:purple_shulker_box");
             item.block = Some("test:box_shulker_box".into());
-            e.items.push(item);
+            e.register(item).unwrap();
         }
         fn blocks(&self, _: &RegistrationContext, e: &mut BlocksEvent<'_>) {
             // Its item is the shulker box item above, not a block item of its own.
-            e.blocks
-                .push(Block::new("test:box_shulker_box", "minecraft:barrel").with_item(false));
-            e.blocks
-                .extend(["test:a", "test:b"].map(|id| Block::new(id, "minecraft:white_banner")));
+            e.register(Block::new("test:box_shulker_box", "minecraft:barrel").with_item(false))
+                .unwrap();
+            for block in ["test:a", "test:b"].map(|id| Block::new(id, "minecraft:white_banner")) {
+                e.register(block).unwrap();
+            }
         }
     }
     fn with_fixture(replace: bool, f: impl FnOnce(&mut Game<'_>, Log, Arc<AtomicBool>)) {
@@ -306,7 +310,7 @@ mod tests {
                     Ok(true)
                 );
                 assert_eq!(*log.lock().unwrap(), [("load", 7), ("payload", 19)]);
-                assert_eq!(*payloads.lock().unwrap(), [(entity, 19)]);
+                assert_eq!(*payloads.lock().unwrap(), [(entity, 19, [1, 64, 1], level)]);
 
                 let stone = game
                     .pack
@@ -318,7 +322,13 @@ mod tests {
                 assert!(game.run_command("clone 1 64 1 1 64 1 2 64 1"));
                 let clone = game.block_entity(level, [2, 64, 1]).unwrap();
                 assert_ne!(clone, entity);
-                assert_eq!(*payloads.lock().unwrap(), [(entity, 19), (clone, 29)]);
+                assert_eq!(
+                    *payloads.lock().unwrap(),
+                    [
+                        (entity, 19, [1, 64, 1], level),
+                        (clone, 29, [2, 64, 1], level)
+                    ]
+                );
                 game.fire_pending_block_entity_loads();
                 assert_eq!(
                     *log.lock().unwrap(),

@@ -11,6 +11,7 @@ description = "Sunrise simulation foundations for the pinned vanilla Java Editio
 rng-trace = []
 
 [dependencies]
+stacker = "0.1.25"
 md-5 = { version = "0.10.6", default-features = false }
 libm = "=0.2.16"
 rustc-hash = "2"
@@ -54,8 +55,18 @@ path = "src/bin/density_parity.rs"
 test = false
 
 [[bin]]
+name = "sunrise-string-hash-parity"
+path = "src/bin/string_hash_parity.rs"
+test = false
+
+[[bin]]
 name = "sunrise-float-log-parity"
 path = "src/bin/float_log_parity.rs"
+test = false
+
+[[bin]]
+name = "sunrise-modified-utf8-parity"
+path = "src/bin/modified_utf8_parity.rs"
 test = false
 
 [lints]

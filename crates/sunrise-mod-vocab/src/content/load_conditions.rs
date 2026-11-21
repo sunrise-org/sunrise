@@ -1,4 +1,4 @@
-//! Load-phase condition handlers shared by native and wasm mods.
+//! Load-phase condition handlers.
 use crate::Identifier;
 use std::{collections::BTreeMap, sync::Arc};
 type Entries = BTreeMap<Identifier, (String, Arc<dyn LoadCondition>)>;
@@ -61,7 +61,7 @@ pub trait LoadConditions {
     ) -> Result<(), ConditionError>;
 }
 impl dyn LoadConditions + '_ {
-    /// Store a concrete handler through the shared native and wasm route.
+    /// Store a concrete load condition handler.
     pub fn register(
         &mut self,
         name: Identifier,

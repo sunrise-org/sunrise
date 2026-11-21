@@ -25,8 +25,8 @@ in `.local/minecraft/26.3/sources/server/`.
 
 | Tool | What it is | Fate |
 |---|---|---|
-| `sunrise-report [SECONDS\|stop\|status]` (dedicated console) and `sunrise-server report` | `crates/sunrise-client/src/game/dedicated/report.rs`; console parse `game/dedicated.rs:1651-1687`; recorder fed each tick `dedicated.rs:1343-1356`; max 600 s (`report.rs:23`). Writes `reports/perf-<time>.json` (`"format": 2`, keys `report.rs:370-393`) and a 9-line `.txt` (`report.rs:414-533`) in the server folder. `sunrise-server report` POSTs the console line and polls `reports/` (`crates/sunrise-server/src/cli.rs:289-347`). Nothing in `tools/` or CI reads `perf-*.json`. | **Folds.** The command names stay; the output becomes one `.hzperf` (§3). Ticks go to `health` and `span_blocks`; `spans`, `worst_ticks` and `chunk_workers` go to `spans` and `workers`; `mob_costs` and `levels` go to `world`; `network` goes to `net`; `machine`, `config` and `process` go to `Start`; `overhead` goes to `Stop.overhead`. The `.txt` is gone: `sunrise-server report` prints a few lines from the capture (`sunrise_perf_format::server_brief`: TPS, MSPT, CPU, memory, players, heaviest tick phases) and the file's path, and `sunrise-perf summary` is the full text form. |
-| `tick_profile.rs` | Mob cost by type, 1 tick in `SAMPLE_EVERY = 4` (`game/tick_profile.rs:16`); span users bitmask `SPANS_SPIKES/REPORT/MOD` (`:38-51`). | **Stays as a producer** of `world.entity_costs`. Its span-user switch gains `SPANS_CAPTURE`. |
+| `sunrise-report [SECONDS\|stop\|status]` (dedicated console) and `sunrise-server report` | parsing and recording bookkeeping in `crates/sunrise-gameplay/src/dedicated/report.rs`, the `.hzperf` capture opened in `crates/sunrise-client/src/game/interface/dedicated/report.rs` (`start_perf_capture`); console parse `game/dedicated.rs:1651-1687`; recorder fed each tick `dedicated.rs:1343-1356`; max 600 s (`report.rs:23`). Writes `reports/perf-<time>.json` (`"format": 2`, keys `report.rs:370-393`) and a 9-line `.txt` (`report.rs:414-533`) in the server folder. `sunrise-server report` POSTs the console line and polls `reports/` (`crates/sunrise-server/src/cli.rs:289-347`). Nothing in `tools/` or CI reads `perf-*.json`. | **Folds.** The command names stay; the output becomes one `.hzperf` (§3). Ticks go to `health` and `span_blocks`; `spans`, `worst_ticks` and `chunk_workers` go to `spans` and `workers`; `mob_costs` and `levels` go to `world`; `network` goes to `net`; `machine`, `config` and `process` go to `Start`; `overhead` goes to `Stop.overhead`. The `.txt` is gone: `sunrise-server report` prints a few lines from the capture (`sunrise_perf_format::server_brief`: TPS, MSPT, CPU, memory, players, heaviest tick phases) and the file's path, and `sunrise-perf summary` is the full text form. |
+| `tick_profile.rs` | Mob cost by type, 1 tick in `SAMPLE_EVERY = 4` (`crates/sunrise-gameplay/src/tick_profile.rs:18`); span users bitmask `SPANS_SPIKES/REPORT/MOD` (`:40-56`). | **Stays as a producer** of `world.entity_costs`. Its span-user switch gains `SPANS_CAPTURE`. |
 | `SUNRISE_SPIKES=MS` slow-frame / slow-tick lines | `crates/sunrise-client-render/src/spans.rs`; frame line `game.rs:20055-20058`, tick line `game/levels.rs:631-640`; dedicated default 250 ms (`dedicated.rs:673-676`). Parsed by `tools/pacing_bench.py:103` and by the ad-hoc scripts. | **Leaves the log entirely.** Slow ticks and frames go into the in-memory slow ring, which every capture carries (`slow`, §3). The env var stays as the ring's threshold. Vanilla's "Can't keep up!" warning is untouched (`dedicated.rs:316`, rate limit `:678`; vanilla `MinecraftServer.java:723`). |
 | `SUNRISE_TRACE=FILE`, `sunrise-ctl trace`, console `sunrise-trace` | Chrome-trace JSON writer `spans.rs:303-454`, streamed with a 256 KiB buffer, global mutex per span while on; ctl row `commands.rs:587` (`mcp: false`); console max 300 s (`report.rs:563`). | **Folds.** The span timeline becomes `timeline` chunks of a capture, and Perfetto JSON becomes `sunrise-perf export --perfetto`. The three entry points stay as aliases that start a timeline-only capture. |
 | `SUNRISE_STARTUP_TRACE=FILE` | JSON-lines startup steps, marks and counters (`spans.rs:456-641`); read by `tools/startup_trace.py`. | **Stays for now.** It runs before the game home and reports folder exist, and it streams line by line so a startup crash keeps what ran. It could fold in once `SUNRISE_PROFILE` covers startup (later). |
@@ -41,7 +41,7 @@ in `.local/minecraft/26.3/sources/server/`.
 | `/debug start\|stop`, `/jfr`, `/perf` | Vanilla commands (`game/commands/extra.rs:1006-1163`); `/perf` is listed but has no executor. | **Stay.** They are vanilla parity, not this platform; `/perf` is a separate parity item. Remote profiling borrows its permission level (§4.2). |
 | F3+2/F3+3 charts, performance overlay | `debug_chart.rs`; crate `sunrise-perf-overlay`. | **Stay** (live UI). |
 | `render-capture` / `scene_replay` | Input fixture: mesh state + camera, hundreds of MB to 1.45 GB, built from Mojang assets (spec B). | **Stays separate.** A scene capture is a renderer input, not a measurement. `scene_replay --json` results can be stored as a `bench` entry referencing the scene by `corpus_id`. |
-| `SUNRISE_OCCLUSION_PROFILE` | Subsystem log lines every few seconds (`game/occlusion_culling.rs:856`). | **Fold when next touched**, as counters (§3.6). Nothing reads them yet. |
+| `SUNRISE_OCCLUSION_PROFILE` | Subsystem log lines every few seconds (`crates/sunrise-client-gameplay/src/occlusion_culling/mod.rs`). | **Fold when next touched**, as counters (§3.6). Nothing reads them yet. |
 | `examples/*_bench.rs`, `*_profile.rs` | Microbenchmarks. | **Stay**, out of scope. |
 
 ### On local branches (not on main)
@@ -289,6 +289,7 @@ message Start {
   uint32 players = 14;
   uint64 world_fs_used_mb = 15;
   uint64 world_fs_total_mb = 16;
+  ClientSettings client_settings = 17;     // clients: render distance chosen and loaded, simulation distance, far terrain distance and on/off, graphics preset
 }
 
 message HealthSample {
@@ -383,11 +384,9 @@ message Stop {
 
 Notes on fields:
 
-- On this fork, `Start.mods` includes loaded content, native and wasm mods. `ModKind` adds the
-  protobuf value `MOD_KIND_WASM = 3`; existing values keep their numbers. Native membership comes
-  from the validated compiled inventory, wasm membership from selected wasm manifests. Unknown
-  code provenance remains unspecified, not guessed to be native or wasm. A crate name is recorded
-  only when canonical metadata supplies one.
+- `Start.mods` includes loaded content and native mods. Native membership comes from the validated
+  compiled inventory. Unknown code provenance remains unspecified. A crate name is recorded only
+  when canonical metadata supplies one.
 - `Stop.overhead`: `spans_ms_per_tick`, `spans_share`, `sampler_share_of_thread`, `writer_core_share`,
   `dropped_samples`, `dropped_messages`, `timeline_stopped_t`, `heap_samples`, `heap_sample_ns`.
 - `Start.settings`, `game_rules` and `sunrise_options` are typed allowlists, never a dump of a file or of the
@@ -469,7 +468,7 @@ Notes on fields:
     when a switch starts to matter for what a tick costs.
   - `TickDetail.spans` holds the tick's own spans only; the spans recorded between ticks (the chunk pump) are left out
     of `span_blocks`, `spans` and a slow tick's `top`, so span sums stay consistent with the tick's wall time.
-  - `SunriseOptions.max_view_distance` is 0 when the far ring was not created, even if `server.toml` sets a distance.
+  - `SunriseOptions.max_view_distance` is always 0: the far ring it recorded was removed. Older captures still carry its distance.
   - `Overhead.mob_timing_ms_per_tick` and `mob_timing_share` price the mob tick sampling next to `spans_*`.
   - `memory` snapshots are `sunrise-ctl memory` flattened (`game/memory.rs`, described in `docs/memory.md`), at the start, every 10 s and at the stop. A dedicated server names its columns `columns` (single player keeps `client_columns` and `server_columns`) and adds `entities`, `players`, `chunk_send`, `light_queue`, `generation_queue` and `allocator`. Every side has `named_mb` and `unattributed_mb`: `unattributed_mb = process.resident_mb - named_mb`, where `named_mb` adds the byte totals of the columns (a section the window and its server thread both hold once), `server_generation`, `entities`, `players`, `chunk_send`, the two queues, `renderer.cpu` (client) and the far tiles' `kept_mb`. All are estimates from capacities, so a negative `unattributed_mb` means overlap.
 - `sunrise-perf query` rounds numbers to 3 decimals. `spans --slow` averages over the slow ticks; `ticks` and `tick`

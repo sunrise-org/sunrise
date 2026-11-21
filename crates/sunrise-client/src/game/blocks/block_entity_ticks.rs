@@ -14,17 +14,8 @@ use sunrise_client::{
     furnace::FurnaceCooking,
 };
 use sunrise_core::position::BlockPos;
+use sunrise_gameplay::block_entity_ticks::{block_ticking_at, ticker_name};
 use sunrise_world::registry::BlockStateId;
-
-/// Shared decision for a borrowed position read and an owned tick-phase snapshot.
-fn block_ticking_at(
-    levels: &sunrise_client::ticket_levels::Levels,
-    pending: &sunrise_client::fast_hash::FxHashSet<(i32, i32)>,
-    x: i32,
-    z: i32,
-) -> bool {
-    levels.block_ticking_at(x, z) && !pending.contains(&(x >> 4, z >> 4))
-}
 
 /// What `block_entities.tick` is visiting: the kinds its dispatch ticks, read once per entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -259,6 +250,7 @@ impl<N: LoopMod, T: BlockEntityTickSlot> BlockEntityTickSlot for Attributed<N, T
     #[inline(always)]
     fn before(&mut self, tick: &mut BlockEntityTick<'_, '_>) -> LoopFlow {
         self.call(|slot| slot.before(tick))
+            .unwrap_or(LoopFlow::Continue)
     }
     #[inline(always)]
     fn after(&mut self, tick: &mut BlockEntityTick<'_, '_>) {
@@ -292,28 +284,6 @@ impl Drop for Enclosing<'_, '_> {
                 self.game.trial_spawner_tick_positions,
             ) = scratch;
         }
-    }
-}
-
-/// The block entity type a sample is attributed to while its ticker runs.
-fn ticker_name(entity: &BlockEntity) -> &'static str {
-    match entity {
-        BlockEntity::Chest(_) => "hopper",
-        BlockEntity::Crafter(_) => "crafter",
-        BlockEntity::Jukebox(_) => "jukebox",
-        BlockEntity::Beacon(_) => "beacon",
-        BlockEntity::CreakingHeart(_) => "creaking_heart",
-        BlockEntity::Spawner(_) => "mob_spawner",
-        BlockEntity::TrialSpawner(_) => "trial_spawner",
-        BlockEntity::Vault(_) => "vault",
-        BlockEntity::Beehive(_) => "beehive",
-        BlockEntity::Furnace(_) => "furnace",
-        BlockEntity::Brewing(_) => "brewing_stand",
-        BlockEntity::DaylightDetector => "daylight_detector",
-        BlockEntity::Campfire(_) => "campfire",
-        BlockEntity::Mod(_) => "mod_block_entity",
-        BlockEntity::PotentSulfur(_) => "potent_sulfur",
-        _ => "block_entity",
     }
 }
 
@@ -985,7 +955,7 @@ mod add_blocks_tests {
                     (SIGN, "minecraft:oak_sign"),
                     (DECLARED, "minecraft:vault"),
                 ] {
-                    event.blocks.push(mod_api::Block::new(id, template));
+                    event.register(mod_api::Block::new(id, template)).unwrap();
                 }
             }
             fn block_entity_type_add_blocks(
@@ -1293,9 +1263,56 @@ mod slot_guard_tests {
         let mut slots = <(Attributed<Row, Both>, ())>::make();
         assert_eq!(slots.before(&mut tick), LoopFlow::Continue);
         slots.after(&mut tick);
-        let seen = slots.0.call(|slot| std::mem::take(&mut slot.0));
+        let seen = slots.0.call(|slot| std::mem::take(&mut slot.0)).unwrap();
         assert_eq!(seen.before, [Some(Row::CALL)]);
         assert_eq!(seen.after, [Some(Row::CALL)]);
+        assert_eq!(current_native_call(), None);
+    }
+
+    /// A slot that reads the world through the Host, as a mod's slot may.
+    #[derive(Default)]
+    struct Gated {
+        asked: u32,
+    }
+    impl BlockEntityTickSlot for Gated {
+        fn before(&mut self, tick: &mut BlockEntityTick<'_, '_>) -> LoopFlow {
+            self.asked += 1;
+            let host: &dyn mod_api::Host = &*tick.game;
+            let _ = host.level("minecraft:overworld");
+            LoopFlow::Stop
+        }
+        fn after(&mut self, tick: &mut BlockEntityTick<'_, '_>) {
+            self.asked += 1;
+            let host: &dyn mod_api::Host = &*tick.game;
+            let _ = host.level("minecraft:overworld");
+        }
+    }
+
+    /// Loop slots run in ticks, after the thread reached World. Fired in Setup and in Reloading
+    /// anyway, a slot's world read is a contained refusal answered as no answer (Continue, nothing),
+    /// never the no-scope panic, and the slot is not poisoned; in World it answers.
+    #[test]
+    #[ignore = "daily"]
+    fn a_loop_slot_outside_the_world_is_refused_not_a_panic() {
+        use mod_api::__private::{ModPhase, PhaseOwner};
+        let mut game_resources = None;
+        let mut game = server_game(&mut game_resources);
+        let mut slots = <(Attributed<Row, Gated>, ())>::make();
+        let mut tick = BlockEntityTick {
+            game: &mut game,
+            pos: (8, 64, 8),
+            kind: TickedKind::Hopper,
+            mod_type: None,
+        };
+        for reloading in [false, true] {
+            let setup = PhaseOwner::scope(ModPhase::Setup);
+            let _reload = reloading.then(|| setup.reloading().unwrap());
+            assert_eq!(slots.before(&mut tick), LoopFlow::Continue);
+            slots.after(&mut tick);
+        }
+        let _world = PhaseOwner::scope(ModPhase::World);
+        assert_eq!(slots.before(&mut tick), LoopFlow::Stop);
+        assert_eq!(slots.0.call(|slot| slot.asked), Some(5));
         assert_eq!(current_native_call(), None);
     }
 }
@@ -1576,8 +1593,8 @@ mod own_block_entity_tests {
         }
         fn blocks(&self, _: &RegistrationContext, event: &mut BlocksEvent<'_>) {
             event
-                .blocks
-                .push(mod_api::Block::new(self.block, "minecraft:stone"));
+                .register(mod_api::Block::new(self.block, "minecraft:stone"))
+                .unwrap();
         }
         fn block_entity_type_add_blocks(
             &self,

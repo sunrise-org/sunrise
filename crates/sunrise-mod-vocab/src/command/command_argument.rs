@@ -189,7 +189,7 @@ pub trait CommandArgumentType: Send + Sync + 'static {
     /// its answer unfiltered. It is `None` when no player asks: the console, and a client
     /// completing its own client commands before its own profile is known.
     ///
-    /// Native and wasm results share the vanilla packet limits: completion text may contain
+    /// The vanilla packet limits apply: completion text may contain
     /// at most 32767 UTF-16 code units; a literal tooltip may occupy at most 65535 bytes in
     /// Java modified UTF-8 (the NBT string limit). If any result exceeds either limit, the
     /// engine reports the refusal and discards the callback's results, rather than truncating

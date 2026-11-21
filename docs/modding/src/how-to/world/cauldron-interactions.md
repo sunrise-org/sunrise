@@ -109,8 +109,8 @@ statistics must be vanilla custom-statistic identifiers or `minecraft:used`.
 
 `Interaction::fire(&mut dyn ServerHost, &CauldronUse, &CauldronPlan)` runs only on
 the server, inside the shared action transaction. Return `CauldronFire::Applied`
-to permit the plan and supported callback writes to commit. `Refused`, a panic,
-a guest trap, stale preconditions or an enclosing abort discards the action.
+to permit the plan and supported callback writes to commit. A refusal, panic,
+stale precondition or enclosing abort discards the action.
 Sounds, statistics, events and overflow drops wait for root commit. The action uses the
 shared transaction and runtime limits, with no cauldron-specific budget.
 
@@ -119,6 +119,5 @@ shared transaction and runtime limits, with no cauldron-specific budget.
 Client prediction selects the same entry, but skips custom handlers entirely:
 it does not call `decide` or predict writes and consumes the local action while
 waiting for the server result. Vanilla handlers continue to predict normally.
-The server owns inventories, statistics, drops and game events. Native and wasm handlers
-use the same generated registration and callback route;
+The server owns inventories, statistics, drops and game events.
 `CauldronFire` defaults to `Refused` when a generated callback cannot run.

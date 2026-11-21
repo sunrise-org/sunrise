@@ -176,17 +176,19 @@ fn random_uuid() -> u128 {
 
 impl Game<'_> {
     /// handleLogin: a new session state and signature cache, and prepareKeyPair.
+    /// The session itself goes out from `tick_chat_session`, never from here:
+    /// vanilla's tick sends it once the key future is done, after the login's
+    /// teleport confirm.
     pub(super) fn remote_chat_login(&mut self) {
         if let Some(r) = self.remote.as_mut() {
             r.secure_chat = SecureChat::default();
             r.signatures = Default::default();
         }
         // Only when the server says it is in online mode (handleLogin).
-        if self.remote.as_ref().is_some_and(|r| r.online_mode) {
-            if let Some(account) = self.auth() {
-                auth::prepare_chat_keys_for(account, true);
-            }
-            self.update_chat_session();
+        if self.remote.as_ref().is_some_and(|r| r.online_mode)
+            && let Some(account) = self.auth()
+        {
+            auth::prepare_chat_keys_for(account, true);
         }
     }
 

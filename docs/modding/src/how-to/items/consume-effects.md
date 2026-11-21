@@ -23,3 +23,12 @@ built-in effects; stack patches can change or remove the list.
 
 To apply an effect without consuming an item, use
 [`LivingRef::apply_consume_effect`](consumable-effects.md).
+
+## Food eligibility
+
+`Hooks::can_eat` receives the eating `player` on both sides, with `stack = None`
+for cake and candle cake. Read food through `event.player.food(host)` and effects
+through `host.living(event.player.entity())`. On the client these are the local
+player's copies of server-sent state. Return `Some(true)` to permit eating,
+`Some(false)` to refuse it, or `None` to keep `vanilla_can_eat`. Always-eat
+eligibility comes from the food component, not a separate event field.

@@ -84,6 +84,48 @@ fn a_local_sound_is_checked() {
     assert!(!local_sound_ok(&at("ironfall:boom"), 1201));
 }
 
+/// `play_local_sound` runs `SoundEffects::valid`, the check `play_sound` edits run: the ends of
+/// every range play, and a value past one, NaN or an infinity plays nothing.
+#[test]
+fn a_local_sounds_effects_are_checked() {
+    use super::local_sound_ok;
+    use mod_api::{SoundEffects, SoundPlay, SoundSource};
+    let with = |set: fn(&mut SoundEffects)| {
+        let mut effects = SoundEffects::NONE;
+        set(&mut effects);
+        SoundPlay::at("ironfall:hum", SoundSource::Blocks, [0.5, 64.0, 0.5]).with_effects(effects)
+    };
+    let played: [fn(&mut SoundEffects); 6] = [
+        |_| {},
+        |e| e.gain = 0.0,
+        |e| e.lowpass = 20.0,
+        |e| e.highpass = 20_000.0,
+        |e| {
+            e.room = 1.0;
+            e.hall = 1.0;
+            e.cavern = 1.0;
+        },
+        |e| e.reverb_lowpass = 20.0,
+    ];
+    for set in played {
+        assert!(local_sound_ok(&with(set), 0));
+    }
+    let refused: [fn(&mut SoundEffects); 9] = [
+        |e| e.gain = f32::NAN,
+        |e| e.gain = 1.5,
+        |e| e.direct = -0.1,
+        |e| e.lowpass = 19.0,
+        |e| e.lowpass = f32::INFINITY,
+        |e| e.highpass = f32::NEG_INFINITY,
+        |e| e.room = 2.0,
+        |e| e.cavern = f32::NAN,
+        |e| e.reverb_lowpass = 20_001.0,
+    ];
+    for set in refused {
+        assert!(!local_sound_ok(&with(set), 0));
+    }
+}
+
 /// `native_play_sound` takes vanilla's and mods' sound ids, nothing else.
 #[test]
 fn sound_ids_are_identifiers() {

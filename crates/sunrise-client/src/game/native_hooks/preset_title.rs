@@ -13,13 +13,16 @@ impl Game<'_> {
             self.build_screen();
             return;
         }
-        let id = title.mode.id();
-        self.title_change(Some(id));
+        let answer = self.title_change(Some(title.mode.id()));
         self.screen_state.build.reopened();
         self.title = Some(title);
-        self.build_screen();
+        match self.screen_decision(answer) {
+            ScreenDecision::ModScreen(mod_id) => self.apply_screen(Screen::Mod, Some(mod_id)),
+            ScreenDecision::Vanilla(target) => self.open_screen_target(target),
+            // With no world nothing else can show: a `Cancel` doesn't keep it shut.
+            ScreenDecision::Keep | ScreenDecision::Open => self.build_screen(),
+        }
         self.screen_state.observed = self.observed_now();
-        let none = self.screen_change_view(Screen::Playing);
-        self.native_screen_init_post(&screen_view_with_id(&none, id));
+        self.shown_init_post();
     }
 }

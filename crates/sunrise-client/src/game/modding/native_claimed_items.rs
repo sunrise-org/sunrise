@@ -1,5 +1,5 @@
 //! A client mod's view and its own items (docs/modding/src/how-to/native-mods.md, "A client mod's view and items"): the
-//! first block along the view, across the distant terrain past the loaded chunks, and items whose
+//! first block along the view in the loaded chunks, and items whose
 //! right-click is the mod's alone, heard as use events the mod polls.
 use super::Game;
 pub use mod_api::game::{HeldItemSlot, ModEvent};
@@ -100,25 +100,20 @@ impl Game<'_> {
                 .map(sunrise_client::snbt::to_snbt),
         })
     }
-    /// The first block along the view within `distance` (at most 1024), past the loaded chunks over the distant terrain.
+    /// The first block along the view within `distance` (at most 1024), in loaded chunks only; `None` on a miss.
     pub(super) fn raycast(&self, distance: f32) -> Option<mod_api::Hit> {
         let (d, hit) = self.view_hit()?;
         (d <= distance.clamp(0.0, RAYCAST_MAX)).then_some(hit)
     }
-    /// The first block along the view within `RAYCAST_MAX`, and its distance.
+    /// The first block along the view within `RAYCAST_MAX`, in loaded chunks only, and its distance; `None` on a miss.
     pub(super) fn view_hit(&self) -> Option<(f32, mod_api::Hit)> {
         self.player.as_ref()?;
         let eye = self.eye_position()?;
         let dir = super::view_vector(self.yaw, self.pitch);
         let reach = f64::from(RAYCAST_MAX);
-        let (pos, point, state) = match self.clip_ray(eye, dir, reach) {
-            Some(hit) => (
-                hit.pos,
-                hit.point,
-                self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]),
-            ),
-            None => self.lod_ray(eye, dir, reach)?,
-        };
+        let hit = self.clip_ray(eye, dir, reach)?;
+        let (pos, point) = (hit.pos, hit.point);
+        let state = self.world.block(pos[0], pos[1], pos[2]);
         let distance = (0..3)
             .map(|i| (point[i] - eye[i]).powi(2))
             .sum::<f64>()
@@ -135,32 +130,6 @@ impl Game<'_> {
                 block: mod_api::__private::block_key(&self.res.facts().get(state).name)?,
             },
         ))
-    }
-    /// A ray over the distant terrain (`Lod::ground`) past the loaded chunks, a block at a time.
-    fn lod_ray(
-        &self,
-        eye: [f64; 3],
-        dir: [f64; 3],
-        reach: f64,
-    ) -> Option<([i32; 3], [f64; 3], sunrise_world::registry::BlockStateId)> {
-        let lod = self.lod.as_ref()?;
-        let mut t = 0.0;
-        while t <= reach {
-            let p = [
-                eye[0] + dir[0] * t,
-                eye[1] + dir[1] * t,
-                eye[2] + dir[2] * t,
-            ];
-            let (x, z) = (p[0].floor() as i32, p[2].floor() as i32);
-            if !self.world.loaded(x, z)
-                && let Some((height, state)) = lod.ground(x, z)
-                && p[1] <= f64::from(height)
-            {
-                return Some(([x, height - 1, z], [p[0], f64::from(height), p[2]], state));
-            }
-            t += 1.0;
-        }
-        None
     }
     /// Right-clicks with these items (at most 64 ids) are mod `mod_id`'s; a later call replaces the list.
     pub(super) fn claim_items(&mut self, mod_id: &str, ids: &[String]) {

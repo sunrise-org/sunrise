@@ -36,8 +36,6 @@ pub trait PlayerProgressBackendMut {
     ///
     /// `test` is lent to this call only. A failed test stops further testing
     /// and reports `Test`; earlier matching criteria may already be granted.
-    /// Wasm predicates run synchronously, including callbacks into the group
-    /// firing the trigger, within that call's remaining execution and memory limits.
     #[access(WorldOnly)]
     fn player_trigger_criterion(
         &mut self,

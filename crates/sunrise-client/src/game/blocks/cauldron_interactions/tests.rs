@@ -76,16 +76,20 @@ struct TestMod {
 #[mod_api::__subscriptions]
 impl Hooks for TestMod {
     fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
-        event.blocks.push(mod_api::Block::new(
-            "test:syrup_cauldron",
-            "minecraft:water_cauldron",
-        ));
+        event
+            .register(mod_api::Block::new(
+                "test:syrup_cauldron",
+                "minecraft:water_cauldron",
+            ))
+            .unwrap();
     }
     fn items(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::ItemsEvent<'_>) {
-        event.items.push(mod_api::Item::new(
-            "test:syrup_bottle",
-            "minecraft:glass_bottle",
-        ));
+        event
+            .register(mod_api::Item::new(
+                "test:syrup_bottle",
+                "minecraft:glass_bottle",
+            ))
+            .unwrap();
     }
     fn register_cauldron_interaction(
         &self,

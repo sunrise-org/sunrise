@@ -7,6 +7,10 @@ use super::*;
 #[path = "incoming_tests/resource_load_scope.rs"]
 mod scope_tests;
 
+#[cfg(test)]
+#[path = "resource_load/facts_memo.rs"]
+mod facts_memo;
+
 pub(super) const STAGE_LINES: [&str; 10] = [
     "Loading menu",
     "Loading assets",
@@ -334,9 +338,13 @@ pub(super) fn gameplay_tables(
     let behaviour_json: serde_json::Value =
         sunrise_world::json_file::read(&root.join("block-behaviours.json"))
             .map_err(|e| e.to_string())?;
+    #[cfg(not(test))]
     let (facts, gameplay_projection) =
         BlockFacts::load_with_projection(root, assets.registry, &behaviour_json, parallel)
             .map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    let (facts, gameplay_projection) =
+        facts_memo::load(root, assets.registry, &behaviour_json, parallel)?;
     drop(facts_step);
     progress.set(2);
     let (light, motion) = std::thread::scope(|scope| {
@@ -581,15 +589,11 @@ pub(super) fn load_resources_for_mods(
     let role = load_role.execution;
     let mut root = resolved.prepared().to_path_buf();
     let headless = !role.is_client();
-    let (runtime_sprites, texture_atlases) = if headless {
-        (Vec::new(), Vec::new())
+    let texture_atlases = if headless {
+        Vec::new()
     } else {
-        (
-            client_reload::collect_runtime_sprites(),
-            client_reload::collect_texture_atlases(),
-        )
+        client_reload::collect_texture_atlases()
     };
-    resolved = client_reload::stage_runtime_sprites(resolved, &runtime_sprites);
     resolved = client_reload::stage_texture_atlases(resolved, &texture_atlases);
     let threads = settings.sunrise.worker_threads();
     // One pool of workers for every level's streaming, the client's and the
@@ -659,19 +663,28 @@ pub(super) fn load_resources_for_mods(
             let ui = load_ui(resolved.source()).map(|ui| offer(ui, &root));
             (ui, core.join())
         });
+        // A cloud texture vanilla would read past fails its reload (`CloudRenderer.prepare`),
+        // and so this load: checked here, where the packs can still be dropped, before the
+        // pack tables read it again. A server draws no clouds.
+        let clouds = match headless {
+            true => Ok(()),
+            false => sunrise_client::clouds::load(resolved.source()).map(drop),
+        };
         // Core data is provisional: a selected world pack may replace an entry.
-        let failure = match (ui, core) {
-            (Ok(gui), Ok(Ok(core))) => break (core, gui, resolved, conditions),
-            (Err(e), _) if can_rollback => e.to_string(),
-            (_, Ok(Err(e))) if can_rollback => e,
-            (_, Ok(Err(e))) => {
+        let failure = match (ui, core, clouds) {
+            (Ok(gui), Ok(Ok(core)), Ok(())) => break (core, gui, resolved, conditions),
+            (Err(e), _, _) if can_rollback => e.to_string(),
+            (_, Ok(Err(e)), _) if can_rollback => e,
+            (_, _, Err(e)) if can_rollback => e.to_string(),
+            (_, Ok(Err(e)), _) => {
                 return Err(format!(
                     "{e}\nPrepare resources with the launcher, or: sunrise-prepare --prepare"
                 )
                 .into());
             }
-            (_, Err(e)) => return Err(e.into()),
-            (Err(e), Ok(Ok(_))) => return Err(e),
+            (_, Err(e), _) => return Err(e.into()),
+            (Err(e), Ok(Ok(_)), _) => return Err(e),
+            (Ok(_), Ok(Ok(_)), Err(e)) => return Err(e.into()),
         };
         log::warn!(
             "Sunrise: resource packs failed to load ({failure}); using the default resources"
@@ -679,11 +692,10 @@ pub(super) fn load_resources_for_mods(
         pack_error = Some(failure);
         can_rollback = false;
         root = vanilla_root.to_path_buf();
-        resolved = client_reload::stage_runtime_sprites(
+        resolved = client_reload::stage_texture_atlases(
             sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
-            &runtime_sprites,
+            &texture_atlases,
         );
-        resolved = client_reload::stage_texture_atlases(resolved, &texture_atlases);
     };
     // Every loaded game publishes scalar registry keys, including callers that
     // load a prepared root directly instead of building a mod content overlay.
@@ -755,14 +767,13 @@ pub(super) fn load_resources_for_mods(
         item_renderer,
         biomes.clone(),
         Arc::new(light),
-    );
+    )?;
     pack.additional_data = additional_data.into();
     drop(pack_step);
     log::info!("load pack tables: {:.2}s", started.elapsed().as_secs_f32());
     progress.set(4);
     if !menu {
         use sunrise_client::lang::{self, Language};
-        sunrise_client::ui::load_metadata(resolved.source());
         // An integrated server shares the client's loaded resources and
         // language; it doesn't run this loader in production.
         lang::set(if role.is_dedicated_server() {
@@ -867,15 +878,18 @@ pub(super) fn load_resources_for_mods(
     let prepared_at = Instant::now();
     let (game_cpu, renderer_cpu) = if menu {
         let (game_cpu, renderer_cpu) = std::thread::scope(|scope| {
-            let textures = Step::spawn(scope, parallel, "textures", || {
-                startup::time("handoff.renderer_textures", || {
-                    prepare_renderer_textures(&pack)
+            // A server read no sprite pixels (`reload_for_server`), so it has no window textures to mip.
+            let textures = (!headless).then(|| {
+                Step::spawn(scope, parallel, "textures", || {
+                    startup::time("handoff.renderer_textures", || {
+                        prepare_renderer_textures(&pack)
+                    })
                 })
             });
             let game_cpu = startup::time("handoff.game_cpu", || {
                 GameCpuResources::load(&resolved, entity_models.as_deref())
             });
-            (game_cpu, textures.join())
+            (game_cpu, textures.map(Step::join))
         });
         let game_cpu = match game_cpu {
             Ok(game_cpu) => game_cpu,
@@ -890,7 +904,7 @@ pub(super) fn load_resources_for_mods(
             "Sunrise: handoff CPU resources prepared on worker in {} ms",
             prepared_at.elapsed().as_millis()
         );
-        (Some(game_cpu), Some(renderer_cpu))
+        (Some(game_cpu), renderer_cpu)
     } else {
         (None, None)
     };

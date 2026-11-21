@@ -5,27 +5,22 @@ use crate::*;
 #[sunrise_mod_api_macros::host_area]
 pub trait ServicesServerHost {
     /// The commands service.
-    /// Not on wasm: a frame resource; its methods are the imports.
     #[access(WorldOnly)]
     #[service]
     fn commands(&mut self) -> &mut dyn Commands;
     /// The levels service.
-    /// Not on wasm: a frame resource; its methods are the imports.
     #[access(WorldOnly)]
     #[service]
     fn levels(&self) -> &dyn Levels;
     /// The messages service.
-    /// Not on wasm: a frame resource; its methods are the imports.
     #[access(WorldOnly)]
     #[service]
     fn messages(&self) -> &dyn Messages;
     /// The players service.
-    /// Not on wasm: a frame resource; its methods are the imports.
     #[access(WorldOnly)]
     #[service]
     fn players(&self) -> &dyn Players;
     /// The runtime_levels service.
-    /// Not on wasm: a frame resource; its methods are the imports.
     #[access(WorldOnly)]
     #[service]
     fn runtime_levels(&mut self) -> &mut dyn RuntimeLevels;
@@ -34,17 +29,14 @@ pub trait ServicesServerHost {
 #[sunrise_mod_api_macros::host_area]
 pub trait ServicesClientHost {
     /// Persistent model groups.
-    /// Not on wasm: a frame resource; its methods are the imports.
     #[access(PublishedResources)]
     #[service]
     fn instance_groups(&self) -> &dyn InstanceGroups;
     /// The client_session service.
-    /// Not on wasm: a frame resource; its methods are the imports.
     #[access(WorldOnly)]
     #[service]
     fn client_session(&self) -> &dyn ClientSession;
     /// The render_assets service.
-    /// Not on wasm: a frame resource; its methods are the imports.
     #[access(PublishedResources)]
     #[service]
     fn render_assets(&self) -> &dyn RenderAssets;
@@ -136,7 +128,7 @@ pub trait Commands {
     }
     /// Side: server.
     /// Runs `line` (no slash) as the server's console does: permission
-    /// level 4, from the overworld's spawn, with no output. A teleport to
+    /// level 4, from the world spawn in its level, with no output. A teleport to
     /// another level (`execute in minecraft:the_nether run tp Alex 0 70 0`)
     /// happens at the next tick's start, as the console's. Whether it ran
     /// without failing. During a guest's turn, live players (including the
@@ -348,12 +340,33 @@ pub trait RenderAssets {
     }
     /// Side: client.
     /// Published asset/data read: available in Setup, Reloading and World.
-    /// Keys of every baked model block state `state` can draw in the published store, in bake
+    /// The model of block state `state` as vanilla draws a block state outside the terrain (a
+    /// moving piston block, a falling block, a block display): all the parts its blockstate file
+    /// selects for its properties, weighted alternatives picked at the fixed seed
+    /// `BlockEntityDrawContext::block` uses, tint layers from the block's tint sources without a
+    /// position. Any state: a mod's, vanilla's, a resource pack's. It draws through
+    /// [`WorldDrawContext::draw_model_instances`](crate::WorldDrawContext::draw_model_instances),
+    /// [`InstanceGroupRef`] and `BlockEntityDrawContext::terrain_model`. `ModelError::UnknownModel` for a
+    /// state with no baked model (air, a block drawn by a special renderer) or one the live
+    /// block-state index lacks (a block it does not hold, or an ordinal past the block's states).
+    /// Resolve once per distinct state in `client_setup` and again in `client_resources_reloaded`,
+    /// not each frame; the handle goes stale on a reload.
+    fn block_state_model(&self, state: BlockState) -> Result<ModelRef, ModelError> {
+        crate::world::phase::unprovided(
+            "RenderAssets::block_state_model",
+            "block_state_model",
+            crate::world::phase::LoadAccess::PublishedResources,
+        )
+    }
+    /// Side: client.
+    /// Published asset/data read: available in Setup, Reloading and World.
+    /// Keys of every baked model `state` can draw in the current published generation, in bake
     /// order without repeats: each weighted alternative and each multipart part its properties
-    /// select, whichever one a position's seed would pick. Empty for a state no blockstate file
-    /// binds (air) and on a store that bakes no models. `ModelError::UnknownModel` for an id
-    /// past the block state table. Ask once in `model_baking_completed`, not each frame.
-    fn block_state_models(&self, state: BlockStateId) -> Result<Vec<BakedModelKey>, ModelError> {
+    /// select, whichever one a position's seed would pick. A valid state with no baked binding
+    /// returns an empty list. A state the live block-state index lacks (a block it does not
+    /// hold, or an ordinal past the block's states) returns `ModelError::UnknownModel`.
+    /// Cache keys until the next `model_baking_completed`.
+    fn block_state_models(&self, state: BlockState) -> Result<Vec<BakedModelKey>, ModelError> {
         crate::world::phase::unprovided(
             "RenderAssets::block_state_models",
             "block_state_models",

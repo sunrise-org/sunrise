@@ -1,6 +1,5 @@
 //! Every item and recipe the game knows, made once for the mods that read
-//! them (native mods' `native_recipes`, capability `recipes` of WebAssembly
-//! mods, docs/modding/src/how-to/content-mods.md), and the recipe book's known displays; placing a
+//! them through `native_recipes`, and the recipe book's known displays; placing a
 //! recipe and creative gifts. The recipes are the window's own data — the
 //! content root's — with the server's recipes of the types its native mods
 //! had it send (`sunrise:recipe_content`) in their place, while the known

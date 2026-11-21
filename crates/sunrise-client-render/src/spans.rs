@@ -590,14 +590,6 @@ pub mod startup {
         }
     }
 
-    /// The first time `name` happens, as a mark. `once` is the caller's flag.
-    #[inline]
-    pub fn mark_once(once: &AtomicBool, name: &'static str) {
-        if on() && !once.swap(true, Ordering::Relaxed) {
-            mark(name);
-        }
-    }
-
     /// Set while a world opens, a server is joined or the dimension changes,
     /// until the view first fills ([`view_filled`]).
     static FILLING: AtomicBool = AtomicBool::new(false);

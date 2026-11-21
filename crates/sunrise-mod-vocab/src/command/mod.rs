@@ -143,7 +143,7 @@ impl CommandArgument {
 /// on the server before any listener runs. `entity` and `player` select exactly one;
 /// `entities` and `players` select one or more, in selector order. Unhandled entities
 /// are omitted, and an empty result is refused. Failed parsing or resolution produces
-/// command feedback instead. Every source receives this same data on native and wasm.
+/// command feedback instead.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]

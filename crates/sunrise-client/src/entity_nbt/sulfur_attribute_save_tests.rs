@@ -45,7 +45,7 @@ fn the_save_writes_base_and_permanent_modifiers_and_replaces_stale_entries() {
     });
     let stale =
         |id: &str| Tag::compound([("id", string(id)), ("base", Tag::Double(9.0f64.to_bits()))]);
-    let mut nbt = Compound::new();
+    let mut nbt = EntityTagWriter::new(None);
     nbt.insert(
         "attributes".into(),
         Tag::List(vec![
@@ -96,7 +96,7 @@ fn another_species_map_is_not_saved_by_the_bridge() {
     let map = m.extra.armor_attributes.as_deref_mut().unwrap();
     let kr = map.catalog().id("minecraft:knockback_resistance").unwrap();
     map.edit(kr, |i, o| i.set_base_value(0.5, o).unwrap());
-    let mut nbt = Compound::new();
+    let mut nbt = EntityTagWriter::new(None);
     put_sulfur_attributes(&mut nbt, &m);
-    assert!(!nbt.contains_key(&"attributes".into()));
+    assert!(nbt.get(&"attributes".into()).is_none());
 }

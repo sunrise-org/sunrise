@@ -8,6 +8,36 @@ use sunrise_client::{
     preedit::{self, PreeditEvent},
 };
 
+/// The text of the key press that is still held, which the input method may
+/// commit again once a field has focus. GLFW's char callback of a key press
+/// reaches the screen open when the key was pressed, so the press that opens
+/// a text screen (T, or / for chat) never types into it; winit can hand the
+/// same character over as `Ime::Commit` after the field enabled the input
+/// method.
+#[derive(Default)]
+pub(super) struct HeldKeyText(Option<(winit::keyboard::KeyCode, String)>);
+
+impl HeldKeyText {
+    pub(super) fn pressed(&mut self, key: winit::keyboard::KeyCode, text: Option<&str>) {
+        self.0 = text.map(|t| (key, t.to_owned()));
+    }
+
+    pub(super) fn released(&mut self, key: winit::keyboard::KeyCode) {
+        if self.0.as_ref().is_some_and(|(k, _)| *k == key) {
+            self.0 = None;
+        }
+    }
+
+    /// Whether `committed` is the held key's own character: dropped once.
+    pub(super) fn swallows(&mut self, committed: &str) -> bool {
+        if self.0.as_ref().is_some_and(|(_, t)| t == committed) {
+            self.0 = None;
+            return true;
+        }
+        false
+    }
+}
+
 impl Game<'_> {
     /// Whether a text box has focus right now (the fields `ime_commit` can fill).
     pub(super) fn text_field_focused(&mut self) -> bool {
@@ -144,7 +174,7 @@ impl Game<'_> {
     /// Text the input method committed (`WindowEvent::Ime(Commit)`).
     pub(super) fn ime_commit(&mut self, text: &str) {
         preedit::mark_committed();
-        if text.is_empty() {
+        if text.is_empty() || self.held_key_text.swallows(text) {
             return;
         }
         // Dialogs have their own fields; the other topmost prompts take no text.
@@ -193,5 +223,26 @@ impl Game<'_> {
                 _ => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HeldKeyText;
+    use winit::keyboard::KeyCode;
+
+    #[test]
+    fn the_held_opening_key_is_not_typed_again_by_the_input_method() {
+        let mut held = HeldKeyText::default();
+        held.pressed(KeyCode::KeyT, Some("t"));
+        assert!(held.swallows("t"));
+        assert!(!held.swallows("t"), "only the one character of the press");
+        held.pressed(KeyCode::KeyT, Some("t"));
+        assert!(!held.swallows("h"), "another character is the person's");
+        held.released(KeyCode::KeyT);
+        assert!(!held.swallows("t"), "a commit after the release is typed");
+        held.pressed(KeyCode::Slash, Some("/"));
+        held.released(KeyCode::KeyT);
+        assert!(held.swallows("/"), "another key's release keeps it");
     }
 }

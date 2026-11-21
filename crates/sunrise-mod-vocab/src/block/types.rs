@@ -2,7 +2,7 @@
 use crate::*;
 
 /// A block requested once through [`Registrar::block_key`](BlocksRegistrar::block_key). Its load-owned slot survives reload.
-// no wire: decoding validates the u32 slot with BlockKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+// no wire: decoding validates the u32 slot with BlockKey::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: its field is private, so only registration creates a key
 pub struct BlockKey(pub(crate) u32);
@@ -15,12 +15,12 @@ pub struct BlockKey(pub(crate) u32);
 pub struct BlockStateId(pub u32);
 
 /// A block entity type requested at registration. Its slot remains stable for the process.
-// no wire: decoding validates the u32 slot with BlockEntityTypeKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+// no wire: decoding validates the u32 slot with BlockEntityTypeKey::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: only the load-owned table creates keys
 pub struct BlockEntityTypeKey(pub(crate) u32);
 
-/// The existing block entity tick's write-back choice on native and wasm.
+/// What a block entity tick writes back.
 // exhaustive: the wire protocol has exactly two snapshot write-back choices.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
 pub enum BlockEntityTickReply {

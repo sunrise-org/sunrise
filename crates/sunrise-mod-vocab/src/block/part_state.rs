@@ -39,9 +39,9 @@ use std::{cell::RefCell, fmt, sync::Arc};
 /// of it, so a client reads the default.
 pub trait BlockEntityPartState: BlockEntityPart + Sized {
     /// The value each block entity of the Part's type keeps.
-    type Data: Clone + Send + Sync + crate::wire::Wire + 'static;
+    type Data: Clone + Send + Sync + 'static;
     /// Its attachment key, default and codec. The owner declares the key at registration;
-    /// without a codec the value is kept for the session only (and a wasm mod needs one).
+    /// without a codec the value is kept for the session only.
     const DATA: &'static AttachmentType<Self::Data>;
 
     /// The block entity's value, or the default when it has none. Inserts nothing.
@@ -159,13 +159,6 @@ pub enum PartStateRefusal {
     Sync,
     /// `DATA.copy_on_death` is set: a block entity has no death to copy across.
     CopyOnDeath,
-    /// `DATA` has no codec, which a wasm mod needs: its values cross the wasm
-    /// boundary only in their saved form.
-    NoCodecOnWasm,
-    /// `Data`'s Wire form holds a resource handle (an erased handler such as
-    /// `Arc<dyn BlockPart>`), which crosses only into one link group's resource scope:
-    /// not as data both targets read, nor into a save.
-    ResourceHandle,
     /// The same key is already declared with a type of another Rust type name, named here.
     Incompatible {
         /// The type the key was first declared with.
@@ -187,13 +180,6 @@ impl PartStateRefusal {
         match self {
             Self::Sync => f.write_str("sync is not supported for part state yet"),
             Self::CopyOnDeath => write!(f, "copy_on_death does not apply to {holder}"),
-            Self::NoCodecOnWasm => f.write_str(
-                "a wasm mod's part state needs a codec (its values cross only in saved form)",
-            ),
-            Self::ResourceHandle => f.write_str(
-                "its Wire form holds a resource handle, which crosses only within one link \
-                 group: not to every target, nor into a save",
-            ),
             Self::Incompatible { declared } => write!(
                 f,
                 "the key is already declared with type {declared}, a different Rust type"
@@ -267,41 +253,27 @@ pub struct PartStateDeclaration {
     pub data_name: &'static str,
     sync: bool,
     copy_on_death: bool,
-    codec: bool,
-    /// Whether the type's Wire form holds a resource handle anywhere in it.
-    resource: bool,
 }
 
 impl PartStateDeclaration {
-    /// The declaration of `key`: what the typed declaration is erased to, the same on both
-    /// targets.
-    pub fn of<T: crate::wire::Wire + 'static>(key: &AttachmentType<T>) -> Self {
+    /// The declaration of `key`: what the typed declaration is erased to, for registration.
+    pub fn of<T: 'static>(key: &AttachmentType<T>) -> Self {
         Self {
             namespace: key.namespace,
             name: key.name,
             data_name: std::any::type_name::<T>(),
             sync: key.sync,
             copy_on_death: key.copy_on_death,
-            codec: key.codec.is_some(),
-            resource: T::holds_resource(&mut Vec::new()),
         }
     }
 
-    /// What the declaration is refused for on its own, for a mod the game loaded as a wasm
-    /// module where `wasm` (the game's knowledge, not the module's): syncing, copying on death,
-    /// a resource handle in its Wire form, or no codec in a wasm mod.
-    pub fn check(&self, wasm: bool) -> Result<(), PartStateRefusal> {
+    /// Validate that the state is local to its owning holder.
+    pub fn check(&self) -> Result<(), PartStateRefusal> {
         if self.sync {
             return Err(PartStateRefusal::Sync);
         }
         if self.copy_on_death {
             return Err(PartStateRefusal::CopyOnDeath);
-        }
-        if self.resource {
-            return Err(PartStateRefusal::ResourceHandle);
-        }
-        if wasm && !self.codec {
-            return Err(PartStateRefusal::NoCodecOnWasm);
         }
         Ok(())
     }
@@ -504,75 +476,14 @@ mod tests {
     }
 
     #[test]
-    fn declarations_refuse_sync_copy_on_death_and_codec_less_wasm_state() {
-        let check = |key: &AttachmentType<i32>, wasm| PartStateDeclaration::of(key).check(wasm);
-        assert_eq!(check(&key(false, false, true), true), Ok(()));
-        assert_eq!(check(&key(false, false, false), false), Ok(()));
+    fn declarations_refuse_sync_and_copy_on_death() {
+        let check = |key: &AttachmentType<i32>| PartStateDeclaration::of(key).check();
+        assert_eq!(check(&key(false, false, true)), Ok(()));
+        assert_eq!(check(&key(false, false, false)), Ok(()));
+        assert_eq!(check(&key(true, false, true)), Err(PartStateRefusal::Sync));
         assert_eq!(
-            check(&key(false, false, false), true),
-            Err(PartStateRefusal::NoCodecOnWasm)
-        );
-        assert_eq!(
-            check(&key(true, false, true), false),
-            Err(PartStateRefusal::Sync)
-        );
-        assert_eq!(
-            check(&key(false, true, true), false),
+            check(&key(false, true, true)),
             Err(PartStateRefusal::CopyOnDeath)
-        );
-    }
-
-    #[test]
-    fn a_resource_handle_anywhere_in_the_type_refuses_the_declaration_on_both_targets() {
-        #[derive(sunrise_mod_api_macros::Wire)]
-        struct Holds {
-            _part: Vec<(u8, Option<Arc<dyn BlockPart>>)>,
-        }
-        #[derive(sunrise_mod_api_macros::Wire)]
-        enum Plain {
-            _A(u8, String),
-            _B { _x: Vec<Option<i64>> },
-        }
-        fn declared<T: crate::wire::Wire + 'static>(wasm: bool) -> Result<(), PartStateRefusal> {
-            let key = AttachmentType::<T> {
-                namespace: "test",
-                name: "state",
-                default: || unreachable!(),
-                codec: Some(AttachmentCodec {
-                    encode: |_| Ok(Compound::new()),
-                    decode: |_| unreachable!(),
-                }),
-                copy_on_death: false,
-                sync: false,
-            };
-            PartStateDeclaration::of(&key).check(wasm)
-        }
-        for wasm in [false, true] {
-            assert_eq!(
-                declared::<Option<Arc<dyn BlockPart>>>(wasm),
-                Err(PartStateRefusal::ResourceHandle)
-            );
-            assert_eq!(
-                declared::<Holds>(wasm),
-                Err(PartStateRefusal::ResourceHandle)
-            );
-            assert_eq!(declared::<Plain>(wasm), Ok(()));
-        }
-    }
-
-    #[test]
-    fn a_refusal_names_the_part_key_type_and_capability() {
-        let error = BlockEntityStateError::State {
-            part: "press::Press",
-            namespace: "press",
-            name: "progress",
-            data: "u32",
-            reason: PartStateRefusal::NoCodecOnWasm,
-        };
-        assert_eq!(
-            error.to_string(),
-            "part press::Press: state press:progress of type u32 refused: \
-             a wasm mod's part state needs a codec (its values cross only in saved form)"
         );
     }
 

@@ -130,9 +130,7 @@ pub enum ItemPlace {
     /// player only if they have none: into their inventory, or dropped at the root commit when
     /// it is full. Inserting nothing gives nothing. Otherwise it is the place inside.
     ///
-    /// Wrappers may nest to any depth in a mod's own code: reading and writing undo them in a
-    /// loop. One crossing the wasm boundary nests at most 15 wrappers deep (the wire's 32
-    /// levels, two for each); a deeper one is refused there.
+    /// Wrappers may nest to any depth: reading and writing undo them in a loop.
     InfiniteMaterials {
         /// The player's UUID.
         player: u128,
@@ -412,14 +410,22 @@ impl ResourceHandler<ItemResource> for GameItemItems {
     fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
         self.slot(host, index).map_or(0, |stack| stack.count())
     }
-    fn capacity(&self, host: &mut dyn ServerHost, index: usize, resource: &ItemResource) -> u32 {
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
+        let Some(resource) = resource else {
+            return if index < self.size(host) { 99 } else { 0 };
+        };
         self.0.stack(host).map_or(0, |held| {
             backend_of(&*host).map_or(0, |backend| {
                 backend.item_container_capacity(&held, index, resource.as_stack())
             })
         })
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -441,7 +447,7 @@ impl ResourceHandler<ItemResource> for GameItemItems {
             went => self.rewrite(host, tx, &changed, went.min(amount)),
         }
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -781,9 +787,9 @@ impl ItemPlace {
             for &anywhere in passes {
                 while left > 0 {
                     let moved = match (insert, anywhere) {
-                        (true, false) => handler.insert(host, tx, slot, resource, left),
-                        (true, true) => handler.insert_any(host, tx, resource, left),
-                        (false, _) => handler.extract(host, tx, slot, resource, left),
+                        (true, false) => handler.insert_at(host, tx, slot, resource, left),
+                        (true, true) => handler.insert(host, tx, resource, left).map_err(|_| ())?,
+                        (false, _) => handler.extract_at(host, tx, slot, resource, left),
                     };
                     match handler.checked(moved, left, self).ok_or(())? {
                         0 => break,

@@ -11,7 +11,7 @@
 //! stays reserved, so no mod may declare it (`Local::capture`), and the generic packet API
 //! still refuses it.
 use sunrise_protocol::{
-    attachment_sync, collider_sync, general_entity,
+    attachment_sync, collider_sync, connection_groups, general_entity,
     payload_negotiation::{Error, Flow, ManifestBuilder, Phase, RegistrationPhase},
 };
 
@@ -37,6 +37,12 @@ pub(super) const DECLARATIONS: &[Declaration] = &[
         id: collider_sync::CHANNEL,
         flow: Flow::ToClient,
         version: collider_sync::VERSION,
+    },
+    Declaration {
+        phase: Phase::Play,
+        id: connection_groups::CHANNEL,
+        flow: Flow::ToClient,
+        version: connection_groups::VERSION,
     },
     Declaration {
         phase: Phase::Play,

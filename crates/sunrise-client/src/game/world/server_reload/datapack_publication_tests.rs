@@ -49,6 +49,64 @@ fn write(path: &Path, text: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
 }
+#[test]
+#[ignore = "daily"]
+fn recipe_priority_layer_is_named_and_applied_through_reload() {
+    use sunrise_mod_package::content::RECIPE_PRIORITIES_PATH;
+    let _publication = sunrise_client::datapack_net::isolate_server_publication();
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    let pack = root.join("datapacks/priority_fixture");
+    write(
+        &pack.join("pack.mcmeta"),
+        r#"{"pack":{"description":"fixture","min_format":94,"max_format":94}}"#,
+    );
+    write(
+        &root.join("datapacks.json"),
+        r#"{"enabled":["vanilla","file/priority_fixture"],"disabled":[]}"#,
+    );
+    for id in ["a", "b"] {
+        write(
+            &pack.join(format!("data/priority_fixture/recipe/{id}.json")),
+            r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:stone"],"result":{"id":"minecraft:stick"}}"#,
+        );
+    }
+    let path = pack.join(RECIPE_PRIORITIES_PATH);
+    write(&path, r#"{"entries":{"priority_fixture:b":5}}"#);
+    with_game(|game| {
+        let order = |game: &Game<'_>| {
+            game.recipes().by_type["minecraft:crafting"]
+                .iter()
+                .filter(|row| row.id.starts_with("priority_fixture:"))
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>()
+        };
+        game.load_world(request(root)).unwrap();
+        assert_eq!(order(game), ["priority_fixture:b", "priority_fixture:a"]);
+        write(
+            &path,
+            r#"{"replace":true,"entries":{"priority_fixture:a":10}}"#,
+        );
+        assert!(game.run_command("reload"));
+        assert_eq!(order(game), ["priority_fixture:a", "priority_fixture:b"]);
+        let layers = game.pack_files().priority_layers;
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].pack, "file/priority_fixture");
+        assert_eq!(layers[0].path, "data/neoforge/recipe_priorities.json");
+        write(&path, "{");
+        let error = game
+            .reload_datapacks(true, &game.level.enabled_features.clone())
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("file/priority_fixture: data/neoforge/recipe_priorities.json"),
+            "{error}"
+        );
+        assert_eq!(order(game), ["priority_fixture:a", "priority_fixture:b"]);
+    });
+}
+
 fn power(game: &crate::game::Game<'_>) -> DatapackValue {
     let set = game.mods.datapack_registries.as_ref().unwrap();
     set.get(

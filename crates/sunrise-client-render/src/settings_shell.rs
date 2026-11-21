@@ -228,11 +228,10 @@ impl<P: Copy, S: Copy> Lines<P, S> {
     }
 }
 
-/// The world or the menu's background, veiled.
+/// The world or the menu's background, as vanilla's screens draw it.
 pub(crate) fn backdrop(batch: &mut HudBatch, atlas: &HudAtlas, in_world: bool) {
     let (w, h) = (batch.width, batch.height);
     ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
-    style::fill(batch, atlas, [0.0, 0.0, w, h], style::veil());
 }
 
 /// The mark and the screen's name over the search field.
@@ -294,7 +293,7 @@ pub(crate) fn search_field(
     focused: bool,
 ) {
     let rect = cols.search();
-    style::well(batch, atlas, rect);
+    style::well(batch, atlas, rect, focused);
     search.focused = focused;
     let [x, y, _, h] = rect;
     let clear = cols.clear();
@@ -360,15 +359,6 @@ pub(crate) fn list<P: Copy, S: Copy>(
     let mark = crate::widgets::targets_mark();
     let row_y = |line: &Line<P, S>| cols.top + line.y - scroll;
     let shows = |y: f32, h: f32| y + h > cols.top && y < cols.bottom;
-    for line in lines {
-        let y = row_y(line);
-        if let Some((_, panel)) = line.group
-            && shows(y + style::GROUP_ROW, panel)
-        {
-            let rect = [cols.list_x, y + style::GROUP_ROW, cols.list_w, panel];
-            style::group(batch, atlas, rect);
-        }
-    }
     // A group's first row, which has no rule over it.
     let mut first = false;
     for line in lines {
@@ -463,6 +453,8 @@ pub(crate) struct RowView<'a> {
     pub(crate) focused: bool,
     /// Its slider is being dragged.
     pub(crate) held: bool,
+    /// Its slider's value changes from the keyboard (Enter pressed on it, `can_change_value`).
+    pub(crate) editing: bool,
     /// A key binding, drawn as a button rather than a value between arrows: whether it waits for
     /// its key.
     pub(crate) key: Option<bool>,
@@ -480,6 +472,7 @@ pub(crate) fn row(batch: &mut HudBatch, atlas: &HudAtlas, cols: &Columns, y: f32
         hover,
         focused,
         held,
+        editing,
         key,
     } = view;
     let rect = cols.row(y);
@@ -526,7 +519,7 @@ pub(crate) fn row(batch: &mut HudBatch, atlas: &HudAtlas, cols: &Columns, y: f32
     let color = if live { style::WHITE } else { style::muted() };
     let soft = if live { style::soft() } else { style::muted() };
     let ty = y + ((style::ROW - 8.0) / 2.0).floor();
-    let lit = live && (hover || held);
+    let lit = live && (hover || held || focused);
     let left = rect[0] + style::INSET;
     // An action (Calibrate...) is a button across the row, as vanilla's lists have them.
     if switch.is_none() && slider.is_none() && value.is_none() {
@@ -543,12 +536,19 @@ pub(crate) fn row(batch: &mut HudBatch, atlas: &HudAtlas, cols: &Columns, y: f32
             (None, None) => right - vw - 18.0,
         };
         match (switch, slider) {
-            (Some(on), _) => style::checkbox(batch, atlas, right, y, on, live),
+            (Some(on), _) => style::checkbox(batch, atlas, right, y, on, (lit, live)),
             // A slider shows its track, the value on it, while it is pointed at, focused or held.
             (None, Some(position)) => {
                 let value = Text::literal(value);
                 if active {
-                    style::slider(batch, atlas, control, &value, position, (lit, live));
+                    let states = style::SliderState {
+                        hover,
+                        focused,
+                        editing,
+                        held,
+                        live,
+                    };
+                    style::slider(batch, atlas, control, &value, position, states);
                 } else {
                     batch.text_styled(atlas, &value, start, ty, soft, true);
                 }
@@ -616,35 +616,43 @@ fn lit(batch: &mut HudBatch, atlas: &HudAtlas, [x, y, w, _]: [f32; 4]) {
 }
 
 /// A value to read ([`Value::Read`]) at `y`: its name, and the value at the right, cut short to
-/// fit. `(label, name, value)`; `(hover, focused)`.
+/// fit; greyed, and no controller target, when it isn't `live`. `(label, name, value)`;
+/// `(hover, focused, live)`.
 fn read_row(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
     cols: &Columns,
     y: f32,
     (label, name, value): (&str, &str, &str),
-    (hover, focused): (bool, bool),
+    (hover, focused, live): (bool, bool, bool),
 ) {
     let rect = cols.row(y);
-    crate::widgets::record(label, rect, true);
+    crate::widgets::record(label, rect, live);
     crate::widgets::narratable(|| {
-        crate::widgets::Narratable::button(label.to_owned(), rect, true)
+        crate::widgets::Narratable::button(label.to_owned(), rect, live)
             .hovered(hover)
             .focused(focused)
     });
-    crate::widgets::target(rect);
-    if hover || focused {
+    if live {
+        crate::widgets::target(rect);
+    }
+    if live && (hover || focused) {
         lit(batch, atlas, rect);
     }
     let ty = y + ((style::ROW - 8.0) / 2.0).floor();
     let left = rect[0] + style::INSET;
     let name_w = atlas.font.width(name);
     let shown = Text::literal(name.to_owned());
-    batch.text_styled(atlas, &shown, left, ty, style::WHITE, true);
+    let (color, soft) = if live {
+        (style::WHITE, style::soft())
+    } else {
+        (style::muted(), style::muted())
+    };
+    batch.text_styled(atlas, &shown, left, ty, color, true);
     let room = rect[2] - 2.0 * style::INSET - name_w - 8.0;
     let value = style::fit(atlas, value, room);
     let vx = rect[0] + rect[2] - style::INSET - atlas.font.width(&value);
-    batch.text_styled(atlas, &Text::literal(value), vx, ty, style::soft(), true);
+    batch.text_styled(atlas, &Text::literal(value), vx, ty, soft, true);
     if focused {
         style::ring(
             batch,
@@ -735,7 +743,13 @@ fn pad_row(batch: &mut HudBatch, atlas: &HudAtlas, cols: &Columns, y: f32, view:
         (None, Some(_)) => Text::literal(text).with_color(crate::text::YELLOW),
         (None, None) => Text::literal(text),
     };
-    style::button(batch, atlas, chip, &face, (live && hover, live, false));
+    style::button(
+        batch,
+        atlas,
+        chip,
+        &face,
+        (live && (hover || focused), live, false),
+    );
     let ty = y + ((style::ROW - 8.0) / 2.0).floor();
     let middle = chip[0] + chip[2] / 2.0;
     if let Some(g) = art {
@@ -775,7 +789,8 @@ fn pad_row(batch: &mut HudBatch, atlas: &HudAtlas, cols: &Columns, y: f32, view:
         crate::widgets::target(reset);
     }
     let shown = Text::literal(reset_label);
-    style::button(batch, atlas, reset, &shown, (reset_hover, resets, false));
+    let reset_lit = resets && (reset_hover || reset_focused);
+    style::button(batch, atlas, reset, &shown, (reset_lit, resets, false));
     if reset_focused {
         style::ring(batch, atlas, reset, style::WHITE);
     }
@@ -1525,9 +1540,6 @@ pub(crate) trait Hosted {
     fn typing(&self) -> bool;
     /// A key or the pad moved the focus away: the search field stops taking the keys.
     fn blur_search(&mut self);
-    /// Nothing has the focus: a touch moved off it, say.
-    #[allow(dead_code)] // For #11846's `OptionsUi::touch_start`, which cleared Graphics' focus.
-    fn clear_focus(&mut self);
     /// Text typed into the search field (the keyboard, a controller's on-screen keyboard).
     fn type_text(&mut self, text: &str);
     /// Ctrl+A/C/V/X in the search field.
@@ -2206,7 +2218,7 @@ impl<S: Screen> Shell<S> {
         let hint = self.strip_text(row);
         if let Value::Read(value) = &row.value {
             let view = (label.as_str(), row.name.as_str(), value.as_str());
-            read_row(batch, atlas, cols, y, view, (hover, focused));
+            read_row(batch, atlas, cols, y, view, (hover, focused, row.live));
             crate::widgets::last_narratable(|n| n.hint = Some(hint.clone()));
             return;
         }
@@ -2244,6 +2256,7 @@ impl<S: Screen> Shell<S> {
             hover,
             focused,
             held: self.dragging == Some(row.id),
+            editing: focused && self.can_change_value,
             key: row.binding().map(|_| waits),
         };
         self::row(batch, atlas, cols, y, &view);
@@ -2346,8 +2359,8 @@ impl<S: Screen + Default> Hosted for Shell<S> {
         }
         let cols = view.cols;
         backdrop(batch, atlas, in_world);
-        style::panel(batch, atlas, cols.plate);
-        style::panel(batch, atlas, cols.dock);
+        style::panel(batch, atlas, cols.plate, in_world);
+        style::panel(batch, atlas, cols.dock, in_world);
         self.frame_draw = Some(view);
     }
     fn draw_contents(&mut self, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
@@ -2720,10 +2733,6 @@ impl<S: Screen + Default> Hosted for Shell<S> {
         if self.typing() {
             self.focus = None;
         }
-    }
-    fn clear_focus(&mut self) {
-        self.focus = None;
-        self.can_change_value = false;
     }
     fn type_text(&mut self, text: &str) {
         if !text.is_empty() {

@@ -76,6 +76,7 @@ pub(in crate::game) fn enchant_particles(game: &Game<'_>) -> usize {
         gateway_particles: &|_, _| 0,
         thundering: false,
         ultrawarm: false,
+        block_parts: None,
     };
     for _ in 0..4096 {
         animate_tick(game.res.animate(), &mut engine, &ctx, TABLE);
@@ -141,8 +142,8 @@ fn enchant_particles_share_native_power_and_rebuild_only_on_parts_reload() {
         }
         fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
             event
-                .blocks
-                .push(mod_api::Block::new(CUSTOM, "minecraft:glass"));
+                .register(mod_api::Block::new(CUSTOM, "minecraft:glass"))
+                .unwrap();
         }
     }
     let parts = std::env::var(CHILD).unwrap() == "parts";

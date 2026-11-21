@@ -79,7 +79,7 @@ inventory contract below is an explicit exception: the old build-only reply is r
 
 `GET /api/v1/mods` asks the running engine over its authenticated control connection for its canonical
 `LoadedMods` package inventory. `mods` lists package ids and versions in inventory order, including
-native code, wasm code and content packages installed in that inventory. This is the startup inventory,
+native code and content packages installed in that inventory. This is the startup inventory,
 not a new package rescan or a list inferred from resource namespaces.
 
 ```json

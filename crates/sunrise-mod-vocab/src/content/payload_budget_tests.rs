@@ -43,8 +43,8 @@ fn a_writer_refuses_what_the_readers_allocation_budget_refuses() {
 
 #[test]
 fn every_target_charges_a_64_bit_peers_sizes() {
-    // A String is 12 bytes on wasm32 (three 4-byte words) and 24 on a 64-bit target: a wasm32
-    // writer charges the 24 a native reader will.
+    // A String of three 4-byte words on a 32-bit target is charged the same 24 bytes
+    // as on a 64-bit target.
     assert_eq!(widened(12, 4), 24);
     assert_eq!(widened(24, 8), 24);
     // A type without pointers is charged its 64-bit size on 64-bit, and at most twice its

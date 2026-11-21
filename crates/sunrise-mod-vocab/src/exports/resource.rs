@@ -4,5 +4,6 @@ pub use content::attached_storage::{
 };
 pub use content::resource::{
     ComponentId, EnchantmentEffect, ItemAttackRange, ItemBar, ItemDamageSource, ItemRarity,
-    ItemResource, Overanswered, PREVENT_ARMOR_CHANGE, ResourceHandler, move_resources,
+    ItemResource, Overanswered, PREVENT_ARMOR_CHANGE, ResourceHandler,
 };
+pub use content::resource_util;

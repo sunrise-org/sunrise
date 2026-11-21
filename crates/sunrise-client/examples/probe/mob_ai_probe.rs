@@ -1204,6 +1204,7 @@ pub fn main() -> sunrise_client::Result<()> {
             };
             ($snapshot:expr, $grid:expr) => {
                 MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     mob_maps: sunrise_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
                     goal_host: None,
                     teams: Default::default(),
@@ -1227,6 +1228,7 @@ pub fn main() -> sunrise_client::Result<()> {
                     others: $snapshot,
                     live_mobs: None,
                     dragon: None,
+                    armor_stands: &[],
                     leash_boats: &[],
                     who_lookup: None,
                     others_grid: $grid,
@@ -1336,16 +1338,19 @@ pub fn main() -> sunrise_client::Result<()> {
                     .map_or([0.0; 3], |p| [p.position.x, p.position.y, p.position.z]);
                 mobs[i].damage(&mut test_level.level(), 1.0, Damage::player(at));
                 // Creaking.hurtServer: the heart's reaction, then the sway.
-                if let Some((home, by_player)) = creaking::take_hurt(&mut mobs[i], &w) {
-                    if by_player && let Some((_, h)) = hearts.iter_mut().find(|(at, _)| *at == home)
-                    {
-                        let mut host = Host {
-                            mobs: &mut mobs,
-                            added: Vec::new(),
-                            types: &types,
-                            created: &mut created,
-                            spawning: s.spawning,
-                        };
+                if let Some((home, by_player)) = creaking::take_hurt(&mut mobs[i], &mut events)
+                    && let Some((_, h)) = hearts.iter_mut().find(|(at, _)| *at == home)
+                {
+                    let id = mobs[i].id;
+                    let mut host = Host {
+                        mobs: &mut mobs,
+                        added: Vec::new(),
+                        types: &types,
+                        created: &mut created,
+                        spawning: s.spawning,
+                    };
+                    let protects = creaking_heart::protector(h, &host) == Some(id);
+                    if protects && by_player {
                         creaking_heart::creaking_hurt(
                             h,
                             home,
@@ -1366,7 +1371,9 @@ pub fn main() -> sunrise_client::Result<()> {
                             _ => {}
                         }
                     }
-                    creaking::sway(&mut mobs[i], &mut events);
+                    if protects {
+                        creaking::sway(&mut mobs[i], &mut events);
+                    }
                 }
                 events.append(&mut mobs[i].outbox);
             }

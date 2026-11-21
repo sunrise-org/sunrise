@@ -8,11 +8,13 @@
 //! Messages go through the `log` facade. Sunrise's own still print their plain text on stderr,
 //! as they did before the log existed. Other crates, including native mods and their helper
 //! crates, reach the file through INFO too, with their target prefixed to identify the source.
+//! `SUNRISE_LOG_STDERR` also echoes selected targets to stderr for development.
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, mpsc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard, mpsc};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local, NaiveDate};
@@ -262,13 +264,22 @@ pub fn open_latest(dir: &Path) -> io::Result<Option<Latest>> {
     Ok(Some(Latest { file, _lock: lock }))
 }
 
+/// Where the message appears besides the log file.
+enum Echo {
+    Quiet,
+    /// The caller prints the line itself, e.g. on the dedicated server's stdout.
+    Mirrored,
+    Plain(String),
+    Record,
+}
+
 /// What the writer thread is told.
 enum Out {
-    /// Lines for the file, dated, and the message for stderr (Sunrise's own).
+    /// Lines for the file, dated, with their stderr policy.
     Write {
         date: NaiveDate,
         lines: Vec<String>,
-        stderr: Option<String>,
+        stderr: Echo,
     },
     /// Answer once everything before is written.
     Flush(mpsc::SyncSender<()>),
@@ -286,33 +297,54 @@ struct Writer {
 }
 
 impl Writer {
-    fn run(mut self, out: mpsc::Receiver<Out>) {
-        let stderr = io::stderr();
+    fn channel<'a>(
+        &self,
+        tap: &'a Tap,
+        main_thread: &'static str,
+        stderr_targets: Vec<String>,
+    ) -> (Logger<'a>, mpsc::Receiver<Out>) {
+        let (out, receive) = mpsc::channel();
+        let logger = Logger {
+            out,
+            tap,
+            has_file: self.file.is_some(),
+            recent: Mutex::new(VecDeque::new()),
+            main_thread,
+            stderr_targets,
+            floods: Mutex::new(Floods::default()),
+        };
+        (logger, receive)
+    }
+
+    fn run(mut self, out: mpsc::Receiver<Out>, mut stderr: impl Write) {
         for msg in out {
             match msg {
                 Out::Write {
                     date,
                     lines,
-                    stderr: message,
+                    stderr: echo,
                 } => {
-                    if let Some(message) = message {
-                        let _ = writeln!(stderr.lock(), "{message}");
+                    if let Echo::Plain(message) = &echo {
+                        let _ = writeln!(stderr, "{message}");
                     }
                     if date != self.date {
                         if let Some(latest) = &mut self.file
                             && let Err(e) = roll(&mut latest.file, &self.dir, self.date)
                         {
-                            let _ = writeln!(
-                                stderr.lock(),
-                                "Sunrise: could not roll over the log: {e}"
-                            );
+                            let _ = writeln!(stderr, "Sunrise: could not roll over the log: {e}");
                         }
                         self.date = date;
                     }
-                    if let Some(latest) = &mut self.file {
+                    let echo_record = matches!(echo, Echo::Record);
+                    if self.file.is_some() || echo_record {
                         let mut text = lines.join("\n");
                         text.push('\n');
-                        let _ = latest.file.write_all(text.as_bytes());
+                        if let Some(latest) = &mut self.file {
+                            let _ = latest.file.write_all(text.as_bytes());
+                        }
+                        if echo_record {
+                            let _ = stderr.write_all(text.as_bytes());
+                        }
                     }
                 }
                 Out::Flush(done) => {
@@ -326,13 +358,16 @@ impl Writer {
     }
 }
 
-struct Logger {
+struct Logger<'a> {
     out: mpsc::Sender<Out>,
+    tap: &'a Tap,
+    has_file: bool,
     /// The last lines, kept here (not on the writer) so a crash report has them at once.
     recent: Mutex<VecDeque<String>>,
     /// What the main thread is called in the log: "Render thread", or "Server thread" for the
     /// dedicated server, as in vanilla.
     main_thread: &'static str,
+    stderr_targets: Vec<String>,
     floods: Mutex<Floods>,
 }
 
@@ -388,9 +423,9 @@ impl Floods {
     }
 }
 
-static LOGGER: std::sync::OnceLock<Logger> = std::sync::OnceLock::new();
+static LOGGER: std::sync::OnceLock<Logger<'static>> = std::sync::OnceLock::new();
 
-/// The most lines the tap keeps between two drains (`take_tapped`); older ones are dropped.
+/// The most lines the tap keeps between two drains (`take_tapped`); new overflow is dropped.
 pub const TAP_LINES: usize = 4096;
 
 /// The most bytes of a line's message the tap keeps; the rest is cut off at a character boundary.
@@ -404,32 +439,112 @@ pub struct TappedLine {
     pub level: log::Level,
     pub thread: String,
     pub message: String,
+    /// The batch's overflow count on its first line; zero on every later line.
+    pub dropped: u64,
 }
 
-/// Whether the tap keeps lines (`set_tap`), read before its lock is taken.
-static TAPPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// The lines kept for the native mods' `console_line` hook, oldest first.
-static TAP: Mutex<VecDeque<TappedLine>> = Mutex::new(VecDeque::new());
+#[derive(Default)]
+struct TapQueue {
+    lines: Vec<TappedLine>,
+    dropped: u64,
+}
+
+impl TapQueue {
+    fn push(&mut self, thread: &str, level: log::Level, message: &str) {
+        if self.lines.len() == TAP_LINES {
+            self.dropped += 1;
+            return;
+        }
+        self.lines.push(TappedLine {
+            level,
+            thread: capped(thread, TAP_THREAD_BYTES),
+            message: capped(message, TAP_MESSAGE_BYTES),
+            dropped: 0,
+        });
+    }
+
+    fn drain(&mut self) -> Vec<TappedLine> {
+        if let Some(first) = self.lines.first_mut() {
+            first.dropped = std::mem::take(&mut self.dropped);
+        }
+        std::mem::take(&mut self.lines)
+    }
+}
+
+struct Tap {
+    /// Read before touching the tap queue. Only the server tick or shutdown changes it.
+    active: AtomicBool,
+    queue: Mutex<TapQueue>,
+}
+
+impl Tap {
+    const fn new() -> Self {
+        Self {
+            active: AtomicBool::new(false),
+            queue: Mutex::new(TapQueue {
+                lines: Vec::new(),
+                dropped: 0,
+            }),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, TapQueue> {
+        #[cfg(test)]
+        TAP_LOCKS.set(TAP_LOCKS.get() + 1);
+        self.queue.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn lock_if_capturing(&self) -> Option<MutexGuard<'_, TapQueue>> {
+        if !self.active.load(Ordering::Relaxed) || UNTAPPED.get() {
+            return None;
+        }
+        let queue = self.lock();
+        // Shutdown may have disabled the tap while this producer waited for the queue.
+        self.active.load(Ordering::Relaxed).then_some(queue)
+    }
+
+    fn take(&self, listened: bool) -> Vec<TappedLine> {
+        if !listened {
+            self.stop();
+        } else if self.active.load(Ordering::Relaxed) {
+            return self.lock().drain();
+        } else {
+            self.active.store(true, Ordering::Relaxed);
+        }
+        Vec::new()
+    }
+
+    fn stop(&self) {
+        if self.active.load(Ordering::Relaxed) {
+            let mut queue = self.lock();
+            self.active.store(false, Ordering::Relaxed);
+            *queue = TapQueue::default();
+        }
+    }
+}
+
+static TAP: Tap = Tap::new();
 
 thread_local! {
     /// Set while this thread runs `untapped`: its lines are not kept.
     static UNTAPPED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Keeps every line logged from now on for `take_tapped` (`on`), or stops and forgets them.
-pub fn set_tap(on: bool) {
-    TAPPING.store(on, std::sync::atomic::Ordering::Relaxed);
-    if !on {
-        TAP.lock().unwrap_or_else(|e| e.into_inner()).clear();
-    }
+#[cfg(test)]
+thread_local! {
+    static TAP_LOCKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// The lines the tap kept since the last call, oldest first.
-pub fn take_tapped() -> Vec<TappedLine> {
-    TAP.lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .drain(..)
-        .collect()
+/// Called by the server at tick start. The first listening tick enables capture; later ones
+/// drain the previous tick's batch in order. With no listener, only the transition from active
+/// to inactive touches the queue, to discard any undelivered lines and release its memory.
+pub fn take_tapped(listened: bool) -> Vec<TappedLine> {
+    TAP.take(listened)
+}
+
+/// Stop capture and forget any undelivered lines. Already idle means no tap lock.
+pub fn stop_tap() {
+    TAP.stop();
 }
 
 /// Runs `f` without tapping the lines this thread logs meanwhile (a `console_line`
@@ -454,23 +569,15 @@ fn capped(text: &str, max: usize) -> String {
     text[..end].to_owned()
 }
 
-fn tap(thread: &str, level: log::Level, message: &str) {
-    if !TAPPING.load(std::sync::atomic::Ordering::Relaxed) || UNTAPPED.get() {
-        return;
-    }
-    let mut lines = TAP.lock().unwrap_or_else(|e| e.into_inner());
-    if lines.len() >= TAP_LINES {
-        lines.pop_front();
-    }
-    lines.push_back(TappedLine {
-        level,
-        thread: capped(thread, TAP_THREAD_BYTES),
-        message: capped(message, TAP_MESSAGE_BYTES),
-    });
-}
-
 fn ours(target: &str) -> bool {
     target.starts_with("sunrise")
+}
+
+/// A target is the named crate or one of its modules, not just a shared prefix.
+fn target_matches(target: &str, name: &str) -> bool {
+    target
+        .strip_prefix(name)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
 }
 
 /// Crates logged from ERROR only, their warnings being known noise. `calloop` 0.13, winit 0.30's
@@ -479,14 +586,10 @@ fn ours(target: &str) -> bool {
 /// event for non-existence source"). Neither crate has a release without it.
 const ERRORS_ONLY: &[&str] = &["calloop"];
 
-impl log::Log for Logger {
+impl log::Log for Logger<'_> {
     fn enabled(&self, meta: &log::Metadata) -> bool {
         let target = meta.target();
-        let floor = if ERRORS_ONLY.iter().any(|name| {
-            target
-                .strip_prefix(name)
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
-        }) {
+        let floor = if ERRORS_ONLY.iter().any(|name| target_matches(target, name)) {
             log::Level::Error
         } else {
             log::Level::Info
@@ -498,11 +601,12 @@ impl log::Log for Logger {
         if !self.enabled(record.metadata()) {
             return;
         }
-        let sunrise = ours(record.target());
+        let target = record.target();
+        let sunrise = ours(target);
         let message = if sunrise {
             record.args().to_string()
         } else {
-            format!("[{}] {}", record.target(), record.args())
+            format!("[{target}] {}", record.args())
         };
         let current = std::thread::current();
         let thread = match current.name() {
@@ -523,23 +627,34 @@ impl log::Log for Logger {
         let level = record.level();
         match gate {
             Gate::Skip => return,
-            Gate::Write { left_out } if left_out > 0 => self.write(
+            Gate::Write { left_out } if left_out > 0 => self.send(
                 thread,
                 level,
                 &format!(
                     "{left_out} more lines like the next one were not logged in the last minute"
                 ),
+                Echo::Quiet,
             ),
             _ => {}
         }
-        let stderr = sunrise.then(|| message.clone());
-        tap(thread, level, &message);
+        let stderr = if sunrise {
+            Echo::Plain(message.clone())
+        } else if self
+            .stderr_targets
+            .iter()
+            .any(|name| target_matches(target, name))
+        {
+            Echo::Record
+        } else {
+            Echo::Quiet
+        };
         self.send(thread, level, &message, stderr);
         if gate == Gate::Last {
-            self.write(
+            self.send(
                 thread,
                 level,
                 &format!("{FLOOD_LINES} lines like this one in a minute: the next ones are counted, not logged"),
+                Echo::Quiet,
             );
         }
     }
@@ -553,12 +668,8 @@ impl log::Log for Logger {
     }
 }
 
-impl Logger {
-    fn write(&self, thread: &str, level: log::Level, message: &str) {
-        self.send(thread, level, message, None);
-    }
-
-    fn send(&self, thread: &str, level: log::Level, message: &str, stderr: Option<String>) {
+impl Logger<'_> {
+    fn send(&self, thread: &str, level: log::Level, message: &str, stderr: Echo) {
         let now = Local::now();
         // As log4j writes a multi-line message: the pattern once, the rest as it is.
         let lines: Vec<String> = message
@@ -581,15 +692,30 @@ impl Logger {
                 recent.push_back(line.clone());
             }
         }
-        let msg = Out::Write {
+        let visible_without_writer = matches!(stderr, Echo::Plain(_) | Echo::Mirrored);
+        let visible = self.has_file || visible_without_writer || matches!(stderr, Echo::Record);
+        // Keep the lock through publication so the tap and the writer see records in the
+        // same order. Quiet records without a file only go into the crash report's history.
+        let mut queue = if visible {
+            self.tap.lock_if_capturing()
+        } else {
+            None
+        };
+        let result = self.out.send(Out::Write {
             date: now.date_naive(),
             lines,
             stderr,
-        };
+        });
+        if let Some(queue) = &mut queue
+            && (result.is_ok() || visible_without_writer)
+        {
+            queue.push(thread, level, message);
+        }
+        drop(queue);
         if let Err(mpsc::SendError(Out::Write {
-            stderr: Some(message),
+            stderr: Echo::Plain(message),
             ..
-        })) = self.out.send(msg)
+        })) = result
         {
             // No writer (it could not start): the terminal still gets Sunrise's messages.
             eprintln!("{message}");
@@ -619,50 +745,62 @@ pub fn init(home: &Path, main_thread: &'static str) {
         }
     };
     let logger = LOGGER.get_or_init(|| {
-        let (out, receive) = mpsc::channel();
         let writer = Writer {
             file,
             dir,
             date: Local::now().date_naive(),
         };
+        let stderr_targets = std::env::var("SUNRISE_LOG_STDERR")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|target| !target.is_empty())
+            .map(str::to_owned)
+            .collect();
+        let (logger, receive) = writer.channel(&TAP, main_thread, stderr_targets);
         if let Err(e) = std::thread::Builder::new()
             .name("Log writer".into())
-            .spawn(move || writer.run(receive))
+            .spawn(move || writer.run(receive, io::stderr()))
         {
             eprintln!("Sunrise: could not start the log writer: {e}");
         }
-        Logger {
-            out,
-            recent: Mutex::new(VecDeque::new()),
-            main_thread,
-            floods: Mutex::new(Floods::default()),
-        }
+        logger
     });
     if log::set_logger(logger).is_ok() {
         log::set_max_level(log::LevelFilter::Info);
     }
 }
 
-/// A line in the log from code that prints it elsewhere itself (the dedicated server console).
-pub fn write_only(level: log::Level, message: &str) {
+/// Writes to the log file under the current thread's log name. Set `printed_elsewhere` only
+/// when the caller also prints this message to a terminal, so the tap can see it without a file.
+pub fn write_current(level: log::Level, message: &str, printed_elsewhere: bool) {
     let current = std::thread::current();
     let main = LOGGER.get().map_or("main", |logger| logger.main_thread);
     let thread = match current.name() {
         Some("main") | None => main,
         Some(name) => name,
     };
-    tap(thread, level, message);
-    if let Some(logger) = LOGGER.get() {
-        logger.write(thread, level, message);
+    if printed_elsewhere {
+        write_mirrored_as(thread, level, message);
+    } else {
+        write_as(thread, level, message);
     }
 }
 
-/// Writes `message` to the log file only, under the thread vanilla names for it (`Server thread` for
-/// a login refused on a connection's own thread), as the console line beside it shows.
+/// Writes `message` to the log file only, under the thread vanilla names for it.
 pub fn write_as(thread: &str, level: log::Level, message: &str) {
-    tap(thread, level, message);
     if let Some(logger) = LOGGER.get() {
-        logger.write(thread, level, message);
+        logger.send(thread, level, message, Echo::Quiet);
+    }
+}
+
+/// Writes a line that the caller also prints to a terminal, under the thread vanilla names for
+/// it (`Server thread` for a login refused on a connection's own thread).
+pub fn write_mirrored_as(thread: &str, level: log::Level, message: &str) {
+    if let Some(logger) = LOGGER.get() {
+        logger.send(thread, level, message, Echo::Mirrored);
+    } else if let Some(mut queue) = TAP.lock_if_capturing() {
+        queue.push(thread, level, message);
     }
 }
 
@@ -714,45 +852,47 @@ pub fn newest_crash_report(home: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    /// The tap keeps lines only while on, never a line logged inside `untapped`, and at most
-    /// `TAP_LINES`, dropping the oldest.
     #[test]
     fn the_tap_keeps_lines_while_on_and_skips_untapped_ones() {
-        let probes = |lines: Vec<TappedLine>| -> Vec<String> {
-            lines
-                .into_iter()
-                .filter(|l| l.message.starts_with("tap probe"))
-                .map(|l| format!("{}/{}: {}", l.thread, l.level, l.message))
-                .collect()
+        let tap = Tap::new();
+        let writer = Writer {
+            file: None,
+            dir: PathBuf::new(),
+            date: day(14),
         };
-        write_as("Server thread", log::Level::Info, "tap probe off");
-        set_tap(true);
-        write_as("Server thread", log::Level::Warn, "tap probe 1");
-        untapped(|| write_as("Server thread", log::Level::Info, "tap probe hidden"));
-        write_only(log::Level::Error, "tap probe 2");
-        let thread = std::thread::current().name().unwrap_or("main").to_owned();
+        let (logger, _receive) = writer.channel(&tap, "Server thread", Vec::new());
+        let record = |thread, level, message| logger.send(thread, level, message, Echo::Record);
+        let idle_locks = TAP_LOCKS.get();
+        assert!(tap.take(false).is_empty());
+        record("Server thread", log::Level::Info, "tap probe off");
         assert_eq!(
-            probes(take_tapped()),
+            TAP_LOCKS.get(),
+            idle_locks,
+            "an idle tick and log take no tap lock"
+        );
+        assert!(tap.take(true).is_empty());
+        record("Server thread", log::Level::Warn, "tap probe 1");
+        untapped(|| record("Server thread", log::Level::Info, "tap probe hidden"));
+        record("Another thread", log::Level::Error, "tap probe 2");
+        let kept = tap.take(true);
+        let probes: Vec<_> = kept
+            .iter()
+            .map(|l| (l.thread.as_str(), l.level, l.message.as_str()))
+            .collect();
+        assert_eq!(
+            probes,
             [
-                "Server thread/WARN: tap probe 1".to_owned(),
-                format!("{thread}/ERROR: tap probe 2"),
+                ("Server thread", log::Level::Warn, "tap probe 1"),
+                ("Another thread", log::Level::Error, "tap probe 2"),
             ]
         );
-        for i in 0..TAP_LINES + 5 {
-            write_as("Server thread", log::Level::Info, &format!("tap probe {i}"));
-        }
-        let kept = take_tapped();
-        assert!(kept.len() <= TAP_LINES);
-        assert_eq!(
-            kept.last().unwrap().message,
-            format!("tap probe {}", TAP_LINES + 4)
-        );
-        // An oversized line is cut to the stated caps, at a character boundary: the message
-        // ends in a three-byte character that straddles the cap, the thread name is long.
+        // The message ends in a three-byte character that straddles the cap.
         let long = format!("tap probe long {}", "\u{20ac}".repeat(TAP_MESSAGE_BYTES));
-        write_as(&"t".repeat(TAP_THREAD_BYTES + 50), log::Level::Info, &long);
-        let kept = take_tapped();
-        let line = kept.last().unwrap();
+        let thread = "t".repeat(TAP_THREAD_BYTES + 50);
+        record(&thread, log::Level::Info, &long);
+        let kept = tap.take(true);
+        assert_eq!(kept.len(), 1);
+        let line = &kept[0];
         assert_eq!(line.thread, "t".repeat(TAP_THREAD_BYTES));
         assert!(line.message.starts_with("tap probe long \u{20ac}"));
         assert!(line.message.len() <= TAP_MESSAGE_BYTES);
@@ -760,9 +900,31 @@ mod tests {
             TAP_MESSAGE_BYTES - line.message.len() < 3,
             "cut at the last whole character"
         );
-        set_tap(false);
-        write_as("Server thread", log::Level::Info, "tap probe after");
-        assert!(probes(take_tapped()).is_empty());
+        record("Server thread", log::Level::Info, "discarded on stop");
+        assert!(tap.take(false).is_empty());
+        record("Server thread", log::Level::Info, "tap probe after");
+        assert!(tap.take(true).is_empty());
+        assert!(tap.take(true).is_empty());
+    }
+
+    #[test]
+    fn the_tap_keeps_the_oldest_lines_and_reports_overflow_once() {
+        let mut queue = TapQueue::default();
+        for i in 0..4099 {
+            queue.push("Server thread", log::Level::Info, &format!("line {i}"));
+        }
+        let batch = queue.drain();
+        assert_eq!(batch.len(), 4096);
+        for (i, line) in batch.iter().enumerate() {
+            assert_eq!(line.message, format!("line {i}"));
+            assert_eq!(line.dropped, if i == 0 { 3 } else { 0 });
+        }
+        assert!(queue.drain().is_empty());
+        queue.push("Server thread", log::Level::Info, "next batch");
+        let batch = queue.drain();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].message, "next batch");
+        assert_eq!(batch[0].dropped, 0);
     }
 
     #[test]
@@ -771,19 +933,14 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("sunrise-native-log-test-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let (out, receive) = mpsc::channel();
+        let tap = Tap::new();
         let writer = Writer {
             file: Some(open_latest(&dir).unwrap().unwrap()),
             dir: dir.clone(),
             date: Local::now().date_naive(),
         };
-        let handle = std::thread::spawn(move || writer.run(receive));
-        let logger = Logger {
-            out,
-            recent: Mutex::new(VecDeque::new()),
-            main_thread: "Render thread",
-            floods: Mutex::new(Floods::default()),
-        };
+        let (logger, receive) = writer.channel(&tap, "Render thread", Vec::new());
+        let handle = std::thread::spawn(move || writer.run(receive, io::sink()));
         for (target, level, message) in [
             ("meridian_sunrise::save", log::Level::Warn, "save failed"),
             ("meridian_core::map", log::Level::Info, "map opened"),
@@ -826,13 +983,13 @@ mod tests {
     #[test]
     fn sunrise_stderr_and_external_file_records_stay_separate() {
         use log::Log;
-        let (out, receive) = mpsc::channel();
-        let logger = Logger {
-            out,
-            recent: Mutex::new(VecDeque::new()),
-            main_thread: "Render thread",
-            floods: Mutex::new(Floods::default()),
+        let tap = Tap::new();
+        let writer = Writer {
+            file: None,
+            dir: PathBuf::new(),
+            date: day(14),
         };
+        let (logger, receive) = writer.channel(&tap, "Render thread", Vec::new());
         for target in ["sunrise_client::game", "meridian_core", "wgpu_hal::vulkan"] {
             logger.log(
                 &log::Record::builder()
@@ -845,15 +1002,158 @@ mod tests {
                 panic!("a diagnostic must write a record")
             };
             if ours(target) {
-                assert_eq!(stderr.as_deref(), Some("diagnostic"));
+                assert!(matches!(stderr, Echo::Plain(message) if message == "diagnostic"));
                 assert!(lines.iter().any(|line| line.ends_with("diagnostic")));
             } else {
-                assert!(stderr.is_none());
+                assert!(matches!(stderr, Echo::Quiet));
                 assert!(
                     lines
                         .iter()
                         .any(|line| line.ends_with(&format!("[{target}] diagnostic")))
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn selected_targets_echo_whole_records_in_the_file_format() {
+        use log::Log;
+        let dir = tempfile::tempdir().unwrap();
+        // With the file open, and when a different game owns it.
+        for with_file in [true, false] {
+            let tap = Tap::new();
+            tap.take(true);
+            let log_day = day(14);
+            let writer = Writer {
+                file: with_file.then(|| open_latest(dir.path()).unwrap().unwrap()),
+                dir: dir.path().to_owned(),
+                date: log_day,
+            };
+            let (logger, receive) = writer.channel(
+                &tap,
+                "Render thread",
+                vec!["my_mod".into(), "another_mod".into()],
+            );
+            for (target, message) in [
+                ("my_mod", "root record"),
+                ("my_mod::map", "module record\ncontinued here"),
+                ("another_mod", "second selected target"),
+                (
+                    "other",
+                    "other record\n[12:34:56] [Render thread/INFO]: [my_mod] not ours",
+                ),
+                ("my_mod_else", "similar crate name"),
+                ("sunrise_client::game", "Sunrise message"),
+            ] {
+                logger.log(
+                    &log::Record::builder()
+                        .args(format_args!("{message}"))
+                        .level(log::Level::Info)
+                        .target(target)
+                        .build(),
+                );
+            }
+            logger.send(
+                "Server thread",
+                log::Level::Info,
+                "printed on stdout by the caller",
+                Echo::Mirrored,
+            );
+            let mut expected = vec![
+                "[my_mod] root record",
+                "[my_mod::map] module record\ncontinued here",
+                "[another_mod] second selected target",
+            ];
+            if with_file {
+                expected.extend([
+                    "[other] other record\n[12:34:56] [Render thread/INFO]: [my_mod] not ours",
+                    "[my_mod_else] similar crate name",
+                ]);
+            }
+            expected.extend(["Sunrise message", "printed on stdout by the caller"]);
+            let batch = tap.take(true);
+            assert_eq!(
+                batch.iter().map(|l| l.message.as_str()).collect::<Vec<_>>(),
+                expected
+            );
+            drop(logger);
+            // Keep the byte comparison on one log day, even across midnight.
+            let (fixed, queued) = mpsc::channel();
+            for mut record in receive {
+                let Out::Write { date, .. } = &mut record else {
+                    panic!("a diagnostic must write a record");
+                };
+                *date = log_day;
+                fixed.send(record).unwrap();
+            }
+            drop(fixed);
+            let mut stderr = Vec::new();
+            writer.run(queued, &mut stderr);
+            let stderr = String::from_utf8(stderr).unwrap();
+            let lines: Vec<_> = stderr.lines().collect();
+            assert_eq!(lines.len(), 5);
+            assert!(lines[0].ends_with("/INFO]: [my_mod] root record"));
+            assert!(lines[1].ends_with("/INFO]: [my_mod::map] module record"));
+            assert_eq!(lines[2], "continued here");
+            assert!(lines[3].ends_with("/INFO]: [another_mod] second selected target"));
+            assert_eq!(lines[4], "Sunrise message");
+            assert!(stderr.ends_with('\n'));
+            if with_file {
+                let full = fs::read_to_string(dir.path().join("latest.log")).unwrap();
+                assert!(full.starts_with(stderr.strip_suffix("Sunrise message\n").unwrap()));
+                assert!(full.contains(
+                    "[other] other record\n[12:34:56] [Render thread/INFO]: [my_mod] not ours\n"
+                ));
+                assert!(full.contains("[my_mod_else] similar crate name\n"));
+                assert!(full.ends_with("/INFO]: printed on stdout by the caller\n"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_flood_notice_only_reaches_the_tap_when_written_to_the_file() {
+        use log::Log;
+        let dir = tempfile::tempdir().unwrap();
+        let notice = "100 lines like this one in a minute: the next ones are counted, not logged";
+        for with_file in [false, true] {
+            let tap = Tap::new();
+            tap.take(true);
+            let writer = Writer {
+                file: with_file.then(|| open_latest(dir.path()).unwrap().unwrap()),
+                dir: dir.path().to_owned(),
+                date: Local::now().date_naive(),
+            };
+            let (logger, receive) = writer.channel(&tap, "Server thread", Vec::new());
+            for _ in 0..101 {
+                logger.log(
+                    &log::Record::builder()
+                        .args(format_args!("repeated warning"))
+                        .level(log::Level::Warn)
+                        .target("sunrise_server")
+                        .build(),
+                );
+            }
+            let batch = tap.take(true);
+            assert_eq!(batch.len(), if with_file { 101 } else { 100 });
+            assert_eq!(batch[0].dropped, 0);
+            assert_eq!(
+                batch.last().unwrap().message,
+                if with_file {
+                    notice
+                } else {
+                    "repeated warning"
+                }
+            );
+            drop(logger);
+            let mut stderr = Vec::new();
+            writer.run(receive, &mut stderr);
+            assert_eq!(
+                String::from_utf8(stderr).unwrap(),
+                "repeated warning\n".repeat(100)
+            );
+            if with_file {
+                let file = fs::read_to_string(dir.path().join("latest.log")).unwrap();
+                assert!(file.ends_with(&format!("/WARN]: {notice}\n")));
             }
         }
     }

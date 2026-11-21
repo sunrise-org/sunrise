@@ -22,10 +22,10 @@ pub trait LevelSavedDataBackend {
     #[access(WorldOnly)]
     fn level_raids(&self, level: LevelRef) -> Option<Vec<RaidRef>>;
     /// Side: server.
-    /// The world's respawn data (`LevelData.getRespawnData`): the world spawn and the way a
-    /// player appearing there faces, as `/setworldspawn` sets them. Sunrise keeps one world
-    /// spawn, in the Overworld, so every level of a world answers the same. None on a client,
-    /// for a stale handle, and before the world has chosen its spawn.
+    /// The world's respawn data (`LevelData.getRespawnData`): the world spawn, the level it is
+    /// in and the way a player appearing there faces, as `/setworldspawn` sets them. The world
+    /// has one, so every level of a world answers the same. None on a client, for a stale
+    /// handle, and before the world has chosen its spawn.
     #[access(WorldOnly)]
     fn level_respawn_data(&self, level: LevelRef) -> Option<RespawnData>;
     /// Side: server.
@@ -42,12 +42,11 @@ pub trait LevelSavedDataBackend {
 #[sunrise_mod_api_macros::host_area]
 pub trait LevelSavedDataBackendMut {
     /// Side: server.
-    /// `LevelData.setRespawnData(RespawnData.of(..))`, as `/setworldspawn` does: the world spawn
-    /// moves to `pos`, facing `yaw` (wrapped to -180..180) and `pitch` (clamped to -90..90), a
-    /// player whose own respawn point was the old world spawn follows it, and `spawn_change`
-    /// fires. Only the Overworld's handle, where Sunrise keeps the world spawn. False for
-    /// another level, a stale handle, a client, a non-finite angle and a position outside the
-    /// spawnable bounds.
+    /// `LevelData.setRespawnData(RespawnData.of(level, ..))`, as `/setworldspawn` run in this
+    /// level does: the world spawn moves to `pos` in this handle's level, facing `yaw` (wrapped
+    /// to -180..180) and `pitch` (clamped to -90..90), a player whose own respawn point was the
+    /// old world spawn follows it, and `spawn_change` fires. False for a stale handle, a client,
+    /// a non-finite angle and a position outside the spawnable bounds.
     #[access(WorldOnly)]
     fn level_set_respawn_data(
         &mut self,

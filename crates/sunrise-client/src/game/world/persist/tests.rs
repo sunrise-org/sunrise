@@ -3,6 +3,155 @@ use super::*;
 
 include!("position_load_tests.rs");
 
+mod transient_entities {
+    use super::*;
+    use crate::game::native_entity_refs::tests::{bind_local_player, with_game};
+    use mod_api::{
+        __private::{ModPhase, PhaseOwner},
+        EntityRef, LevelWriteError,
+    };
+
+    fn with_server(test: impl FnOnce(&mut Game<'_>)) {
+        mod_platform::testing::with_mods(Default::default(), || {
+            with_game(|game| {
+                let _world = PhaseOwner::scope(ModPhase::World);
+                game.world
+                    .chunks
+                    .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+                test(game);
+            });
+        });
+    }
+
+    fn display(game: &mut Game<'_>) -> EntityRef {
+        let target = game
+            .summon_with_nbt("minecraft:text_display", [4.0, 64.0, 4.0], "{}")
+            .unwrap()
+            .unwrap();
+        game.entity(game.resident_target_id(target).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_transient_display_is_live_and_can_resume_saving_with_its_uuid() {
+        with_server(|game| {
+            let display = display(game);
+            let chunks = HashSet::from([(0, 0)]);
+            assert_eq!(display.set_persistent(game, false), Ok(true));
+            assert_eq!(display.set_persistent(game, false), Ok(true));
+            assert_eq!(game.entity(display.id()), Some(display));
+            let uuid =
+                sunrise_client::lan::playerdata::uuid_ints(game.entity_uuid(display).unwrap());
+            assert_eq!(game.entity_chunks(&chunks, false), vec![((0, 0), vec![])]);
+            let capture = game.snapshot_entity_chunks(&chunks, EntitySnapshot::Structure);
+            assert_eq!(capture[0].1.len(), 1);
+            assert_eq!(entity_nbt::uuid(&capture[0].1[0]), Some(uuid));
+
+            assert_eq!(display.set_persistent(game, true), Ok(true));
+            let restored = game.entity_chunks(&chunks, false);
+            assert_eq!(restored[0].1.len(), 1);
+            assert_eq!(entity_nbt::uuid(&restored[0].1[0]), Some(uuid));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn unloading_a_transient_display_erases_its_old_record() {
+        with_server(|game| {
+            let display = display(game);
+            game.save_entities(true).unwrap();
+            assert_eq!(game.save.load_entities(0, 0).unwrap().len(), 1);
+            assert_eq!(display.set_persistent(game, false), Ok(true));
+            assert_eq!(
+                game.save.load_entities(0, 0).unwrap().len(),
+                1,
+                "setting the flag does not rewrite an old snapshot"
+            );
+
+            let chunk = game.world.chunks.remove(&(0, 0)).unwrap();
+            game.unload_entities(std::slice::from_ref(&chunk));
+            game.save.flush().unwrap();
+            assert_eq!(game.entity(display.id()), None);
+            let records = game.save.load_entities(0, 0).unwrap();
+            assert!(records.is_empty());
+            game.world.chunks.insert((0, 0), chunk);
+            game.world.queue_entity_nbt((0, 0), records);
+            game.spawn_loaded_entities();
+            assert!(game.others.is_empty());
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn the_root_controls_chunk_and_player_vehicle_saves_but_not_logout_removal() {
+        with_server(|game| {
+            let root = game
+                .summon_with_nbt(
+                    "minecraft:pig",
+                    [4.0, 64.0, 4.0],
+                    r#"{Passengers:[{id:"minecraft:chicken",UUID:[I;0,0,0,321]}]}"#,
+                )
+                .unwrap()
+                .unwrap();
+            let root = game.entity(game.resident_target_id(root).unwrap()).unwrap();
+            let rider = game.mob_passenger_ids(root.id())[0];
+            let chunks = HashSet::from([(0, 0)]);
+            assert_eq!(
+                game.entity(rider).unwrap().set_persistent(game, false),
+                Ok(true)
+            );
+            let saved = game.entity_chunks(&chunks, false);
+            let Some(Tag::List(passengers)) = saved[0].1[0].get("Passengers") else {
+                panic!("marking the rider alone must not drop it from its vehicle");
+            };
+            assert_eq!(entity_nbt::uuid(&passengers[0]), Some([0, 0, 0, 321]));
+            let (wrapper, attach) = game.snapshot_parent_vehicle(rider, &[], false).unwrap();
+            assert_eq!(attach, [0, 0, 0, 321]);
+            assert_eq!(
+                wrapper
+                    .get("Entity")
+                    .and_then(|tree| tree.get("Passengers")),
+                Some(&Tag::List(passengers.clone()))
+            );
+
+            assert_eq!(root.set_persistent(game, false), Ok(true));
+            assert_eq!(game.entity_chunks(&chunks, false), vec![((0, 0), vec![])]);
+            assert_eq!(game.snapshot_parent_vehicle(rider, &[], false), None);
+            assert!(game.entity(root.id()).is_some());
+            assert_eq!(game.snapshot_parent_vehicle(rider, &[], true), None);
+            assert_eq!(game.entity(root.id()), None);
+            assert_eq!(game.entity(rider), None);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_persistence_write_refuses_players_stale_handles_clients_and_setup() {
+        with_server(|game| {
+            let display = display(game);
+            game.player =
+                Some(sunrise_client::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            bind_local_player(game, 100, 25);
+            let player = game.entity(100).unwrap();
+            assert_eq!(player.set_persistent(game, false), Ok(false));
+            {
+                let _setup = PhaseOwner::scope(ModPhase::Setup);
+                assert_eq!(
+                    display.set_persistent(game, false),
+                    Err(LevelWriteError::Unavailable)
+                );
+            }
+            game.options.execution_role = crate::game::execution_role::ExecutionRole::Client;
+            assert_eq!(display.set_persistent(game, false), Ok(false));
+            game.options.execution_role =
+                crate::game::execution_role::ExecutionRole::IntegratedServer;
+            assert!(display.discard(game));
+            assert_eq!(display.set_persistent(game, false), Ok(false));
+        });
+    }
+}
+
 #[test]
 #[ignore = "daily"]
 fn neutral_load_restores_only_the_saved_live_target_with_or_without_listeners() {

@@ -152,7 +152,15 @@ impl Game<'_> {
         );
         let sweep = self.sweep_before_hit("minecraft:shulker_bullet", false);
         let p = self.remove_projectile_at(i);
-        let at = [p.position.x, p.position.y, p.position.z];
+        self.shulker_bullet_hurt([p.position.x, p.position.y, p.position.z]);
+        self.vehicle_attack_sounds(p.aabb(), sweep, magic.then_some(p.id as i32));
+        self.reset_attack_strength();
+        self.swing_arm();
+    }
+
+    /// `ShulkerBullet.hurtServer`'s sound and fifteen crit particles
+    /// (`sendParticles`, spread 0.2) at the bullet, before it is destroyed.
+    pub(super) fn shulker_bullet_hurt(&mut self, at: [f64; 3]) {
         self.audio
             .play("minecraft:entity.shulker_bullet.hurt", Some(at), 1.0, 1.0);
         if let Some(ty) = sunrise_client::particles::ParticleType::from_name("crit") {
@@ -161,9 +169,6 @@ impl Game<'_> {
                 .send_particles(&options, at, [0.2, 0.2, 0.2], 0.0, 15);
             self.lan_level_particles(&options, at, [0.2, 0.2, 0.2], 0.0, 15, None);
         }
-        self.vehicle_attack_sounds(p.aabb(), sweep, magic.then_some(p.id as i32));
-        self.reset_attack_strength();
-        self.swing_arm();
     }
 
     /// `Player.canInteractWithEntity(box, 3.0)` as the server checks an

@@ -7,6 +7,7 @@
 use crate::{
     bounded::{self, Symlinks},
     internals::{atomic_write, check_output_dir},
+    release,
 };
 use std::{
     fs,
@@ -23,7 +24,9 @@ use sunrise_mod_package::{
     manifest::MANIFEST,
 };
 
-const USAGE: &str = "cargo sunrise-mod publish [--out <dir>] [--registry <checkout>] [--summary <text>] [--owner <login>]… [--categories a,b] [--tags a,b] [--changelog <text>] [--key <public key> --signature <file.minisig>] [--wasm]";
+mod binaries;
+
+const USAGE: &str = "cargo sunrise-mod publish [--out <dir>] [--registry <checkout>] [--summary <text>] [--owner <login>]… [--categories a,b] [--tags a,b] [--changelog <text>] [--key <public key> --signature <file.minisig>] [--package <file.smod>] [--sunrise <tag>] [--asset-base <author release URL> --releases <file>] [--binaries <dir> --sdk-data <dir>]";
 
 #[derive(Default)]
 struct Options {
@@ -36,7 +39,12 @@ struct Options {
     changelog: String,
     key: Option<String>,
     signature: Option<PathBuf>,
-    wasm: bool,
+    package: Option<PathBuf>,
+    sunrise: Option<String>,
+    releases: Option<PathBuf>,
+    binaries: Option<PathBuf>,
+    asset_base: Option<String>,
+    sdk_data: Option<PathBuf>,
 }
 
 fn list(value: &str) -> Vec<String> {
@@ -52,10 +60,6 @@ fn parse(args: &[String]) -> Result<Options, String> {
     let mut o = Options::default();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
-        if arg == "--wasm" {
-            o.wasm = true;
-            continue;
-        }
         let known = [
             "--out",
             "--registry",
@@ -66,6 +70,12 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--changelog",
             "--key",
             "--signature",
+            "--package",
+            "--sunrise",
+            "--releases",
+            "--binaries",
+            "--asset-base",
+            "--sdk-data",
         ];
         if !known.contains(&arg.as_str()) {
             return Err(format!(
@@ -84,7 +94,14 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--tags" => o.tags = list(value),
             "--changelog" => o.changelog = value.clone(),
             "--key" => o.key = Some(value.clone()),
-            _ => o.signature = Some(value.into()),
+            "--signature" => o.signature = Some(value.into()),
+            "--package" => o.package = Some(value.into()),
+            "--sunrise" => o.sunrise = Some(value.clone()),
+            "--releases" => o.releases = Some(value.into()),
+            "--binaries" => o.binaries = Some(value.into()),
+            "--asset-base" => o.asset_base = Some(value.clone()),
+            "--sdk-data" => o.sdk_data = Some(value.into()),
+            _ => unreachable!("known option"),
         }
     }
     Ok(o)
@@ -176,6 +193,7 @@ fn draft(
         id: m.id.clone(),
         kind,
         repo: None,
+        nightly: None,
         name: m.name.clone(),
         summary: o
             .summary
@@ -213,7 +231,31 @@ fn draft(
     }
 }
 
-fn pull_request(entry: &Entry, v: &EntryVersion, size: u64, first: bool) -> (String, String) {
+fn checklist(before: &[Entry], entry: &Entry, checkout: Option<&Path>) -> Vec<String> {
+    let mut remaining = entry.check_fields();
+    remaining.extend(
+        page::check_required(
+            &entry.id,
+            &entry.description,
+            &entry.categories,
+            entry.icon.as_deref(),
+            &entry.screenshots,
+        )
+        .into_iter()
+        .map(|p| format!("{}: {p}", entry.id)),
+    );
+    // A draft made without --registry has an empty screenshot list, so the rule never reads a file.
+    remaining.extend(registry::check_screenshot_rule(
+        before,
+        std::slice::from_ref(entry),
+        checkout.unwrap_or_else(|| Path::new(".")),
+    ));
+    // A category that is still the TODO is already listed as such.
+    remaining.retain(|r| !r.contains("is not a category") || !r.contains(TODO));
+    remaining
+}
+
+fn pull_request(entry: &Entry, v: &EntryVersion, size: u64, first: bool) -> String {
     let id = &entry.id;
     let title = if first {
         format!("Add {} {}", id, v.version)
@@ -230,24 +272,26 @@ fn pull_request(entry: &Entry, v: &EntryVersion, size: u64, first: bool) -> (Str
     } else {
         "entry is"
     };
-    let body = format!(
+    let mut body = format!(
         "{title}\n\n\
          - Project: `{id}` ({}), version {}, for Minecraft {}\n\
          - File: `{}`, {size} bytes, {signed}\n\
-         - Artifact URL: {TODO}: paste the address of `{}` (a release asset of your repository works)\n\
-         - SHA-256: `{}`\n\n\
-         The {submitted} in this pull request; the file's facts (API, side, capabilities) are read from the file.\n\n\
-         For the maintainer: copy the file from the artifact URL to this repository's `staging` release as `{}`, check that its SHA-256 is the one above, and let the `check` workflow run. After the merge, `publish` releases it as `{id}-{}`.\n",
+         - SHA-256: `{}`\n\n",
         entry.kind.name(),
         v.version,
         v.game,
         v.file,
-        v.file,
         v.sha256,
-        staged_name(&v.sha256, &v.file),
-        v.version,
     );
-    (title, body)
+    if v.sunrise.is_none() {
+        body.push_str(&format!(
+            "Artifact URL: {TODO}: paste the address of `{}` (a release asset of your repository works).\n\n\
+             The {submitted} in this pull request; the file's facts (API, side, capabilities) are read from the file.\n\n\
+             For the maintainer: copy the file from the artifact URL to this repository's `staging` release as `{}`, check that its SHA-256 is the one above, and let the `check` workflow run. After the merge, `publish` releases it as `{id}-{}`.\n",
+            v.file, staged_name(&v.sha256, &v.file), v.version,
+        ));
+    }
+    body
 }
 
 pub fn run(entry_point: mod_surface::child::ChildEntry, args: &[String]) -> Result<(), String> {
@@ -255,39 +299,73 @@ pub fn run(entry_point: mod_surface::child::ChildEntry, args: &[String]) -> Resu
     let root = Path::new(".");
     let manifest = Manifest::parse(&bounded::read(&root.join(MANIFEST), bounded::MAX_MANIFEST)?)?;
     let id = &manifest.id;
-    let release_version = manifest.version.to_string();
-    if !registry::plain_version(&release_version) {
-        return Err(format!(
-            "{MANIFEST}: version {release_version:?} cannot name a registry release: use SemVer without `+build` metadata and at most 64 characters"
-        ));
-    }
+    let release_version = release::version(&manifest)?;
+    let releases = o.releases.as_deref().map(release::releases).transpose()?;
+    let asset_base = o
+        .asset_base
+        .as_deref()
+        .map(|base| base.trim_end_matches('/'));
+    let binaries = match (&o.binaries, asset_base, &o.sdk_data) {
+        (None, _, None) => None,
+        (Some(dir), Some(base), Some(sdk_data)) => Some(binaries::Inputs {
+            dir,
+            base,
+            sdk_data,
+            releases: releases
+                .as_deref()
+                .ok_or("--binaries requires --releases <file>")?,
+        }),
+        _ => return Err("--binaries needs --asset-base <author release URL> and --sdk-data <dir> with the source and target SDKs".into()),
+    };
     let kind = if manifest.native.is_some() {
         Kind::NativeMod
     } else {
         Kind::Mod
     };
-    let existing = if let Some(checkout) = &o.registry {
-        let loaded = registry::load(checkout).map_err(|errors| format!(
-            "--registry {} is not a valid registry checkout: {}. Restore the checked-in entries or use a clean checkout",
-            checkout.display(),
-            errors.join("; ")
-        ))?;
-        if loaded
+    let checkout = o
+        .registry
+        .as_ref()
+        .map(|checkout| {
+            registry::load(checkout).map_err(|errors| format!(
+                "--registry {} is not a valid registry checkout: {}. Restore the checked-in entries or use a clean checkout",
+                checkout.display(),
+                errors.join("; ")
+            ))
+        })
+        .transpose()?;
+    if let Some(loaded) = &checkout
+        && loaded
             .collections
             .iter()
             .any(|collection| &collection.id == id)
-        {
-            return Err(format!(
-                "{id} is already a registry collection: choose a different `id` in {MANIFEST}"
-            ));
-        }
-        // The registry loader has bound every entry's id to its file name; select this project's id.
-        loaded.entries.into_iter().find(|e| &e.id == id)
-    } else {
-        None
-    };
+    {
+        return Err(format!(
+            "{id} is already a registry collection: choose a different `id` in {MANIFEST}"
+        ));
+    }
+    // The registry loader has bound every entry's id to its file name; select this project's id.
+    let existing = checkout
+        .as_ref()
+        .and_then(|loaded| loaded.entries.iter().find(|e| &e.id == id).cloned());
+    let listed = existing.as_ref().and_then(|entry| {
+        entry.versions.iter().find(|v| {
+            sunrise_mod_package::manifest::parse_version(&v.version)
+                .is_ok_and(|version| version == manifest.version)
+        })
+    });
+    if listed.is_some() && binaries.is_none() {
+        return Err(format!(
+            "{id} {release_version} is already listed in the registry, and a published version never changes: raise `version` in {MANIFEST} and run publish again"
+        ));
+    }
+    let first_stable = o.sunrise.is_some()
+        && existing.as_ref().is_some_and(|entry| {
+            entry.nightly.is_some() && entry.versions.is_empty() && entry.repo.is_none()
+        });
     if let Some(entry) = &existing {
-        if let Some(repo) = &entry.repo {
+        if listed.is_none()
+            && let Some(repo) = &entry.repo
+        {
             return Err(format!(
                 "{id} follows the releases of {repo}: publish a release there; the registry takes no file for it"
             ));
@@ -296,45 +374,92 @@ pub fn run(entry_point: mod_surface::child::ChildEntry, args: &[String]) -> Resu
             return Err(format!(
                 "{id} is listed as a {}, and a project's kind never changes: build a {} instead",
                 entry.kind.name(),
-                entry.kind.name()
+                kind.name()
             ));
         }
-        if let Some(listed) = entry.versions.iter().find(|v| {
-            sunrise_mod_package::manifest::parse_version(&v.version)
-                .is_ok_and(|version| version == manifest.version)
-        }) {
-            return Err(format!(
-                "{id} {} is already listed in the registry, and a published version never changes: raise `version` in {MANIFEST} and run publish again",
-                listed.version
-            ));
-        }
-        if entry.key.is_some() && (o.key.is_none() || o.signature.is_none()) {
-            return Err(format!(
-                "{id} has a key, so every version must be signed: use `cargo sunrise-mod build`, sign the package, then pass --key and --signature to publish"
-            ));
-        }
-        if o.key.as_deref().map(str::trim) != entry.key.as_deref().map(str::trim) {
+        let can_set_initial_key = first_stable && entry.key.is_none();
+        if !can_set_initial_key
+            && (listed.is_none() || o.key.is_some())
+            && o.key.as_deref().map(str::trim) != entry.key.as_deref().map(str::trim)
+        {
             return Err(format!(
                 "{id} cannot change its signing key: pass the --key its entry names, or omit --key and --signature if it has none"
             ));
         }
     }
-    if o.key.is_some() != o.signature.is_some() {
+    let (key, signature, source_tag) = if let Some(old) = listed {
+        if o.package.is_none() || o.signature.is_some() {
+            return Err("append a build with --package <original signed .smod>; its signature is already in the entry, so do not pass --signature".into());
+        }
+        if o.sunrise
+            .as_ref()
+            .is_some_and(|tag| Some(tag) != old.sunrise.as_ref())
+        {
+            return Err("a published source pin never changes; --sunrise must name its original stable release".into());
+        }
+        (
+            existing.as_ref().and_then(|e| e.key.as_deref()),
+            old.signature.clone(),
+            old.sunrise.as_deref(),
+        )
+    } else {
+        if o.key.is_some() != o.signature.is_some() {
+            return Err(
+                "--key and --signature go together: supply both to publish a signed package".into(),
+            );
+        }
+        let signature = o
+            .signature
+            .as_ref()
+            .map(|path| {
+                bounded::read(path, 16 << 10).map_err(|e| {
+                    format!(
+                        "{e}: pass the .minisig produced by cargo sunrise-mod sign to --signature"
+                    )
+                })
+            })
+            .transpose()?;
+        (o.key.as_deref(), signature, o.sunrise.as_deref())
+    };
+    if binaries.is_some() && (kind != Kind::NativeMod || source_tag.is_none()) {
         return Err(
-            "--key and --signature go together: supply both to publish a signed package".into(),
+            "--binaries needs a native mod and its source version's stable release (--sunrise)"
+                .into(),
         );
     }
-    let signature = o
-        .signature
-        .as_ref()
-        .map(|path| {
-            bounded::read(path, 16 << 10).map_err(|e| {
-                format!("{e}: pass the .minisig produced by minisign -S to --signature")
-            })
+    let asset_base = match (source_tag, asset_base) {
+        (Some(_), None) => {
+            return Err("a stable source version needs --asset-base <author release URL>".into());
+        }
+        (None, Some(_)) => {
+            return Err("--asset-base needs a stable source version (--sunrise)".into());
+        }
+        (_, base) => base,
+    };
+    if source_tag.is_some() && (key.is_none() || signature.is_none()) {
+        return Err("a stable source version needs a signed .smod and the project's key".into());
+    }
+    if o.package.is_some() && signature.is_none() {
+        return Err("--package needs a signed .smod".into());
+    }
+    let stable = source_tag
+        .map(|tag| {
+            release::stable(
+                releases
+                    .as_deref()
+                    .ok_or("--sunrise requires --releases <file>")?,
+                tag,
+            )
         })
         .transpose()?;
-    let icon = read_icon(&root.join("icon.png"))?;
     let first = existing.is_none();
+    let needs_icon =
+        first || (first_stable && existing.as_ref().is_some_and(|entry| entry.icon.is_none()));
+    let icon = if needs_icon {
+        read_icon(&root.join("icon.png"))?
+    } else {
+        None
+    };
     // Remove trailing slashes and `.` before symlink_metadata; both could hide a symlink.
     let out: PathBuf = o
         .out
@@ -347,7 +472,7 @@ pub fn run(entry_point: mod_surface::child::ChildEntry, args: &[String]) -> Resu
     }
     let mods = out.join(ENTRIES);
     let files = out.join("files");
-    let icons = (first && icon.is_some()).then(|| out.join("icons"));
+    let icons = icon.is_some().then(|| out.join("icons"));
     // An unsigned submission is built first, into the project's own output folder.
     let built = signature
         .is_none()
@@ -373,24 +498,30 @@ pub fn run(entry_point: mod_surface::child::ChildEntry, args: &[String]) -> Resu
         return Err("--out is the registry checkout: choose a separate output folder so the original entry stays unchanged".into());
     }
 
-    let package = if signature.is_some() {
+    let package = if let Some(path) = &o.package {
+        path.clone()
+    } else if signature.is_some() {
         root.join("target/sunrise-mod").join(format!("{id}.smod"))
     } else {
-        let args: Vec<String> = o.wasm.then(|| "--wasm".to_owned()).into_iter().collect();
-        crate::build_command(entry_point, &args)?
+        crate::build_command(entry_point, &[])?
     };
     let package_bytes = bounded::read_bytes(&package, index::MAX_FILE, Symlinks::Refuse).map_err(|e| {
         format!("{e}: build a regular .smod within the registry's size limit with `cargo sunrise-mod build` and sign it again if needed")
     })?;
-    let report = crate::check::check(
-        &package,
-        kind.clone(),
-        o.key.as_deref(),
-        signature.as_deref(),
-    )
-    .map_err(|e| {
+    let append = listed.is_some();
+    let check = if append {
+        crate::check::check_reviewed_source
+    } else {
+        crate::check::check
+    };
+    let report = check(&package, kind.clone(), key, signature.as_deref()).map_err(|e| {
+        let advice = if append {
+            "supply the original signed source file"
+        } else {
+            "rebuild it and sign the rebuilt file if needed"
+        };
         format!(
-            "the package {} fails its check: {e}; rebuild it and sign the rebuilt file if needed",
+            "the package {} fails its check: {e}; {advice}",
             package.display()
         )
     })?;
@@ -409,29 +540,139 @@ pub fn run(entry_point: mod_surface::child::ChildEntry, args: &[String]) -> Resu
             package.display()
         ));
     }
-    let file = release_name(id, &release_version, "smod");
-    let version = EntryVersion {
-        native_binaries: Vec::new(),
+    if let Some(stable) = stable
+        && report.facts.sunrise_pin.as_deref() != Some(stable.commit.as_str())
+    {
+        return Err(format!(
+            "the source package does not pin Sunrise {} ({})",
+            stable.tag, stable.commit
+        ));
+    }
+    if let Some(old) = listed
+        && old.sha256 != report.sha256
+    {
+        return Err(format!(
+            "{id} {}: --package must be the original published source file; its SHA-256 never changes",
+            old.version
+        ));
+    }
+    let source_name = release_name(id, &release_version, "smod");
+    let mut version = listed.cloned().unwrap_or_else(|| EntryVersion {
+        sunrise: source_tag.map(str::to_owned),
+        builds: Vec::new(),
+        file: asset_base.map_or_else(
+            || source_name.clone(),
+            |base| format!("{base}/{source_name}"),
+        ),
         version: release_version,
         published: today(),
         game: report
             .facts
             .game
+            .clone()
             .unwrap_or_else(|| sunrise_mod_package::sdk::GAME.to_owned()),
-        file: file.clone(),
         sha256: report.sha256.clone(),
         signature,
         changelog: o.changelog.clone(),
-    };
-    let entry = match existing {
+    });
+    let before = existing.clone();
+    let mut entry = match existing {
+        None => draft(&manifest, kind, &o, icon.is_some(), version.clone()),
         Some(mut entry) => {
-            entry.versions.insert(0, version.clone());
+            if first_stable {
+                let defaults = draft(&manifest, kind, &o, icon.is_some(), version.clone());
+                for (field, default) in [
+                    (&mut entry.name, defaults.name),
+                    (&mut entry.summary, defaults.summary),
+                    (&mut entry.description, defaults.description),
+                    (&mut entry.license, defaults.license),
+                    (&mut entry.source, defaults.source),
+                ] {
+                    if field.trim().is_empty() {
+                        *field = default;
+                    }
+                }
+                if entry.categories.is_empty() {
+                    entry.categories = defaults.categories;
+                }
+                entry.icon = entry.icon.or(defaults.icon);
+                entry.key = entry.key.or(defaults.key);
+            }
             entry
         }
-        None => draft(&manifest, kind, &o, icon.is_some(), version.clone()),
     };
+    let file = entry.source_file_name(&version)?.to_owned();
+    if append && let Some(base) = asset_base {
+        let published = version
+            .file
+            .strip_suffix(&file)
+            .and_then(|prefix| prefix.strip_suffix('/'))
+            .expect("checked source URL");
+        if base != published {
+            return Err(format!(
+                "a build append must use the original author's release: pass --asset-base {published}"
+            ));
+        }
+    }
+    let submission = binaries
+        .map(|inputs| inputs.prepare(&entry, &version, &package_bytes))
+        .transpose()?;
+    if let Some(submission) = &submission {
+        version.builds.push(submission.build.clone());
+    }
+    if append {
+        *entry
+            .versions
+            .iter_mut()
+            .find(|old| old.version == version.version)
+            .expect("existing version") = version.clone();
+    } else if first {
+        entry.versions[0] = version.clone();
+    } else {
+        entry.versions.insert(0, version.clone());
+    }
+    let source_signature = version
+        .signature
+        .as_deref()
+        .filter(|_| !append && asset_base.is_some())
+        .map(|sig| (format!("{file}.minisig"), sig));
     let entry_text = entry.to_toml()?;
-    let (title, body) = pull_request(&entry, &version, report.size, first);
+    let mut body = if let Some(submission) = &submission
+        && append
+    {
+        format!(
+            "Build {id} {} for Sunrise {}\n\nThe reviewed source package and existing builds are unchanged.\n",
+            version.version, submission.build.sunrise,
+        )
+    } else {
+        pull_request(&entry, &version, report.size, first)
+    };
+    if let Some(base) = asset_base {
+        body.push_str("\nUpload and verify these files on the author's release before opening the pull request:\n");
+        if let Some((signature, _)) = &source_signature {
+            body.push_str(&format!(
+                "- `{file}`: `{}` — SHA-256 `{}`\n\
+                 - `{signature}`: `{base}/{signature}`\n",
+                version.file, version.sha256,
+            ));
+        }
+        if let Some(submission) = &submission {
+            for asset in &submission.assets {
+                body.push_str(&format!(
+                    "- `{}`: `{base}/{}` — SHA-256 `{}`\n",
+                    asset.name, asset.name, asset.sha256,
+                ));
+            }
+            let signature = &submission.descriptor_signature_name;
+            body.push_str(&format!("- `{signature}`: `{base}/{signature}`\n"));
+        }
+        let staged_icon = if icons.is_some() {
+            format!(" and `icons/{id}.png`")
+        } else {
+            String::new()
+        };
+        body.push_str(&format!("\nThen submit `mods/{id}.toml`{staged_icon} in the registry pull request. Do not commit the release assets.\n"));
+    }
     for dir in [Some(&mods), Some(&files), icons.as_ref()]
         .into_iter()
         .flatten()
@@ -442,28 +683,51 @@ pub fn run(entry_point: mod_surface::child::ChildEntry, args: &[String]) -> Resu
     let write = |path: PathBuf, bytes: &[u8]| {
         atomic_write(&path, bytes).map_err(|e| format!("{e}; choose a writable --out folder"))
     };
-    write(mods.join(format!("{id}.toml")), entry_text.as_bytes())?;
-    write(files.join(&version.sha256), &package_bytes)?;
-    write(out.join(&file), &package_bytes)?;
+    if !append {
+        write(files.join(&version.sha256), &package_bytes)?;
+        write(out.join(&file), &package_bytes)?;
+    }
+    if let Some((name, sig)) = &source_signature {
+        write(out.join(name), sig.as_bytes())?;
+    }
+    if let Some(submission) = &submission {
+        for asset in &submission.assets {
+            let path = submission.verified_files.path().join(&asset.sha256);
+            let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            write(files.join(&asset.sha256), &bytes)?;
+            write(out.join(&asset.name), &bytes)?;
+        }
+        write(
+            out.join(&submission.descriptor_signature_name),
+            submission.build.signature.as_bytes(),
+        )?;
+    }
     if let (Some(dir), Some(bytes)) = (&icons, &icon) {
         write(dir.join(format!("{id}.png")), bytes)?;
     }
+    write(mods.join(format!("{id}.toml")), entry_text.as_bytes())?;
     write(out.join("PULL_REQUEST.md"), body.as_bytes())?;
 
-    let mut remaining = entry.check_fields();
-    remaining.extend(
-        page::check_required(
-            &entry.id,
-            &entry.description,
-            &entry.categories,
-            entry.icon.as_deref(),
-            &entry.screenshots,
-        )
-        .into_iter()
-        .map(|p| format!("{}: {p}", entry.id)),
-    );
-    // A category that is still the TODO is already listed as such.
-    remaining.retain(|r| !r.contains("is not a category") || !r.contains(TODO));
+    let mut remaining = checklist(before.as_slice(), &entry, o.registry.as_deref());
+    if let Some(loaded) = &checkout {
+        let game = &version.game;
+        remaining.extend(
+            loaded
+                .unmet_dependencies(game, &report.facts.dependencies)
+                .into_iter()
+                .map(|unmet| {
+                    let listed = if unmet.listed.is_empty() {
+                        "no version of it".to_owned()
+                    } else {
+                        format!("only {}", unmet.listed.join(", "))
+                    };
+                    format!(
+                        "{id}: requires {} {}, but the registry lists {listed} for Minecraft {game}: publish a matching version of {} first, or change the range in {MANIFEST}",
+                        unmet.id, unmet.range, unmet.id
+                    )
+                }),
+        );
+    }
     println!(
         "{} {} ({}, {} bytes, SHA-256 {})",
         entry.id,
@@ -474,12 +738,26 @@ pub fn run(entry_point: mod_surface::child::ChildEntry, args: &[String]) -> Resu
     );
     println!("Wrote in {}:", out.display());
     println!("  {ENTRIES}/{}.toml   the registry entry", entry.id);
-    println!("  {file}   the package, to attach to a release of your repository");
-    println!(
-        "  files/{}   the same file, named as `registry check --files` reads it",
-        report.sha256
-    );
-    if first && icon.is_some() {
+    if !append {
+        println!("  {file}   the package, to attach to a release of your repository");
+        println!(
+            "  files/{}   the same file, named as `registry check --files` reads it",
+            report.sha256
+        );
+    }
+    if let Some((name, _)) = &source_signature {
+        println!("  {name}   source signature");
+    }
+    if let Some(submission) = &submission {
+        for asset in &submission.assets {
+            println!("  {}   signed release asset", asset.name);
+        }
+        println!(
+            "  {}   descriptor signature",
+            submission.descriptor_signature_name
+        );
+    }
+    if icons.is_some() {
         println!("  icons/{}.png   your icon.png", entry.id);
     }
     println!("  PULL_REQUEST.md   the pull request text, below");
@@ -491,26 +769,28 @@ pub fn run(entry_point: mod_surface::child::ChildEntry, args: &[String]) -> Resu
             println!("  - {r}");
         }
     }
-    // Prefix the package path so even --out values starting with '-' are positional.
-    // Use single-quoted arguments for the POSIX shell (PowerShell on Windows).
-    let quote = |arg: &str| {
-        let escape = if cfg!(windows) { "''" } else { "'\\''" };
-        format!("'{}'", arg.replace('\'', escape))
-    };
-    let packaged = root.join(&out).join(&file);
-    let signing = match (&o.key, &o.signature) {
-        (Some(key), Some(signature)) => format!(
-            " --key {} --signature {}",
-            quote(key),
-            quote(&signature.to_string_lossy()),
-        ),
-        _ => String::new(),
-    };
-    println!(
-        "\nCheck the new file locally (registry CI checks the whole checkout):\n  cargo sunrise-mod check {}{signing}",
-        quote(&packaged.to_string_lossy()),
-    );
-    println!("\nPull request: {title}\n\n{body}");
+    if !append {
+        // Prefix the package path so even --out values starting with '-' are positional.
+        // Use single-quoted arguments for the POSIX shell (PowerShell on Windows).
+        let quote = |arg: &str| {
+            let escape = if cfg!(windows) { "''" } else { "'\\''" };
+            format!("'{}'", arg.replace('\'', escape))
+        };
+        let packaged = root.join(&out).join(&file);
+        let signing = match (&o.key, &o.signature) {
+            (Some(key), Some(signature)) => format!(
+                " --key {} --signature {}",
+                quote(key),
+                quote(&signature.to_string_lossy()),
+            ),
+            _ => String::new(),
+        };
+        println!(
+            "\nCheck the new file locally (registry CI checks the whole checkout):\n  cargo sunrise-mod check {}{signing}",
+            quote(&packaged.to_string_lossy()),
+        );
+    }
+    println!("\nPull request:\n\n{body}");
     Ok(())
 }
 
@@ -530,7 +810,8 @@ mod tests {
 
     fn row(version: &str) -> EntryVersion {
         EntryVersion {
-            native_binaries: Vec::new(),
+            sunrise: None,
+            builds: Vec::new(),
             version: version.into(),
             published: "2026-11-18".into(),
             game: "26.3".into(),
@@ -539,6 +820,40 @@ mod tests {
             signature: None,
             changelog: String::new(),
         }
+    }
+
+    #[test]
+    fn the_checklist_requires_a_screenshot_file_in_the_checkout() {
+        let o = Options {
+            owners: vec!["ada".into()],
+            categories: vec!["decoration".into()],
+            ..Options::default()
+        };
+        let mut entry = draft(&manifest(), Kind::Mod, &o, true, row("0.2.0"));
+        let needs = |problems: Vec<String>| {
+            problems
+                .iter()
+                .any(|p| p.contains("needs at least one screenshot"))
+        };
+        assert!(needs(checklist(&[], &entry, None)));
+
+        let checkout = tempfile::tempdir().unwrap();
+        let path = "screenshots/glowing_blocks/one.png";
+        entry.screenshots = vec![path.into()];
+        let mut update = entry.clone();
+        update.versions.insert(0, row("0.3.0"));
+        let remaining = || checklist(std::slice::from_ref(&entry), &update, Some(checkout.path()));
+        assert!(needs(remaining()));
+
+        let image = checkout.path().join(path);
+        fs::create_dir_all(image.parent().unwrap()).unwrap();
+        // A 320x180 PNG header is sufficient for the registry's dimension check.
+        fs::write(
+            image,
+            b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\x01\x40\0\0\0\xb4\x08\x06\0\0\0",
+        )
+        .unwrap();
+        assert!(!needs(remaining()));
     }
 
     #[test]

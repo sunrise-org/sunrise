@@ -57,7 +57,7 @@ fn register_render_pipelines(
 scaled by its alpha. `WorldDepth::Tested` hides the quads behind nearer world surfaces, and
 `ThroughWalls` draws them over everything. No pipeline writes depth.
 
-The id must be in a namespace your mod owns. There is no per-mod pipeline count cap. A registration
+The id must be in a namespace your mod owns (or in a content package it serves via `served_by`). There is no per-mod pipeline count cap. A registration
 with an unowned namespace or a duplicate id is logged with the mod's id and dropped.
 
 ### Required or optional

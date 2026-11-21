@@ -1077,3 +1077,116 @@ fn a_panicking_behavior_leaves_the_rest_of_the_tick_working() {
         });
     });
 }
+
+/// A behavior whose methods read the world through the Host after journalling the call.
+/// `read_in_check` picks whether `check_extra_start_conditions` reads too.
+struct Gated {
+    read_in_check: bool,
+}
+impl Gated {
+    fn call(&self, cx: &mut BehaviorCx<'_>, call: &str) {
+        record(&format!("gated/{call}"));
+        let _ = cx.host().level("minecraft:overworld");
+        record("gated/read");
+    }
+}
+impl Behavior for Gated {
+    fn name(&self) -> &'static str {
+        "Gated"
+    }
+    fn check_extra_start_conditions(&mut self, cx: &mut BehaviorCx<'_>) -> bool {
+        if self.read_in_check {
+            self.call(cx, "check");
+        }
+        true
+    }
+    fn start(&mut self, cx: &mut BehaviorCx<'_>) {
+        self.call(cx, "start");
+    }
+    fn can_still_use(&mut self, cx: &mut BehaviorCx<'_>) -> bool {
+        self.call(cx, "can_still_use");
+        true
+    }
+    fn tick(&mut self, cx: &mut BehaviorCx<'_>) {
+        self.call(cx, "tick");
+    }
+    fn stop(&mut self, cx: &mut BehaviorCx<'_>) {
+        self.call(cx, "stop");
+    }
+}
+
+/// Behaviors run in brain ticks, after the thread reached World. Run under Setup and Reloading
+/// anyway, a behavior's world read in any of its methods is a contained refusal (the behavior did
+/// not answer), never the no-scope panic; in World the same behaviors read.
+#[test]
+#[ignore = "daily"]
+fn a_behavior_run_outside_the_world_is_refused_not_a_panic() {
+    use mod_api::__private::{ModPhase, PhaseOwner};
+    let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    with_game(|game| {
+        zombie(game, 8, [3.5, 65.0, 3.5]);
+        for reloading in [false, true] {
+            CALLS.lock().unwrap().clear();
+            let setup = PhaseOwner::scope(ModPhase::Setup);
+            let _reload = reloading.then(|| setup.reloading().unwrap());
+            let mut reads_in_check = wrapped(
+                3,
+                3,
+                Box::new(Gated {
+                    read_in_check: true,
+                }),
+            );
+            let mut reads_after = wrapped(
+                3,
+                3,
+                Box::new(Gated {
+                    read_in_check: false,
+                }),
+            );
+            with_mob_world(game, |mob, w, level| {
+                assert!(
+                    !reads_in_check.try_start(mob, w, level.random(), 0),
+                    "a refused check is no answer"
+                );
+                assert!(reads_after.try_start(mob, w, level.random(), 0));
+                reads_after.tick_or_stop(mob, w, 1);
+            });
+            let calls = CALLS.lock().unwrap().clone();
+            for reached in [
+                "gated/check",
+                "gated/start",
+                "gated/can_still_use",
+                "gated/stop",
+            ] {
+                assert!(
+                    calls.iter().any(|call| call == reached),
+                    "{reached} was called: {calls:?}"
+                );
+            }
+            assert!(
+                !calls.iter().any(|call| call == "gated/read"),
+                "no world read answered: {calls:?}"
+            );
+            assert!(!reads_after.running(), "a refused can_still_use stops it");
+        }
+        CALLS.lock().unwrap().clear();
+        let mut reads = wrapped(
+            3,
+            3,
+            Box::new(Gated {
+                read_in_check: true,
+            }),
+        );
+        with_mob_world(game, |mob, w, level| {
+            assert!(reads.try_start(mob, w, level.random(), 0));
+        });
+        assert!(
+            CALLS
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|call| call == "gated/read"),
+            "in World the same behavior reads"
+        );
+    });
+}

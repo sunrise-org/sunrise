@@ -1182,6 +1182,7 @@ mod tests {
                 }
                 let seen = [sheep.seen(None, &crate::items::Items::empty())];
                 let world = crate::mobs::MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     others: &seen,
                     ..world
                 };
@@ -1229,6 +1230,7 @@ mod tests {
                 sheep.invisible = invisible;
                 let seen = [sheep.seen(None, &crate::items::Items::empty())];
                 let world = crate::mobs::MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     others: &seen,
                     ..world
                 };

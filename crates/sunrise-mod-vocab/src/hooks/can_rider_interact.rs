@@ -11,7 +11,7 @@ pub trait Hooks {
     /// update that distance normally. Inside-box selection does not ask it.
     /// Both the tick and frame pick use this rule. Attack-range component rays
     /// have no same-vehicle restriction and do not ask it. No server reach or
-    /// interaction checks change. Native and wasm parts share this contract.
+    /// interaction checks change.
     #[hook(
         side = "client",
         contract = "collect",

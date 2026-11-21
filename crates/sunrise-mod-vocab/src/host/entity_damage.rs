@@ -80,17 +80,18 @@ pub trait EntityDamageBackendMut {
     /// no such field.
     #[access(WorldOnly)]
     fn entity_set_invulnerable_time(&mut self, entity: EntityRef, ticks: i32) -> bool;
-    /// `Entity.hurtServer(level, source, amount)` of `amount` from a source
-    /// of `damage_type` (`minecraft:generic`'s shape), `direct` the entity
-    /// that dealt it (a shot arrow) and `causing` the one responsible for it
-    /// (its shooter): the engine's own hurt paths take it — the damage type,
-    /// the attacker, armor, the damage cooldown and every existing hurt hook
-    /// kept, the damage event the hit already broadcasts is the broadcast —
-    /// by kind: the player's and mobs' for the living, the item, vehicle,
-    /// dragon and crystal branches for the damageable rest. True when the
-    /// damage was taken. None for a stale handle, false for a kind that
-    /// cannot be hurt or an unregistered damage type. Stale direct/causing
-    /// handles are treated as absent sources.
+    /// Hurts the entity for `amount` through `Entity.hurtServer`. Pass the
+    /// exact registered `damage_type` id, vanilla or modded: the hurt source
+    /// keeps that id regardless of the entities supplied (for example,
+    /// `minecraft:explosion` does not become `minecraft:player_explosion`).
+    /// `direct` dealt the damage (such as an arrow); `causing` is responsible
+    /// (such as its shooter). The normal armor, cooldown, hooks and damage
+    /// broadcast still apply. True when the damage was accepted, false if
+    /// refused (including an unregistered type), and None for a stale target.
+    /// Accepted does not mean health was lost: `hurtServer` can report success
+    /// without any (a heart-bound creaking's reaction, a ghast's reflected
+    /// large fireball on hurt cooldown).
+    /// Stale direct or causing handles are treated as absent.
     #[access(WorldOnly)]
     fn entity_hurt(
         &mut self,

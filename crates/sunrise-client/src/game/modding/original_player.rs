@@ -193,157 +193,10 @@ mod tests {
         ..RETAINED
     };
 
-    fn wasm_reads(
-        host: &mut dyn ServerHost,
-        event: &mut PlayerCloneEvent<'_>,
-        death: bool,
-        keep: bool,
-    ) -> sunrise_mod_wasm::WasmMod {
-        use mod_api::wire::Writer;
-        let escape = |bytes: &[u8]| {
-            bytes
-                .iter()
-                .map(|b| format!("\\{b:02x}"))
-                .collect::<String>()
-        };
-        let mut data = String::new();
-        let mut body = String::new();
-        let mut offset = 4096;
-        let mut check = |owner: &str, name: &str, input: Writer, expected: Writer| {
-            let id = sunrise_mod_wasm::fixture::import_id(owner, name).unwrap();
-            data.push_str(&format!(
-                "(data (i32.const {offset}) \"{}\")",
-                escape(input.bytes())
-            ));
-            // The original is read from the guest event, never supplied as fixture data.
-            let token_offset = offset + if owner == "AttachmentStore" { 4 } else { 0 };
-            body.push_str(&format!(
-                "i32.const {token_offset} global.get $original i64.store "
-            ));
-            body.push_str(&format!("i32.const {id} i32.const {offset} i32.const {} i32.const 32768 i32.const 8192 call $host drop ", input.bytes().len()));
-            for (index, byte) in expected.bytes().iter().enumerate() {
-                body.push_str(&format!(
-                    "i32.const {} i32.load8_u i32.const {byte} i32.ne if unreachable end ",
-                    32768 + index
-                ));
-            }
-            offset += 2048;
-        };
-        let input = || {
-            let mut w = Writer::new();
-            w.put(&0u64);
-            w
-        };
-        let mut expected = Writer::new();
-        expected.put(&Some([7.0f64, 64.0, -9.0]));
-        check("Backend", "original_player_position", input(), expected);
-        let mut expected = Writer::new();
-        expected.put(&Some(if death { 0.0f32 } else { 13.0 }));
-        check("Backend", "original_player_health", input(), expected);
-        let mut expected = Writer::new();
-        expected.put(&Some(mod_api::PlayerExperience::from(
-            mod_api::__private::built::PlayerExperience {
-                level: 7,
-                progress: 0.0,
-                total: 0,
-            },
-        )));
-        check("Backend", "original_player_experience", input(), expected);
-        let mut expected = Writer::new();
-        expected.put(&Some(vec![mod_api::ActiveEffect::new(
-            mod_platform::__private::part_tests::effect_key("minecraft:speed"),
-            200,
-            1,
-            false,
-            true,
-            true,
-        )]));
-        check("Backend", "original_player_effects", input(), expected);
-        let mut expected = Writer::new();
-        expected.put(&Some(
-            Identifier::parse(if death {
-                Dim::Nether.id()
-            } else {
-                Dim::End.id()
-            })
-            .unwrap(),
-        ));
-        check("Backend", "original_player_dimension", input(), expected);
-        let mut args = Writer::new();
-        args.put(&Holder::OriginalPlayer(0));
-        args.put(&"clone");
-        args.put(&"saved");
-        let saved: sunrise_core::nbt::Compound =
-            [("value".into(), sunrise_core::nbt::Tag::Int(31))].into();
-        let mut expected = Writer::new();
-        expected.put(&Ok::<_, mod_api::AttachmentError>(Some(saved)));
-        check("AttachmentStore", "saved", args, expected);
-        let mut args = input();
-        args.put(&2i32);
-        let mut expected = Writer::new();
-        use super::super::api_values::TryIntoApi;
-        let stack: Option<mod_api::ItemStack> = if death && !keep {
-            None
-        } else {
-            Some(
-                sunrise_items::items::ItemStack::new("minecraft:diamond", 4)
-                    .try_into_api()
-                    .unwrap(),
-            )
-        };
-        expected.put(&stack);
-        check("Backend", "original_player_inventory_slot", args, expected);
-        let stale =
-            sunrise_mod_wasm::fixture::import_id("Backend", "original_player_position").unwrap();
-        // A production host write after all checks makes a trapped/undispatched guest observable.
-        let player = host.player(event.player).unwrap();
-        let mut marker = Writer::new();
-        marker.put(&player);
-        marker.put(&42i32);
-        let setter =
-            sunrise_mod_wasm::fixture::import_id("BackendMut", "player_set_experience_levels")
-                .unwrap();
-        data.push_str(&format!(
-            "(data (i32.const 24576) \"{}\")",
-            escape(marker.bytes())
-        ));
-        let bytes = wat::parse_str(format!(r#"(module
-          (@custom "dylink.0" "\01\04\00\00\00\00")
-          (import "env" "memory" (memory 1))
-          (import "env" "__indirect_function_table" (table 1 funcref))
-          {imports}
-          (global $original (mut i64) (i64.const 0))
-          (global $called (mut i32) (i32.const 0))
-          (func (export "sunrise_in") (param i32) (result i32) i32.const 512)
-          {data}
-          (func (export "sunrise_hook") (param i64) (result i64)
-            global.get $called
-            if
-              i32.const 4096 global.get $original i64.store
-              i32.const {stale} i32.const 4096 i32.const 8 i32.const 32768 i32.const 8192 call $host drop
-              i32.const 32768 i32.load8_u if unreachable end
-            else
-              ;; UUID, length-prefixed name, was_death, then OriginalPlayerRef.
-              i32.const 533 i32.const 528 i32.load i32.add i64.load global.set $original
-              i32.const 1 global.set $called
-              {body}
-            end
-            i32.const {setter} i32.const 24576 i32.const {len} i32.const 32768 i32.const 8192 call $host drop
-            ;; Mutable event fields must be returned even when this listener leaves them unchanged.
-            i32.const 28672 i32.const 512 i32.const 16 memory.copy
-            i32.const 28688 i32.const 532 i32.const 528 i32.load i32.add i32.load8_u i32.store8
-            i32.const 28689 global.get $original i64.store
-            i64.const {reply}))"#, imports=sunrise_mod_wasm::fixture::wat_imports(), len=marker.bytes().len(), reply=(28672u64 << 32) | 25)).unwrap();
-        let module = sunrise_mod_wasm::fixture::module(&bytes).unwrap();
-        module.player_clone(host, event);
-        assert_eq!(player.experience(host).unwrap().level, 42);
-        module
-    }
-
     struct Listener {
         death: bool,
         keep: bool,
-        heard: Arc<Mutex<Vec<(OriginalPlayerRef, sunrise_mod_wasm::WasmMod)>>>,
+        heard: Arc<Mutex<Vec<OriginalPlayerRef>>>,
     }
 
     #[mod_api::__subscriptions]
@@ -380,8 +233,6 @@ mod tests {
             );
             assert_eq!(original.attachment(host, &VALUE), Ok(73));
             assert_eq!(original.attachment(host, &RETAINED), Ok(17));
-            // The saved import reads the raw codec-backed entry, before native reads decode it.
-            let wasm = wasm_reads(host, event, self.death, self.keep);
             assert_eq!(original.attachment(host, &SAVED), Ok(31));
             assert_eq!(
                 SAVED.get(host, Holder::Player(event.player)),
@@ -427,7 +278,7 @@ mod tests {
             // Replacement writes cannot alter the captured old values.
             VALUE.set(host, Holder::Player(event.player), 99).unwrap();
             assert_eq!(original.attachment(host, &VALUE), Ok(73));
-            self.heard.lock().unwrap().push((original, wasm));
+            self.heard.lock().unwrap().push(original);
         }
     }
 
@@ -503,19 +354,7 @@ mod tests {
                 }
                 let heard = heard.lock().unwrap();
                 assert_eq!(heard.len(), 1);
-                let (original, wasm) = &heard[0];
-                let original = *original;
-                let replacement = game.player(12).unwrap();
-                assert!(game.player_set_experience_levels(replacement, 0));
-                // Re-enter the same guest after dispatch; it retained the actual event token.
-                let mut expired = PlayerCloneEvent {
-                    player: 12,
-                    name: "expired",
-                    was_death: death,
-                    original,
-                };
-                wasm.player_clone(game, &mut expired);
-                assert_eq!(replacement.experience(game).unwrap().level, 42);
+                let original = heard[0];
                 assert_eq!(original.position(game), None);
                 assert_eq!(original.inventory_slot(game, 2), None);
                 assert_eq!(original.health(game), None);

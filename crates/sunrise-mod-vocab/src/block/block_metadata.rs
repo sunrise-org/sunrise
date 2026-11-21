@@ -3,7 +3,7 @@ use crate::{BlockKey, StateConstraint};
 
 /// Transport form for a process-local state. Mods use the BlockState facade, not this record.
 /// Receiving metadata and write boundaries validate the ordinal against the block definition.
-// hidden: generated native/wasm transport for the private-field BlockState facade.
+// hidden: internal representation of the private-field BlockState facade.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -61,7 +61,6 @@ impl From<sunrise_mod_runtime::block_definitions::StateError> for BlockStateErro
 
 /// Read-only metadata, lent by a host's block-states service or a tint worker.
 /// This is the low-level resource contract; mods call the BlockState facade instead.
-/// Native and generated WebAssembly forwards invoke the same immutable table implementation.
 // hidden: low-level shared resource contract; BlockState methods are the mod-facing operations.
 #[doc(hidden)]
 pub trait BlockMetadata {

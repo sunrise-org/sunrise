@@ -197,10 +197,10 @@ pub mod tests {
         fn amount(&self, host: &mut dyn ServerHost, _: usize) -> u32 {
             self.held(host).map_or(0, |(_, amount)| amount)
         }
-        fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: &Chemical) -> u32 {
+        fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: Option<&Chemical>) -> u32 {
             1000
         }
-        fn insert(
+        fn insert_at(
             &self,
             host: &mut dyn ServerHost,
             _: &Transaction,
@@ -219,7 +219,7 @@ pub mod tests {
             }
             went
         }
-        fn extract(
+        fn extract_at(
             &self,
             host: &mut dyn ServerHost,
             _: &Transaction,
@@ -324,20 +324,22 @@ pub mod tests {
         // The pipe calls the chest's capability, the game's own, with the host it was given:
         // in an aborted transaction the stick goes in, and comes back out.
         let aborted: Result<(), u32> =
-            host.transaction(|host, tx| Err(pipe.insert(host, tx, 0, &stick_, 1)));
+            host.transaction(|host, tx| Err(pipe.insert_at(host, tx, 0, &stick_, 1)));
         assert_eq!(aborted, Err(1));
         assert!(
             backend_of(&*host)
                 .and_then(|backend| backend.container_stack(on(CHEST, None), 0))
                 .is_none()
         );
-        let went = host.transaction(|host, tx| Ok::<_, ()>(pipe.insert(host, tx, 0, &stick_, 1)));
+        let went =
+            host.transaction(|host, tx| Ok::<_, ()>(pipe.insert_at(host, tx, 0, &stick_, 1)));
         assert_eq!(went, Ok(1));
         assert_eq!(
             backend_of(&*host).and_then(|backend| backend.container_stack(on(CHEST, None), 0)),
             Some(stick())
         );
-        let went = host.transaction(|host, tx| Ok::<_, ()>(pipe.insert(host, tx, 0, &stick_, 1)));
+        let went =
+            host.transaction(|host, tx| Ok::<_, ()>(pipe.insert_at(host, tx, 0, &stick_, 1)));
         assert_eq!(went, Ok(0));
         // No block entity with slots: no answer. A mod's own capability has no game answer.
         assert!(here().capability(host, &ITEMS, [5, 64, 0], None).is_none());
@@ -361,7 +363,7 @@ pub mod tests {
         let resource = ItemResource::of(&item);
         let went =
             host.transaction(
-                |host, tx| match handler.insert(host, tx, 0, &resource, amount) {
+                |host, tx| match handler.insert_at(host, tx, 0, &resource, amount) {
                     went if went == amount => Ok(went),
                     went => Err(went),
                 },
@@ -427,10 +429,10 @@ pub mod tests {
         fn amount(&self, _: &mut dyn ServerHost, _: usize) -> u32 {
             0
         }
-        fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: &ItemResource) -> u32 {
+        fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: Option<&ItemResource>) -> u32 {
             0
         }
-        fn insert(
+        fn insert_at(
             &self,
             _: &mut dyn ServerHost,
             _: &Transaction,
@@ -440,7 +442,7 @@ pub mod tests {
         ) -> u32 {
             0
         }
-        fn extract(
+        fn extract_at(
             &self,
             _: &mut dyn ServerHost,
             _: &Transaction,
@@ -464,10 +466,10 @@ pub mod tests {
         fn amount(&self, _: &mut dyn ServerHost, _: usize) -> u32 {
             0
         }
-        fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: &ItemResource) -> u32 {
+        fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: Option<&ItemResource>) -> u32 {
             u32::MAX
         }
-        fn insert(
+        fn insert_at(
             &self,
             _: &mut dyn ServerHost,
             _: &Transaction,
@@ -477,7 +479,7 @@ pub mod tests {
         ) -> u32 {
             amount
         }
-        fn extract(
+        fn extract_at(
             &self,
             _: &mut dyn ServerHost,
             _: &Transaction,
@@ -503,7 +505,7 @@ pub mod tests {
         assert_eq!(voids.owner(), "doubler");
         let stick_ = ItemResource::of(&stick());
         let went: Result<u32, ()> =
-            host.transaction(|host, tx| Ok(voids.insert(host, tx, 0, &stick_, 64)));
+            host.transaction(|host, tx| Ok(voids.insert_at(host, tx, 0, &stick_, 64)));
         assert_eq!(went, Ok(64));
         assert_eq!(voids.amount(host, 0), 0);
         // A block no provider is registered for has none, as before.

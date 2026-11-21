@@ -1,19 +1,20 @@
 # Why a mount was refused
 
-`EntityRef::start_riding(host, vehicle, force)` seats a player or a mob on a mob, boat, minecart
-or generic seat entity and answers `Ok(())`. Where it refuses, it names the cause as a
+`EntityRef::start_riding(host, vehicle, force)` seats a player, mob or declared general entity on
+a mob, boat, minecart, declared general vehicle or generic seat, and answers `Ok(())`. Where it
+refuses, it names the cause as a
 `StartRidingRefusal`:
 
 | Refusal | Cause |
 | --- | --- |
 | `NoEntity` | A handle is stale or held out, or names an entity that was removed, is dying, or is in another level. Also the answer with no game backend. |
 | `PlayerVehicle` | The vehicle is a player, forced or not. |
-| `UnsupportedRider` | The rider is neither a player nor a mob. |
-| `UnsupportedVehicle` | The vehicle takes no passenger (a marker, or an entity that is not a seat). |
+| `UnsupportedRider` | The rider is not a player, mob or declared general entity. |
+| `UnsupportedVehicle` | The vehicle cannot carry passengers, for example a marker or a general type declared `NoSave`. |
 | `SameEntity` | The rider is the vehicle. |
 | `AlreadyRiding` | The rider already rides this vehicle. |
 | `Cycle` | The vehicle rides the rider, directly or through other vehicles. |
-| `CannotRide` | Unforced, the rider may not ride now: a sneaking player, a mob in its boarding cooldown, a warden or a wither. |
+| `CannotRide` | Unforced, the rider may not ride now: a sneaking player, a mob or general rider in its boarding cooldown, a warden or wither. |
 | `Full` | The vehicle has no room. `force` passes a mob's or a seat's count, not a boat's or a minecart's storage limit. |
 | `Canceled` | A mod's `entity_mount` hook canceled the mount or the dismount from the old vehicle. |
 
@@ -25,8 +26,7 @@ match rider.start_riding(host, vehicle, false) {
 }
 ```
 
-The enum is `#[non_exhaustive]`: keep a wildcard arm. It crosses the wasm boundary whole, so a
-wasm mod reads the same refusal a native mod does.
+The enum is `#[non_exhaustive]`: keep a wildcard arm.
 
 ## Why nothing rides a player
 
@@ -41,3 +41,11 @@ or not, and names it `PlayerVehicle`.
 those checks reaches no hook. (This is this engine's order; moving the hook earlier is tracked in #1557.) The checks run again after the hook, since a hook can fill, remove
 or remount the vehicle, and then name what the hook changed. Such a refusal means the requested
 mount did not complete; what the hook moved or removed stays as it left it.
+
+Some removal effects run while the entity still resolves. A nested `EntityRef::remove` or
+`EntityRef::discard` for that same entity returns `false` while those effects run.
+
+When a vehicle is destroyed or discarded, its own dismount is offered first, then each direct
+passenger's in passenger-list order. The removed entity no longer resolves during these calls. A vetoed mob rider
+of a removed boat, cart or mob keeps its edge and retries after the next eligible, uncanceled
+`entity_tick_pre`, before it ticks. A rider refused level residency does not retry on its own.

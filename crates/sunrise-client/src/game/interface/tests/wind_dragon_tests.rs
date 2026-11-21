@@ -13,13 +13,17 @@ fn end_game<'a>(resources: &'a mut Option<std::sync::Arc<crate::game::Resources>
         Some(crate::game::Dim::Overworld)
     );
     assert!(game.dimension_type().has_ender_dragon_fight, "the End");
+    let layout = game.world.layout();
     for x in -1..2 {
         for z in -1..2 {
             game.world
                 .chunks
-                .insert((x, z), Arc::new(Chunk::empty(x, z)));
+                .insert((x, z), Arc::new(Chunk::with_layout(x, z, layout)));
         }
     }
+    // Direct insertion bypasses the streamer's light queue. /forceload waits
+    // for the center column to be lit; the surrounding eight are already resident.
+    game.world.dirty_light.insert((0, 0));
     assert!(game.run_command("forceload add 0 0"));
     game
 }

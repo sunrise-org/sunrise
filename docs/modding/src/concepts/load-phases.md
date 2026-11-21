@@ -6,9 +6,8 @@ the mod registers, and no world until the World phase.
 ![Each game thread goes through Packages, Registration, Setup, Config and World, in order; a data or asset reload
 enters Reloading and returns to the phase it came from.](../images/load-phases.svg)
 
-Native and wasm hooks share the installed dependency-ordered mod slice, including registration,
-config loading and reload-listener registration. The shared resolver keeps bundle-order ties,
-checks present optional dependencies too, and refuses cycles for both build targets. Content-only
+Registration, config loading and reload-listener registration all use the installed dependency order.
+The resolver keeps bundle-order ties, checks present optional dependencies and refuses cycles. Content-only
 packages stay after code in the loaded-mod inventory; listener-specific edges use `ReloadOrder`.
 
 Each owning thread progresses through `Packages → Registration → Setup → Config → World`.
@@ -26,8 +25,7 @@ Each owning thread progresses through `Packages → Registration → Setup → C
 registration begins, as an `InstanceDirectory`: `Unix(Vec<u8>)` preserves raw Unix
 path bytes, and `Windows(Vec<u16>)` preserves Windows UTF-16 code units, including
 unpaired surrogates. Never convert Unix bytes with a lossy UTF-8 conversion when
-constructing a native filesystem path. Wasm receives the identical host-encoded
-value through Wire as data only; this does not grant filesystem access. A context
+constructing a filesystem path. A context
 with no engine snapshot returns `RegistrationReadError::Unavailable`.
 
 A mod that does slow work while the game starts shows it on the startup loading screen
@@ -37,8 +35,7 @@ steps)` opens a bar under the game's stage bar and returns `Result<StartupProgre
 `register` and step it or call `bar.message(text)` from a worker thread or from `client_setup`.
 `RegistrationContext::message(text)` shows a line for a few seconds. The newest four bars and the
 last three lines are drawn, each cut to one line. A dedicated server logs each label, line and
-tenth of a bar's steps instead. A wasm mod holds the game's screen by id, and each call crosses to
-the game. A custom loading window is not part of this.
+tenth of a bar's steps instead.
 
 This is part of the startup progress feature, not live rendering of synchronous setup work.
 Bars can be opened through `RegistrationContext`; `client_setup` has no creation context and
@@ -94,7 +91,7 @@ game thread.
 
 `DataLoadContext` and `LoopContext` expose frozen registry and settings metadata. Use
 `DataLoadOrigin` to identify the load origin and `LoopSide` to identify the owning side.
-Registry entries retain registry ID order on native and wasm.
+Registry entries retain registry ID order.
 
 In World, both client and server hosts expose `registry_entry(registry, id)`,
 `registry_entries(registry)` and `registry_entry_in_tag(&entry, tag)`. These read the
@@ -109,7 +106,7 @@ registry owner, so `minecraft:worldgen/world_preset` is unavailable; selecting a
 preset, sharing generator resources or reopening a saved stem does not change that.
 
 `RegistryEntry` is a plain Wire value containing `registry: Identifier` and
-`id: Identifier`, identical on native and wasm. Its names may be retained across
+`id: Identifier`. Its names may be retained across
 reloads; constructing the value does not establish that the entry exists.
 `as_block_key(host)`, `as_item_key(host)` and the corresponding narrowing methods
 for block entity types, boolean game rules, dimensions, effects, enchantments,

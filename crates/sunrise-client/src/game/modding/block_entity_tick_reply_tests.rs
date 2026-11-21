@@ -1,4 +1,4 @@
-//! Shared Parts run natively and as compiled wasm guests against real Game storage.
+//! Native Parts exercise tick replies against real Game storage.
 use mod_api::{Hooks, Registrar};
 use std::sync::{
     Arc,
@@ -8,7 +8,7 @@ use sunrise_client::{
     chunk::Chunk,
     containers::{BlockEntity, ModBlockEntity},
 };
-#[path = "../../../../sunrise-mod-wasm/tests/fixture/src/tick_reply.rs"]
+#[path = "block_entity_tick_reply_tests/fixture.rs"]
 mod fixture;
 
 struct Native;
@@ -54,81 +54,22 @@ impl Hooks for Effects {
     }
 }
 
-/// The compiled wasm fixture as one initialized mod entry. `pub(in crate::game)`:
-/// the general entity tick's wasm tests (`game::entities::general::tick_tests`) load it too.
-///
-/// The fixture's points listeners register against the process's points table,
-/// which seals once, so a second load-and-initialize in one process refuses its
-/// replace listener as already owned. The modules therefore load and initialize
-/// once per process and every caller rebuilds its entry from the same module:
-/// the four daily game tests share one process with this.
-pub(in crate::game) fn wasm_mods() -> Vec<mod_api::ModEntry> {
-    use std::sync::OnceLock;
-    static MODULES: OnceLock<Vec<(&'static str, sunrise_mod_wasm::WasmMod)>> = OnceLock::new();
-    let modules = MODULES.get_or_init(|| {
-        use sunrise_mod_package::manifest::Package;
-        use sunrise_mod_wasm::{WasmPackage, load};
-        let path = std::path::PathBuf::from(std::env::var_os("SUNRISE_WASM_FIXTURE").unwrap());
-        let manifest = Package::read(&path).unwrap().manifest;
-        let info = mod_api::PackageInfo::new(
-            manifest.id.clone(),
-            manifest.version.to_string(),
-            mod_api::PackageKind::Code,
-            mod_api::Side::Both,
-            vec![manifest.id.clone()],
-            vec![],
-        );
-        let loaded = load(
-            &std::fs::read(std::env::var_os("SUNRISE_WASM_STD").unwrap()).unwrap(),
-            vec![WasmPackage {
-                manifest,
-                module: Package::read_wasm(&path).unwrap(),
-            }],
-        );
-        assert!(loaded.refused.is_empty(), "{:?}", loaded.refused);
-        assert_eq!(loaded.mods.len(), 1);
-        loaded.initialize(&[info]).unwrap();
-        loaded
-            .manifests
-            .iter()
-            .map(|manifest| {
-                (
-                    &*Box::leak(manifest.id.clone().into_boxed_str()),
-                    loaded.modules()[0].clone(),
-                )
-            })
-            .collect()
-    });
-    modules
-        .iter()
-        .map(|(id, module)| {
-            // A trapping earlier test stopped the shared module's group; the
-            // game keeps it stopped, but the next test re-arms it, as a fresh
-            // process would.
-            module.rearm_after_a_test();
-            mod_api::ModEntry::wasm(id, Box::new(module.clone()))
-        })
-        .collect()
-}
-
 #[test]
-#[ignore = "needs prepared resources and compiled SUNRISE_WASM_FIXTURE/SUNRISE_WASM_STD"]
-fn native_and_compiled_wasm_tick_reply_matrix() {
-    const NAME: &str =
-        "game::block_entity_tick_reply_tests::native_and_compiled_wasm_tick_reply_matrix";
+#[ignore = "daily"]
+fn native_tick_reply_matrix() {
+    const NAME: &str = "game::block_entity_tick_reply_tests::native_tick_reply_matrix";
     if super::native_entity_refs::tests::run_fresh_cases(
         NAME,
-        "TICK_REPLY_TARGET",
-        &["native", "wasm"],
+        "SUNRISE_TICK_REPLY_CHILD",
+        &["game"],
     ) {
         return;
     }
     sunrise_guest_stack::run_on_guest_stack(|| {
-        let mut entries = if std::env::var("TICK_REPLY_TARGET").unwrap() == "wasm" {
-            wasm_mods()
-        } else {
-            vec![mod_api::ModEntry::new("wasm_fixture", Box::new(Native))]
-        };
+        let mut entries = vec![mod_api::ModEntry::new(
+            "tick_reply_fixture",
+            Box::new(Native),
+        )];
         let effects = Arc::new([AtomicU32::new(0), AtomicU32::new(0)]);
         entries.push(mod_api::ModEntry::new(
             "tick_effects",
@@ -174,6 +115,52 @@ fn native_and_compiled_wasm_tick_reply_matrix() {
                     .into_iter()
                     .collect(),
                 );
+                // The type is registered, and other types do subscribe. Neither
+                // a lazy container nor a slotless holder should be normalized here.
+                for (pos, items) in [
+                    ((1, 64, 1), vec![]),
+                    (
+                        (1, 64, 2),
+                        vec![Some(sunrise_client::items::ItemStack::new(
+                            "minecraft:stone",
+                            1,
+                        ))],
+                    ),
+                ] {
+                    let data = sunrise_client::containers::ModBlockEntityFields {
+                        data: vec![23],
+                        items: items.clone(),
+                        ..Default::default()
+                    };
+                    let entity = ModBlockEntity::new("tick_reply_fixture:no_ticker".into(), data);
+                    assert!(entity.numeric_id().is_some());
+                    let revision = entity.revision();
+                    game.world
+                        .block_entities
+                        .insert(pos, BlockEntity::Mod(Box::new(entity)));
+                    let generation = game.world.block_entities.generation(&pos);
+                    game.world.block_entities.sleep(pos);
+                    game.world.modified.clear();
+                    game.tick_mod_block_entity(pos);
+                    let Some(BlockEntity::Mod(current)) = game.world.block_entities.get(&pos)
+                    else {
+                        panic!("unsubscribed entity lost")
+                    };
+                    assert_eq!(current.id(), "tick_reply_fixture:no_ticker");
+                    assert_eq!(current.data, [23]);
+                    assert!(current.nbt.is_empty());
+                    assert_eq!(current.items, items);
+                    assert_eq!(current.revision(), revision);
+                    assert_eq!(game.world.block_entities.generation(&pos), generation);
+                    assert!(game.world.block_entities.is_asleep(&pos));
+                    assert!(game.world.modified.is_empty());
+                    assert!(
+                        effects
+                            .iter()
+                            .all(|counter| counter.load(Ordering::Relaxed) == 0)
+                    );
+                    game.world.block_entities.remove(&pos);
+                }
                 game.spawn_item(
                     sunrise_client::items::ItemStack::new("minecraft:stone", 5),
                     [0.0; 3],
@@ -183,7 +170,7 @@ fn native_and_compiled_wasm_tick_reply_matrix() {
                 let item_id = game.dropped[0].id;
                 let entity = |mode| {
                     ModBlockEntity::new(
-                        "wasm_fixture:tick_reply".into(),
+                        "tick_reply_fixture:tick_reply".into(),
                         sunrise_client::containers::ModBlockEntityFields {
                             data: vec![mode, 0, 0, item_id as i32],
                             ..Default::default()

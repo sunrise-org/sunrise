@@ -6,6 +6,9 @@ use std::{
 };
 use sunrise_mod_package::index::{self, registry::Entry};
 
+#[path = "publish/native_release.rs"]
+mod native_release;
+
 const BIN: &str = env!("CARGO_BIN_EXE_cargo-sunrise-mod");
 const ENTRY: &str = "mods/coords_hud.toml";
 const PAGE: &[&str] = &[
@@ -16,6 +19,11 @@ const PAGE: &[&str] = &[
     "--categories",
     "utility",
 ];
+
+/// A complete 64 × 64 PNG, not just the header.
+fn icon_png() -> Vec<u8> {
+    STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAAAAACPAi4CAAAAG0lEQVR4nO3BgQAAAADDoPlT3+AEVQEAAAB8AxBAAAFGOA0dAAAAAElFTkSuQmCC").unwrap()
+}
 
 fn manifest(dir: &Path, version: &str) {
     fs::write(
@@ -147,8 +155,7 @@ fn check_command_accepts_an_update_without_shipping_history_or_the_icon_again() 
     let checkout = "Ada's registry";
     let out = "Ada's new submission";
     manifest(root, "1.0.0");
-    // A 64 × 64 PNG, not just the IHDR: the old package and the registry both read it.
-    fs::write(root.join("icon.png"), STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAAAAACPAi4CAAAAG0lEQVR4nO3BgQAAAADDoPlT3+AEVQEAAAB8AxBAAAFGOA0dAAAAAElFTkSuQmCC").unwrap()).unwrap();
+    fs::write(root.join("icon.png"), icon_png()).unwrap();
     let mut args = vec!["publish", "--out", checkout];
     args.extend_from_slice(PAGE);
     success(run(root, &args));
@@ -175,10 +182,24 @@ fn check_command_accepts_an_update_without_shipping_history_or_the_icon_again() 
     );
 
     manifest(root, "2.0.0");
+    let manifest_path = root.join("sunrise-mod.toml");
+    let source = fs::read_to_string(&manifest_path).unwrap();
+    fs::write(
+        manifest_path,
+        format!("{source}\n[dependencies]\nfixture_missing_dep = '^2'\n"),
+    )
+    .unwrap();
     let output = success(run(
         root,
         &["publish", "--registry", checkout, "--out", out],
     ));
+    assert!(
+        output.lines().any(|line| line
+            .trim_start()
+            .strip_prefix("- ")
+            .is_some_and(|bullet| bullet.contains("fixture_missing_dep") && bullet.contains("^2"))),
+        "{output}"
+    );
     let staged_entry = fs::read_to_string(root.join(out).join(ENTRY)).unwrap();
     let new: Entry = toml::from_str(&staged_entry).unwrap();
     assert_eq!(new.versions[0].version, "2.0.0");
@@ -242,7 +263,16 @@ fn signed_publish_stages_the_exact_prebuilt_package_with_the_checkout_key() {
     fs::write(&built, &signed).unwrap();
     let mut args = args.to_vec();
     args.extend(["--key", key, "--signature", signature.to_str().unwrap()]);
+    // Same id and version, but a dependency added to the source after signing: the staged
+    // package does not require it, so publish reports no unmet dependency for it.
+    let source = fs::read_to_string(root.join("sunrise-mod.toml")).unwrap();
+    fs::write(
+        root.join("sunrise-mod.toml"),
+        format!("{source}\n[dependencies]\nunlisted_after_signing = '^1'\n"),
+    )
+    .unwrap();
     let output = success(run(root, &args));
+    assert!(!output.contains("unlisted_after_signing"), "{output}");
     assert!(output.contains("--key ") && output.contains("--signature "));
     #[cfg(unix)]
     {

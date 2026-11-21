@@ -70,7 +70,7 @@ fn tab_sprite((side, ..): (Side, f32, f32, usize), i: usize, max: usize, selecte
         middle
     };
     let sel = if selected { "_selected" } else { "" };
-    format!("gui/sprites/advancements/tab_{part}{sel}")
+    format!("advancements/tab_{part}{sel}")
 }
 fn icon_offset(side: Side) -> (f32, f32) {
     match side {
@@ -82,19 +82,19 @@ fn icon_offset(side: Side) -> (f32, f32) {
 }
 fn frame_sprite(frame: Frame, obtained: bool) -> &'static str {
     match (frame, obtained) {
-        (Frame::Task, true) => "gui/sprites/advancements/task_frame_obtained",
-        (Frame::Task, false) => "gui/sprites/advancements/task_frame_unobtained",
-        (Frame::Goal, true) => "gui/sprites/advancements/goal_frame_obtained",
-        (Frame::Goal, false) => "gui/sprites/advancements/goal_frame_unobtained",
-        (Frame::Challenge, true) => "gui/sprites/advancements/challenge_frame_obtained",
-        (Frame::Challenge, false) => "gui/sprites/advancements/challenge_frame_unobtained",
+        (Frame::Task, true) => "advancements/task_frame_obtained",
+        (Frame::Task, false) => "advancements/task_frame_unobtained",
+        (Frame::Goal, true) => "advancements/goal_frame_obtained",
+        (Frame::Goal, false) => "advancements/goal_frame_unobtained",
+        (Frame::Challenge, true) => "advancements/challenge_frame_obtained",
+        (Frame::Challenge, false) => "advancements/challenge_frame_unobtained",
     }
 }
 fn box_sprite(obtained: bool) -> &'static str {
     if obtained {
-        "gui/sprites/advancements/box_obtained"
+        "advancements/box_obtained"
     } else {
-        "gui/sprites/advancements/box_unobtained"
+        "advancements/box_unobtained"
     }
 }
 /// The layout of the loaded tree, cached per tree.
@@ -687,7 +687,7 @@ impl Game<'_> {
             ui::nine_slice(
                 batch,
                 atlas,
-                "gui/sprites/advancements/title_box",
+                "advancements/title_box",
                 ix + f(title_left),
                 iy + f(by),
                 f(width),

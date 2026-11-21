@@ -29,7 +29,6 @@ pub mod discovery;
 mod effect_meta;
 pub mod entity;
 pub mod equipment_cache;
-pub mod far;
 pub mod guest;
 pub mod guest_list;
 pub mod handoff;
@@ -848,7 +847,7 @@ impl Lan {
     pub fn connect_local(&self) -> io::Result<sunrise_protocol::connection::Pipe> {
         let (client, server) = sunrise_protocol::connection::Pipe::pair();
         let shared = self.shared.clone();
-        // Configuration payload handlers of wasm mods run on this thread.
+        // Mod configuration payload handlers run on this thread.
         sunrise_guest_stack::spawn("sunrise-local-conn".into(), move || {
             if let Err(e) = conn::serve_local(server, shared)
                 && std::env::var_os("SUNRISE_NET_DEBUG").is_some()
@@ -1069,7 +1068,7 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>, stop: &AtomicBool) {
                     continue;
                 };
                 shared.wait(&counted, &stream);
-                // Configuration payload handlers of wasm mods run on this thread.
+                // Mod configuration payload handlers run on this thread.
                 let _ = sunrise_guest_stack::spawn("sunrise-lan-conn".into(), move || {
                     WAITING.set(Some(counted.2));
                     handle(stream, addr, counted);

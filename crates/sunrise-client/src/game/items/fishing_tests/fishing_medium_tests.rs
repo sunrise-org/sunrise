@@ -246,7 +246,12 @@ fn a_client_keeps_only_the_surface_and_draws_the_bobber_floating() {
             assert!(game.local_player().is_some());
             assert_eq!(medium.lock().unwrap().told.unwrap().2, game.local_player());
 
-            let mut state = (Vec3::new(5.5, 62.0, 0.5), Vec3::ZERO, State::Flying, false);
+            let mut state = (
+                Vec3::new(5.5, 62.0, 0.5),
+                Vec3::ZERO,
+                State::Flying,
+                Default::default(),
+            );
             let mut random = LegacyRandom::new(7);
             for tick in 0..100 {
                 state = game.client_hook_step(1, Some(feet), true, state, &mut random);

@@ -17,6 +17,7 @@ sunrise-core = { path = "../sunrise-core" }
 sunrise-assets = { path = "../sunrise-assets" }
 sunrise-threads = { path = "../sunrise-threads" }
 sunrise-deflate = { path = "../sunrise-deflate" }
+sunrise-mod-api-macros = { path = "../sunrise-mod-api-macros" }
 crc32fast = "1.5.2"
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }

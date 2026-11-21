@@ -83,6 +83,9 @@ impl Game<'_> {
     /// The title, action bar and selected-item parts of `Hud.tick`.
     pub(super) fn tick_hud(&mut self) {
         self.titles.tick();
+        // Hud.tick: the vignette after the titles, before the held item's name. (A local world,
+        // which has no `Gui.tick` here, eases it in its level tick, `tick_particles`.)
+        self.tick_vignette();
         self.tick_in_bed_chat();
         // `MinecraftServer.isCurrentlySaving` of single player's server.
         let saving = self

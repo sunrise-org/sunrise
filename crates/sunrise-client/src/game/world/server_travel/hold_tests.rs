@@ -275,6 +275,33 @@ fn a_command_arrival_holds_movement_until_lit_then_ticks_damage_again() {
     );
     assert!(landing(game.lan.as_ref().unwrap()));
 
+    let pos = [at[0] as i32, at[1] as i32 - 1, at[2] as i32];
+    let stone = game
+        .pack
+        .assets
+        .registry
+        .default_state("minecraft:stone")
+        .unwrap();
+    game.world.set(pos[0], pos[1], pos[2], stone).unwrap();
+    let host = game.lan.as_mut().unwrap();
+    host.hub.ticks = 20_000;
+    host.play
+        .entry(CONN)
+        .or_default()
+        .arm_mining_for_test(pos, host.hub.ticks, Some((pos, 0)));
+    game.tick_guests();
+    assert!(game.on_server_trip(CONN));
+    assert_eq!(
+        game.as_guest(CONN, |g| g.mining.as_ref().map(|m| m.ticks)),
+        Some(Some(1)),
+        "the held tick did not advance active mining"
+    );
+    assert_eq!(
+        game.world.block(pos[0], pos[1], pos[2]),
+        stone,
+        "the held tick did not complete the due destroy"
+    );
+
     light(&mut game, chunk);
     game.tick_server_travel();
     assert!(!game.on_server_trip(CONN));

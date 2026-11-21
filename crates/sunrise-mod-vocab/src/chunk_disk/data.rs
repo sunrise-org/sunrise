@@ -4,40 +4,11 @@ use super::*;
 /// A job-local attachment transaction. No decoded value is shared with live state.
 /// Use [`Self::get`] and [`Self::set`] with the ordinary typed attachment key.
 /// Any refused operation poisons the job even if the listener ignores its error.
-#[derive(Clone, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
-#[wire(via = ChunkDiskDataWire)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ChunkDiskData {
     entries: Compound,
     failure: Option<ChunkDiskFailure>,
-}
-
-/// Checked transport for a disk snapshot. Decoding validates all budgets before
-/// accepting the store; a forged response cannot bypass the native checks.
-// hidden: engine transport only; decoding re-validates every budget
-#[doc(hidden)]
-#[derive(Clone, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
-#[non_exhaustive]
-pub struct ChunkDiskDataWire {
-    entries: Compound,
-    failure: Option<ChunkDiskFailure>,
-}
-
-impl From<&ChunkDiskData> for ChunkDiskDataWire {
-    fn from(data: &ChunkDiskData) -> Self {
-        Self {
-            entries: data.entries.clone(),
-            failure: data.failure.clone(),
-        }
-    }
-}
-impl TryFrom<ChunkDiskDataWire> for ChunkDiskData {
-    type Error = ChunkDiskFailure;
-    fn try_from(data: ChunkDiskDataWire) -> Result<Self, Self::Error> {
-        let mut result = Self::from_nbt(data.entries)?;
-        result.failure = data.failure;
-        Ok(result)
-    }
 }
 
 impl ChunkDiskData {
@@ -51,9 +22,8 @@ impl ChunkDiskData {
         })
     }
 
-    /// Read the job's typed value, inserting its default if absent. `T` must
-    /// support the shared Wire contract on native and wasm alike.
-    pub fn get<T: Clone + Send + Sync + wire::Wire + 'static>(
+    /// Read the job's typed value, inserting its default if absent.
+    pub fn get<T: Clone + Send + Sync + 'static>(
         &mut self,
         key: &AttachmentType<T>,
     ) -> Result<T, ChunkDiskFailure> {
@@ -62,7 +32,7 @@ impl ChunkDiskData {
 
     /// Replace only the snapshot's value. Failed encoding leaves the original
     /// envelopes intact and refuses publication of the entire job.
-    pub fn set<T: Clone + Send + Sync + wire::Wire + 'static>(
+    pub fn set<T: Clone + Send + Sync + 'static>(
         &mut self,
         key: &AttachmentType<T>,
         value: T,
@@ -71,7 +41,7 @@ impl ChunkDiskData {
     }
 
     /// Remove a snapshot binding through its typed codec.
-    pub fn remove<T: Clone + Send + Sync + wire::Wire + 'static>(
+    pub fn remove<T: Clone + Send + Sync + 'static>(
         &mut self,
         key: &AttachmentType<T>,
     ) -> Result<Option<T>, ChunkDiskFailure> {

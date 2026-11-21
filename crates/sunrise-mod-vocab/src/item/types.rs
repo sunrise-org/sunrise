@@ -29,7 +29,7 @@ pub enum ModelError {
 }
 
 /// An item requested at registration; its load-owned slot identifies the canonical name.
-// no wire: decoding validates the u32 slot with ItemKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+// no wire: decoding validates the u32 slot with ItemKey::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: only registration creates a key
 pub struct ItemKey(pub(crate) u32);
@@ -47,7 +47,7 @@ impl ItemKey {
 
 /// A menu type (`minecraft:generic_9x3`) in the built-in menu registry, in
 /// registration order. A key stays valid until the game exits.
-// no wire: decoding validates the u32 slot with MenuKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+// no wire: decoding validates the u32 slot with MenuKey::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: only the load-owned table creates keys
 pub struct MenuKey(pub(crate) u32);
@@ -55,7 +55,7 @@ pub struct MenuKey(pub(crate) u32);
 /// An enchantment (`minecraft:sharpness`) in the data-loaded enchantment
 /// registry, in registry order. Keys keep their identity across reloads; a
 /// reload changes which entries the table lists, not what an existing slot names.
-// no wire: decoding validates the u32 slot with EnchantmentKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+// no wire: decoding validates the u32 slot with EnchantmentKey::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: only the load-owned table creates keys
 pub struct EnchantmentKey(pub(crate) u32);

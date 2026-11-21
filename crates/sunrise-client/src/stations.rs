@@ -288,46 +288,84 @@ fn can_store_enchantments(stack: &ItemStack) -> bool {
 pub fn increased_repair_cost(cost: u32) -> u32 {
     (u64::from(cost) * 2 + 1).min(i32::MAX as u64) as u32
 }
-/// `ItemStack.getHoverName`: the custom name, a potion's or tipped arrow's
-/// contents, a written book's title, the `item_name` component, else the
-/// item's or head owner's name.
-pub fn hover_name(names: &crate::creative::Names, stack: &ItemStack) -> String {
-    if let Some(name) = stack.custom_name() {
-        return name;
+/// `ItemStack.getHoverName` as a component: the custom name as written, a potion's or tipped
+/// arrow's contents, a written book's title, the `item_name` component, else the item's or head
+/// owner's name, translatable so each viewer renders it in their own language.
+pub fn hover_name_text(names: &crate::creative::Names, stack: &ItemStack) -> crate::text::Text {
+    use crate::text::Text;
+    let data = stack.data();
+    // `ItemStack.getCustomName`: the custom name, else a written book's non-blank title.
+    if stack.custom_name().is_some()
+        && let Some(component) = data.and_then(|d| d.custom_name.as_ref())
+    {
+        return crate::entity_nbt::name_text(component);
     }
-    if let Some(key) = crate::brewing::contents_name_key(stack) {
-        return names
-            .display_get(&key)
-            .unwrap_or_else(|| names.display_item(&stack.item));
-    }
-    if let Some(title) = stack
-        .data()
+    if let Some(title) = data
         .and_then(|d| d.written.as_ref())
         .map(|w| w.title.as_str())
         .filter(|t| !t.trim().is_empty())
     {
-        return title.to_owned();
+        return Text::literal(title);
+    }
+    // `ItemStack.getItemName`: the item's own `getName`, which for a few items is not its
+    // `item_name` component.
+    if let Some(key) = crate::brewing::contents_name_key(stack) {
+        return Text::translate(&key, &[]);
+    }
+    if &*stack.item == "minecraft:shield"
+        && let Some(color) = data.and_then(|d| d.base_color.as_deref())
+    {
+        // `ShieldItem.getName`: the banner's base colour names the shield.
+        return Text::translate(&format!("item.minecraft.shield.{color}"), &[]);
+    }
+    if &*stack.item == "minecraft:compass"
+        && data.is_some_and(|d| d.other("minecraft:lodestone_tracker").is_some())
+    {
+        // `CompassItem.getName`: a lodestone tracker names it, over `item_name`.
+        return Text::translate("item.minecraft.lodestone_compass", &[]);
     }
     if let Some(head) = crate::item_tooltip::player_head_name(stack) {
         // `PlayerHeadItem.getName`: a profile's name, else the item name.
-        return head.title(&|key| names.display_get(key));
+        return head.text();
     }
-    if let Some(name) = stack.item_name() {
-        return name;
+    // `Item.getName`: the stack's `item_name` component, including the compact raid banner.
+    if let Some(component) = data.and_then(|d| d.saved_other("minecraft:item_name")) {
+        return crate::entity_nbt::name_text(component);
     }
-    if stack
-        .data()
-        .is_some_and(|d| d.other("!minecraft:item_name").is_some())
-    {
+    if data.is_some_and(|d| d.other("!minecraft:item_name").is_some()) {
         // `Item.getName` is `getOrDefault(ITEM_NAME, EMPTY)`.
-        return String::new();
+        return Text::literal("");
     }
-    if stack.data().is_some_and(|d| d.ominous_banner) {
-        return names
-            .display_get("block.minecraft.ominous_banner")
-            .unwrap_or_else(|| "Ominous Banner".to_owned());
+    // Keep the prototype's component, including any fallback it actually carries.
+    // Do not insert an English fallback into a component shared with other viewers.
+    if let Some(name) = names.item_name(&stack.item) {
+        return match name
+            .as_object()
+            .filter(|component| component.len() == 1)
+            .and_then(|component| component.get("translate"))
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(key) => Text::translate(key, &[]),
+            None => crate::entity_nbt::name_text(&crate::scoreboard::json_to_tag(name)),
+        };
     }
-    names.display_item(&stack.item)
+    // An item without a prototype (a mod's) takes the key `Item.Properties` gives it: its
+    // block's for a block item (`useBlockDescriptionPrefix`), else `item.*`.
+    let (namespace, path) = stack
+        .item
+        .split_once(':')
+        .unwrap_or(("minecraft", &stack.item));
+    let prefix = if names.is_block_item(&stack.item) {
+        "block"
+    } else {
+        "item"
+    };
+    Text::translate(&format!("{prefix}.{namespace}.{path}"), &[])
+}
+/// `ItemStack.getHoverName` as plain text in the current language: the component of
+/// [`hover_name_text`], rendered.
+pub fn hover_name(names: &crate::creative::Names, stack: &ItemStack) -> String {
+    hover_name_text(names, stack).plain()
 }
 /// `AnvilMenu.createResult`. `name` is the rename box text (None = untouched).
 pub fn anvil_result(
@@ -433,7 +471,7 @@ pub fn anvil_result(
         }
     }
     match name {
-        Some(n) if !n.trim().is_empty() => {
+        Some(n) if !sunrise_core::java_character::is_blank(n) => {
             if n != hover_name {
                 naming_cost = 1;
                 price += 1;
@@ -764,10 +802,10 @@ impl ParsedStationRecipe {
         }
     }
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct StationRecipes {
     pub smithing: Vec<Smithing>,
-    /// Sorted by recipe id, the registry order vanilla lists them in.
+    /// Descending recipe priority, then vanilla's registration order.
     pub stonecutting: Vec<Stonecutting>,
     /// `trim_material` registry: id -> (asset name, description).
     pub trim_materials: Vec<(String, String)>,
@@ -777,6 +815,13 @@ pub struct StationRecipes {
     item_limits: std::collections::HashMap<Arc<str>, (u32, u32)>,
 }
 impl StationRecipes {
+    /// These tables with `stonecutting` in place of their own stonecutter list.
+    pub fn with_stonecutting(&self, stonecutting: Vec<Stonecutting>) -> Self {
+        Self {
+            stonecutting,
+            ..self.clone()
+        }
+    }
     /// Load station tables only after the complete recipe candidate validates.
     pub fn load(
         root: &Path,
@@ -1763,6 +1808,125 @@ mod tests {
             assert_eq!(hover_name(&names, &book(" ")), "Written Book");
             let diamond = stack(r#"{id:"minecraft:diamond",count:1}"#);
             assert_eq!(hover_name(&names, &diamond), "Diamond");
+        });
+    }
+
+    /// `ItemStack.getHoverName`'s branches, each by what it renders to in a language holding only
+    /// the keys vanilla's rules name. The expected values are written from those rules
+    /// (`PotionItem.getName`, `ShieldItem.getName`, `CompassItem.getName`,
+    /// `PlayerHeadItem.getName`, `ItemStack.getCustomName`), not derived from the code.
+    #[test]
+    fn hover_name_component_of_each_branch() {
+        use sunrise_core::nbt::Tag;
+        let names = crate::creative::Names::default();
+        let parse = |snbt: &str| item_data::parse_stack(snbt).unwrap().unwrap();
+        let mut head = ItemStack::new("minecraft:player_head", 1);
+        head.data_mut()
+            .set_other("minecraft:profile", Some(Tag::String("Notch".into())));
+        let mut compass = ItemStack::new("minecraft:compass", 1);
+        compass.data_mut().set_other(
+            "minecraft:lodestone_tracker",
+            Some(Tag::compound(Vec::<(&str, Tag)>::new())),
+        );
+        let mut named = ItemStack::new("minecraft:diamond", 1);
+        named.data_mut().set_other(
+            "minecraft:item_name",
+            Some(Tag::compound([(
+                "translate",
+                Tag::String("custom.key".into()),
+            )])),
+        );
+        let mut removed = ItemStack::new("minecraft:diamond", 1);
+        removed.data_mut().set_other(
+            "!minecraft:item_name",
+            Some(Tag::compound(Vec::<(&str, Tag)>::new())),
+        );
+        let cases = [
+            (
+                "potion",
+                parse(
+                    r#"{id:"minecraft:potion",count:1,components:{"minecraft:potion_contents":{potion:"minecraft:water"}}}"#,
+                ),
+                "Water Bottle",
+            ),
+            (
+                "written book",
+                parse(
+                    r#"{id:"minecraft:written_book",count:1,components:{"minecraft:written_book_content":{title:"Log",author:"A"}}}"#,
+                ),
+                "Log",
+            ),
+            (
+                "shield",
+                parse(
+                    r#"{id:"minecraft:shield",count:1,components:{"minecraft:base_color":"red"}}"#,
+                ),
+                "Red Shield",
+            ),
+            ("lodestone compass", compass, "Lodestone Compass"),
+            ("player head", head, "Notch's Head"),
+            (
+                "ominous banner",
+                parse(
+                    r#"{id:"minecraft:white_banner",count:1,components:{"minecraft:item_name":{translate:"block.minecraft.ominous_banner"}}}"#,
+                ),
+                "Ominous Banner",
+            ),
+            ("item_name", named, "Custom"),
+            ("removed item_name", removed, ""),
+        ];
+        let lang = crate::lang::Language::of(
+            "en_us",
+            [
+                ("item.minecraft.potion.effect.water", "Water Bottle"),
+                ("item.minecraft.shield.red", "Red Shield"),
+                ("item.minecraft.lodestone_compass", "Lodestone Compass"),
+                ("block.minecraft.player_head.named", "%s's Head"),
+                ("block.minecraft.ominous_banner", "Ominous Banner"),
+                ("custom.key", "Custom"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned())),
+        );
+        crate::lang::scoped(lang, || {
+            for (branch, stack, expected) in cases {
+                assert_eq!(
+                    hover_name_text(&names, &stack).plain(),
+                    expected,
+                    "{branch}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn hover_name_keeps_only_authored_fallbacks() {
+        use serde_json::json;
+        use std::collections::BTreeMap;
+        let blocks = Box::leak(Box::new(
+            sunrise_world::registry::BlockRegistry::from_facts_json(
+                br#"{"defaults":{"minecraft:air":0},"states":[["a",true,false,"","minecraft:air"]]}"#
+                    .as_slice(),
+            )
+            .unwrap(),
+        ));
+        let sword = ItemStack::new("minecraft:diamond_sword", 1);
+        let name = json!({"translate": "item.minecraft.diamond_sword"});
+        let names = crate::creative::Names::default().with_item_names(
+            &BTreeMap::from([(
+                sword.item.to_string(),
+                BTreeMap::from([("minecraft:item_name".into(), name.clone())]),
+            )]),
+            blocks,
+        );
+        crate::lang::scoped(crate::lang::Language::default(), || {
+            assert_eq!(hover_name_text(&names, &sword).component(), name);
+            let mut renamed = sword;
+            let name = json!({"translate": "test.name", "fallback": "A custom sword"});
+            renamed.data_mut().set_other(
+                "minecraft:item_name",
+                Some(crate::scoreboard::json_to_tag(&name)),
+            );
+            assert_eq!(hover_name_text(&names, &renamed).component(), name);
         });
     }
 

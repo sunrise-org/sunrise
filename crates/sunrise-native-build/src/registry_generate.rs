@@ -7,6 +7,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
+use sunrise_mod_package::native_route::PACKAGES;
 
 /// Copies only inert manifests. Source files, build scripts and Cargo config never enter it.
 pub fn stage(bundle: &Bundle, output: &Path) -> Result<(), String> {
@@ -86,13 +87,7 @@ pub fn rewrite_dependencies(
     table: &mut toml::Table,
     todo: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
-    for kind in [
-        "dependencies",
-        "dev-dependencies",
-        "build-dependencies",
-        "dev_dependencies",
-        "build_dependencies",
-    ] {
+    for kind in super::crates::DEPENDENCY_KINDS {
         let Some(deps) = table.get_mut(kind).and_then(toml::Value::as_table_mut) else {
             continue;
         };
@@ -100,7 +95,7 @@ pub fn rewrite_dependencies(
         for (key, dep) in deps.iter_mut() {
             let get = |field| dep.get(field).and_then(toml::Value::as_str);
             let package = get("package").unwrap_or(key);
-            if let Some(&(name, _)) = api::PACKAGES.iter().find(|(name, _)| *name == package) {
+            if let Some(&(name, _)) = PACKAGES.iter().find(|(name, _)| *name == package) {
                 api::sdk_source(key, name, dep)?;
                 sdk.push(key.clone());
                 continue;
@@ -194,7 +189,6 @@ pub fn generate<T: Toolchain>(
     bundle: &Bundle,
     update: bool,
 ) -> Result<(), String> {
-    // A wasm mod with `[[inject]]` rows is a bundle too, and pins no game build to lock against.
     let native = bundle.manifest.native.as_ref().ok_or_else(|| {
         crate::host::trf(
             "{path} is not a native mod.",
@@ -213,20 +207,16 @@ pub fn generate<T: Toolchain>(
     let work = tempfile::tempdir_in(super::root()).map_err(|e| e.to_string())?;
     stage(bundle, work.path())?;
     let seed = super::registry_lock::RegistryLock::parse(&game(&native.sunrise)?)?;
-    fs::write(
-        work.path().join("Cargo.lock"),
-        seed.seed("version=4\npackage=[]\n")?,
-    )
-    .map_err(|e| e.to_string())?;
     let rust = rust()?;
-    // `cargo update --workspace` keeps a seeded package's version where the mod's requirements
-    // allow it and drops the seeded packages the mod doesn't reach; `generate-lockfile` would
-    // ignore the seed.
-    let mut command = super::cargo(&rust, work.path(), "update");
-    command.arg("--workspace");
-    super::run(command, "Resolving registry dependency pins", |_| {})?;
-    let text = super::read_lock(work.path())?;
-    super::registry_lock::RegistryLock::parse(&text)?;
+    let text = super::registry_resolve::resolve(work.path(), &seed, &seed, None, |subcommand| {
+        super::cargo(&rust, work.path(), subcommand)
+    })
+    .map_err(|error| {
+        crate::host::trf(
+            "{mod}: could not write Cargo.lock.\n{error}",
+            &[("mod", &bundle.manifest.id), ("error", &error)],
+        )
+    })?;
     // Refusals and resolution errors above never mutate the existing lock.
     let mut pending = tempfile::NamedTempFile::new_in(&bundle.dir).map_err(|e| e.to_string())?;
     pending
@@ -327,30 +317,6 @@ mod tests {
         }
     }
     #[test]
-    fn a_wasm_mod_with_injections_has_no_game_build_to_lock_against() {
-        let manifest = sunrise_mod_package::Manifest::parse(&format!(
-            "id='wasm_inject'\nname='Wasm inject'\nversion='1.0.0'\napi='0.2'\ncapabilities=['registries']\n[wasm]\nsha512='{}'\ntoolchain='fixture'\n[[inject]]\nid='tick'\nat='game::tick'\nkind='head'\nwith='tick'\n",
-            "0".repeat(128)
-        ))
-        .unwrap();
-        let bundle = Bundle {
-            manifest,
-            dir: "wasm-inject".into(),
-        };
-        let unreached = || -> Result<crate::rust::Unpacked, String> {
-            panic!("no toolchain before the refusal")
-        };
-        let error = generate(
-            unreached,
-            |_| panic!("no game lock before the refusal"),
-            &bundle,
-            true,
-        )
-        .unwrap_err();
-        assert_eq!(error, "wasm-inject is not a native mod.");
-    }
-
-    #[test]
     fn local_dependencies_are_traversed_but_cannot_escape() {
         let input = tempfile::tempdir().unwrap();
         let output = tempfile::tempdir().unwrap();
@@ -381,24 +347,28 @@ mod tests {
         );
     }
 
-    /// A mod's own package needs packages the game locks: the lock gives the game's version of
-    /// each, not the newest, and a build's check takes it.
-    #[test]
-    #[ignore = "daily"]
-    fn a_mods_lock_starts_from_the_games_versions() {
-        use crate::registry_lock::RegistryLock;
+    struct GameSeedFixture {
+        input: tempfile::TempDir,
+        bundle: Bundle,
+        game: String,
+        toolchain: crate::rust::Unpacked,
+    }
+
+    fn game_seed_fixture() -> GameSeedFixture {
         let input = tempfile::tempdir().unwrap();
-        let vendor = tempfile::tempdir().unwrap();
+        let vendor = input.path().join("vendor");
         let bundle = fixture(input.path());
         for (name, version, dependency) in [
             ("zipish", "1.0.0", "getrandom='0.4'"),
+            ("zipish", "1.0.1", "getrandom='=0.4.4'"),
             ("getrandom", "0.4.3", "libc='0.2'"),
             ("getrandom", "0.4.4", "libc='0.2'"),
             ("libc", "0.2.190", ""),
-            ("libc", "0.2.191", ""),
+            ("libc", "0.2.191", "[features]\nnew_api=[]"),
+            ("libc", "0.3.0", ""),
             ("unused", "1.0.0", ""),
         ] {
-            let folder = vendor.path().join(format!("{name}-{version}"));
+            let folder = vendor.join(format!("{name}-{version}"));
             fs::create_dir_all(folder.join("src")).unwrap();
             fs::write(folder.join("src/lib.rs"), "").unwrap();
             fs::write(
@@ -416,7 +386,7 @@ mod tests {
         }
         fs::write(
             input.path().join("Cargo.toml"),
-            "[package]\nname='fixture'\nversion='0.1.0'\n[dependencies]\nsunrise-mod-api={ path='.sunrise/sdk/api/crates/sunrise-mod-api' }\nzipish='1'\n",
+            "[package]\nname='fixture'\nversion='0.1.0'\n[dependencies]\nsunrise-mod-api={ path='.sunrise/sdk/api/crates/sunrise-mod-api' }\nzipish='1'\nother-libc={package='libc',version='0.3'}\n",
         )
         .unwrap();
         let package = |name: &str, version: &str, dependencies: &str| {
@@ -449,10 +419,30 @@ mod tests {
             cargo_config: vec![
                 "net.offline=true".into(),
                 "source.crates-io.replace-with='fixture'".into(),
-                format!("source.fixture.directory='{}'", vendor.path().display()),
+                format!("source.fixture.directory='{}'", vendor.display()),
             ],
             c_bin: None,
         };
+        GameSeedFixture {
+            input,
+            bundle,
+            game,
+            toolchain,
+        }
+    }
+
+    /// A mod's own package needs packages the game locks: the lock gives the game's version of
+    /// each, not the newest, and a build's check takes it. A different semver slot is still free.
+    #[test]
+    #[ignore = "daily"]
+    fn a_mods_lock_starts_from_the_games_versions() {
+        use crate::registry_lock::RegistryLock;
+        let GameSeedFixture {
+            input,
+            bundle,
+            game,
+            toolchain,
+        } = game_seed_fixture();
         generate(|| Ok(toolchain), |_| Ok(game.clone()), &bundle, false).unwrap();
         let text = fs::read_to_string(input.path().join("Cargo.lock")).unwrap();
         let pins = RegistryLock::parse(&text).unwrap();
@@ -463,11 +453,68 @@ mod tests {
             .collect();
         assert_eq!(
             locked,
-            ["getrandom 0.4.3", "libc 0.2.190", "zipish 1.0.0"],
+            [
+                "getrandom 0.4.3",
+                "libc 0.2.190",
+                "libc 0.3.0",
+                "zipish 1.0.0"
+            ],
             "{text}"
         );
         let mut allowed = RegistryLock::parse(&game).unwrap();
         allowed.extend(&pins).unwrap();
         allowed.check_pins(&pins).unwrap();
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_requirement_that_moves_a_game_pin_leaves_the_old_lock_untouched() {
+        let GameSeedFixture {
+            input,
+            bundle,
+            game,
+            toolchain,
+        } = game_seed_fixture();
+        let manifest = input.path().join("Cargo.toml");
+        let original = fs::read_to_string(&manifest).unwrap();
+        let older_parent = original.replace("zipish='1'", "zipish='=1.0.0'");
+        let lock = input.path().join("Cargo.lock");
+        generate(
+            || Ok(toolchain.clone()),
+            |_| Ok(game.clone()),
+            &bundle,
+            false,
+        )
+        .unwrap();
+        let old = fs::read(&lock).unwrap();
+        for (cargo, expected) in [
+            (
+                format!(
+                    "{older_parent}\n[target.'cfg(unix)'.build-dependencies]\nnewer={{package='libc',version='=0.2.191'}}\n"
+                ),
+                ["libc", "0.2.190", "=0.2.191", "fixture v0.1.0"],
+            ),
+            (
+                original.replace("zipish='1'", "zipish='=1.0.1'"),
+                ["getrandom", "0.4.3", "=0.4.4", "zipish v1.0.1"],
+            ),
+            (
+                format!("{older_parent}\nlibc={{version='0.2',features=['new_api']}}\n"),
+                ["libc", "0.2.190", "0.2.191", "`new_api`"],
+            ),
+        ] {
+            fs::write(&manifest, cargo).unwrap();
+            let error = generate(
+                || Ok(toolchain.clone()),
+                |_| Ok(game.clone()),
+                &bundle,
+                true,
+            )
+            .unwrap_err();
+            for detail in expected.into_iter().chain(["registry_fixture"]) {
+                assert!(error.contains(detail), "{error}");
+            }
+            assert_eq!(fs::read(&lock).unwrap(), old);
+        }
     }
 }

@@ -13,13 +13,7 @@ This is vanilla's feature-type registry (`minecraft:worldgen/feature_type`, NeoF
 
 Use an ID in your mod's namespace. These stop startup with a message naming your mod: a
 duplicate ID, an ID in another mod's namespace (vanilla's `minecraft:` included), an empty name,
-an invalid config schema, and a feature type registered by a wasm mod.
-
-## Not on wasm
-
-Feature types run on the worldgen workers, which wasm mods can't serve yet. A wasm mod that
-registers one is refused at startup, naming the mod and the type, before any world job runs;
-there is no fallback. Write the feature type in a native mod.
+or an invalid config schema.
 
 ## Config
 

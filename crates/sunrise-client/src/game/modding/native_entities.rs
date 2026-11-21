@@ -91,7 +91,6 @@ pub(super) fn target_id(t: Target) -> Option<u32> {
     }
 }
 
-#[allow(dead_code)]
 impl Game<'_> {
     /// Whether this game simulates the level `dimension`.
     fn native_simulates_level(&self, dimension: &str) -> bool {
@@ -258,7 +257,7 @@ impl Game<'_> {
             }
             while let Some((slot, id, seq)) = self.next_unannounced(mark, &[], None) {
                 mark = seq;
-                let kind = self.slot_kind_and_position(slot).0;
+                let kind = self.slot_kind_and_position(slot).0.into_owned();
                 self.construct_joining(id, &kind);
             }
             return true;
@@ -271,6 +270,7 @@ impl Game<'_> {
         {
             self.persist.joined_seq = seq;
             let (kind, at) = self.slot_kind_and_position(slot);
+            let kind = kind.into_owned();
             let mut canceled = false;
             let dimension = self.dim.id();
             self.construct_joining(id, &kind);
@@ -296,7 +296,7 @@ impl Game<'_> {
                 self.discard_slot(slot);
                 kept &= id != watch;
             } else {
-                self.remember_join(id, kind.into_owned());
+                self.remember_join(id, kind);
                 // `addEntity` files it under its section, untold.
                 self.entity_section_joined(id, [at.x, at.y, at.z]);
                 if let Some((id, item, count, position)) = spawn {
@@ -410,7 +410,7 @@ impl Game<'_> {
         self.persist.live.insert(index, (id, kind, true));
     }
     /// The type id and position a mod is told of.
-    fn slot_kind_and_position(&self, slot: Slot) -> (std::borrow::Cow<'static, str>, Vec3) {
+    fn slot_kind_and_position(&self, slot: Slot) -> (std::borrow::Cow<'_, str>, Vec3) {
         use super::entity::Entity;
         let block = |p: [i32; 3]| {
             Vec3::new(
@@ -442,7 +442,7 @@ impl Game<'_> {
                 (kind.into(), block(f.pos))
             }
             Slot::Apart(Apart::Other(i)) => {
-                (self.others[i].kind.clone().into(), self.others[i].position)
+                (self.others[i].kind.as_str().into(), self.others[i].position)
             }
             Slot::Apart(Apart::Dragon) => (
                 "minecraft:ender_dragon".into(),
@@ -1090,7 +1090,7 @@ mod tests {
                     velocity: Vec3::ZERO,
                     fuse: 80,
                     ticks: 0,
-                    on_ground: false,
+                    ground: Default::default(),
                     in_water: false,
                     stuck: Vec3::ZERO,
                     fall_distance: 0.0,

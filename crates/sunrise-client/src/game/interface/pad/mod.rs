@@ -684,7 +684,7 @@ impl Game<'_> {
     }
 
     /// B and Start: what Escape does where the pad is.
-    pub(super) fn pad_back(&mut self) -> Result<()> {
+    pub(in crate::game) fn pad_back(&mut self) -> Result<()> {
         // The death confirm's buttons wait a second, as its Escape does.
         if self
             .ui
@@ -701,7 +701,10 @@ impl Game<'_> {
         if self.screen == Screen::Options {
             return self.options_key(KeyCode::Escape, None);
         }
-        if let Some(title) = self.title.as_mut() {
+        // A mod's screen in front of the title takes the Escape itself.
+        if self.title_input_active()
+            && let Some(title) = self.title.as_mut()
+        {
             title.escape();
             self.save_title_options();
             return Ok(());

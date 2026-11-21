@@ -4,9 +4,8 @@ use sunrise_mod_runtime::attachments::{self as runtime, index};
 
 /// A SNAPSHOT of membership and value bindings in the host's current dimension.
 /// Later changes require a fresh query. This is a residency view: removed but
-/// unswept entities may appear, and stale writes fail. Native acquisition neither
-/// clones values nor decodes saved payloads; iteration decodes lazily.
-/// Codec-less attachment types are native-only; their rows do not cross to wasm.
+/// unswept entities may appear, and stale writes fail. Acquisition neither clones values nor
+/// decodes saved payloads; iteration decodes lazily.
 // no wire: transfers only saved rows as scoped tokens plus network NBT; decode requires a complete compound envelope and rebuilds runtime entries.
 #[derive(Clone)]
 #[non_exhaustive]
@@ -24,10 +23,6 @@ impl AttachmentBatch {
         key: &AttachmentType<T>,
     ) -> Result<AttachmentQuery<'_, T>, AttachmentError> {
         crate::parts::validate_attachment_use(key.namespace, key.name, key.sync)?;
-        #[cfg(target_arch = "wasm32")]
-        if key.codec.is_none() {
-            return Err(AttachmentError::Decode);
-        }
         self.0.query(key)
     }
 }

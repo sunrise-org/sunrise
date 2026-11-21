@@ -66,9 +66,8 @@ level's game time (`None` outside a world) and the partial tick: for an ingredie
 a few ticks and must move smoothly between them. There is no cap on animated items: a `Frame` renderer costs one `extract` per drawn item per frame, for each
 display context the item is drawn in (the same item in a hand and in an item frame is asked twice). A `Frame`
 answer is not kept past its frame, and an item
-drawn with one is never cached as a still GUI image. The same for native and wasm mods: a wasm renderer is one
-call per asked stack, the stack copied in and the parts copied out. Nothing is asked, and no scan runs, for a
-model whose type no mod registered.
+drawn with one is never cached as a still GUI image. Nothing is asked, and no scan runs, for a model whose
+type no mod registered.
 
 A later registration of a type replaces the earlier one, whichever mod made it and vanilla's types included,
 as in NeoForge; the log names both mods. An id that is not `<namespace>:<path>` is logged and left out. A
@@ -76,9 +75,9 @@ special model of a type no mod registered and vanilla doesn't have is an error n
 that item draws the missing model, and the rest of the resources load. A part can also be an item stack (`SpecialModelPart::stack`), resolved through the item model resolver with the
 inner item's own models, tints and foil under the display context you name; a cycle or more than
 `MAX_NESTED_STACK_PARTS` (64) stack parts in one draw refuses the answer. A renderer that returns an `Err`,
-panics, answers more than `MAX_SPECIAL_MODEL_PARTS` (256) parts or a transform that isn't finite, or (in a
-wasm mod) has its call refused or trapped, is logged once with its type and asked no more until resources
-reload; its special models draw the missing model until then. A part naming a model no pack has makes that
+panics, returns more than `MAX_SPECIAL_MODEL_PARTS` (256) parts or returns a non-finite transform
+is logged once with its type and asked no more until resources reload. Its special models draw the
+missing model until then. A part naming a model no pack has makes that
 answer draw the missing model, logged once for the model."#]
     #[hook(
         side = "client",

@@ -2,7 +2,7 @@
 //! added onto the sky, and on the float frame, in Sunrise's lifted world, the sun's disc in
 //! vanilla's colour at the scene's peak (entity.wgsl `fs_sky_sun`).
 
-pub(super) struct Celestial {
+pub(crate) struct Celestial {
     /// `fs_sky_celestial`, added onto the sky: the End sky, the moon, and the sun wherever the
     /// world isn't lifted.
     pub(super) added: wgpu::RenderPipeline,
@@ -105,26 +105,31 @@ impl Celestial {
         Self { added, sun }
     }
 
-    /// The Overworld's sun and moon (`Game::celestial_geometry`: the sun's quad first, unless a
-    /// pack's sky draws its own), the indices in `range`, with `added` bound. In Sunrise's
-    /// `lifted` world (HDR lighting on the float frame, no pack, not the title) the sun's quad
-    /// takes `fs_sky_sun`'s two passes instead.
+    /// The celestial `quads` (each its place in the buffer and what it is), with `added` bound.
+    /// In Sunrise's `lifted` world (HDR lighting on the float frame, no pack, not the title) the
+    /// sun's quad takes `fs_sky_sun`'s two passes instead.
     pub(super) fn draw_bodies(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         lifted: bool,
-        mut range: std::ops::Range<u32>,
+        quads: impl IntoIterator<Item = (u32, super::CelestialBody)>,
     ) {
-        if let Some(sun) = self.sun.as_ref().filter(|_| lifted && range.start == 0) {
-            for pipeline in sun {
-                pass.set_pipeline(pipeline);
-                pass.draw_indexed(0..6, 0, 0..1);
+        for (quad, body) in quads {
+            let indices = quad * 6..quad * 6 + 6;
+            let sun = self
+                .sun
+                .as_ref()
+                .filter(|_| lifted && body == super::CelestialBody::Sun);
+            match sun {
+                Some(sun) => {
+                    for pipeline in sun {
+                        pass.set_pipeline(pipeline);
+                        pass.draw_indexed(indices.clone(), 0, 0..1);
+                    }
+                    pass.set_pipeline(&self.added);
+                }
+                None => pass.draw_indexed(indices, 0, 0..1),
             }
-            pass.set_pipeline(&self.added);
-            range.start = 6;
-        }
-        if !range.is_empty() {
-            pass.draw_indexed(range, 0, 0..1);
         }
     }
 }

@@ -108,7 +108,6 @@ screen.
 | Method | Draws |
 |---|---|
 | `fill_triangle(atlas, [a, b, c], colour)` | one triangle |
-| `fill_fan(atlas, centre, rim, colour)` | a triangle from the centre to each two neighbouring rim points |
 | `fill_arc(atlas, centre, [r0, r1], [a0, a1], colour)` | an annular sector; `r0 = 0` is a pie slice, a span of `TAU` a ring |
 | `fill_disc(atlas, centre, r, colour)` | a disc |
 | `fill_disc_gradient(atlas, centre, r, &[Stop(fraction, colour)...])` | a disc whose colour runs through the stops from the centre out |

@@ -1,4 +1,0 @@
-The callback a command argument type declares for its own arguments: the server asks it for one
-argument's candidates, with the text typed for it, the arguments parsed before it and the sender,
-and calls no mod code on a client. Export, because the game calls the mod's implementation; the
-engine keeps the matching candidates and sorts them.

@@ -250,7 +250,9 @@ impl Game<'_> {
                     } else {
                         empty_template_ran = true;
                         let player = self.use_context();
+                        let actor = self.interacting_loot_entity();
                         self.with_block_use_level(|b, level, ticks| {
+                            level.interacting = Some(actor.clone());
                             b.use_without_item(level, ticks, state, block_hit, player)
                         })
                     };
@@ -887,13 +889,7 @@ impl Game<'_> {
             && !infinity
             && let Some(i) = arrow_slot
         {
-            let cell = self.stack_in_mut(i);
-            if let Some(s) = cell.as_mut() {
-                s.count -= 1;
-                if s.count == 0 {
-                    *cell = None;
-                }
-            }
+            self.consume_player_slot(i, 1);
         }
     }
     /// `EnchantmentHelper.processProjectileCount` and `processProjectileSpread`

@@ -2548,6 +2548,75 @@ fn allay_hand(model: &Part, base: glam::Mat4, poses: &Poses) -> Option<glam::Mat
             * glam::Mat4::from_translation(glam::Vec3::new(0.0625, 0.0, 0.0)),
     )
 }
+/// `ArmedModel.translateToHand`: a mob's hand in model space, as
+/// `ItemInHandLayer.submitArmWithItem` has it before its item rotations. That is the
+/// arm's part matrix, moved by the slim or skeleton offset, or the Allay's, Vex's or
+/// Copper Golem's own hand. `hand_base` applies vanilla's item rotations and the hand
+/// offset after it. A native mod takes the hand here through `[[native.mixin]]`, where a
+/// Java mod's mixin on `submitArmWithItem` turns the pose stack before those rotations
+/// (#3970). A pack's `attachments` anchor replaces the whole hand and doesn't come
+/// through here.
+#[sunrise_mod_api_macros::replaceable]
+pub fn translate_to_hand(
+    m: &Mob,
+    model: &Part,
+    base: glam::Mat4,
+    poses: &Poses,
+    left: bool,
+) -> Option<glam::Mat4> {
+    let skeleton = skeleton_arms(m.species());
+    let arm = if left { "left_arm" } else { "right_arm" };
+    // `SkeletonModel.translateToHand` shifts the arm by 1, `PlayerModel.translateToHand`
+    // by 0.5 for slim arms: the hand is the middle of the arm.
+    let offset = if skeleton {
+        if left { -1.0 } else { 1.0 }
+    } else if avatar(m) && m.slim {
+        if left { -0.5 } else { 0.5 }
+    } else {
+        0.0
+    };
+    // The arm's matrix, `None` when the model has no such part. The function's only exit is
+    // its value (no `?`, no early `return`), so a `RETURN` row applies to every call.
+    let arm_matrix = if m.species() == Species::Allay {
+        allay_hand(model, base, poses)
+    } else {
+        part_matrix(model, base, poses, arm, offset)
+    };
+    arm_matrix.map(|mut t| {
+        if m.species() == Species::Vex {
+            // `VexModel.translateToHand`: the held item is drawn at 0.55 scale.
+            t *= glam::Mat4::from_scale(glam::Vec3::splat(0.55));
+            t *= glam::Mat4::from_translation(glam::Vec3::new(
+                if left { -0.046_875 } else { 0.046_875 },
+                -0.156_25,
+                0.078_125,
+            ));
+        }
+        if m.species() == Species::CopperGolem {
+            // `CopperGolemModel.translateToHand`: a still golem holds the item
+            // across the arm, a working one scaled down in front of it.
+            if m.extra.variant3 == super::copper_golem::IDLE {
+                t *= glam::Mat4::from_rotation_y((if left { 90.0f32 } else { -90.0 }).to_radians())
+                    * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 0.125));
+            } else {
+                t *= glam::Mat4::from_scale(glam::Vec3::splat(0.55))
+                    * glam::Mat4::from_translation(glam::Vec3::new(-0.125, 0.3125, -0.1875));
+            }
+        }
+        t
+    })
+}
+/// The skeleton family, whose `SkeletonModel.translateToHand` shifts the arm by 1.
+fn skeleton_arms(species: Species) -> bool {
+    matches!(
+        species,
+        Species::Skeleton
+            | Species::Stray
+            | Species::Bogged
+            | Species::Parched
+            | Species::WitherSkeleton
+    )
+}
 /// The hand of a mob in model space, up to the item's own transform
 /// (`ItemInHandLayer.submitArmWithItem`).
 fn hand_base(
@@ -2575,49 +2644,12 @@ fn hand_base(
     ) {
         return Some(t);
     }
-    let skeleton = matches!(
-        m.species(),
-        Species::Skeleton
-            | Species::Stray
-            | Species::Bogged
-            | Species::Parched
-            | Species::WitherSkeleton
-    );
-    let arm = if left { "left_arm" } else { "right_arm" };
-    // `SkeletonModel.translateToHand` shifts the arm by 1, `PlayerModel.translateToHand`
-    // by 0.5 for slim arms: the hand is the middle of the arm.
-    let offset = if skeleton {
-        if left { -1.0 } else { 1.0 }
-    } else if avatar(m) && m.slim {
-        if left { -0.5 } else { 0.5 }
-    } else {
-        0.0
-    };
-    let mut t = if m.species() == Species::Allay {
-        allay_hand(model, base, poses)?
-    } else {
-        part_matrix(model, base, poses, arm, offset)?
-    };
-    if m.species() == Species::Vex {
-        // `VexModel.translateToHand`: the held item is drawn at 0.55 scale.
-        t *= glam::Mat4::from_scale(glam::Vec3::splat(0.55));
-        t *= glam::Mat4::from_translation(glam::Vec3::new(
-            if left { -0.046_875 } else { 0.046_875 },
-            -0.156_25,
-            0.078_125,
-        ));
-    }
-    if m.species() == Species::CopperGolem {
-        // `CopperGolemModel.translateToHand`: a still golem holds the item
-        // across the arm, a working one scaled down in front of it.
-        if m.extra.variant3 == super::copper_golem::IDLE {
-            t *= glam::Mat4::from_rotation_y((if left { 90.0f32 } else { -90.0 }).to_radians())
-                * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 0.125));
-        } else {
-            t *= glam::Mat4::from_scale(glam::Vec3::splat(0.55))
-                * glam::Mat4::from_translation(glam::Vec3::new(-0.125, 0.3125, -0.1875));
-        }
-    }
+    let hand = translate_to_hand(m, model, base, poses, left)?;
+    Some(item_from_hand(hand, m, left))
+}
+/// `ItemInHandLayer.submitArmWithItem` after `translateToHand`: the two item rotations,
+/// then the baby or adult hand offset, applied to the hand `translate_to_hand` gives.
+fn item_from_hand(mut t: glam::Mat4, m: &Mob, left: bool) -> glam::Mat4 {
     let (ox, oy, oz) = if m.is_baby() {
         (0.0, 1.0, -4.5)
     } else {
@@ -2629,7 +2661,7 @@ fn hand_base(
         oy / 16.0,
         oz / 16.0,
     ));
-    Some(t)
+    t
 }
 /// The transform of one of a mob's model parts, in camera space
 /// (`ModelPart.translateAndRotate` down the tree).
@@ -4436,6 +4468,149 @@ mod random_texture_tests {
             assert!(
                 (length - 1.875).abs() < 1.0e-5,
                 "{axis:?} scales by {length}, not 2 * 0.9375"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod translate_to_hand_tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    /// A zombie whose model is a root with two posed arms.
+    fn armed() -> (Mob, Part) {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        Arc::make_mut(&mut kind).species = Species::Zombie;
+        let model = Part::parse(
+            "root",
+            &json!({"children": {
+                "right_arm": {"pose": [-5.0, 2.0, 0.0, -0.4, 0.1, 0.05, 1.0, 1.0, 1.0]},
+                "left_arm": {"pose": [5.0, 2.0, 0.0, 0.3, -0.1, -0.05, 1.0, 1.0, 1.0]}
+            }}),
+        );
+        (
+            Mob::new(1, kind, sunrise_core::geometry::Vec3::ZERO, 0.0),
+            model,
+        )
+    }
+
+    /// `ItemInHandLayer.submitArmWithItem`: `translateToHand`, then the two item rotations
+    /// and the hand offset. The hand `hand_base` places an item in is the one
+    /// `translate_to_hand` returns, with only those three steps after it, so a mixin that
+    /// turns the returned matrix turns the item before vanilla's rotations (#3970).
+    #[test]
+    fn the_item_rotations_and_hand_offset_come_after_translate_to_hand() {
+        let (m, model) = armed();
+        let poses = Poses::new(&model);
+        let base = glam::Mat4::from_translation(glam::Vec3::new(0.25, 1.5, -0.75))
+            * glam::Mat4::from_rotation_y(0.7);
+        for left in [false, true] {
+            let hand = translate_to_hand(&m, &model, base, &poses, left).unwrap();
+            let arm = if left { "left_arm" } else { "right_arm" };
+            // A zombie's `translateToHand` is its arm's own `translateAndRotate`.
+            assert_eq!(hand, part_matrix(&model, base, &poses, arm, 0.0).unwrap());
+            let expected = hand
+                * (glam::Mat4::from_rotation_x((-90.0f32).to_radians())
+                    * glam::Mat4::from_rotation_y(PI))
+                * glam::Mat4::from_translation(glam::Vec3::new(
+                    if left { -1.0 } else { 1.0 } / 16.0,
+                    2.0 / 16.0,
+                    -10.0 / 16.0,
+                ));
+            assert_eq!(
+                hand_base(&m, &model, base, &poses, &[], left).unwrap(),
+                expected
+            );
+        }
+    }
+
+    /// `held_item_transform`, the held item's pose the renderer draws, goes through
+    /// `translate_to_hand`: it is exactly the hand that function returns for the posed model,
+    /// then the item rotations and hand offset. If the renderer stopped calling it, a row on
+    /// `translate_to_hand` would no longer move the item, and this test would fail.
+    #[test]
+    fn the_held_item_is_placed_from_translate_to_hand() {
+        let (mut m, model) = armed();
+        Arc::make_mut(&mut m.kind).model = Arc::new(model);
+        let data = MobData {
+            states: Vec::new(),
+            placements: Default::default(),
+            heightmaps: Default::default(),
+            animations: Default::default(),
+            biome_tags: Default::default(),
+            entity_tags: Default::default(),
+            villager_hats: Default::default(),
+            cem: Default::default(),
+            random_textures: Default::default(),
+            emissive: Default::default(),
+            blinks: Default::default(),
+            pois: Default::default(),
+            species_placements: Default::default(),
+            mod_spawns: Default::default(),
+            resolved: Default::default(),
+        };
+        let (alpha, camera) = (0.5, glam::DVec3::new(-2.0, 1.0, 3.0));
+        let (posed, poses, _) = posed_body(&m, alpha, &data);
+        let base = base_transform(&m, alpha, camera);
+        for left in [false, true] {
+            let hand = translate_to_hand(&m, &posed, base, &poses, left).unwrap();
+            assert_eq!(
+                held_item_transform(&m, alpha, camera, &data, left).unwrap(),
+                item_from_hand(hand, &m, left)
+            );
+        }
+    }
+
+    /// What a `RETURN` row on `translate_to_hand` does to the item: the turn it multiplies
+    /// into the hand comes before vanilla's item rotations, as a Java mixin's
+    /// `poseStack.rotate` at `submitArmWithItem`'s first `rotateDegrees` does
+    /// (BendableCuboids' forearm: about X, 0.25 below the arm's pivot). Turning after the
+    /// rotations instead puts the item elsewhere for this pose.
+    #[test]
+    fn a_turn_of_the_hand_comes_before_the_item_rotations() {
+        let (m, model) = armed();
+        let poses = Poses::new(&model);
+        let base = glam::Mat4::from_rotation_y(0.7);
+        let elbow = glam::Vec3::new(0.0, 0.25, 0.0);
+        let turn = glam::Mat4::from_translation(elbow)
+            * glam::Mat4::from_rotation_x(0.5)
+            * glam::Mat4::from_translation(-elbow);
+        for left in [false, true] {
+            let hand = translate_to_hand(&m, &model, base, &poses, left).unwrap();
+            let turned = item_from_hand(hand * turn, &m, left);
+            // The Java pose stack: translateToHand, the mixin's turn, the two item rotations,
+            // the hand offset.
+            let java = hand
+                * turn
+                * (glam::Mat4::from_rotation_x((-90.0f32).to_radians())
+                    * glam::Mat4::from_rotation_y(PI))
+                * glam::Mat4::from_translation(glam::Vec3::new(
+                    if left { -1.0 } else { 1.0 } / 16.0,
+                    2.0 / 16.0,
+                    -10.0 / 16.0,
+                ));
+            assert_eq!(turned, java);
+            let after = item_from_hand(hand, &m, left) * turn;
+            assert!(
+                !turned.abs_diff_eq(after, 1.0e-3),
+                "a turn before the item rotations differs from one after them"
+            );
+        }
+    }
+
+    /// The skeleton family's `translateToHand` shifts the arm by 1 (outwards on each side).
+    #[test]
+    fn a_skeleton_hand_is_its_arm_shifted_by_one() {
+        let (mut m, model) = armed();
+        Arc::make_mut(&mut m.kind).species = Species::Skeleton;
+        let poses = Poses::new(&model);
+        let base = glam::Mat4::IDENTITY;
+        for (left, arm, shift) in [(false, "right_arm", 1.0), (true, "left_arm", -1.0)] {
+            assert_eq!(
+                translate_to_hand(&m, &model, base, &poses, left).unwrap(),
+                part_matrix(&model, base, &poses, arm, shift).unwrap()
             );
         }
     }

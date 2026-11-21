@@ -48,7 +48,7 @@ fn client_host_hashes_plain_stacks_with_added_and_removed_components() {
             removed: vec![11],
             ..Stack::new(4, 3)
         };
-        let hashed = Hashed::create(&network, &NoNames);
+        let hashed = Hashed::create(&network, &NoNames).unwrap();
         let expected = Serverbound::ContainerClick(ContainerClick {
             container: 2,
             state: 5,

@@ -21,6 +21,7 @@ fn inventory_label_default_follows_image_height_not_inventory_slots() {
                     own_background: true,
                     ..Default::default()
                 },
+                mod_type: None,
                 data: Vec::new(),
                 extra: None,
             });

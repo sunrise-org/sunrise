@@ -76,6 +76,17 @@ pub trait ClientInputClientHost {
     #[access(ClientSetup)]
     fn mapping_state(&self, name: &str) -> Option<(bool, u64)>;
     /// Side: client.
+    /// Whether the key or mouse button the vanilla mapping `name` is bound to is physically down
+    /// (`InputConstants.isKeyDown`, or the window's mouse button, on `KeyMapping.getKey`), where
+    /// `mapping` reads the logical `KeyMapping.isDown`. It follows the player's binding and
+    /// ignores the toggle option, the conflict context, the modifiers and any `set_mapping_down`
+    /// write, so a mod that let go of a mapping can hand back what the player still holds:
+    /// `set_mapping_down(key, mapping_physical_down(key) == Ok(Some(true)))`. False for a mapping
+    /// bound to no key, `Ok(None)` for a mapping `mapping` doesn't answer for, and
+    /// `Err(Unavailable)` where a client read is not allowed. Allocates nothing.
+    #[access(ClientSetup)]
+    fn mapping_physical_down(&self, name: &str) -> Result<Option<bool>, LevelReadError>;
+    /// Side: client.
     /// Holds the vanilla gameplay mapping `key` down or lets it go (`KeyMapping.setDown`): the
     /// held state its key gives it, without the click a press adds. For a hold-style mapping
     /// this replaces its logical state until the next input for that mapping. It does not press

@@ -34,8 +34,9 @@ pub enum GuiPaintError {
         /// The op's place in the buffer.
         index: u32,
     },
-    /// A `GuiDraw::Sprite` or `GuiDraw::AtlasSprite` the GUI atlas does not hold, a mob effect
-    /// sprite (`mob_effect/...`, namespaced or not) included.
+    /// A `GuiDraw::Sprite` the GUI atlas does not hold by GUI id (one its definition removed
+    /// included), a mob effect sprite (`mob_effect/...`, namespaced or not) included, or a
+    /// `GuiDraw::AtlasSprite` the packed block atlas does not hold by name.
     Sprite {
         /// The op's place in the buffer.
         index: u32,

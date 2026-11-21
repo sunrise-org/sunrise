@@ -1,6 +1,6 @@
 //! Player liquid travel and environmental damage over the shared fluid state.
 use super::*;
-use crate::breathing::{Breath, breathe, drown};
+use crate::breathing::{AirStep, Breath};
 use sunrise_core::random::RandomSource;
 use sunrise_world::{
     fluid::FluidKind,
@@ -58,84 +58,99 @@ impl MotionWorld<'_, '_, '_> {
         }
         Ok(())
     }
-    /// `LivingEntity.baseTick`'s air supply and drowning, then lava.
+    /// `LivingEntity.baseTick`'s air supply and drowning, then lava, with
+    /// vanilla's breathing: a server's game stops between [`Self::decide_air`]
+    /// and [`Self::apply_air`] to fire `living_breathe` with its owning host.
     pub fn tick_environment_damage(&mut self) -> Result<()> {
-        // Air is synced entity data: only the server runs LivingEntity's air block.
-        if !self.player.client_side {
-            let eye = BlockPos::containing(self.player.position.add_vector(Vec3::new(
-                0.0,
-                f64::from(self.player.dimensions.eye_height),
-                0.0,
-            )));
-            let bubble_column = self
-                .assets
-                .registry
-                .state(self.block(eye))
-                .is_some_and(|state| state.name == "minecraft:bubble_column");
-            let submerged = self.player.is_eye_in_fluid(WATER) && !bubble_column;
-            let drowns = submerged
-                && !self.player.status.water_breathing
-                && !self.player.status.breath_of_the_nautilus
-                && !self.player.invulnerable
-                && !self.player.spectator;
-            let vanilla = if drowns {
-                // decreaseAirSupply's getAttribute: the instance exists from now
-                // on, even unmodified.
-                let key = self.player.attributes.key("minecraft:oxygen_bonus");
-                self.player
-                    .attributes
-                    .get_instance(key)
-                    .map_err(|e| format!("oxygen bonus: {e:?}"))?;
-                let oxygen = self
-                    .player
-                    .attribute("minecraft:oxygen_bonus")?
-                    .max(f64::from(self.player.respiration));
-                let sparing =
-                    oxygen > 0.0 && self.scene.random.next_double() >= 1.0 / (oxygen + 1.0);
-                Breath {
-                    can_breathe: false,
-                    consume: i32::from(!sparing),
-                    refill: 0,
-                }
-            } else {
-                // The nautilus' breath keeps a submerged player's air as it is.
-                let held = submerged
-                    && self.player.status.breath_of_the_nautilus
-                    && !self.player.status.water_breathing;
-                Breath {
-                    can_breathe: true,
-                    consume: 1,
-                    refill: if held { 0 } else { 4 },
-                }
-            };
-            // LivingBreatheEvent, on the server's copy of the player only.
-            let breath = breathe(
-                self.loop_context,
-                self.player.entity_id as u32,
-                "minecraft:player",
-                vanilla,
-            );
-            // LivingDrownEvent, likewise. A player's getMaxAirSupply is Entity's 300.
-            if let Some(drowning) = drown(
-                self.loop_context,
-                self.player.entity_id as u32,
-                "minecraft:player",
-                &mut self.player.air,
-                300,
-                breath,
-                true,
-            ) {
-                self.player
-                    .events
-                    .push(MotionEvent::Drown(drowning.bubbles));
-                if let Some(damage) = drowning.damage {
-                    self.player.events.push(MotionEvent::Health(
-                        crate::health::HealthEvent::DrownDamage(damage),
-                    ));
-                    self.environment_hurt("minecraft:drown", damage)?;
-                }
+        if let Some(step) = self.decide_air()? {
+            self.apply_air(step, step.vanilla)?;
+        }
+        self.tick_lava_contact()
+    }
+    /// What `LivingEntity.baseTick`'s air supply does to the player this tick,
+    /// before the mods are asked. Air is synced entity data: only the server
+    /// runs LivingEntity's air block, so a client's copy decides nothing.
+    pub fn decide_air(&mut self) -> Result<Option<AirStep>> {
+        if self.player.client_side {
+            return Ok(None);
+        }
+        let eye = BlockPos::containing(self.player.position.add_vector(Vec3::new(
+            0.0,
+            f64::from(self.player.dimensions.eye_height),
+            0.0,
+        )));
+        let bubble_column = self
+            .assets
+            .registry
+            .state(self.block(eye))
+            .is_some_and(|state| state.name == "minecraft:bubble_column");
+        let submerged = self.player.is_eye_in_fluid(WATER) && !bubble_column;
+        let drowns = submerged
+            && !self.player.status.water_breathing
+            && !self.player.status.breath_of_the_nautilus
+            && !self.player.invulnerable
+            && !self.player.spectator;
+        let vanilla = if drowns {
+            // decreaseAirSupply's getAttribute: the instance exists from now
+            // on, even unmodified.
+            let key = self.player.attributes.key("minecraft:oxygen_bonus");
+            self.player
+                .attributes
+                .get_instance(key)
+                .map_err(|e| format!("oxygen bonus: {e:?}"))?;
+            let oxygen = self
+                .player
+                .attribute("minecraft:oxygen_bonus")?
+                .max(f64::from(self.player.respiration));
+            let sparing = oxygen > 0.0 && self.scene.random.next_double() >= 1.0 / (oxygen + 1.0);
+            Breath {
+                can_breathe: false,
+                consume: i32::from(!sparing),
+                refill: 0,
+            }
+        } else {
+            // The nautilus' breath keeps a submerged player's air as it is.
+            let held = submerged
+                && self.player.status.breath_of_the_nautilus
+                && !self.player.status.water_breathing;
+            Breath {
+                can_breathe: true,
+                consume: 1,
+                refill: if held { 0 } else { 4 },
+            }
+        };
+        // Entity.getMaxAirSupply for a player.
+        Ok(Some(AirStep::generic(self.player.air, 300, vanilla)))
+    }
+    /// Apply `breath` (vanilla's, or the mods' answer to `living_breathe`) to
+    /// the air `step` decided on, then LivingDrownEvent. A player whose air is no
+    /// longer what was decided on keeps it: the decision is never recomputed.
+    pub fn apply_air(&mut self, step: AirStep, breath: Breath) -> Result<()> {
+        if self.player.air != step.air {
+            return Ok(());
+        }
+        let entity = self.player.entity_id as u32;
+        if let Some(drowning) = step.finish(
+            self.loop_context,
+            entity,
+            "minecraft:player",
+            &mut self.player.air,
+            breath,
+        ) {
+            self.player
+                .events
+                .push(MotionEvent::Drown(drowning.bubbles));
+            if let Some(damage) = drowning.damage {
+                self.player.events.push(MotionEvent::Health(
+                    crate::health::HealthEvent::DrownDamage(damage),
+                ));
+                self.environment_hurt("minecraft:drown", damage)?;
             }
         }
+        Ok(())
+    }
+    /// `LivingEntity.baseTick`'s lava contact, after the air.
+    pub fn tick_lava_contact(&mut self) -> Result<()> {
         if self.player.is_in_lava() {
             self.lava_ignite_and_hurt()?;
         }
@@ -461,6 +476,7 @@ mod below_world_tests {
         scene.shape = shape;
         let mut player = PlayerMotion::new(&resources, Vec3::new(0.5, y, 0.5)).unwrap();
         MotionWorld {
+            side: sunrise_client::motion::dry_side(),
             tag_items: None,
             block_registries: None,
             loop_context: crate::test_resources::server_loop_context(),

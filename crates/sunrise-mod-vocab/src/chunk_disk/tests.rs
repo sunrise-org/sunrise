@@ -55,9 +55,6 @@ impl Hooks for Listener {
         if self.mode == 1 {
             panic!("fixture unwind after tentative write");
         }
-        if self.mode == 2 {
-            sunrise_mod_runtime::dispatch_failures::record_dispatch_failure();
-        }
     }
     fn chunk_data_load(&self, _: &dyn ChunkDiskHost, event: &mut ChunkDataLoadEvent<'_>) {
         self.calls.fetch_add(1, Ordering::Relaxed);
@@ -105,25 +102,16 @@ fn load_disk_8_callback_increment_publishes_9_once() {
 }
 
 #[test]
-fn codec_error_unwind_or_trap_after_setting_8_refuses_partial_publication() {
-    for mode in [1, 2] {
-        with_listener(mode, |calls| {
-            let job = ChunkDiskJob::capture(&context(ChunkDiskPhase::Save), &store(7)).unwrap();
-            let refusal = run(&job).unwrap_err();
-            assert_eq!(refusal.mod_id, "disk_fixture");
-            assert_eq!(
-                refusal.reason,
-                if mode == 1 {
-                    "native listener unwound"
-                } else {
-                    "wasm listener trapped or its Wire response was refused"
-                }
-            );
-            assert_eq!(read(job.captured()), 7);
-            assert_eq!(run(&job).unwrap_err(), refusal);
-            assert_eq!(calls.load(Ordering::Relaxed), 1);
-        });
-    }
+fn codec_error_or_unwind_after_setting_8_refuses_partial_publication() {
+    with_listener(1, |calls| {
+        let job = ChunkDiskJob::capture(&context(ChunkDiskPhase::Save), &store(7)).unwrap();
+        let refusal = run(&job).unwrap_err();
+        assert_eq!(refusal.mod_id, "disk_fixture");
+        assert_eq!(refusal.reason, "native listener unwound");
+        assert_eq!(read(job.captured()), 7);
+        assert_eq!(run(&job).unwrap_err(), refusal);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    });
     let broken = AttachmentType {
         codec: Some(sunrise_mod_runtime::attachments::AttachmentCodec {
             encode: |_| Err(AttachmentError::Encode),

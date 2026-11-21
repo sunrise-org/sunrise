@@ -2,7 +2,6 @@ use super::*;
 
 /// Helpers for native mods, kept as stable as the hook points.
 // Native mods use these; nothing in Sunrise does.
-#[allow(dead_code)]
 impl Game<'_> {
     /// `Inventory.items`: the non-empty main inventory stacks in slot order, including
     /// their components. None for a stale or unavailable player; on clients only the

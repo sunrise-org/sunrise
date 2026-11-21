@@ -56,8 +56,8 @@ impl Hooks for Probe {
     }
     fn blocks(&self, _: &RegistrationContext, event: &mut BlocksEvent<'_>) {
         event
-            .blocks
-            .push(mod_api::Block::new(POT, "minecraft:stone"));
+            .register(mod_api::Block::new(POT, "minecraft:stone"))
+            .unwrap();
     }
 }
 

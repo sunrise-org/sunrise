@@ -247,12 +247,9 @@ impl Game<'_> {
                         );
                     }
                 }
-                ScreenDraw::Sprite { id, x, y, .. } => batch.sprite(
-                    atlas,
-                    &format!("gui/sprites/{id}"),
-                    ox + *x as f32,
-                    oy + *y as f32,
-                ),
+                ScreenDraw::Sprite { id, x, y, .. } => {
+                    batch.sprite(atlas, id, ox + *x as f32, oy + *y as f32)
+                }
                 ScreenDraw::Banner {
                     base,
                     layers,

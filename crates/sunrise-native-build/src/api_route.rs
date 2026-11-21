@@ -1,10 +1,11 @@
 //! Build each API-only native mod as its own Rust dylib from SDK metadata.
 //! The executable is fixed and the engine archive is never read.
-use super::{api, dependencies, internals, prebuilt};
+use super::{api, dependencies, prebuilt};
 use crate::rust::Toolchain;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use sunrise_mod_package::native_route::{INTERNALS_PACKAGE, PACKAGES};
 
 /// The template the mods library is written from, in the `api` slice.
 pub const TEMPLATE: &str = "native_mod_entry.rs.template";
@@ -31,9 +32,8 @@ pub fn compile(
     let search =
         |edition: &str| prebuilt::rustc_with(rust, &[&deps, &host, &runtime_deps, out], edition);
     let mut libraries = HashMap::new();
-    for (package, name) in api::PACKAGES {
-        // The API route has no game's wasmtime: only a mod with a `[[native.*]]` row may name it.
-        if package != api::INTERNALS_PACKAGE && package != api::WASMTIME_PACKAGE {
+    for (package, name) in PACKAGES {
+        if package != INTERNALS_PACKAGE {
             libraries.insert(name, prebuilt::library(&runtime_deps, name)?);
         }
     }
@@ -52,7 +52,6 @@ pub fn compile(
             &prebuilt::library_entry(
                 &api::template(&api.join(TEMPLATE))?,
                 &[&project.bundle.manifest],
-                &internals::Catalog::read(api)?,
                 sdk.commit(),
                 &project.bundle.manifest.id,
                 &project.bundle.manifest.version.to_string(),

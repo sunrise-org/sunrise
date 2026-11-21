@@ -294,8 +294,10 @@ impl Game<'_> {
         for change in message.changes {
             map.apply_sync(change);
         }
-        if let (true, Holder::Entity(id)) = (message.replace, message.holder) {
-            remote.general.snapshot_arrived(id as i32);
+        if let Holder::Entity(id) = message.holder {
+            remote
+                .general
+                .attachments_arrived(id as i32, message.replace, map);
         }
         self.bind_remote_attachment(message.holder);
     }

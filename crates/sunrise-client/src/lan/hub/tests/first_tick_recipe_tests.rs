@@ -44,8 +44,8 @@ fn first_tick_after_the_games_turn(unlocked: &[&str]) -> Vec<String> {
         }
     });
     while rx.try_recv().is_ok() {}
-    hub.sync_player_state(0);
-    hub.flush_progress(1);
+    hub.flush_progress(1); // initial snapshot
+    hub.flush_progress(1); // next level tick's dirty progress
     adds(&rx)
 }
 

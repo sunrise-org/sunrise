@@ -226,9 +226,9 @@ pub fn missing_system_libraries(text: &str) -> bool {
         .iter()
         .any(|said| {
             text.match_indices(said).any(|(at, _)| {
-                let flag = text[at + said.len()..]
-                    .split(|c: char| c.is_whitespace() || c == ':')
-                    .next();
+                let flag = text[at + said.len()..].split_whitespace().next();
+                // GNU ld ends the flag with one colon; a colon inside it names another library.
+                let flag = flag.map(|flag| flag.strip_suffix(':').unwrap_or(flag));
                 matches!(flag, Some("-ludev" | "-lasound"))
             })
         })
@@ -303,6 +303,9 @@ pub(crate) mod tests {
         for line in [
             "rust-lld: error: unable to find library -lasound_extra",
             "/usr/bin/ld: cannot find -ludev2: No such file or directory",
+            "rust-lld: error: unable to find library -lasound:plugin",
+            "/usr/bin/ld: cannot find -ludev:plugin: No such file or directory",
+            "/usr/bin/ld: cannot find -ludev:plugin:: No such file or directory",
             "rust-lld: error: unable to find library -lz",
             "error: linking with `cc` failed: exit status: 1",
         ] {

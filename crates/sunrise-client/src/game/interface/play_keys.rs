@@ -3,6 +3,19 @@ use super::inventory_input::drop_whole_stack;
 use super::*;
 
 impl Game<'_> {
+    /// `new InventoryScreen(player)`: the player's inventory, or in creative
+    /// mode the creative inventory `InventoryScreen.init` swaps in.
+    pub(super) fn open_player_inventory(&mut self) {
+        if self.creative {
+            self.set_screen(Screen::Creative);
+            self.refresh_creative_tabs();
+            self.creative_screen.reopen();
+            self.refresh_saved_hotbars();
+        } else {
+            self.set_screen(Screen::Inventory);
+        }
+        self.capture(false);
+    }
     /// A key press while a world is open (keyboard or control socket). `key`
     /// is the vanilla default the pressed mapping translates to, `raw` the
     /// physical key as pressed (the same where the caller had no window key):
@@ -30,8 +43,9 @@ impl Game<'_> {
             return Ok(());
         }
         if self.sort_key_press(key)
-            || sunrise_client::keybinds::key_name(key)
-                .is_some_and(|name| self.hud_editor_key_press(name))
+            || sunrise_client::keybinds::key_name(key).is_some_and(|name| {
+                self.hud_editor_key_press(name) || self.shader_pack_key_press(name)
+            })
         {
             return Ok(());
         }
@@ -197,15 +211,7 @@ impl Game<'_> {
                         if self.tutorial.open_inventory() {
                             self.persist_tutorial_step();
                         }
-                        if self.creative {
-                            self.set_screen(Screen::Creative);
-                            self.refresh_creative_tabs();
-                            self.creative_screen.reopen();
-                            self.refresh_saved_hotbars();
-                        } else {
-                            self.set_screen(Screen::Inventory);
-                        }
-                        self.capture(false);
+                        self.open_player_inventory();
                     }
                 }
                 Screen::Creative => {

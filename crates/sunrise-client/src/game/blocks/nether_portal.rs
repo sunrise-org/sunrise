@@ -87,17 +87,27 @@ pub(super) struct Plan {
     width: f32,
     height: f32,
     /// Through an End portal: `approximate` is the End's spawn point, or the
-    /// Overworld's shared spawn.
+    /// world spawn in its level.
     pub(super) end: bool,
+    /// Through an End portal out of the End, to the world spawn's level, which may be the End
+    /// itself: no platform is built there.
+    pub(super) from_end: bool,
 }
 
 impl Plan {
     /// `EndPortalBlock.getPortalDestination` for an entity other than a
     /// player in `from`: the End's spawn point, or out of the End the
-    /// Overworld's shared spawn `world_spawn`.
-    fn end_portal(from: Dim, world_spawn: BlockPos, width: f32, height: f32) -> Self {
-        let (dim, approximate) = if from == Dim::End {
-            (Dim::Overworld, world_spawn)
+    /// world spawn `world_spawn` in its level `spawn_level` (`respawnData.dimension()`).
+    fn end_portal(
+        from: Dim,
+        spawn_level: Dim,
+        world_spawn: BlockPos,
+        width: f32,
+        height: f32,
+    ) -> Self {
+        let from_end = from == Dim::End;
+        let (dim, approximate) = if from_end {
+            (spawn_level, world_spawn)
         } else {
             let [x, y, z] = super::end::END_SPAWN;
             (Dim::End, BlockPos::new(x, y, z))
@@ -110,6 +120,7 @@ impl Plan {
             width,
             height,
             end: true,
+            from_end,
         }
     }
 }
@@ -317,6 +328,7 @@ fn arrival_tag(a: &Arrival) -> Tag {
         ("width", Tag::Float(p.width.to_bits())),
         ("height", Tag::Float(p.height.to_bits())),
         ("end", Tag::Int(i32::from(p.end))),
+        ("from_end", Tag::Int(i32::from(p.from_end))),
         ("entity", a.tag.clone()),
     ])
 }
@@ -354,6 +366,8 @@ fn arrival_from_tag(a: &Tag) -> Option<Arrival> {
             width: float("width").unwrap_or(0.25),
             height: float("height").unwrap_or(0.25),
             end: int("end").unwrap_or(0) != 0,
+            // An End portal's entry always leads into the End.
+            from_end: int("from_end").map_or(dim != Dim::End, |v| v != 0),
         },
         tag: tag.clone(),
     })
@@ -483,6 +497,7 @@ impl Game<'_> {
             width,
             height,
             end: false,
+            from_end: false,
         }
     }
     /// Whether entity `id` may take `plan`'s portal: the rule on entering its
@@ -494,6 +509,7 @@ impl Game<'_> {
                 plan.dim,
                 super::server_travel::TravelCause::of_plan(plan),
             )
+            && !self.general_transfer_conflicts(id, plan.dim)
     }
     /// The plan of an item or mob going through the portal block at `entry`:
     /// an End portal's fixed destination, else the Nether portal's.
@@ -515,6 +531,7 @@ impl Game<'_> {
         });
         Plan::end_portal(
             self.dim,
+            self.world_spawn_level(),
             BlockPos::new(spawn[0], spawn[1], spawn[2]),
             width,
             height,
@@ -526,14 +543,14 @@ impl Game<'_> {
     /// Where an item or mob through an End portal lands once `plan`'s level
     /// has loaded around it: the bottom centre of the End's spawn point,
     /// above the platform built below it (`EndPlatformFeature.createEndPlatform`);
-    /// out of the End, the top of the shared spawn's column
+    /// out of the End, the top of the world spawn's column in its level
     /// (`Entity.adjustSpawnLocation`).
     fn end_portal_exit(&mut self, plan: &Plan) -> Vec3 {
         let p = plan.approximate;
         let centre = Vec3::new(f64::from(p.x) + 0.5, f64::from(p.y), f64::from(p.z) + 0.5);
-        if plan.dim == Dim::End {
+        if !plan.from_end {
             // In the End the arrival only builds the platform: no spawn search.
-            if let Err(e) = self.end_arrival(centre, &mut None) {
+            if let Err(e) = self.end_arrival(true, centre, &mut None) {
                 log::error!("End platform: {e}");
             }
             return centre;
@@ -1336,14 +1353,9 @@ impl Game<'_> {
     /// `Entity.teleportCrossDimension` away from the loaded dimension: the
     /// entity is saved and removed, and waits for its dimension to load.
     fn remove_portal_vehicle_tree(&mut self, root: u32) {
-        let mounts: Vec<_> = self.mob_objects().map(|m| (m.id, m.extra.mount)).collect();
-        let tree = super::persist::vehicle_tree(root, &mounts);
-        self.mobs.retain(|m| !tree.contains(&m.id));
-        self.persist.off_level.retain(|id, _| !tree.contains(id));
-        self.boats.retain(|b| !tree.contains(&b.id));
-        self.carts.retain(|c| !tree.contains(&c.id));
+        let tree = self.vehicle_tree_ids(root);
+        self.remove_vehicle_rows(&tree);
         for id in tree {
-            self.release_vehicle_container(id);
             self.detach_entity(id);
         }
     }
@@ -1586,7 +1598,7 @@ impl Game<'_> {
             if !self.may_travel_through(id, &plan) {
                 return;
             }
-            let Some(mut tag) = self.vehicle_tree_nbt(id) else {
+            let Some(mut tag) = self.vehicle_tree_nbt_for(id, true) else {
                 return;
             };
             // Entity.removeAfterChangingDimensions drops the leash.
@@ -1612,7 +1624,7 @@ impl Game<'_> {
                 return;
             }
             self.release_vehicle_container(id);
-            let Some(tag) = self.vehicle_tree_nbt(id) else {
+            let Some(tag) = self.vehicle_tree_nbt_for(id, true) else {
                 return;
             };
             let Some(state) = self.capture_vehicle_tree_state(id) else {
@@ -1637,7 +1649,7 @@ impl Game<'_> {
                 return;
             }
             self.release_vehicle_container(id);
-            let Some(mut tag) = self.vehicle_tree_nbt(id) else {
+            let Some(mut tag) = self.vehicle_tree_nbt_for(id, true) else {
                 return;
             };
             // `PositionMoveRotation.of(this)` takes the cart's `getKnownMovement`.
@@ -1729,9 +1741,8 @@ impl Game<'_> {
                 let at = self.end_portal_exit(&plan);
                 // EndPortalBlock.getPortalDestination: PLACE_PORTAL_TICKET.
                 self.place_portal_ticket(Self::chunk_of(at));
-                let into_end = plan.dim == Dim::End;
                 let turn =
-                    end_portal_rotation(into_end, [yaw, pitch], self.level.world_spawn_angle);
+                    end_portal_rotation(!plan.from_end, [yaw, pitch], self.level.world_spawn_angle);
                 (at, motion, turn)
             } else {
                 let exit =
@@ -1911,13 +1922,15 @@ impl Game<'_> {
             f.drop_item,
             f.damage,
             f.fall_distance,
-            f.on_ground,
+            f.ground.on_ground,
             f.rotation,
             uuid,
         );
         let mut tag = super::persist::with_raw(modelled, f.saved.as_ref().map(|s| &s.1));
         if let Tag::Compound(fields) = &mut tag {
             fields.insert("PortalCooldown".into(), Tag::Int(f.portal.cooldown));
+            // Its simulated fire, not a saved copy's (`with_raw` keeps those).
+            fields.insert("Fire".into(), Tag::Short(f.fire_ticks as i16));
             if f.no_gravity {
                 fields.insert("NoGravity".into(), Tag::Byte(1));
             } else {
@@ -1970,7 +1983,17 @@ impl Game<'_> {
         if !self.portals.dirty || self.remote.is_some() {
             return;
         }
-        let list = self.portals.arrivals.iter().map(arrival_tag).collect();
+        let list = self
+            .portals
+            .arrivals
+            .iter()
+            .filter(|arrival| match &arrival.transferred {
+                Some(TransferredArrivalState::Entity(state)) => !state.transient,
+                Some(TransferredArrivalState::VehicleTree(tree)) => !tree.is_transient(),
+                None => true,
+            })
+            .map(arrival_tag)
+            .collect();
         let root = Tag::compound([("arrivals", Tag::List(list))]);
         if sunrise_client::save::write_dat(&self.arrivals_path(), root).is_ok() {
             self.portals.dirty = false;
@@ -2031,8 +2054,13 @@ mod tests {
             assert!(game.mob_object(child).is_none());
             assert!(game.mob_object(leaf).is_none());
             // Land the queued payload through the real arrival transform/adoption path.
-            game.portals.arrivals[0].plan =
-                Plan::end_portal(Dim::Overworld, BlockPos::new(0, 64, 0), 0.9, 0.9);
+            game.portals.arrivals[0].plan = Plan::end_portal(
+                Dim::Overworld,
+                Dim::Overworld,
+                BlockPos::new(0, 64, 0),
+                0.9,
+                0.9,
+            );
             assert_eq!(game.dim, Dim::Overworld);
             game.enter_level(Dim::End).unwrap();
             assert_eq!(game.dim, Dim::End);
@@ -2484,9 +2512,72 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
+    fn portal_arrivals_keep_the_live_opt_out_without_writing_a_waiting_entity() {
+        use mod_api::__private::{ModPhase, PhaseOwner};
+        mod_platform::testing::with_mods(Default::default(), || {
+            crate::game::native_entity_refs::tests::with_game(|game| {
+                let _world = PhaseOwner::scope(ModPhase::World);
+                let chunk = (0, 0);
+                let at = BlockPos::new(4, 64, 4);
+                let spawn = |game: &mut Game<'_>, nbt| {
+                    let target = game
+                        .summon_with_nbt("minecraft:text_display", [4.0, 64.0, 4.0], nbt)
+                        .unwrap()
+                        .unwrap();
+                    game.entity(game.resident_target_id(target).unwrap())
+                        .unwrap()
+                };
+                let transient = spawn(game, "{UUID:[I;0,0,0,583]}");
+                let persistent = spawn(game, "{UUID:[I;0,0,0,584]}");
+                assert_eq!(transient.set_persistent(game, false), Ok(true));
+                game.send_through_portal(transient.id(), at);
+                game.send_through_portal(persistent.id(), at);
+                let world = tempfile::tempdir().unwrap();
+                game.world_root = world.path().to_path_buf();
+                let path = game.arrivals_path();
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                game.save_portal_arrivals();
+                let written = sunrise_client::save::read_dat(&path).unwrap();
+                let Some(Tag::List(saved)) = written.get("arrivals") else {
+                    panic!("missing arrivals list");
+                };
+                assert_eq!(saved.len(), 1);
+                let saved = arrival_from_tag(&saved[0]).unwrap();
+                assert_eq!(
+                    sunrise_client::entity_nbt::uuid(&saved.tag),
+                    Some([0, 0, 0, 584])
+                );
+
+                let waiting = std::mem::take(&mut game.portals.arrivals);
+                assert_eq!(waiting.len(), 2);
+                for pending in waiting {
+                    let Some(TransferredArrivalState::Entity(state)) = pending.transferred else {
+                        panic!("display must carry its live transfer state");
+                    };
+                    game.spawn_teleported_entity(chunk, pending.tag.into(), Some(state));
+                }
+                assert!(game.entity_by_uuid(mod_api::EntityUuid(583)).is_some());
+                let records = game.entity_chunks(&std::collections::HashSet::from([chunk]), false);
+                assert_eq!(records[0].1.len(), 1);
+                assert_eq!(
+                    sunrise_client::entity_nbt::uuid(&records[0].1[0]),
+                    Some([0, 0, 0, 584])
+                );
+            });
+        });
+    }
+
+    #[test]
     fn portal_transfer_pending_arrival_does_not_save_transient_tnt_immunity() {
         let arrival = Arrival {
-            plan: Plan::end_portal(Dim::End, BlockPos::new(0, 64, 0), 0.98, 0.98),
+            plan: Plan::end_portal(
+                Dim::End,
+                Dim::Overworld,
+                BlockPos::new(0, 64, 0),
+                0.98,
+                0.98,
+            ),
             tag: Tag::compound([("id", Tag::String("minecraft:tnt".into()))]),
             tnt_used_portal: true,
             transferred: None,
@@ -2502,14 +2593,18 @@ mod tests {
     fn end_portals_lead_to_the_end_spawn_and_back_to_the_world_spawn() {
         let spawn = BlockPos::new(-7, 70, 12);
         for from in [Dim::Overworld, Dim::Nether] {
-            let plan = Plan::end_portal(from, spawn, 0.9, 1.4);
+            let plan = Plan::end_portal(from, Dim::Nether, spawn, 0.9, 1.4);
             assert_eq!(plan.dim, Dim::End);
             assert_eq!(plan.approximate, BlockPos::new(100, 50, 0));
-            assert!(plan.end);
+            assert!(plan.end && !plan.from_end);
         }
-        let plan = Plan::end_portal(Dim::End, spawn, 0.25, 0.25);
-        assert_eq!(plan.dim, Dim::Overworld);
-        assert_eq!(plan.approximate, spawn);
+        // Out of the End: to the world spawn, in the level it was set in, the End's own too.
+        for level in [Dim::Overworld, Dim::Nether, Dim::End] {
+            let plan = Plan::end_portal(Dim::End, level, spawn, 0.25, 0.25);
+            assert_eq!(plan.dim, level);
+            assert_eq!(plan.approximate, spawn);
+            assert!(plan.from_end);
+        }
     }
 
     #[test]
@@ -2576,7 +2671,13 @@ mod tests {
             preserve_arrival_cooldown(&mut tag);
             let arrival = Arrival {
                 transferred: None,
-                plan: Plan::end_portal(Dim::Overworld, BlockPos::new(0, 64, 0), 1.375, 0.5625),
+                plan: Plan::end_portal(
+                    Dim::Overworld,
+                    Dim::Overworld,
+                    BlockPos::new(0, 64, 0),
+                    1.375,
+                    0.5625,
+                ),
                 tag,
                 tnt_used_portal: false,
             };
@@ -2592,15 +2693,21 @@ mod tests {
     #[test]
     fn waiting_arrivals_keep_their_end_destination_when_saved() {
         let tag = Tag::compound([("id", Tag::String("minecraft:cow".into()))]);
-        for (from, dim) in [(Dim::Overworld, Dim::End), (Dim::End, Dim::Overworld)] {
+        // An exit to a world spawn set in the End stays an exit: no platform there.
+        for (from, level) in [
+            (Dim::Overworld, Dim::Overworld),
+            (Dim::End, Dim::Overworld),
+            (Dim::End, Dim::End),
+        ] {
             let arrival = Arrival {
                 tnt_used_portal: false,
                 transferred: None,
-                plan: Plan::end_portal(from, BlockPos::new(3, 64, -5), 0.9, 1.4),
+                plan: Plan::end_portal(from, level, BlockPos::new(3, 64, -5), 0.9, 1.4),
                 tag: tag.clone(),
             };
             let back = arrival_from_tag(&arrival_tag(&arrival)).unwrap();
-            assert_eq!(back.plan.dim, dim);
+            assert_eq!(back.plan.dim, arrival.plan.dim);
+            assert_eq!(back.plan.from_end, from == Dim::End);
             assert_eq!(back.plan.approximate, arrival.plan.approximate);
             assert!(back.plan.end);
             assert_eq!(back.tag, tag);
@@ -2609,7 +2716,13 @@ mod tests {
         let mut old = arrival_tag(&Arrival {
             tnt_used_portal: false,
             transferred: None,
-            plan: Plan::end_portal(Dim::End, BlockPos::new(0, 64, 0), 0.25, 0.25),
+            plan: Plan::end_portal(
+                Dim::End,
+                Dim::Overworld,
+                BlockPos::new(0, 64, 0),
+                0.25,
+                0.25,
+            ),
             tag,
         });
         if let Tag::Compound(c) = &mut old {

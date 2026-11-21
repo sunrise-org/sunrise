@@ -8,12 +8,11 @@ not fire this hook. The callback uses `event.data.get(&KEY)` and
 For example, reading disk value 8 and setting 9 publishes 9 on success.
 
 The worker host supplies only the job identity and immutable resource reads.
-It has no live backend and is not a `ServerHost`. Values cross the native/wasm
-boundary through the generated Wire adapter; no typed Rust pointer crosses it.
-Every typed value needs both a persistence codec and the shared `Wire` trait.
+It has no live backend and is not a `ServerHost`.
+Every typed value needs a persistence codec and must implement `Wire`.
 Unknown bounded attachment entries are preserved opaquely.
 
-Codec errors, native unwinds and guest dispatch failures refuse the entire
+Codec errors and unwinding panics refuse the entire
 store: none of its edits are kept. The chunk still loads, with the attachments
 exactly as they were stored, so a mod bug leaves no gap in the world. No
 `chunk_data_save` listener runs for that chunk for the rest of the session, so

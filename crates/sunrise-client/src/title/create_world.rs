@@ -736,10 +736,10 @@ impl Title {
             crate::widgets::record(&label.plain(), [x, 0.0, tw, TAB_BAR], true);
             crate::widgets::target_as([x, 0.0, tw, TAB_BAR], crate::widgets::Kind::Tab(selected));
             let sprite = match (selected, ui::hovered(cursor, x, 0.0, tw, TAB_BAR)) {
-                (true, true) => "gui/sprites/widget/tab_selected_highlighted",
-                (true, false) => "gui/sprites/widget/tab_selected",
-                (false, true) => "gui/sprites/widget/tab_highlighted",
-                (false, false) => "gui/sprites/widget/tab",
+                (true, true) => "widget/tab_selected_highlighted",
+                (true, false) => "widget/tab_selected",
+                (false, true) => "widget/tab_highlighted",
+                (false, false) => "widget/tab",
             };
             ui::nine_slice(batch, atlas, sprite, x, 0.0, tw, TAB_BAR, u32::MAX);
             let lw = atlas.font.width_text(&label).floor();

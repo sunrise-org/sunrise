@@ -1,6 +1,6 @@
 # Block-state facts
 
-A `BlockState` is an API-owned value pairing a `BlockKey` with a block-local canonical ordinal, not a numeric engine state ID or a live object. Read facts without a world position on either side through `host.block_states()` (import `HostBlockStates`). The service reads the game's loaded tables. Basic fact queries and matching allocate nothing; `definition` copies the property data for the caller. Property operations on `BlockState` borrow explicit immutable block metadata; `block()` and `ordinal()` need no host:
+A `BlockState` is an API-owned value pairing a `BlockKey` with a block-local canonical ordinal, not a numeric engine state ID or a live object. Read facts without a world position on either side through `host.block_states()` (import `HostBlockStates`). Inside a level callback, which receives a level view and no `Host` (such as `BlockPart::random_tick`), call `level.block_states()` on the view: it is the same service over the same tables. The service reads the game's loaded tables. Basic fact queries and matching allocate nothing; `definition` copies the property data for the caller. Property operations on `BlockState` borrow explicit immutable block metadata; `block()` and `ordinal()` need no host:
 
 | Method | Vanilla |
 |---|---|
@@ -15,6 +15,7 @@ A `BlockState` is an API-owned value pairing a `BlockKey` with a block-local can
 | `is_redstone_conductor(state) -> Option<bool>` | `BlockState.isRedstoneConductor` when it depends only on the block state; `None` when a position is needed |
 | `map_color(state) -> Option<u8>` | `BlockState.getMapColor`: the `MapColor.id` a map item colours a column by, 0 for none |
 | `map_color_rgba(packed) -> Option<[u8; 4]>` | `MapColor.getColorFromPackedId`: decode a map pixel to `[red, green, blue, alpha]`; ID 0 and undefined IDs decode to transparent RGBA; `None` means no game backend |
+| `block_class(state, class: BlockClass) -> Result<Option<bool>, LevelReadError>` | Java `instanceof` on the block's vanilla class, subclasses included: `Stair`, `Entity` (`EntityBlock`), `IronBars`, `StainedGlassPane`, `TrapDoor`. See below |
 | `states_of(block) -> Option<BlockStateRange>` | `StateDefinition.getPossibleStates`, as owned values in canonical local-ordinal order |
 | `definition(block)` | Property names and legal serialized values |
 | `matches(state, block, constraints)` | Partial property match with typed invalid-property and invalid-value errors |
@@ -30,6 +31,39 @@ placed block, use `LevelRef::is_redstone_conductor(host, pos)` (server side, `No
 position).
 
 Queries return `None` for an unknown state or block, including an invalid local ordinal, and on a host with no game behind it (a mod's test double). The ordinal order is defined by the complete canonical property constraints, not by the engine's numeric enumeration.
+
+## Contextual friction
+
+`host.block_states().friction(state)` is the static coefficient. To ask the state's friction parts,
+use `level.friction(host, pos, state, entity)` on either side. Pass `None` if no entity is asking,
+or `Some((id, kind))` to forward the caller's entity. The queried state need not be the block at
+`pos`. The read never loads chunks or writes blocks. It returns `Ok(None)` for a repeated active
+query or a query beyond the nesting bound, and a read error for a stale or unavailable level
+or an unknown state.
+
+Inside `BlockPart::friction`, match `LevelSide` to borrow the read-only level. Use
+`view.block_entity(pos)` to get a resident block entity's handle, then
+`view.block_entity_data(handle)` to read its saved data without identity or position metadata.
+On the client this reads the local copy, not unsynced server data; synchronize any data that
+friction needs on both sides. For a block that takes its material's friction, pass that
+material to `view.friction(pos, material, event.entity)` at the **same position** and keep the
+original coefficient if the query returns `None`. Use the same rule on both sides, including
+client prediction and replay.
+
+A part's answer is used as given, as vanilla uses what `getFriction` returns: any finite value,
+above 1 or below 0 included. A non-finite answer is refused and the state's own coefficient is
+used.
+
+## Block classes
+
+`block_class(state, class)` answers what a mod would ask with `instanceof StairBlock`, `EntityBlock`,
+`IronBarsBlock`, `StainedGlassPaneBlock` or `TrapDoorBlock`. It reads the engine's own class of the
+block, so a subclass counts (a waxed copper stair is a `Stair`) and a mod block declared on a vanilla
+behaviour template belongs to that template's classes. It never reads tags: a pack that adds a block
+to `minecraft:stairs` does not make it a `Stair`. An unknown state answers `Ok(None)`; a host with no game
+behind it answers `Err(Unavailable)`. Plain glass panes are `IronBars` and not
+`StainedGlassPane`; vanilla 26.3 has no separate glass-pane class, so tell a plain pane from other bars by its
+block key. Classes are added when a consumer needs one.
 
 ## Copper weathering and wax
 

@@ -1,5 +1,9 @@
 # Design: per-type batched block entity ticks
 
+> The native contract below still applies. WebAssembly mods were removed; the parts about guests are history.
+> This applies to the individual `BlockEntityTickReply`, not the unbuilt batching proposal.
+> See [block-entity tick write-back](../../modding/src/how-to/world/machine-menu-data.md#skip-unchanged-tick-write-back) for the current native API.
+
 **Provisional; implementation waits for a maintainer decision.** This answers
 [#2759](https://github.com/arismoko/horizon/issues/2759).
 The recommendation is contiguous same-type runs in the existing ticker order,
@@ -7,7 +11,7 @@ with each entity committed before the next one starts. This reduces outer calls
 where runs exist; it does not promise one call per type across a whole level.
 
 **Implemented separately in #3669:** the existing individual tick now has
-`BlockEntityTickReply::{Changed, Unchanged}` on native and wasm. Set
+`BlockEntityTickReply::{Changed, Unchanged}`. Set
 `*event.reply = BlockEntityTickReply::Unchanged` to omit that Part's reply snapshot
 entirely. Each Part starts with `Changed` and sees only preceding accepted edits;
 an `Unchanged` Part cannot leak its attempted edits or erase an earlier `Changed`.
@@ -18,7 +22,8 @@ keep their effects; aborted Host transactions stay aborted. Not choosing this fo
 retains full checked `Changed` write-back. Input snapshots are still sent; runs,
 deltas, `NeedFull` and validity caches remain unimplemented.
 
-Audit inputs for this implemented subset (not evidence of batching performance):
+Audit inputs at the time of the individual-tick change, including since-removed
+guest files (not evidence of batching performance):
 
 | Owner | Audited behavior / executable input |
 | --- | --- |
@@ -103,6 +108,9 @@ not a 26.3 batching contract. The 26.3
 Javadoc were consulted; no NeoForge source or patches were read.
 
 ## Proposed execution contract
+
+The remaining batching design, guest paths and acceptance matrix are proposal
+history, not requirements for the implemented individual tick reply.
 
 Choose **A: contiguous runs**, not B: one call per type across the level.
 For `[A1,A2,B1,A3]`, dispatch `[A1,A2]`, tick B1, then dispatch `[A3]`.

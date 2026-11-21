@@ -53,7 +53,7 @@ pub(super) const NO_ANSWER: &str =
 /// The server thread holds its `Game` by value and runs every tick on it.
 /// It reserves what every guest-capable thread does under the engine's stack policy.
 fn server_thread_stack_floor() -> usize {
-    sunrise_guest_stack::engine().reservation()
+    sunrise_guest_stack::reservation()
 }
 
 /// The server thread's stack size: [`server_thread_stack_floor`], or what `RUST_MIN_STACK` asks for
@@ -339,6 +339,20 @@ struct LoadPhase {
     done: bool,
 }
 impl Serving {
+    /// A server thread's handle with no thread behind it, published on `port` (0: not).
+    #[cfg(test)]
+    pub(super) fn fixture(port: u16) -> Self {
+        let flags = Arc::new(Flags::default());
+        flags.published.store(port, Ordering::Relaxed);
+        let (_sender, tasks) = channel();
+        Self {
+            flags,
+            tasks,
+            owner: 1,
+            pending: None,
+            load: LoadPhase::default(),
+        }
+    }
     /// The window reads this as `MinecraftServer.isCurrentlySaving`.
     pub(super) fn set_saving(&self, saving: bool) {
         self.flags.saving.store(saving, Ordering::Relaxed);
@@ -1158,6 +1172,11 @@ impl Game<'_> {
             self.apply_publish();
         }
     }
+    /// Whether anyone but a single-player owner can join this world: any hub of a client or
+    /// a dedicated server, an integrated server's only once published to LAN.
+    pub(super) fn open_to_others(&self) -> bool {
+        self.lan.is_some() && (!self.serving() || self.published_port().is_some())
+    }
     /// `IntegratedServer.getPort` while published.
     pub(super) fn published_port(&self) -> Option<u16> {
         let s = self.serving.as_ref()?;
@@ -1674,6 +1693,69 @@ pub(super) mod tests {
                 }
                 // The window and its resource tables outlive both kinds of session.
                 assert_eq!(next(), Some(exposed), "failed_open = {failed_open}");
+            }
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn forced_disconnect_keeps_wire_cache_until_integrated_server_stops() {
+        use crate::game::native_entity_refs::tests::{run_fresh_cases, with_client_game};
+        use sunrise_client::{lan::data::SyncData, text::Text};
+
+        if run_fresh_cases(
+            "game::integrated::tests::forced_disconnect_keeps_wire_cache_until_integrated_server_stops",
+            "SUNRISE_INTEGRATED_DISCONNECT_SYNC_CHILD",
+            &["disconnect"],
+        ) {
+            return;
+        }
+        with_client_game(|game| {
+            for failure in [None, Some("test shutdown failure")] {
+                let sync = Arc::new(SyncData::empty());
+                super::super::lan::sync::install_wire_reload(
+                    &game.options.resources,
+                    &game.res.core.item_data,
+                    &game.pack_files(),
+                    Some(sync.clone()),
+                    game.adv.tree.clone(),
+                );
+                let flags = Arc::new(Flags::default());
+                let stopping = flags.clone();
+                let (tasks, _waiting_server) = channel();
+                let (observed, probe) = channel();
+                game.integrated = Some(Integrated {
+                    emergency_save: None,
+                    flags,
+                    thread: Some(std::thread::spawn(move || {
+                        let deadline = Instant::now() + Duration::from_secs(5);
+                        while !stopping.stop.load(Ordering::Relaxed) {
+                            assert!(Instant::now() < deadline, "stop was never requested");
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        observed
+                            .send(super::super::lan::sync::cached_reload_sync())
+                            .unwrap();
+                        *stopping.failure.lock().unwrap() = failure.map(str::to_owned);
+                    })),
+                    tasks,
+                    world_name: "fixture".into(),
+                    save_folder: "fixture".into(),
+                    rule_registry: Arc::new(sunrise_client::gamerules::RuleRegistry::vanilla()),
+                });
+                let result = game.leave_server(Some(Text::literal("test disconnect")));
+                assert_eq!(
+                    result.err().map(|error| error.to_string()),
+                    failure.map(str::to_owned)
+                );
+                assert!(
+                    probe
+                        .try_recv()
+                        .unwrap()
+                        .is_some_and(|seen| Arc::ptr_eq(&seen, &sync)),
+                    "the cache must still hold the server's snapshot during shutdown"
+                );
+                assert!(super::super::lan::sync::cached_reload_sync().is_none());
             }
         });
     }

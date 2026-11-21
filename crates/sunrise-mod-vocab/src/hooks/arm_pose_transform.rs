@@ -9,7 +9,7 @@ pub trait Hooks {
     /// Write absolute pitch, yaw and roll in radians into `angles`; initially all
     /// components are non-finite, meaning preserve the base model angle. Each
     /// non-finite component is ignored. The ordinary swing and species animations
-    /// still run afterward. Native and wasm mods receive the same value contract.
+    /// still run afterward.
     #[hook(
         side = "client",
         contract = "listen",

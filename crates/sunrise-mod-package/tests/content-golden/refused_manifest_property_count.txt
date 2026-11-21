@@ -1,0 +1,5 @@
+manifest:
+refused: sunrise-mod.toml: [properties] holds at most 64 keys and 8192 bytes; this one has 65 keys and 250 bytes
+
+icon:
+unavailable

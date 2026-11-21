@@ -47,10 +47,6 @@ impl BlockEntityPart for Consume {
         event.entity.items = vec![Some(
             ItemStack::new("minecraft:stone", 6).try_into_api().unwrap(),
         )];
-        if case.starts_with("wasm_") {
-            super::block_entity_tick_wasm_tests::tick(host, event, first, second, stack, &case);
-            return;
-        }
         assert_eq!(item.set_stack(host, stack), Ok(true));
         assert_eq!(item.stack(host).unwrap().count(), 2);
         assert_eq!(
@@ -108,10 +104,7 @@ impl BlockEntityPart for Observe {
             return;
         }
         let case = std::env::var("ROW4_NATIVE_CASE").unwrap();
-        if matches!(
-            case.as_str(),
-            "invalid_stack" | "wasm_malformed" | "invalid_setter"
-        ) {
+        if matches!(case.as_str(), "invalid_stack" | "invalid_setter") {
             return;
         }
         let first = host.entity(FIRST.load(Ordering::Relaxed)).unwrap();
@@ -175,7 +168,6 @@ impl Hooks for Fixture {
 #[ignore = "daily"]
 fn native_tick_publishes_or_rejects_item_proposals_with_writeback() {
     const NAME: &str = "game::block_entity_tick_items_tests::native_tick_publishes_or_rejects_item_proposals_with_writeback";
-    // Instantiate and invoke the real wasm guest on the production-sized stack.
     crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
         if super::native_entity_refs::tests::run_fresh_cases(
             NAME,
@@ -185,9 +177,6 @@ fn native_tick_publishes_or_rejects_item_proposals_with_writeback() {
                 "unchanged",
                 "invalid_stack",
                 "invalid_setter",
-                "wasm_valid",
-                "wasm_malformed",
-                "wasm_identity_readonly",
                 "nested_abort",
                 "later_remove",
                 "removed",
@@ -279,7 +268,7 @@ fn native_tick_publishes_or_rejects_item_proposals_with_writeback() {
                 assert!(game.block_entity_tick_items.is_none());
                 let rejected = matches!(
                     case.as_str(),
-                    "invalid_stack" | "wasm_malformed" | "invalid_setter" | "removed"
+                    "invalid_stack" | "invalid_setter" | "removed"
                 );
                 let expected: &[u32] = match case.as_str() {
                     "later_remove" => &[],

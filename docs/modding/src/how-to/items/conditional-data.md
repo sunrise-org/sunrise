@@ -25,7 +25,7 @@ definitions. Generated item default components retain their prototype
 lifetime and are not conditional data files.
 
 `neoforge:mod_loaded` asks the owning resource generation's captured enabled
-server-mod IDs, including active code-only native and WebAssembly mods, plus
+server-mod IDs, including active code-only mods, plus
 `minecraft` always. Client-only, disabled and refused packages are absent;
 resource namespaces are not mod IDs. Other supported forms are `neoforge:always`
 (true), `neoforge:never` (false), `neoforge:not` (`value`), `neoforge:and` / `neoforge:or`
@@ -53,4 +53,4 @@ whether a sibling would decide the result.
 
 A file without the conditions array loads normally. Successful reloads publish
 changed enabled IDs together with the data generation; retained readers keep
-their old snapshot. Native and wasm registrations use the same route.
+their old snapshot.

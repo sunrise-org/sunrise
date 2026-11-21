@@ -34,9 +34,7 @@ Config conversion runs when definitions load or reload, not per start. Nested JS
 refused at load. The engine handles structure-set spacing, `biomes` and `terrain_adaptation`.
 
 Both contexts are traits, and `random` hands you a `&mut dyn RandomSource`: see
-[Randomness](../../concepts/randomness.md) for its draws. These interfaces also support structures in `mod.wasm`.
-Wasm worker calls share the dependency group's store lock and use a per-call fuel or epoch
-budget; a trap stops the group with a typed refusal.
+[Randomness](../../concepts/randomness.md) for its draws.
 
 ## Placing pieces
 
@@ -57,7 +55,7 @@ The bounds are independent of the placement box; the ground is `bounds.min[1] + 
 The rules are `None`, `Bury`, `BeardThin`, `BeardBox` and `Encapsulate`. An answer with
 adjustment `None` disables only that piece. No answer inherits the structure's setting.
 An override works even when the structure's `terrain_adaptation` is `"none"`.
-Native and wasm pieces are queried once when generated or loaded, and the answer is cached
+Pieces are queried once when generated or loaded, and the answer is cached
 on the engine piece; terrain generation never calls the mod for it per chunk.
 
 Use `PieceContext` to work within the chunk:

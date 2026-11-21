@@ -167,6 +167,14 @@ impl IPayloadContext for Unreached {
     fn check_payload_token(&self, _: &PayloadToken) -> Result<(), PayloadSendError> {
         unreachable!()
     }
+    fn send_to(
+        &mut self,
+        _: &[PlayerRef],
+        _: &PayloadId,
+        _: PayloadBytes,
+    ) -> Result<u32, PayloadSendError> {
+        unreachable!()
+    }
     fn disconnect(&mut self, _: Text) {
         unreachable!()
     }
@@ -227,9 +235,7 @@ fn a_malformed_body_is_refused_by_name_before_the_handler_runs() {
         let refused = receiver
             .handle(PayloadBytes(body), &mut Unreached)
             .unwrap_err();
-        let PayloadHandleError::Failed(refused) = refused else {
-            panic!("expected a failed decode, got {refused:?}");
-        };
+        let PayloadHandleError::Failed(refused) = refused;
         assert!(refused.contains("test:labelled"), "{refused}");
         assert!(refused.contains(error), "{refused}");
     }
@@ -311,9 +317,7 @@ fn a_callback_that_panicked_is_never_invoked_again() {
     let error = first
         .handle(PayloadBytes(vec![7]), &mut Unreached)
         .unwrap_err();
-    let PayloadHandleError::Failed(error) = error else {
-        panic!("expected a failed callback, got {error:?}");
-    };
+    let PayloadHandleError::Failed(error) = error;
     assert!(error.contains("panicked"), "{error}");
     // Disabled for this connection and for one that resolves the callback later.
     for receiver in [first, receiver()] {

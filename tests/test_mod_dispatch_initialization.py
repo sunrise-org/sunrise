@@ -14,7 +14,7 @@ TEST = re.compile(r'#\[test\]\s*(?:#\[[^\n]*\]\s*)*fn (\w+)\([^)]*\)\s*\{')
 DISPATCH = re.compile(r'\bdispatch_(?!workgroups\b)\w+\s*\(|\bwith_dispatch\s*\(|__private::enter\s*\(|matrix_checks::baseline\s*\(')
 # Qualified mod_platform:: helpers and imported helper names both match.
 # These helpers initialize before invoking user code or publishing registrations.
-READY = re.compile(r'\b(?:initialize|with_mods|install|install_parts|stick_part|install_counter|with_game|with_test_game|with_wasm_parts)\s*\(')
+READY = re.compile(r'\b(?:initialize|with_mods|install|install_parts|stick_part|install_counter|with_game|with_test_game)\s*\(')
 ISOLATED = {
     'crates/sunrise-mod-api/tests/late_instrumentation.rs',
     'crates/sunrise-mod-api/tests/uninstalled_dispatch.rs',
@@ -32,8 +32,8 @@ def test_bodies(source):
 
 def violations(root):
     failures = []
-    for crate in ('sunrise-mod-api', 'sunrise-mod-wasm', 'sunrise-mod-host',
-                  'sunrise-mod-points', 'sunrise-mod-render', 'sunrise-client',
+    for crate in ('sunrise-mod-api', 'sunrise-mod-host',
+                  'sunrise-mod-render', 'sunrise-client',
                   'sunrise-client-lib'):
         for path in (root / 'crates' / crate).rglob('*.rs'):
             relative = path.relative_to(root).as_posix()

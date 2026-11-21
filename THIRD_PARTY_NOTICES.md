@@ -140,9 +140,14 @@ files ship beside the DLL as `DXC-LICENSE-MS.txt` and `DXC-LICENSE-LLVM.txt`, wi
 `third_party/libmimalloc-sys` is [libmimalloc-sys](https://github.com/purpleprotocol/mimalloc_rust)
 0.1.49 by Octavian Oncescu, with the [mimalloc](https://github.com/microsoft/mimalloc) v3 sources it
 bundles (Copyright (c) 2018-2025 Microsoft Corporation, Daan Leijen), both under the MIT license
-(`LICENSE.txt` and `c_src/mimalloc/v3/LICENSE` in that folder). It holds only the v3 sources. One
-change: `mi_popcount` in `include/mimalloc/bits.h` uses mimalloc's portable bit count on MSVC
-x86/x64 instead of the POPCNT instruction, which CPUs before Nehalem lack (#7264).
+(`LICENSE.txt` and `c_src/mimalloc/v3/LICENSE` in that folder). It holds only the v3 sources. Three
+changes: `mi_popcount` in `include/mimalloc/bits.h` uses mimalloc's portable bit count on MSVC
+x86/x64 instead of the POPCNT instruction, which CPUs before Nehalem lack (#7264);
+`build.rs` reruns when a file under `c_src/mimalloc/v3` changes, so a kept build directory never links stale
+sources (#3299); and
+`_mi_arenas_page_free` in `src/arena.c` lowers the `malloc_huge` statistic when a huge page is freed, at
+every `MI_STAT` level as `src/page.c` raises it, instead of `mi_stat_free` (`src/free.c`) and
+`_mi_theap_page_destroy` (`src/theap.c`) lowering it only with detailed statistics (#3299).
 
 ## Pixelify Sans
 
@@ -305,6 +310,12 @@ both files.
 `Matrix4f.rotateAffine` and `Vector4f.mulAffine` (`joml::Quat::rotation_x`/`_y`/`_z`,
 `joml::Mat4::rotate_affine`, `transform_affine`), for the sky's positions shader packs read.
 Changes: ported to Rust; `rotate_affine` keeps only the affine case.
+
+`camera.rs` also adapts `Quaternionf.rotationZYX`, `Matrix4f.rotate(Quaternionfc)` (choosing
+`rotation`, `rotateTranslation` or `rotateAffine` as JOML does), `Matrix4f.scale` and
+`Matrix4f.transformPosition` (`joml::Quat::rotation_zyx`, `joml::Mat4::rotate`, `scale`,
+`transform_position`), for the poses block entity renderers hand to the item renderer.
+Changes: ported to Rust.
 
 ```
 The MIT License

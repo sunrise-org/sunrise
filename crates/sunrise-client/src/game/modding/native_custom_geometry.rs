@@ -8,6 +8,7 @@ use mod_api::{
 };
 use sunrise_client::mesher::Vertex;
 use sunrise_client::screen_effects::{CameraQuads, sampling};
+use sunrise_client::terrain_model;
 use sunrise_client::world_geometry::{self, ModelBatch, WorldGeometry};
 
 impl Game<'_> {
@@ -30,7 +31,7 @@ impl Game<'_> {
         uv: [[f32; 2]; 4],
         argb: u32,
     ) -> bool {
-        let Some(r) = self.gui.atlas.sprites.get(name) else {
+        let Some(r) = self.gui.atlas.texture_rect(name) else {
             return false;
         };
         let flags = self.gui.atlas.flags.get(name).copied();
@@ -105,11 +106,12 @@ impl Game<'_> {
     }
     /// A mod's label as `SubmitNodeCollection.submitNameTag` draws a name: 0.5 above `at`,
     /// facing the camera, 0.025 blocks a font pixel. See-through, twice: opaque white text in
-    /// the world, its light raised to at least 2 (no backdrop), and the faded text on the
-    /// backdrop over everything, unlit. Otherwise once, depth tested and translucent: the faded
-    /// text on the backdrop in the caller's light. The faded text's alpha and the backdrop's
-    /// follow the player's text background opacity. Refused whole, before any layout, for a
-    /// position that is not finite; glyphs a refused label rasterized still upload.
+    /// the world, its light raised to at least 2 unless `exact_light` (no backdrop), and the
+    /// faded text on the backdrop over everything, unlit. Otherwise once, depth tested and
+    /// translucent: the faded text on the backdrop in the caller's light. The faded text's alpha
+    /// (unless `faded_alpha`) and the backdrop's follow the player's text background opacity.
+    /// Refused whole, before any layout, for a position that is not finite; glyphs a refused
+    /// label rasterized still upload.
     pub(super) fn native_world_name_tag(
         &self,
         draw: &mut WorldGeometry,
@@ -132,7 +134,9 @@ impl Game<'_> {
         } else {
             0
         };
-        let faded = self.settings.faded_text_alpha(0.25);
+        let faded = options
+            .faded_alpha
+            .map_or_else(|| self.settings.faded_text_alpha(0.25), u32::from);
         let light = options.light;
         let unit = super::names::NAME_TAG_UNIT;
         let (mut world, mut see_through) = (Vec::new(), Vec::new());
@@ -141,9 +145,11 @@ impl Game<'_> {
         };
         let mut patches = if options.see_through {
             // LightCoordsUtil.lightCoordsWithEmission(light, 2): sky and block at least 2.
-            let lit = sunrise_client::block_entity_render::vertex_light(
-                (light >> 4).max(2) << 4 | (light & 15).max(2),
-            );
+            let lit = sunrise_client::block_entity_render::vertex_light(if options.exact_light {
+                light
+            } else {
+                (light >> 4).max(2) << 4 | (light & 15).max(2)
+            });
             let mut patches = quads(0xFF, 0, 0, lit, &mut world);
             // RenderPipelines.TEXT_SEE_THROUGH: no depth test, no lightmap.
             patches.extend(quads(faded, backdrop, 2, 0, &mut see_through));
@@ -258,6 +264,7 @@ impl Game<'_> {
         } else {
             0
         };
+        let cpu_only = slot.translucent || slot.state;
         let cut = draw.model_cut();
         let camera = DVec3::from(draw.camera());
         let mut builder = sunrise_client::gfx::PreparedInstanceBuilder::default();
@@ -265,13 +272,19 @@ impl Game<'_> {
             ModelBatch {
                 slot: fields.slot,
                 generation: fields.generation,
-                translucent: slot.translucent,
                 bounds: slot.bounds,
             },
             instances,
             self.view_frustum.as_ref(),
             |index, copy| {
-                if copy.overlay != 0 || gpu_left == 0 {
+                // The instance route draws one fixed index range per model: a copy that needs
+                // other faces, another colour, translucency or a block state takes the CPU route.
+                if copy.overlay != 0
+                    || copy.color != u32::MAX
+                    || copy.hidden_faces != 0
+                    || cpu_only
+                    || gpu_left == 0
+                {
                     return false;
                 }
                 gpu_left -= 1;
@@ -307,8 +320,11 @@ impl Game<'_> {
         }
         result
     }
-    /// Bake copies the instance route could not take onto the entity stream, where a pack
-    /// draws them as block entities (`mark_model_copies`), one run per overlay.
+    /// Bake copies the instance route could not take onto the entity stream. Opaque ones of a
+    /// standalone model go as block entities (`mark_model_copies`), one run per overlay. Copies
+    /// with a colour alpha below `0xFF`, of a translucent model or of a block state go through
+    /// the terrain materials (`terrain_model::draw_model`), after them; the renderer sorts their
+    /// quads far to near.
     pub(super) fn commit_model_instances(
         &mut self,
         draw: &mut WorldGeometry,
@@ -316,8 +332,17 @@ impl Game<'_> {
         entities: &mut Vec<Vertex>,
     ) {
         let mut run_overlay = None;
+        let mut materials = std::mem::take(&mut self.model_copy_order);
+        materials.clear();
         for index in 0..draw.copy_count() {
             let copy = draw.copy(index);
+            let Some(slot) = self.standalone_geometry.instance_slot(copy.slot) else {
+                continue;
+            };
+            if slot.translucent || slot.state || copy.color >> 24 != 0xFF {
+                materials.push(index as u32);
+                continue;
+            }
             let Some(faces) = self.standalone_geometry.faces(copy.slot) else {
                 continue;
             };
@@ -326,8 +351,13 @@ impl Game<'_> {
                 run_overlay = Some(copy.overlay);
                 self.mark_model_copies(start);
             }
+            let shown = || {
+                faces
+                    .iter()
+                    .filter(|face| !face.hidden_by(copy.hidden_faces))
+            };
             super::minecarts::emit_model_faces(
-                faces.iter().copied().map(|face| (face, copy.light)),
+                shown().copied().map(|face| (face, copy.light)),
                 world_geometry::row_major_3x4(copy.transform),
                 true,
                 |index| (index >= 0).then_some(copy.tint & 0xFF_FFFF),
@@ -339,10 +369,56 @@ impl Game<'_> {
                 for vertex in quad.iter_mut() {
                     vertex.pos = (Vec3::from(vertex.pos) + shift).to_array();
                     vertex.layer = copy.overlay;
+                    if copy.color != u32::MAX {
+                        vertex.color = terrain_model::multiply_draw_color(vertex.color, copy.color);
+                    }
                 }
             }
-            super::minecarts::scale_tint_alpha(&mut entities[start..], faces, copy.tint);
+            super::minecarts::scale_tint_alpha(&mut entities[start..], shown(), copy.tint);
         }
+        if !materials.is_empty() {
+            self.mark_model_copies(entities.len());
+            let layers = &self.pack.render.sprite_layers;
+            for &index in &materials {
+                let copy = draw.copy(index as usize);
+                let Some(faces) = self.model_faces(copy.slot) else {
+                    continue;
+                };
+                let state = self
+                    .standalone_geometry
+                    .instance_slot(copy.slot)
+                    .is_some_and(|slot| slot.state);
+                let shift = (DVec3::from(copy.origin) - camera).as_vec3();
+                let pose =
+                    Mat4::from_translation(shift) * world_geometry::row_major_3x4(copy.transform);
+                let options = terrain_model::NativeModelRenderOptions {
+                    shade: if state {
+                        terrain_model::NativeModelShade::Model
+                    } else {
+                        terrain_model::NativeModelShade::Entity
+                    },
+                    tint: copy.tint & 0xFF_FFFF,
+                    tint_alpha: (copy.tint >> 24) as u8,
+                    color: copy.color,
+                    hidden_faces: copy.hidden_faces,
+                    ..Default::default()
+                };
+                terrain_model::draw_model(
+                    faces,
+                    pose,
+                    copy.light,
+                    options,
+                    |name| {
+                        layers
+                            .get(name)
+                            .or_else(|| layers.get(name.strip_prefix("minecraft:")?))
+                            .copied()
+                    },
+                    |vertex| entities.push(vertex),
+                );
+            }
+        }
+        self.model_copy_order = materials;
         draw.clear_copies();
     }
 }
@@ -356,7 +432,7 @@ mod tests {
         ModelRef, Overlay, SubmitCustomGeometryEvent, WorldDrawContext,
     };
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use sunrise_client::mesher::Vertex;
 
     static FILL_MODEL: Mutex<Option<ModelRef>> = Mutex::new(None);
@@ -472,6 +548,115 @@ mod tests {
 
     #[test]
     #[ignore = "daily"]
+    fn an_opaque_copy_with_a_colour_or_hidden_faces_is_baked_on_the_cpu() {
+        let _fixture =
+            sunrise_client::models::standalone_fixture(vec!["minecraft:block/grass_block".into()]);
+        super::super::native_entity_refs::tests::with_client_game(|game| {
+            let _restore = Restore;
+            let model = grass(game);
+            let camera = DVec3::new(0.0, 70.0, 0.0);
+            let half_red = 0xFF80_FFFF;
+            let mut draw = WorldGeometry::default();
+            draw.reset(camera.to_array(), Mat4::IDENTITY, [0.0, 0.0]);
+            // One whole copy, and one with its bottom faces hidden (direction bit 0).
+            context(game, &mut draw)
+                .draw_model_instances(
+                    model,
+                    &[
+                        ModelInstance::at([3.0, 70.0, 0.0], u32::MAX).with_color(half_red),
+                        ModelInstance::at([9.0, 70.0, 0.0], u32::MAX)
+                            .with_color(half_red)
+                            .with_hidden_faces(0b1),
+                    ],
+                )
+                .unwrap();
+            let mut entities = Vec::new();
+            game.commit_model_instances(&mut draw, camera, &mut entities);
+            assert!(game.prepared_model_draws.borrow().is_empty(), "no GPU copy");
+            let slot = mod_api::__private::game::Fields::fields(&model).slot;
+            let faces = game
+                .standalone_geometry
+                .faces(slot)
+                .expect("prepared faces")
+                .len();
+            // The first copy holds every face; the second lacks the hidden ones.
+            assert!(entities.len() > faces * 4, "the whole copy is there");
+            assert!(entities.len() < faces * 8, "the hidden faces are absent");
+            // Vertex colours are ABGR: white times `half_red` (`0xFF80FFFF`) on every face.
+            assert!(entities.iter().all(|v| v.color == 0xFFFF_FF80));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_block_state_resolves_once_and_an_unknown_state_is_refused() {
+        let _fixture = sunrise_client::models::standalone_fixture(Vec::new());
+        super::super::native_entity_refs::tests::with_client_game(|game| {
+            let slot = |state: u32| {
+                game.native_block_state_model(sunrise_world::registry::BlockStateId(state))
+                    .map(|model| mod_api::__private::game::Fields::fields(&model).slot)
+            };
+            // Air has no model, and a state past the registry's table is not a panic.
+            assert_eq!(
+                slot(game.world.air.0),
+                Err(mod_api::ModelError::UnknownModel)
+            );
+            assert_eq!(slot(u32::MAX), Err(mod_api::ModelError::UnknownModel));
+            // The first state with a model resolves to the same slot every time.
+            let (state, first) = (1..)
+                .find_map(|state| slot(state).ok().map(|slot| (state, slot)))
+                .expect("some block state has a model");
+            assert_eq!(slot(state), Ok(first));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_tinted_block_state_carries_its_default_tint_in_the_baked_colour() {
+        crate::game::in_own_process(
+            "game::native_custom_geometry::tests::a_tinted_block_state_carries_its_default_tint_in_the_baked_colour",
+            || {
+                super::super::native_entity_refs::tests::with_client_game(|game| {
+                    let colours = |name: &str| {
+                        let state = game.pack.assets.registry.default_state(name).unwrap();
+                        let model = game.native_block_state_model(state).unwrap();
+                        let slot = mod_api::__private::game::Fields::fields(&model).slot;
+                        let faces = game.model_faces(slot).unwrap();
+                        faces
+                            .iter()
+                            .map(|face| (face.quad.tint_index, face.quad.color))
+                            .collect::<Vec<_>>()
+                    };
+                    let tinted = |faces: &[(i32, Option<i32>)]| {
+                        faces
+                            .iter()
+                            .filter(|(index, _)| *index >= 0)
+                            .map(|(_, colour)| *colour)
+                            .collect::<Vec<_>>()
+                    };
+                    let grass = tinted(&colours("minecraft:grass_block"));
+                    assert!(!grass.is_empty(), "the grass block has a tinted face");
+                    // `GrassColor.getDefaultColor()` is `get(0.5, 1.0)`: pixel (127, 127) of
+                    // `colormap/grass.png`, 0x7CBD6B, times white.
+                    assert!(
+                        grass.iter().all(|c| *c == Some(0xFF7C_BD6Bu32 as i32)),
+                        "{grass:x?}"
+                    );
+                    // Stone has faces and none is tinted, so none carries a colour.
+                    let stone = colours("minecraft:stone");
+                    assert!(!stone.is_empty());
+                    assert!(
+                        stone
+                            .iter()
+                            .all(|&(index, colour)| index < 0 && colour.is_none())
+                    );
+                });
+            },
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
     fn persistent_groups_match_batch() {
         use mod_api::{GroupError, InstanceGroups};
         let _fixture = sunrise_client::models::standalone_fixture(vec![
@@ -495,7 +680,7 @@ mod tests {
             let glass = game
                 .native_model(&Identifier::parse("minecraft:block/glass").unwrap())
                 .unwrap();
-            assert_eq!(game.create_group(glass, 1), Err(GroupError::Translucent));
+            assert!(game.create_group(glass, 1).is_ok());
             let group = game.create_group(model, 8).unwrap();
             let near = ModelInstance::at([0.0; 3], 0xFF80_C040);
             let far = ModelInstance::at([40.0, 0.0, 0.0], 0xFFFF_FFFF);
@@ -676,10 +861,11 @@ mod tests {
                 // Subtract world coordinates in f64: each fractional block survives.
                 assert_eq!(staged[0].instance.model[3], [0.25, 0.5, 0.75, 1.0]);
             }
+            // The mod's 65,536 copies: the glass group's 1, this group's 8, three of 16,384 and the rest.
             let sibling = game.create_group(model, 16_384).unwrap();
             let third = game.create_group(model, 16_384).unwrap();
             let fourth = game.create_group(model, 16_384).unwrap();
-            let fifth = game.create_group(model, 16_376).unwrap();
+            let fifth = game.create_group(model, 16_375).unwrap();
             assert_eq!(
                 game.create_group(model, 1),
                 Err(GroupError::CapacityExceeded)
@@ -1079,6 +1265,57 @@ mod tests {
 
     #[test]
     #[ignore = "daily"]
+    fn translucent_and_hidden_copies_take_the_cpu_routes() {
+        let _fixture =
+            sunrise_client::models::standalone_fixture(vec!["minecraft:block/grass_block".into()]);
+        super::super::native_entity_refs::tests::with_client_game(|game| {
+            let _restore = Restore;
+            let model = grass(game);
+            let camera = DVec3::new(0.0, 70.0, 0.0);
+            let at = |x: f64| ModelInstance::at([x, 70.0, 0.0], 0xFFFF_FFFF);
+            let mut draw = WorldGeometry::default();
+            draw.reset(camera.to_array(), Mat4::IDENTITY, [0.0, 0.0]);
+            // A near and a far translucent copy and an opaque copy with
+            // every face hidden that draws nothing.
+            context(game, &mut draw)
+                .draw_model_instances(
+                    model,
+                    &[
+                        at(3.0).with_color(0x80FF_FFFF),
+                        at(9.0).with_color(0x80FF_FFFF),
+                        at(6.0).with_hidden_faces(0b11_1111),
+                    ],
+                )
+                .unwrap();
+            let mut entities = Vec::new();
+            game.commit_model_instances(&mut draw, camera, &mut entities);
+            assert!(game.prepared_model_draws.borrow().is_empty(), "no GPU copy");
+            assert!(!entities.is_empty());
+            assert!(entities.iter().all(
+                |v| v.layer & 0xFFFF == sunrise_client::gfx::TERRAIN_MODEL_TRANSLUCENT_OVERLAY
+            ));
+            let mean_x = |verts: &[Vertex]| {
+                verts.iter().map(|vertex| vertex.pos[0]).sum::<f32>() / verts.len() as f32
+            };
+            // The two translucent copies' quads and none of the fully hidden copy's.
+            let slot = mod_api::__private::game::Fields::fields(&model).slot;
+            let faces = game
+                .standalone_geometry
+                .faces(slot)
+                .expect("prepared faces")
+                .len();
+            assert_eq!(entities.len(), faces * 2 * 4);
+            // In submission order (the far-to-near sort is the renderer's): the cube at x 3
+            // spans 3..4, mean 3.5, and the one at x 9 spans 9..10, mean 9.5.
+            let half = entities.len() / 2;
+            assert_eq!(mean_x(&entities[..half]), 3.5);
+            assert_eq!(mean_x(&entities[half..]), 9.5);
+            assert!(entities.iter().all(|v| v.color >> 24 == 0x80));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
     fn draw_model_instances_bakes_overflow_after_the_instanced_prefix() {
         let _fixture =
             sunrise_client::models::standalone_fixture(vec!["minecraft:block/grass_block".into()]);
@@ -1339,6 +1576,73 @@ mod tests {
             assert_eq!(draw.usage().instances_used, 0);
             assert_eq!(entities.len(), 4);
             assert_eq!(game.prepared_model_draws.borrow()[0].cpu_vertices, 4);
+        });
+    }
+
+    static GATED_BEFORE: AtomicUsize = AtomicUsize::new(0);
+    static GATED_AFTER: AtomicUsize = AtomicUsize::new(0);
+
+    /// Asks the Host for a level in both geometry hooks, and counts the calls that came back.
+    struct Gated;
+    #[mod_api::__subscriptions]
+    impl Hooks for Gated {
+        fn submit_custom_geometry(
+            &self,
+            host: &dyn ClientHost,
+            _: &mut SubmitCustomGeometryEvent<'_>,
+        ) {
+            GATED_BEFORE.fetch_add(1, Ordering::Relaxed);
+            let _ = host.level("minecraft:overworld");
+            GATED_AFTER.fetch_add(1, Ordering::Relaxed);
+        }
+        fn render_level_stage(
+            &self,
+            host: &dyn ClientHost,
+            _: &mut mod_api::RenderLevelStageEvent<'_>,
+        ) {
+            GATED_BEFORE.fetch_add(1, Ordering::Relaxed);
+            let _ = host.level("minecraft:overworld");
+            GATED_AFTER.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Custom geometry runs in frames, after the thread reached World. Fired in Setup and in Reloading
+    /// anyway, a listener's world read is refused inside the hook's own containment (the listener
+    /// never gets past it), never the no-scope panic; in World the same read is answered.
+    #[test]
+    #[ignore = "daily"]
+    fn custom_geometry_outside_the_world_is_refused_not_a_panic() {
+        use mod_api::__private::{ModPhase, PhaseOwner};
+        super::super::native_entity_refs::tests::with_client_game(|game| {
+            mod_platform::__private::install(vec![ModEntry::new("gated", Box::new(Gated))].into());
+            let fill = |game: &mut Game<'_>| {
+                game.fill_world_geometry(
+                    false,
+                    [0.0; 3],
+                    Mat4::IDENTITY,
+                    0.0,
+                    &mut WorldGeometry::default(),
+                    &mut Vec::new(),
+                );
+            };
+            for reloading in [false, true] {
+                let setup = PhaseOwner::scope(ModPhase::Setup);
+                let _reload = reloading.then(|| setup.reloading().unwrap());
+                GATED_BEFORE.store(0, Ordering::Relaxed);
+                GATED_AFTER.store(0, Ordering::Relaxed);
+                fill(game);
+                assert!(GATED_BEFORE.load(Ordering::Relaxed) > 0, "the hooks fired");
+                assert_eq!(GATED_AFTER.load(Ordering::Relaxed), 0, "every read refused");
+            }
+            let _world = PhaseOwner::scope(ModPhase::World);
+            GATED_BEFORE.store(0, Ordering::Relaxed);
+            GATED_AFTER.store(0, Ordering::Relaxed);
+            fill(game);
+            assert_eq!(
+                GATED_AFTER.load(Ordering::Relaxed),
+                GATED_BEFORE.load(Ordering::Relaxed),
+                "in World the read is answered"
+            );
         });
     }
 }

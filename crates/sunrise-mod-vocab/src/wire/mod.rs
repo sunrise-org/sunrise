@@ -1,5 +1,5 @@
-//! The wire form of the API's plain data, for the wasm boundary: values written into and read
-//! from one buffer. Native and wasm mods share the same encoding.
+//! Canonical binary encoding for owned API values, including typed payload tokens.
+//! Typed payload bodies are encoded by `PayloadCodec`, not Wire.
 //!
 //! Everything is little-endian and self-delimiting: a length is a `u32` before its items, an
 //! `Option` is a tag byte, an enum is a `u32` case then its fields, a record is its fields in
@@ -15,42 +15,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 use std::sync::Arc;
 
-// hidden: transport plumbing used by generated boundary code.
-#[doc(hidden)]
-pub use crate::wire::wire_slots::{Id, Slots, Stale};
-// hidden: resource transport implementation, not a mod-facing codec API.
-#[doc(hidden)]
-#[path = "wire_resources.rs"]
-mod resources;
-// hidden: transport plumbing used by generated boundary code.
-#[doc(hidden)]
-pub use resources::{ResourceAccess, Unsupported, install_resource_access};
+mod static_strings;
 
-/// The guest's start-up call: its input is the package list.
-// hidden: transport plumbing used by generated boundary code.
-#[doc(hidden)]
-pub const INIT: u64 = 0xFFFF_FF00;
-/// The guest's call to drop the handlers the game let go of: its input is their ids.
-// hidden: transport plumbing used by generated boundary code.
-#[doc(hidden)]
-pub const RELEASE: u64 = 0xFFFF_FF01;
-/// The lowest id no export has: the ids below it are the transport's own (`INIT`, `RELEASE`,
-/// the prepared-equipment entries), the generator refuses an export whose id falls there.
-// hidden: transport plumbing used by generated boundary code.
-#[doc(hidden)]
-pub const RESERVED_IDS: u64 = 0x1_0000;
-
-// The crate's own tests implement hooks with `#[mod_api::__subscriptions]`, which marks each
-// through `__sunrise_mark!`, a macro the guest transport defines in `mod_api`: a test build has
-// this no-op in its place, re-exported at the crate root by `exports/test_marks.rs`.
-#[cfg(test)]
-macro_rules! __sunrise_mark {
-    ($owner:literal $method:ident) => {};
-}
-#[cfg(test)]
-pub(crate) use __sunrise_mark;
-
-/// Maximum static strings retained by either transport string table.
+/// Maximum static strings retained by the process.
 // hidden: transport plumbing used by generated boundary code.
 #[doc(hidden)]
 pub const MAX_STATIC_STRINGS: usize = 4096;
@@ -60,11 +27,10 @@ pub const MAX_STATIC_STRINGS: usize = 4096;
 pub const MAX_STATIC_STRING_BYTES: usize = 256;
 
 /// Intern a static API string using the platform's bounded process-lifetime storage.
-/// Refuses clearly when the platform resource socket has not been installed.
 // hidden: transport plumbing used by generated boundary code.
 #[doc(hidden)]
 pub fn intern(value: &str) -> Result<&'static str, WireError> {
-    resources::intern(value)
+    static_strings::intern(value)
 }
 
 /// The deepest nesting of one value (a component of a component of…) a reader accepts.
@@ -111,10 +77,9 @@ impl std::fmt::Display for WireError {
 
 impl std::error::Error for WireError {}
 
-// exhaustive: wasm boundary plumbing that generated code builds field by field
+// exhaustive: fields are private; use the codec methods.
 /// A buffer values are written to. Reuse one to keep the allocation.
 #[derive(Default)]
-// no wire: owns a live encoding buffer and resource context.
 pub struct Writer {
     bytes: Vec<u8>,
     error: Option<WireError>,
@@ -206,15 +171,10 @@ impl Writer {
         }
     }
     /// Encodes a borrowed value unless an earlier write failed.
+    /// The caller keeps ownership and is responsible for disposing of the value.
     pub fn put<T: Put + ?Sized>(&mut self, value: &T) {
         if self.error.is_none() {
             value.put_to(self);
-        }
-    }
-    /// Transfers owned resources while leaving plain data on the normal zero-copy path.
-    pub fn put_owned<T: Wire>(&mut self, value: T) {
-        if self.error.is_none() {
-            value.put_owned(self);
         }
     }
     /// Writes one structural level, refusing before recursing past [`MAX_DEPTH`].
@@ -238,161 +198,8 @@ impl Writer {
     pub fn fail(&mut self, error: WireError) {
         self.error.get_or_insert(error);
     }
-    /// Resolves one resource, reserving its wire width before registry mutation.
-    /// Any failure is recorded before returning, so partial messages are never sent.
-    // hidden: transport plumbing used by generated boundary code.
-    #[doc(hidden)]
-    pub fn resource(&mut self, value: Box<dyn std::any::Any>) -> Result<Id, WireError> {
-        self.can_fit(<Id as Wire>::MIN);
-        if let Some(error) = self.error {
-            return Err(error);
-        }
-        let result = resources::store(value);
-        if let Err(error) = result {
-            self.fail(error)
-        }
-        result
-    }
-    /// Reports a deliberate erased-view refusal without changing the native Option contract.
-    // hidden: transport plumbing used by generated boundary code.
-    #[doc(hidden)]
-    pub fn refused(&self, handler: &str) {
-        resources::refused(handler);
-    }
-    // hidden: transport plumbing used by generated boundary code.
-    #[doc(hidden)]
-    pub fn put_resource(&mut self, value: Box<dyn std::any::Any>) {
-        if let Ok(id) = self.resource(value) {
-            self.put(&id)
-        }
-    }
 }
 
-/// A mutable hook argument, erased without changing its wire representation.
-/// Replies are decoded completely before any field is assigned.
-pub trait Record {
-    /// Writes the argument into a hook call.
-    fn encode(&self, out: &mut Writer);
-    /// Applies one complete reply, refusing malformed or trailing bytes atomically.
-    fn apply(&mut self, bytes: &[u8]) -> Result<(), WireError>;
-}
-
-// exhaustive: wasm boundary plumbing that generated code builds field by field
-/// A call record refused before it can be encoded, such as an oversized owned snapshot.
-/// It follows the normal Writer error path instead of sending a truncated call.
-// no wire: borrows names from an encoding diagnostic.
-pub struct Refused(pub WireError);
-impl Record for Refused {
-    fn encode(&self, out: &mut Writer) {
-        out.fail(self.0);
-    }
-    fn apply(&mut self, _: &[u8]) -> Result<(), WireError> {
-        Err(self.0)
-    }
-}
-
-impl<T: Wire> Record for T {
-    fn encode(&self, out: &mut Writer) {
-        out.put(self);
-    }
-    fn apply(&mut self, bytes: &[u8]) -> Result<(), WireError> {
-        let mut input = Reader::new(bytes);
-        let value = input.take()?;
-        if !input.rest().is_empty() {
-            return Err(WireError::Trailing);
-        }
-        *self = value;
-        Ok(())
-    }
-}
-
-// exhaustive: wasm boundary plumbing that generated code builds field by field
-/// A hook record's writable fields, in declaration order. Sharing these tuple codecs avoids
-/// generating and compiling a separate native codec for every named point record.
-// no wire: borrowed call-field projection, encoded only by the call table.
-pub struct Fields<T>(pub T);
-
-// exhaustive: wasm boundary plumbing that generated code builds field by field
-/// A field which crosses with a record but is not a declared writeback destination.
-// no wire: borrowed call-field projection, not an owned value.
-pub struct ReadOnly<T>(pub T);
-
-// hidden: wasm boundary plumbing used by generated code, not a mod's API
-#[doc(hidden)]
-pub trait FieldSet {
-    type Value;
-    fn encode(&self, out: &mut Writer);
-    fn take(input: &mut Reader<'_>) -> Result<Self::Value, WireError>;
-    fn commit(&mut self, value: Self::Value);
-}
-
-impl FieldSet for () {
-    type Value = ();
-    fn encode(&self, _: &mut Writer) {}
-    fn take(_: &mut Reader<'_>) -> Result<(), WireError> {
-        Ok(())
-    }
-    fn commit(&mut self, _: ()) {}
-}
-
-impl<H: Wire, T: FieldSet> FieldSet for (&mut H, T) {
-    type Value = (H, T::Value);
-    fn encode(&self, out: &mut Writer) {
-        out.put(&*self.0);
-        self.1.encode(out);
-    }
-    fn take(input: &mut Reader<'_>) -> Result<Self::Value, WireError> {
-        Ok((input.take()?, T::take(input)?))
-    }
-    fn commit(&mut self, (head, tail): Self::Value) {
-        *self.0 = head;
-        self.1.commit(tail);
-    }
-}
-
-impl<H: Wire, T: FieldSet> FieldSet for (ReadOnly<&H>, T) {
-    type Value = (H, T::Value);
-    fn encode(&self, out: &mut Writer) {
-        out.put(self.0.0);
-        self.1.encode(out);
-    }
-    fn take(input: &mut Reader<'_>) -> Result<Self::Value, WireError> {
-        Ok((input.take()?, T::take(input)?))
-    }
-    fn commit(&mut self, (_, tail): Self::Value) {
-        self.1.commit(tail);
-    }
-}
-
-impl<T: FieldSet> Record for Fields<T> {
-    fn encode(&self, out: &mut Writer) {
-        self.0.encode(out);
-    }
-    fn apply(&mut self, bytes: &[u8]) -> Result<(), WireError> {
-        let mut input = Reader::new(bytes);
-        let value = T::take(&mut input)?;
-        if !input.rest().is_empty() {
-            return Err(WireError::Trailing);
-        }
-        self.0.commit(value);
-        Ok(())
-    }
-}
-
-// exhaustive: wasm boundary plumbing that generated code builds field by field
-// hidden: wasm boundary plumbing used by generated code, not a mod's API
-/// A checked append-only delta. Only the API's type-owned validation can create it.
-#[doc(hidden)]
-// no wire: writeback delta envelope, consumed by call-table validation rather than standalone decoding.
-pub struct Append<T>(Vec<T>);
-impl<T> Append<T> {
-    pub(crate) fn new(values: Vec<T>) -> Self {
-        Self(values)
-    }
-    pub(crate) fn into_vec(self) -> Vec<T> {
-        self.0
-    }
-}
 /// What can be written: every [`Wire`] value, and the borrowed forms a call passes
 /// (`&str`, `&[T]`, `Option<&T>`), which are written as the owned value they stand for.
 pub trait Put {
@@ -431,9 +238,8 @@ impl<T: Put> Put for [T] {
     }
 }
 
-// exhaustive: wasm boundary plumbing that generated code builds field by field
+// exhaustive: fields are private; use the codec methods.
 /// A buffer values are read from.
-// no wire: borrows a live decoding buffer and resource context.
 pub struct Reader<'a> {
     data: &'a [u8],
     depth: u16,
@@ -516,10 +322,6 @@ impl<'a> Reader<'a> {
         Ok(items)
     }
     // hidden: transport plumbing used by generated boundary code.
-    #[doc(hidden)]
-    pub fn take_resource<T: 'static>(&mut self) -> Result<T, WireError> {
-        resources::load(self.take()?)
-    }
     /// Reads one level down: the depth the value may nest to is [`MAX_DEPTH`].
     pub fn nested<T>(
         &mut self,
@@ -552,19 +354,8 @@ impl<'a> Reader<'a> {
 pub trait Wire: Sized {
     /// Minimum encoded size, used to reject impossible collection lengths.
     const MIN: usize;
-    /// Whether the type's encoding holds a resource handle anywhere in it (an erased handler
-    /// such as `Arc<dyn BlockPart>`): such a value crosses only as a handle into one link
-    /// group's resource scope, so Part state refuses it.
-    // hidden: derived and forwarded by the codecs, read by the part-state declaration.
-    fn holds_resource(_: &mut Vec<&'static str>) -> bool {
-        false
-    }
     /// Encodes this value, recording failures on the writer.
     fn put(&self, out: &mut Writer);
-    /// Consumes owned data when a resource's ownership must cross the boundary.
-    fn put_owned(self, out: &mut Writer) {
-        self.put(out);
-    }
     /// Decodes one value, leaving any following bytes for the caller.
     fn take(input: &mut Reader<'_>) -> Result<Self, WireError>;
     // hidden: internal Vec encoding specialization, not a mod-facing API
@@ -574,14 +365,6 @@ pub trait Wire: Sized {
         out.put_len(items.len());
         for item in items {
             item.put(out);
-        }
-    }
-    // hidden: internal list encoding preserves per-item resource ownership transfer
-    #[doc(hidden)]
-    fn put_owned_list(items: Vec<Self>, out: &mut Writer) {
-        out.put_len(items.len());
-        for item in items {
-            out.put_owned(item);
         }
     }
     // hidden: internal Vec decoding specialization for contiguous numeric payloads
@@ -613,9 +396,6 @@ macro_rules! numbers {
                 out.put_bytes(bytemuck::cast_slice(items));
                 #[cfg(target_endian = "big")]
                 for item in items { out.put_bytes(&item.to_le_bytes()); }
-            }
-            fn put_owned_list(items: Vec<Self>, out: &mut Writer) {
-                Self::put_list(&items, out);
             }
             fn take_list(input: &mut Reader<'_>) -> Result<Vec<Self>, WireError> {
                 let len = input.take_len(<Self as Wire>::MIN)?;
@@ -720,9 +500,6 @@ impl Wire for Arc<str> {
 
 impl<T: Wire> Wire for Option<T> {
     const MIN: usize = 1;
-    fn holds_resource(visiting: &mut Vec<&'static str>) -> bool {
-        T::holds_resource(visiting)
-    }
     fn put(&self, out: &mut Writer) {
         match self {
             None => out.put(&0u8),
@@ -730,15 +507,6 @@ impl<T: Wire> Wire for Option<T> {
                 out.put(&1u8);
                 out.put(value);
             }
-        }
-    }
-    fn put_owned(self, out: &mut Writer) {
-        match self {
-            Some(value) => {
-                out.put(&1u8);
-                out.put_owned(value);
-            }
-            None => out.put(&0u8),
         }
     }
     fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
@@ -752,9 +520,6 @@ impl<T: Wire> Wire for Option<T> {
 
 impl<T: Wire, E: Wire> Wire for Result<T, E> {
     const MIN: usize = 1;
-    fn holds_resource(visiting: &mut Vec<&'static str>) -> bool {
-        T::holds_resource(visiting) || E::holds_resource(visiting)
-    }
     fn put(&self, out: &mut Writer) {
         match self {
             Ok(value) => {
@@ -764,18 +529,6 @@ impl<T: Wire, E: Wire> Wire for Result<T, E> {
             Err(error) => {
                 out.put(&1u8);
                 out.put(error);
-            }
-        }
-    }
-    fn put_owned(self, out: &mut Writer) {
-        match self {
-            Ok(value) => {
-                out.put(&0u8);
-                out.put_owned(value);
-            }
-            Err(error) => {
-                out.put(&1u8);
-                out.put_owned(error);
             }
         }
     }
@@ -790,9 +543,6 @@ impl<T: Wire, E: Wire> Wire for Result<T, E> {
 
 impl<T: Wire> Wire for Arc<[T]> {
     const MIN: usize = 4;
-    fn holds_resource(visiting: &mut Vec<&'static str>) -> bool {
-        T::holds_resource(visiting)
-    }
     fn put(&self, out: &mut Writer) {
         out.put_len(self.len());
         for item in self.iter() {
@@ -806,9 +556,6 @@ impl<T: Wire> Wire for Arc<[T]> {
 
 impl<T: Wire> Wire for Box<[T]> {
     const MIN: usize = 4;
-    fn holds_resource(visiting: &mut Vec<&'static str>) -> bool {
-        T::holds_resource(visiting)
-    }
     fn put(&self, out: &mut Writer) {
         out.put_len(self.len());
         for item in self.iter() {
@@ -822,14 +569,8 @@ impl<T: Wire> Wire for Box<[T]> {
 
 impl<T: Wire> Wire for Box<T> {
     const MIN: usize = T::MIN;
-    fn holds_resource(visiting: &mut Vec<&'static str>) -> bool {
-        T::holds_resource(visiting)
-    }
     fn put(&self, out: &mut Writer) {
         out.nested(|out| (**self).put(out));
-    }
-    fn put_owned(self, out: &mut Writer) {
-        out.nested(|out| out.put_owned(*self));
     }
     fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
         input.nested(T::take).map(Box::new)
@@ -838,9 +579,6 @@ impl<T: Wire> Wire for Box<T> {
 
 impl<T: Wire> Wire for Arc<T> {
     const MIN: usize = T::MIN;
-    fn holds_resource(visiting: &mut Vec<&'static str>) -> bool {
-        T::holds_resource(visiting)
-    }
     fn put(&self, out: &mut Writer) {
         out.nested(|out| (**self).put(out));
     }
@@ -851,14 +589,8 @@ impl<T: Wire> Wire for Arc<T> {
 
 impl<T: Wire> Wire for Vec<T> {
     const MIN: usize = 4;
-    fn holds_resource(visiting: &mut Vec<&'static str>) -> bool {
-        T::holds_resource(visiting)
-    }
     fn put(&self, out: &mut Writer) {
         T::put_list(self, out);
-    }
-    fn put_owned(self, out: &mut Writer) {
-        T::put_owned_list(self, out);
     }
     fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
         T::take_list(input)
@@ -867,19 +599,10 @@ impl<T: Wire> Wire for Vec<T> {
 
 impl<T: Wire> Wire for VecDeque<T> {
     const MIN: usize = 4;
-    fn holds_resource(visiting: &mut Vec<&'static str>) -> bool {
-        T::holds_resource(visiting)
-    }
     fn put(&self, out: &mut Writer) {
         out.put_len(self.len());
         for item in self {
             item.put(out);
-        }
-    }
-    fn put_owned(self, out: &mut Writer) {
-        out.put_len(self.len());
-        for item in self {
-            out.put_owned(item);
         }
     }
     fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
@@ -889,17 +612,9 @@ impl<T: Wire> Wire for VecDeque<T> {
 
 impl<T: Wire, const N: usize> Wire for [T; N] {
     const MIN: usize = T::MIN * N;
-    fn holds_resource(visiting: &mut Vec<&'static str>) -> bool {
-        T::holds_resource(visiting)
-    }
     fn put(&self, out: &mut Writer) {
         for item in self {
             item.put(out);
-        }
-    }
-    fn put_owned(self, out: &mut Writer) {
-        for item in self {
-            out.put_owned(item);
         }
     }
     fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
@@ -918,16 +633,12 @@ macro_rules! sets {
     ($($ty:ident [$($bound:tt)+]),*) => {$(
         impl<T: Wire + $($bound)+> Wire for $ty<T> {
     const MIN: usize = 4;
-    fn holds_resource(visiting: &mut Vec<&'static str>) -> bool {
-        T::holds_resource(visiting)
-    }
             fn put(&self, out: &mut Writer) {
                 out.put_len(self.len());
                 for item in self {
                     item.put(out);
                 }
             }
-            fn put_owned(self,out:&mut Writer) { out.put_len(self.len()); for item in self { out.put_owned(item); } }
     fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
                 let len = input.take_len(T::MIN)?;
                 let mut set = Self::default();
@@ -945,9 +656,6 @@ macro_rules! maps {
     ($($ty:ident [$($bound:tt)+]),*) => {$(
         impl<K: Wire + $($bound)+, V: Wire> Wire for $ty<K, V> {
     const MIN: usize = 4;
-    fn holds_resource(visiting: &mut Vec<&'static str>) -> bool {
-        K::holds_resource(visiting) || V::holds_resource(visiting)
-    }
             fn put(&self, out: &mut Writer) {
                 out.put_len(self.len());
                 for (key, value) in self {
@@ -955,7 +663,6 @@ macro_rules! maps {
                     value.put(out);
                 }
             }
-            fn put_owned(self,out:&mut Writer) { out.put_len(self.len()); for (key,value) in self { out.put_owned(key); out.put_owned(value); } }
     fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
                 let len = input.take_len(K::MIN + V::MIN)?;
                 let mut map = Self::default();
@@ -976,14 +683,10 @@ macro_rules! tuples {
         impl<$($name: Wire),+> Wire for ($($name,)+) {
 
     const MIN: usize = 0 $(+ $name::MIN)+;
-    fn holds_resource(visiting: &mut Vec<&'static str>) -> bool {
-        false $(|| <$name as Wire>::holds_resource(visiting))+
-    }
             fn put(&self, out: &mut Writer) {
                 let ($($name,)+) = self;
                 $($name.put(out);)+
             }
-            fn put_owned(self,out:&mut Writer) { let ($($name,)+)=self; $($name.put_owned(out);)+ }
     fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
                 Ok(($($name::take(input)?,)+))
             }
@@ -1017,36 +720,14 @@ impl Wire for std::time::Duration {
     }
 }
 
-// Checked encodings declare their written fields here rather than relying on the
-// Rust representation (which may contain caches or validated constructor state).
-// The list is read by the surface export (`surface/wire_forms.rs`) and expands to the
-// resource walk over the written fields.
+// Explicit layouts for checked codecs are read by the SDK surface generator.
 macro_rules! layout_fields {
-    ($($field:literal => $ty:ty),* $(,)?) => {
-        fn holds_resource(visiting: &mut Vec<&'static str>) -> bool {
-            let this = ::core::any::type_name::<Self>();
-            if visiting.contains(&this) {
-                return false;
-            }
-            visiting.push(this);
-            let found = false $(|| <$ty as $crate::wire::Wire>::holds_resource(visiting))*;
-            visiting.pop();
-            found
-        }
-    };
+    ($($field:literal => $ty:ty),* $(,)?) => {};
 }
-
-// Declares that a hand-written impl crosses as another type: read by the surface export,
-// like `layout_fields!`, and expands to that type's resource walk.
-macro_rules! layout_via {
-    ($ty:ty) => {
-        fn holds_resource(visiting: &mut Vec<&'static str>) -> bool {
-            <$ty as $crate::wire::Wire>::holds_resource(visiting)
-        }
-    };
-}
-
 pub(crate) use layout_fields;
+macro_rules! layout_via {
+    ($ty:ty) => {};
+}
 
 #[cfg(test)]
 mod tests {
@@ -1085,9 +766,6 @@ mod tests {
             out.put(&value);
             assert_eq!(out.bytes(), bytes);
             assert_eq!(super::Reader::decode::<T>(bytes).unwrap(), value);
-            let mut owned = super::Writer::new();
-            owned.put_owned(value);
-            assert_eq!(owned.bytes(), bytes);
         }
         check(
             Named {
@@ -1169,51 +847,12 @@ mod tests {
     }
 
     #[test]
-    fn derived_owned_fields_forward_ownership() {
-        struct Resource;
-        impl Wire for Resource {
-            const MIN: usize = 1;
-            fn put(&self, out: &mut Writer) {
-                out.put(&1u8);
-            }
-            fn put_owned(self, out: &mut Writer) {
-                out.put(&2u8);
-            }
-            fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
-                let _: u8 = input.take()?;
-                Ok(Self)
-            }
-        }
-        #[derive(mod_api::Wire)]
-        struct Owned {
-            resource: Resource,
-        }
-        #[derive(mod_api::Wire)]
-        enum Payload {
-            Resource(Resource),
-        }
-        let mut out = Writer::new();
-        out.put(&Owned { resource: Resource });
-        assert_eq!(out.bytes(), &[1]);
-        out.clear();
-        out.put_owned(Owned { resource: Resource });
-        assert_eq!(out.bytes(), &[2]);
-        out.clear();
-        out.put_owned(Payload::Resource(Resource));
-        assert_eq!(out.bytes(), &[0, 0, 0, 0, 2]);
-    }
-
-    #[test]
     fn golden_value_bytes() {
         fn bytes<T: super::Wire>(value: T, expected: &[u8]) {
             let mut out = super::Writer::new();
             out.put(&value);
             assert_eq!(out.error(), None);
             assert_eq!(out.bytes(), expected);
-            let mut owned = super::Writer::new();
-            owned.put_owned(value);
-            assert_eq!(owned.error(), None);
-            assert_eq!(owned.bytes(), expected);
         }
         bytes(
             crate::Vec3 {
@@ -1270,7 +909,38 @@ mod tests {
             frame: 3,
             removed: true,
             state: [8.0, -9.0, 10.0, 11.0],
+            facing: crate::ParticleFacing::Fixed([0.5, -0.5, 0.5, 0.5]),
+            roll: 0.75,
         });
+    }
+
+    #[test]
+    fn a_particle_batch_survives_the_wire_in_order() {
+        let mut second = crate::ModParticle {
+            position: [9.0, 8.0, 7.0],
+            previous: [0.0; 3],
+            velocity: [0.0; 3],
+            age: 2,
+            lifetime: 4,
+            size: 1.5,
+            rgba: [1.0; 4],
+            frame: 1,
+            removed: false,
+            state: [0.0; 4],
+            facing: crate::ParticleFacing::AroundY,
+            roll: -1.0,
+        };
+        let first = crate::ModParticle {
+            facing: crate::ParticleFacing::Fixed([0.0, 0.0, 0.0, 1.0]),
+            ..second
+        };
+        second.age = 3;
+        round(crate::client::particle_providers::particle_batch_from_vec(
+            vec![first, second],
+        ));
+        round(crate::client::particle_providers::particle_batch_from_vec(
+            Vec::new(),
+        ));
     }
 
     #[test]
@@ -1350,6 +1020,4 @@ mod depth_tests;
 mod json_tree;
 mod tag_tree;
 mod text_tree;
-pub(crate) mod wire_handlers;
-pub(crate) mod wire_slots;
 pub(crate) mod wire_types;

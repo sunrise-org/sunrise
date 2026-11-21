@@ -53,5 +53,3 @@ The enum is `#[non_exhaustive]`. `index` is the op's place in the buffer; nothin
 ops before it included. A `TextFormError` converts into it with `?`.
 
 - **Cost.** The check reads the buffer once before drawing it; a mod that doesn't paint pays nothing.
-- **Wire layout.** `gui_paint`'s error type changed from `TextFormError` to `GuiPaintError`: rebuild wasm mods
-  against the new SDK.

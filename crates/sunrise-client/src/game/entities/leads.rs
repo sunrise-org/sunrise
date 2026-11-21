@@ -8,22 +8,13 @@ use sunrise_client::actions::Action;
 use sunrise_client::{
     items::ItemStack,
     mesher::Vertex,
-    mobs::leash::{self, Holder, Pending},
+    mobs::leash::{self, Holder},
     pose::Pose,
 };
 use sunrise_core::nbt::Tag;
-
-/// Natural fence knot: the fence is its authoritative position, not a render cache.
-/// Its JoinList carries the common residency binding and journal.
-pub(super) struct Knot {
-    /// Entity-owned registration metadata; content clones are detached.
-    pub(super) attachment_lifetime: sunrise_mod_runtime::attachments::AttachmentLifetime,
-    pub id: u32,
-    pub join: sunrise_client::join_seq::JoinSeq,
-    pub fence: [i32; 3],
-}
-sunrise_client::impl_joined!(Knot);
-sunrise_mod_runtime::impl_attachment_lifetime!(Knot);
+pub(super) use sunrise_gameplay::leash_knot::{
+    Knot, held_by_acting_player, resolve_pending_leash, write_mob_leash_tag,
+};
 
 /// The item context of a leash success (`InteractionResult.Success`): tying
 /// held mobs to this one and the holder's detach are `withoutItem`, so item
@@ -70,77 +61,6 @@ struct Rope {
     offset: [f64; 3],
     /// `getQuadLeashOffsets`, when the entity supports a quad lead.
     quad: Option<[[f64; 3]; 4]>,
-}
-/// Whether a mob's lead is held by `acting` (`getLeashHolder() == player`).
-fn held_by_acting_player(
-    leash: Option<Holder>,
-    leash_player: Option<[i32; 4]>,
-    acting: [i32; 4],
-) -> bool {
-    leash == Some(Holder::Player) && leash_player.is_none_or(|p| p == acting)
-}
-
-/// Resolve a `Pending` leash holder loaded from NBT.
-fn resolve_pending_leash(
-    pending: Pending,
-    player_uuid: [i32; 4],
-    owner_uuid: Option<[i32; 4]>,
-    is_guest: impl FnOnce([i32; 4]) -> bool,
-    mob_by_uuid: impl FnOnce([i32; 4]) -> Option<u32>,
-    boat_by_uuid: impl FnOnce([i32; 4]) -> Option<u32>,
-    knot_by_uuid: impl FnOnce([i32; 4]) -> Option<[i32; 3]>,
-) -> Option<(Holder, Option<[i32; 4]>)> {
-    match pending {
-        Pending::Knot(p) => Some((Holder::Knot(p), None)),
-        Pending::Uuid(u) if is_guest(u) || owner_uuid == Some(u) => Some((Holder::Player, Some(u))),
-        // Old integrated worlds wrote offline_uuid("Player") for every holder.
-        // Only that known sentinel can be mapped to the integrated owner; a
-        // different level player UUID may belong to somebody else. Old guest
-        // leashes lost their real UUID, so this owner recovery is best effort.
-        Pending::Uuid(u)
-            if u == player_uuid
-                && u == sunrise_client::lan::playerdata::uuid_ints(
-                    sunrise_protocol::crypto::offline_uuid("Player"),
-                )
-                && owner_uuid.is_some() =>
-        {
-            Some((Holder::Player, owner_uuid))
-        }
-        // `Leashable.restoreLeashFromSave`: `ServerLevel.getEntity(uuid)`, a
-        // leash knot included.
-        Pending::Uuid(u) => mob_by_uuid(u)
-            .map(|id| (Holder::Mob(id), None))
-            .or_else(|| boat_by_uuid(u).map(|id| (Holder::Boat(id), None)))
-            .or_else(|| knot_by_uuid(u).map(|p| (Holder::Knot(p), None))),
-    }
-}
-
-/// Write a mob's `leash` NBT entry into `tag`.
-fn write_mob_leash_tag(
-    tag: &mut Tag,
-    holder: Option<Holder>,
-    pending: Option<Pending>,
-    leash_player: Option<[i32; 4]>,
-    level_player_uuid: Option<[i32; 4]>,
-    mob_uuid: impl FnOnce(u32) -> [i32; 4],
-) {
-    let Tag::Compound(map) = tag else { return };
-    map.remove(&"leash".into());
-    let uuid = match (holder, pending) {
-        (Some(Holder::Player), _) => leash_player.or(level_player_uuid).or(Some([0, 0, 0, 1])),
-        (Some(Holder::Mob(id) | Holder::Boat(id)), _) => Some(mob_uuid(id)),
-        (_, Some(Pending::Uuid(u))) => Some(u),
-        _ => None,
-    };
-    let value = match (holder, pending) {
-        (Some(h), _) => leash::to_nbt(h, uuid),
-        (None, Some(Pending::Knot(p))) => leash::to_nbt(Holder::Knot(p), None),
-        (None, Some(Pending::Uuid(u))) => leash::to_nbt(Holder::Player, Some(u)),
-        _ => None,
-    };
-    if let Some(v) = value {
-        map.insert("leash".into(), v);
-    }
 }
 
 impl Game<'_> {
@@ -681,14 +601,7 @@ impl Game<'_> {
                 self.lead_sound("tied", at);
                 // `Player.interactOn` restores the count of a player with
                 // infinite materials (creative); others spend the lead.
-                if !self.creative
-                    && let Some(stack) = self.held_mut().as_mut()
-                {
-                    stack.count -= 1;
-                    if stack.count == 0 {
-                        *self.held_mut() = None;
-                    }
-                }
+                self.consume_held();
                 return Some(LeashInteraction::WithItem);
             }
         }
@@ -1114,10 +1027,11 @@ impl Game<'_> {
 #[cfg(test)]
 mod rope_hold_tests {
     use super::{
-        Holder, Pending, Tag, held_by_acting_player, leash, resolve_pending_leash,
-        rope_hold_angles, write_mob_leash_tag,
+        Holder, Tag, held_by_acting_player, leash, resolve_pending_leash, rope_hold_angles,
+        write_mob_leash_tag,
     };
     use sunrise_client::lan::playerdata::uuid_ints;
+    use sunrise_client::mobs::leash::Pending;
     use sunrise_protocol::crypto::offline_uuid;
 
     #[test]

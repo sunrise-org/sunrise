@@ -12,8 +12,8 @@
 //! [`NaturalLevel`] so the game and the differential test world
 //! (tools/test_natural_spawn_parity.py) run the same code; random draws follow
 //! vanilla's order.
-use super::Species;
 use super::spawn_rules::{self, Reason, SpawnLevel};
+use super::{MobType, Species};
 use crate::biome::SpawnEntry;
 use crate::fast_hash::FxHashMap;
 use mod_api::{SpawnCheck, SpawnFlags, SpawnLimits};
@@ -335,9 +335,6 @@ fn spawns_far_from_player(s: Species, category: Category) -> bool {
 }
 
 /// What natural spawning reads from a level beyond the spawn rules.
-/// An entity type's species, width, height and category.
-pub type MobType = (Species, f32, f32, Category);
-
 pub trait NaturalLevel: SpawnLevel {
     /// `MobSpawnEvent.PositionCheck`: what server mods answer for the new mob
     /// of type `entity` at `at`, described by `pending`; `Default` leaves the
@@ -373,8 +370,8 @@ pub trait NaturalLevel: SpawnLevel {
     /// `DimensionType.ambientLight`.
     fn ambient_light(&self) -> f32;
     fn has_ceiling(&self) -> bool;
-    /// The entity type's species, width, height and category.
-    fn mob_type(&self, entity: &str) -> Option<MobType>;
+    /// The registered living entity type.
+    fn mob_type(&self, entity: &str) -> Option<&MobType>;
     /// The `natural_mob_spawns` lists by category at a position.
     fn biome_spawns(&self, x: i32, y: i32, z: i32) -> Option<&HashMap<String, Vec<SpawnEntry>>>;
     /// The `natural_mob_spawns` spawn cost of a type at a position.
@@ -1339,7 +1336,8 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
     'groups: for _ in 0..3 {
         let (mut x, mut z) = (x0, z0);
         // The group's entry, its type and where it was picked.
-        let mut current: Option<(Cow<'_, SpawnEntry>, Option<MobType>, [i32; 3])> = None;
+        let mut current: Option<(Cow<'_, SpawnEntry>, Option<(&MobType, Category)>, [i32; 3])> =
+            None;
         let mut group_index = 0u32;
         let mut max = (random.next_float() * 4.0).ceil() as i32;
         let mut ll = 0;
@@ -1373,25 +1371,31 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
                     break;
                 };
                 max = sample_count(&entry, random) as i32;
-                let kind = l.mob_type(&entry.entity);
+                let kind = l
+                    .mob_type(&entry.entity)
+                    .map(|t| (t, Category::from_name(&t.category)));
                 current = Some((entry, kind, [x, y, z]));
             }
             let (entry, kind, picked_at) = current.as_ref().unwrap_or_else(|| unreachable!());
+            let Some((kind, type_category)) = *kind else {
+                continue;
+            };
             // The list the entry was picked from holds it where it was picked.
             let listed = *picked_at == [x, y, z];
-            let valid = valid_position_for_type(
+            if !valid_position_for_type(
                 l,
                 random,
                 category,
                 entry,
-                *kind,
+                kind,
+                type_category,
                 listed,
                 [x, y, z],
                 distance,
-            );
-            let Some((species, width, height, type_category)) = (*kind).filter(|_| valid) else {
+            ) {
                 continue;
-            };
+            }
+            let (species, width, height) = (kind.species, kind.width as f32, kind.height as f32);
             let passed = state.can_spawn(l, &entry.entity, [x, y, z]);
             trace(Event::Test(&entry.entity, [x, y, z], passed));
             if !passed {
@@ -1577,14 +1581,13 @@ fn valid_position_for_type<L: NaturalLevel, R: RandomSource>(
     random: &mut R,
     category: Category,
     entry: &SpawnEntry,
-    kind: Option<MobType>,
+    kind: &MobType,
+    type_category: Category,
     listed: bool,
     pos: [i32; 3],
     distance: f64,
 ) -> bool {
-    let Some((species, width, height, type_category)) = kind else {
-        return false;
-    };
+    let (species, width, height) = (kind.species, kind.width as f32, kind.height as f32);
     if type_category == Category::Misc {
         return false;
     }
@@ -1613,7 +1616,7 @@ fn valid_position_for_type<L: NaturalLevel, R: RandomSource>(
     if !hooked && !listed && !in_list() {
         return false;
     }
-    if !spawn_rules::check_spawn_rules(&entry.entity, species, l, Reason::Natural, random, pos) {
+    if !spawn_rules::check_spawn_rules(kind, l, Reason::Natural, random, pos) {
         return false;
     }
     l.no_collision(spawn_aabb(
@@ -1675,9 +1678,11 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
             let mut attempts = 0;
             while !success && attempts < 4 {
                 attempts += 1;
-                let Some((species, width, height, _)) = kind else {
+                let Some(kind) = kind else {
                     break;
                 };
+                let (species, width, height) =
+                    (kind.species, kind.width as f32, kind.height as f32);
                 let pos = top_non_colliding(l, &entry.entity, x, z);
                 trace(GenEvent::Column(x, z));
                 if spawn_rules::is_spawn_position_ok(
@@ -1700,8 +1705,7 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
                     let (bx, bz) = (fx.floor() as i32, fz.floor() as i32);
                     if !l.no_collision(spawn_aabb(species, fx, fy, fz, width, height))
                         || !spawn_rules::check_spawn_rules(
-                            &entry.entity,
-                            species,
+                            kind,
                             l,
                             Reason::ChunkGeneration,
                             rules,

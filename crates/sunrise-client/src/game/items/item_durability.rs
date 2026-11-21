@@ -241,6 +241,7 @@ impl Game<'_> {
                 self.armor[index] = updated;
                 if let Some(stack) = broken {
                     self.player_equipment_broke(armor_slot(index), &stack);
+                    self.player_item_destroyed(&before, None);
                     self.apply_equipment();
                 }
             }
@@ -259,12 +260,24 @@ impl Game<'_> {
         amount: u32,
         break_slot: sunrise_core::equipment_slot::EquipmentSlot,
     ) {
-        let Some(stack) = self.held().cloned() else {
-            return;
-        };
+        let hand = self.hand;
+        if let Some(original) = self.apply_held_damage(amount, break_slot) {
+            self.player_item_destroyed(&original, Some(hand));
+        }
+    }
+
+    /// Apply wear and its ordinary break effects, returning the pre-wear stack
+    /// on a break. Mining reports that snapshot only after the block's drops.
+    pub(super) fn apply_held_damage(
+        &mut self,
+        amount: u32,
+        break_slot: sunrise_core::equipment_slot::EquipmentSlot,
+    ) -> Option<ItemStack> {
+        let slot = self.held_slot();
+        let stack = self.stack_in(slot).cloned()?;
         let (updated, broken) = self.damage_stack(&stack, amount.min(i32::MAX as u32) as i32, true);
-        if self.held() != Some(&stack) {
-            return;
+        if self.held_slot() != slot || self.stack_in(slot) != Some(&stack) {
+            return None;
         }
         self.edit_block_use_stack(|slot| {
             if let Some(original) = slot.as_mut() {
@@ -284,9 +297,9 @@ impl Game<'_> {
                 }
             }
         });
-        if let Some(broken) = broken {
-            self.player_equipment_broke(break_slot, &broken);
-        }
+        let broken = broken?;
+        self.player_equipment_broke(break_slot, &broken);
+        Some(stack)
     }
     /// `ItemStack.hurtWithoutBreaking`: Unbreaking applies, but the stack stops at
     /// one point of durability left instead of breaking.

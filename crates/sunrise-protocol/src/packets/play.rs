@@ -264,6 +264,14 @@ packet!(
     ChunksBiomes { chunks: Vec<ChunkBiomeData> => List<ChunkBiomeData> }
 );
 packet!(GameEvent { event: u8 => UByte, param: f32 => Float });
+impl GameEvent {
+    /// The whole-number parameter `ClientPacketListener.handleGameEvent` reads for CHANGE_GAME_MODE and
+    /// GUARDIAN_ELDER_EFFECT: `Mth.floor(param + 0.5F)`, the sum rounded to a float first, then floored with
+    /// Java's `int` cast (saturating, NaN to 0). The other events compare the float itself.
+    pub fn rounded_param(&self) -> i32 {
+        f64::from(self.param + 0.5).floor() as i32
+    }
+}
 packet!(HurtAnimation { id: i32 => VarInt, yaw: f32 => Float });
 packet!(
     /// ClientboundDamageEventPacket: the hurt entity, the damage type's

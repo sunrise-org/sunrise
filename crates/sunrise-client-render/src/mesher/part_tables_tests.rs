@@ -89,6 +89,7 @@ fn faces(tables: &MeshTables, parts: &PartTables) -> [Vec<u16>; 6] {
         0x3F76E4,
         &mut mesh,
         [0, 0, 0],
+        &super::visibility_plan::NoMasks,
     );
     let mut faces: [Vec<u16>; 6] = Default::default();
     for quad in mesh.translucent.as_chunks::<4>().0 {

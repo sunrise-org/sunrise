@@ -1,7 +1,7 @@
 //! Read facts transferred once with a prepared equipment decision.
 use crate::*;
 /// One target's immutable read view; equipment uses EquipmentSlot order.
-// hidden: engine/guest preparation metadata, not an additional public Host read API.
+// hidden: engine equipment snapshot, not an additional public Host read API.
 #[doc(hidden)]
 #[derive(Clone, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
 // exhaustive: transport data for one scoped equipment decision

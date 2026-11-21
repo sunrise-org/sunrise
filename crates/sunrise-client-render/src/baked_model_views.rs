@@ -8,23 +8,15 @@ use sunrise_core::geometry::Direction;
 use sunrise_world::registry::BlockStateId;
 
 impl RenderAssets {
-    /// Keys of every baked model `state` can select in this store, in bake order. Empty for a
-    /// state no definition binds; `UnknownModel` for an id past `states`, the block state table.
-    pub fn block_state_models(
-        &self,
-        state: BlockStateId,
-        states: usize,
-    ) -> Result<Vec<BakedModelKey>, ModelError> {
-        if state.0 as usize >= states {
-            return Err(ModelError::UnknownModel);
-        }
-        Ok(self
-            .model_catalog
+    /// Keys of every baked model the resolved `state` can select, in bake order without repeats.
+    /// Empty for a state with no binding in this store.
+    pub fn block_state_models(&self, state: BlockStateId) -> Vec<BakedModelKey> {
+        self.model_catalog
             .state_slots(state)
             .unwrap_or_default()
             .into_iter()
             .map(|slot| mod_api::__private::built::baked_model_key(self.generation, slot))
-            .collect())
+            .collect()
     }
 
     /// A copy of the baked model `key` names, validated against this store's generation first.

@@ -7,6 +7,25 @@ use crate::*;
 #[sunrise_mod_api_macros::host_area]
 pub trait PlayerWorldBackend {
     /// Side: both.
+    /// The support block retained from the player's last move (`Entity.mainSupportingBlockPos`),
+    /// not a new collision query or a read of the current ground flag. `Ok(None)` if no support
+    /// was retained, the handle is stale, or this side does not keep the player's motion.
+    /// On the client, reads the local player's prediction.
+    /// `Err(LevelReadError::Unavailable)` if the host cannot read player motion.
+    #[access(WorldOnly)]
+    fn player_supporting_block(
+        &self,
+        player: PlayerRef,
+    ) -> Result<Option<BlockPos>, LevelReadError>;
+    /// Side: both.
+    /// `Entity.getOnPos()` for this player: the support retained from its last move, otherwise
+    /// the block at its feet with vanilla's `1.0E-5F` subtracted from Y. A server guest's feet
+    /// come from the authoritative position even before the first motion is stored.
+    /// `Ok(None)` for a stale handle or a player with no readable position on this side.
+    /// `Err(LevelReadError::Unavailable)` if the host cannot read player motion.
+    #[access(WorldOnly)]
+    fn player_on_block(&self, player: PlayerRef) -> Result<Option<BlockPos>, LevelReadError>;
+    /// Side: both.
     /// The level the online player is in (`ServerPlayer.level`): on an integrated
     /// server or dedicated server, the player's current dimension; on a client,
     /// the client's level. None for a stale or unavailable player.
@@ -18,6 +37,18 @@ pub trait PlayerWorldBackend {
     /// or unavailable player.
     #[access(WorldOnly)]
     fn player_dimension(&self, player: PlayerRef) -> Option<Identifier>;
+    /// Side: both.
+    /// The collision flags the player's last move left (`Entity.horizontalCollision`,
+    /// `minorHorizontalCollision`, `verticalCollision`, `verticalCollisionBelow`).
+    /// On the client, reads the local player's prediction. `Ok(None)` for a stale
+    /// or untracked handle and for a connected server guest: the server does not
+    /// yet retain collision flags from its position reports.
+    /// `Err(LevelReadError::Unavailable)` if the host cannot read player motion.
+    #[access(WorldOnly)]
+    fn player_collision_flags(
+        &self,
+        player: PlayerRef,
+    ) -> Result<Option<CollisionFlags>, LevelReadError>;
     /// Side: both.
     /// The dimension and block of the player's last death
     /// (`Player.getLastDeathLocation`).

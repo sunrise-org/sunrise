@@ -163,6 +163,8 @@ pub struct State {
     /// for a shift-click), for `ItemSmithedEvent`: the template, base and
     /// addition as they were before the take used them, and the stack taken.
     pub item_smithed: Vec<([Option<ItemStack>; 3], ItemStack)>,
+    /// The authoritative click's take recorder, never enabled during prediction.
+    pub(super) takes: Option<super::click::TakeTracker>,
     /// `FurnaceResultSlot.removeCount`.
     pub(super) output_removed: u32,
     /// `LivingEntity.onEquipItem` calls that change the item: the

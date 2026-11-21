@@ -1233,6 +1233,14 @@ impl Game<'_> {
         }
         self.items().get(&s.item).map_or(64, |i| i.max_stack)
     }
+    fn parse_inline_item_modifier(raw: &str) -> R<serde_json::Value> {
+        let (tag, _) =
+            sunrise_core::nbt::parse_snbt(raw).map_err(|e| err("argument.nbt.invalid", &[&e]))?;
+        let value = sunrise_client::scoreboard::tag_to_json(&tag);
+        sunrise_world::loot::validate_item_modifier(&value)
+            .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
+        Ok(value)
+    }
     /// `ResourceOrIdArgument.getItemModifier`: an inline modifier (SNBT) or
     /// a registered one.
     pub(super) fn item_modifier_arg(&mut self, ctx: &Context, name: &str) -> R<serde_json::Value> {
@@ -1241,9 +1249,7 @@ impl Game<'_> {
             _ => return Err(err("command.failed", &[])),
         };
         if raw.starts_with('{') || raw.starts_with('[') {
-            let (tag, _) = sunrise_core::nbt::parse_snbt(&raw)
-                .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
-            return Ok(sunrise_client::scoreboard::tag_to_json(&tag));
+            return Self::parse_inline_item_modifier(&raw);
         }
         let id = if raw.contains(':') {
             raw
@@ -1643,7 +1649,7 @@ fn edit_components(stack: &mut ItemStack, f: impl FnOnce(&mut sunrise_core::nbt:
 fn set_custom_data(stack: &mut ItemStack, value: &Tag) {
     edit_components(stack, |c| {
         let mut data = match c.get(&"minecraft:custom_data".into()) {
-            Some(t @ Tag::Compound(_)) => t.clone(),
+            Some(t @ Tag::Compound(_)) => sunrise_core::nbt::copy_tag(t),
             _ => Tag::Compound(Default::default()),
         };
         merge_compound(&mut data, value);
@@ -1664,7 +1670,7 @@ fn merge_compound(into: &mut Tag, from: &Tag) {
         match (a.get_mut(k), v) {
             (Some(existing @ Tag::Compound(_)), Tag::Compound(_)) => merge_compound(existing, v),
             _ => {
-                a.insert(k.clone(), v.clone());
+                a.insert(k.clone(), sunrise_core::nbt::copy_tag(v));
             }
         }
     }
@@ -3119,6 +3125,28 @@ mod set_custom_data_tests {
         set_custom_data(&mut stack, &Tag::Compound(Default::default()));
         let saved = sunrise_client::item_data::component_snapshot(&stack);
         assert!(saved.is_none_or(|c| c.get("minecraft:custom_data").is_none()));
+    }
+}
+
+#[cfg(test)]
+mod transient_modifier_tests {
+    use super::*;
+    #[test]
+    fn inline_command_modifier_refuses_whole_sequence_before_execution() {
+        let error = Game::parse_inline_item_modifier(
+            r#"[{type:"minecraft:set_count",count:2},{type:"minecraft:set_components",components:{"!minecraft:creative_slot_lock":{}}}]"#,
+        ).unwrap_err();
+        let message = format!("{error:?}");
+        assert!(message.contains("minecraft:creative_slot_lock"));
+        assert!(message.contains("not a persistent component"));
+        let accepted = Game::parse_inline_item_modifier(
+            r#"[{type:"minecraft:copy_components",source:"block_entity",include:["minecraft:additional_trade_cost"]},{type:"minecraft:set_custom_data",tag:{components:{"minecraft:map_post_processing":"opaque"}}}]"#,
+        ).unwrap();
+        assert_eq!(accepted.as_array().unwrap().len(), 2);
+        assert_eq!(
+            accepted[1]["tag"]["components"]["minecraft:map_post_processing"],
+            "opaque"
+        );
     }
 }
 

@@ -62,6 +62,11 @@ impl Menu {
     }
     /// Apply the backing container's bound without asking placement again.
     pub(super) fn limit_slot_max(&self, s: usize, max: u32) -> u32 {
+        if let super::Kind::Mod(layout) = self.state.kind
+            && let Some(limit) = layout.owned_slots.as_ref().and_then(|limits| limits.get(s))
+        {
+            return max.min(u32::from(*limit));
+        }
         let slot = self.state.slots[s];
         if slot.container == super::MAIN {
             self.state

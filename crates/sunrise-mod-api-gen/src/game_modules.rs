@@ -103,6 +103,12 @@ pub(crate) fn parse(path: &Path, source: &str) -> Result<syn::File, String> {
     syn::parse_file(&expand(path, source)?).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// [`parse`] for a walk that reads module declarations and never bodies: through the
+/// interface cache, which `scan` then reuses.
+pub(crate) fn parse_signatures(path: &Path, source: &str) -> Result<syn::File, String> {
+    syn::parse_file(&expand(path, source)?).map_err(|error| format!("{}: {error}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,6 +2,7 @@
 use super::{Bundle, internals};
 use std::fs;
 use std::path::Path;
+use sunrise_mod_package::native_route::{API_PACKAGE, INTERNALS_PACKAGE, PACKAGES};
 
 pub fn read(path: &Path) -> Result<toml::Table, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -19,22 +20,17 @@ fn path_dep(path: &str) -> toml::Table {
 
 pub fn template(path: &Path) -> Result<String, String> {
     fs::read_to_string(path).ok()
-        .filter(|template| ["/* MOD_ENTRIES */", "/* MOD_SLOTS */", "/* BUILT_MODS */"].iter()
+        .filter(|template| ["/* MOD_ENTRIES */", "/* BUILT_MODS */"].iter()
             .all(|marker| template.matches(marker).count() == 1))
         .ok_or_else(|| crate::host::tr("This game source has no native inventory entry template. Update Sunrise and rebuild the mods against this game.").to_string())
 }
 
-pub fn main_rs(
-    template: &str,
-    mods: &[&sunrise_mod_package::Manifest],
-    catalog: &internals::Catalog,
-) -> String {
+pub fn main_rs(template: &str, mods: &[&sunrise_mod_package::Manifest]) -> String {
     // Own the bytes even when the staged SDK template references a static in a dylib.
     let template = template.replace(
         "std::hint::black_box(&sunrise_mod_package::holder::CAPABILITY);",
         "#[used] static HOLDER_CAPABILITY: [u8; sunrise_mod_package::holder::CAPABILITY.len()] = sunrise_mod_package::holder::CAPABILITY; std::hint::black_box(&HOLDER_CAPABILITY);",
     );
-    let listed = &catalog.points;
     let entries = mods
         .iter()
         .enumerate()
@@ -44,22 +40,7 @@ pub fn main_rs(
         "    mod_api::__private::native::BuiltMod {{ id: {:?}, version: {:?}, side: mod_api::Side::{:?} }},\n",
         m.id, m.version.to_string(), m.side,
     )).collect::<String>();
-    let api_points = listed
-        .iter()
-        .map(super::inject::ListedPoint::emitted)
-        .collect::<Vec<_>>();
-    let raw = mods
-        .iter()
-        .enumerate()
-        .flat_map(|(i, manifest)| {
-            sunrise_mod_point_emit::api(manifest, &api_points, &format!("mod_{i}::"))
-                .expect("API slots checked")
-                .into_iter()
-                .map(|expression| format!("        {expression},\n"))
-        })
-        .collect::<String>();
     let markers = [
-        ("/* MOD_SLOTS */", &raw),
         ("/* MOD_ENTRIES */", &entries),
         ("/* BUILT_MODS */", &inventory),
     ];
@@ -85,25 +66,6 @@ pub struct Project<'a> {
     pub package: String,
     api_deps: Vec<ApiDependency>,
 }
-
-/// The mod API's package, the one crate every mod depends on.
-pub const POINTS_PACKAGE: &str = "sunrise-mod-points";
-pub const API_PACKAGE: &str = "sunrise-mod-api";
-
-/// The per-mod facade's package, rewritten to its generated crate.
-pub const INTERNALS_PACKAGE: &str = "sunrise-internals";
-/// The game's one wasmtime, for a mod that embeds a wasm engine. Native-only and unstable: it follows the exact
-/// game build, so only a mod with a `[[native.*]]` row (which is built for one build) may name it; an API-only mod
-/// installs on any build its surface items allow, and a wasm mod cannot link it (`cargo sunrise-mod build` refuses
-/// the dependency).
-pub const WASMTIME_PACKAGE: &str = "sunrise-wasmtime";
-/// Each game package a mod may depend on, with its library's name.
-pub const PACKAGES: [(&str, &str); 4] = [
-    (API_PACKAGE, "mod_api"),
-    (POINTS_PACKAGE, "mod_points"),
-    (INTERNALS_PACKAGE, "internals"),
-    (WASMTIME_PACKAGE, "sunrise_wasmtime"),
-];
 
 /// Where a mod's `Cargo.toml` names the SDK package `package`: the copy of its pinned build that
 /// `cargo sunrise-mod` fetches into the project (`.sunrise/sdk/`).
@@ -229,6 +191,14 @@ impl<'a> Project<'a> {
 
     /// Parses the staged Cargo manifest, or one read by a caller with its own input bounds.
     pub fn parse(bundle: &'a Bundle, text: &str) -> Result<Self, ProjectError> {
+        Self::parse_with(bundle, text, |file| bundle.dir.join(file).exists())
+    }
+
+    pub(crate) fn parse_with(
+        bundle: &'a Bundle,
+        text: &str,
+        exists: impl Fn(&str) -> bool,
+    ) -> Result<Self, ProjectError> {
         let mod_id = || bundle.manifest.id.clone();
         let cargo: toml::Table = text.parse().map_err(|e| ProjectError::Cargo {
             mod_id: mod_id(),
@@ -243,7 +213,7 @@ impl<'a> Project<'a> {
             }
         }
         for config in [".cargo/config", ".cargo/config.toml"] {
-            if bundle.dir.join(config).exists() {
+            if exists(config) {
                 return Err(ProjectError::Cargo {
                     mod_id: mod_id(),
                     reason: format!(
@@ -347,16 +317,6 @@ impl<'a> Project<'a> {
                 }
             }
         }
-        if api_deps.iter().any(|api| api.package == WASMTIME_PACKAGE)
-            && !(bundle.needs_mixins() || !bundle.native().r#loop.is_empty())
-        {
-            return Err(ProjectError::Cargo {
-                mod_id: mod_id(),
-                reason: format!(
-                    "E_NATIVE_ONLY_PACKAGE: {WASMTIME_PACKAGE} is the game's own wasmtime, pinned to one exact game build, so only a mod with a [[native.*]] row may depend on it; an API-only mod installs on any build its surface items allow"
-                ),
-            });
-        }
         if !api_deps
             .iter()
             .any(|api| api.target.is_none() && api.package == API_PACKAGE)
@@ -371,24 +331,11 @@ impl<'a> Project<'a> {
         })
     }
 
-    /// The manifest's dependency tables: `[dependencies]` (no target), then each
-    /// `[target.<cfg>.dependencies]`.
-    pub fn dependency_tables(&self) -> impl Iterator<Item = (Option<&str>, &toml::Table)> + '_ {
-        dependency_tables(&self.cargo)
-    }
-
     /// Whether the mod links its game internals facade, under any dependency alias.
     pub fn uses_internals(&self) -> bool {
         self.api_deps
             .iter()
             .any(|api| api.package == INTERNALS_PACKAGE)
-    }
-
-    /// Whether the mod links the game's wasmtime ([`WASMTIME_PACKAGE`]).
-    pub fn uses_wasmtime(&self) -> bool {
-        self.api_deps
-            .iter()
-            .any(|api| api.package == WASMTIME_PACKAGE)
     }
 
     /// The names the mod's code calls the game's packages by (`mod_api` or a
@@ -406,18 +353,6 @@ impl<'a> Project<'a> {
             })
             .collect()
     }
-}
-
-fn dependency_tables(cargo: &toml::Table) -> impl Iterator<Item = (Option<&str>, &toml::Table)> {
-    let targets = cargo
-        .get("target")
-        .and_then(toml::Value::as_table)
-        .into_iter()
-        .flatten()
-        .map(|(target, config)| (Some(target.as_str()), config.get("dependencies")));
-    std::iter::once((None, cargo.get("dependencies")))
-        .chain(targets)
-        .filter_map(|(target, table)| Some((target, table?.as_table()?)))
 }
 
 /// Add the mod libraries and their generated internals facades to the discovery workspace.
@@ -552,11 +487,7 @@ mod tests {
         );
         let template =
             "fn main() { std::hint::black_box(&sunrise_mod_package::holder::CAPABILITY); }";
-        fs::write(
-            &source,
-            main_rs(template, &[], &internals::Catalog::default()),
-        )
-        .unwrap();
+        fs::write(&source, main_rs(template, &[])).unwrap();
         assert!(
             std::process::Command::new("rustc")
                 .args(["--edition=2021", "-O", "-Cprefer-dynamic", "--extern"])
@@ -666,87 +597,6 @@ mod tests {
     }
 
     #[test]
-    fn a_native_mod_takes_the_games_wasmtime_by_its_path_form_only() {
-        let dir = fixture();
-        let wasmtime = "[dependencies]\nsunrise-mod-api={path='.sunrise/sdk/api/crates/sunrise-mod-api'}\nsunrise-wasmtime={path='.sunrise/sdk/api/crates/sunrise-wasmtime'}\n";
-        fs::write(
-            dir.join("Cargo.toml"),
-            format!("[package]\nname='example-mod'\nversion='1.0.0'\n{wasmtime}"),
-        )
-        .unwrap();
-        // An API-only mod (no [[native.*]] row) installs on any build its surface allows: it may not name the game's wasmtime.
-        let bundle = super::super::bundle_in(&dir).unwrap().unwrap();
-        let error = Project::read(&bundle).err().unwrap().to_string();
-        assert!(
-            error.starts_with(
-                "example: E_NATIVE_ONLY_PACKAGE: sunrise-wasmtime is the game's own wasmtime"
-            ),
-            "{error}"
-        );
-        let path = dir.join(sunrise_mod_package::manifest::MANIFEST);
-        let text = fs::read_to_string(&path).unwrap()
-            + "[[native.module]]\nid='test'\nfile='crates/sunrise-client/src/game.rs'\nname='support'\nsource='src/lib.rs'\n";
-        fs::write(&path, text).unwrap();
-        let api = "sunrise-mod-api={path='.sunrise/sdk/api/crates/sunrise-mod-api'}";
-        for (line, libraries, refusal) in [
-            (
-                "sunrise-wasmtime={path='.sunrise/sdk/api/crates/sunrise-wasmtime'}",
-                Some(("sunrise_wasmtime", "sunrise_wasmtime")),
-                None,
-            ),
-            (
-                "wasmtime={package='sunrise-wasmtime',path='.sunrise/sdk/api/crates/sunrise-wasmtime'}",
-                Some(("wasmtime", "sunrise_wasmtime")),
-                None,
-            ),
-            (
-                "sunrise-wasmtime='50'",
-                None,
-                Some("example: E_SDK_SOURCE: sunrise-wasmtime: a version names no source"),
-            ),
-            (
-                "sunrise-wasmtime={path='../sunrise-wasmtime'}",
-                None,
-                Some(
-                    "example: E_SDK_SOURCE: sunrise-wasmtime: the path must be \".sunrise/sdk/api/crates/sunrise-wasmtime\"",
-                ),
-            ),
-        ] {
-            let text = format!(
-                "[package]\nname='example-mod'\nversion='1.0.0'\n[dependencies]\n{api}\n{line}\n"
-            );
-            fs::write(dir.join("Cargo.toml"), text).unwrap();
-            let bundle = super::super::bundle_in(&dir).unwrap().unwrap();
-            match (Project::read(&bundle), libraries, refusal) {
-                (Ok(project), Some(library), None) => {
-                    assert!(
-                        project
-                            .api_dependencies()
-                            .contains(&(library.0.to_owned(), library.1))
-                    );
-                    // The game's features are the only ones: a mod asking for its own is refused on the prebuilt route.
-                    assert!(super::super::prebuilt::project_refusal(&project).is_none());
-                }
-                (Err(error), None, Some(refusal)) => {
-                    assert!(error.to_string().starts_with(refusal), "{error}")
-                }
-                (result, ..) => panic!("{line}: {:?}", result.err()),
-            }
-        }
-        let own = format!(
-            "[package]\nname='example-mod'\nversion='1.0.0'\n[dependencies]\n{api}\nsunrise-wasmtime={{path='.sunrise/sdk/api/crates/sunrise-wasmtime',features=['wat']}}\n"
-        );
-        fs::write(dir.join("Cargo.toml"), own).unwrap();
-        let bundle = super::super::bundle_in(&dir).unwrap().unwrap();
-        let project = Project::read(&bundle).unwrap();
-        assert!(matches!(
-            super::super::prebuilt::project_refusal(&project),
-            Some(super::super::prebuilt::Refusal::Features { .. })
-        ));
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn generates_only_tool_contract_tables_without_mutating_package() {
         let dir = fixture();
         let path = dir.join(sunrise_mod_package::manifest::MANIFEST);
@@ -781,16 +631,13 @@ mod tests {
         extra.side = mod_vocab::Side::Client;
         let mods = [&base, &extra];
         for count in 0..=2 {
-            let text = main_rs(template, &mods[..count], &internals::Catalog::default());
-            let padded = ["/* MOD_ENTRIES */", "/* MOD_SLOTS */", "/* BUILT_MODS */"]
+            let text = main_rs(template, &mods[..count]);
+            let padded = ["/* MOD_ENTRIES */", "/* BUILT_MODS */"]
                 .into_iter()
                 .fold(template.to_owned(), |text, marker| {
                     text.replace(marker, &format!("    {marker}"))
                 });
-            assert_eq!(
-                main_rs(&padded, &mods[..count], &internals::Catalog::default()),
-                text
-            );
+            assert_eq!(main_rs(&padded, &mods[..count]), text);
             let facts: Vec<_> = text
                 .lines()
                 .filter(|line| line.contains(" => mod_"))
@@ -832,17 +679,32 @@ mod tests {
             ),
         )
         .unwrap();
-        let resolution = super::super::dependencies::Resolution {
-            order: vec![0],
-            warnings: Vec::new(),
-        };
+        let manifest = dir.join(sunrise_mod_package::manifest::MANIFEST);
+        let source = fs::read_to_string(&manifest).unwrap();
+        fs::write(
+            &manifest,
+            format!("{source}\n[dependencies]\ncontent='^1'\n"),
+        )
+        .unwrap();
         let bundle = super::super::bundle_in(&dir).unwrap().unwrap();
         let project = Project::read(&bundle).unwrap();
         let catalog = internals::Catalog {
             discovery: true,
             ..Default::default()
         };
-        assert!(stage(stage_dir, &[project], &[vec![]], &resolution, &catalog).unwrap());
+        let side = sunrise_mod_package::manifest::Side::Both;
+        let declared =
+            super::super::dependencies::build_dependencies(&bundle.manifest, side, |_| false);
+        let resolution =
+            super::super::dependencies::resolve_links(&[super::super::dependencies::Mod {
+                id: &bundle.manifest.id,
+                version: &bundle.manifest.version,
+                has_api: true,
+                code: true,
+                dependencies: &declared,
+            }])
+            .unwrap();
+        assert!(stage(stage_dir, &[project], &[declared], &resolution, &catalog).unwrap());
         let root = read(&stage_dir.join("Cargo.toml")).unwrap();
         assert_eq!(
             root["workspace"]["members"].as_array().unwrap(),
@@ -852,6 +714,7 @@ mod tests {
             ]
         );
         let lib = read(&stage_dir.join("native-api/example/Cargo.toml")).unwrap();
+        assert!(lib["dependencies"].get("content").is_none());
         assert_eq!(
             lib["dependencies"]["internals"]["path"].as_str(),
             Some("../../native-internals/example")

@@ -7,6 +7,33 @@ use crate::{
 };
 
 #[test]
+fn game_event_parameter_rounds_the_float_sum_before_flooring_and_casting() {
+    for (param, expected) in [
+        (-0.6, -1),
+        (-0.5, 0),
+        (f32::from_bits(0x3eff_ffff), 1),
+        (0.0, 0),
+        (-0.0, 0),
+        (f32::NAN, 0),
+        (8_388_609.0, 8_388_610),
+        (2_147_483_520.0, 2_147_483_520),
+        (2_147_483_648.0, i32::MAX),
+        (-2_147_483_520.0, -2_147_483_520),
+        (-2_147_483_648.0, i32::MIN),
+        (-2_147_483_904.0, i32::MIN),
+        (f32::INFINITY, i32::MAX),
+        (f32::NEG_INFINITY, i32::MIN),
+    ] {
+        assert_eq!(
+            GameEvent { event: 3, param }.rounded_param(),
+            expected,
+            "parameter {param} (0x{:08x})",
+            param.to_bits()
+        );
+    }
+}
+
+#[test]
 fn a_command_tree_with_a_cycle_is_refused() {
     let node = |kind: u8, name: &str, children: Vec<i32>, redirect: Option<i32>| CommandNode {
         kind,
@@ -791,7 +818,7 @@ fn serverbound_round_trips() {
             button: 0,
             input: 0,
             changed: vec![(36, None)],
-            carried: Some(Hashed::of(&Stack::new(1, 64))),
+            carried: Some(Hashed::of(&Stack::new(1, 64)).unwrap()),
         }),
         Serverbound::MovePlayerPosRot(MovePlayerPosRot {
             x: 1.0,

@@ -302,6 +302,7 @@ mod defend_trader_tests {
                 owner.ai.last_hurt_by_time = 5;
                 let seen = [owner.seen(None, &crate::items::Items::empty())];
                 let world = crate::mobs::MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     others: &seen,
                     ..world
                 };

@@ -5,7 +5,7 @@ use sunrise_core::nbt::Tag;
 
 /// Failure to access a native item component.
 #[derive(Debug)]
-pub enum NativeComponentError {
+pub(crate) enum NativeComponentError {
     UnknownType,
     InvalidValue(sunrise_protocol::Error),
 }

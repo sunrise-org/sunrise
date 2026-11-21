@@ -28,7 +28,7 @@ impl ReloadResourceError {
         }
     }
 }
-/// The error as its resource and message, the form it crosses a wasm mod's boundary in.
+/// The error as its resource ID and message.
 impl From<&ReloadResourceError> for (Identifier, String) {
     fn from(error: &ReloadResourceError) -> Self {
         (error.resource.clone(), error.source.to_string())

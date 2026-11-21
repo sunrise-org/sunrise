@@ -3,30 +3,7 @@ use super::*;
 use crate::*;
 use sunrise_core::nbt::{Compound, JavaString};
 
-pub(super) fn install_layout_resources() {
-    let _ = crate::wire::install_resource_access(crate::wire::ResourceAccess {
-        intern: |value| {
-            if value.len() > crate::wire::MAX_STATIC_STRING_BYTES {
-                return Err(WireError::Invalid("static string too long"));
-            }
-            Ok(Box::leak(value.to_owned().into_boxed_str()))
-        },
-        store: |value| {
-            let provider = value
-                .downcast::<std::sync::Arc<dyn std::any::Any + Send + Sync>>()
-                .map_err(|_| WireError::Invalid("no resource context"))?;
-            if provider.downcast_ref::<u32>() != Some(&73) {
-                return Err(WireError::Invalid("no resource context"));
-            }
-            Ok(crate::wire::Id(0x100000007))
-        },
-        load: |_, _| Err(WireError::Invalid("no resource context")),
-        refused: |_| {},
-    });
-}
-
 fn fields<T: Wire, F: Wire + std::fmt::Debug + PartialEq>(value: T, expected: F) {
-    install_layout_resources();
     assert_eq!(decode::<T, F>(value), expected);
 }
 fn id(s: &str) -> Identifier {
@@ -147,8 +124,8 @@ fn resource_decoders_normalize_non_unit_wire_quantities() {
 }
 
 #[test]
-fn empty_feature_flag_storage_encodes_the_effective_vanilla_default() {
-    let flags = FeatureFlags::new(std::sync::Arc::from([]));
+fn feature_flag_wire_preserves_the_effective_set() {
+    let flags = FeatureFlags::new(["minecraft:vanilla".to_owned()].into());
     assert!(flags.contains("minecraft:vanilla"));
     assert!(flags.contains("vanilla"));
     assert_eq!(flags.iter().collect::<Vec<_>>(), ["minecraft:vanilla"]);
@@ -159,12 +136,13 @@ fn empty_feature_flag_storage_encodes_the_effective_vanilla_default() {
     assert_eq!(out.bytes(), expected);
     let decoded: FeatureFlags = Reader::decode(expected).unwrap();
     assert_eq!(decoded.iter().collect::<Vec<_>>(), ["minecraft:vanilla"]);
-    // A zero-entry input still takes the constructor's empty-default path,
-    // and re-encoding it emits the same effective list as before the migration.
-    let empty: FeatureFlags = Reader::decode(&[0, 0, 0, 0]).unwrap();
+    let no_flags = [0, 0, 0, 0];
+    let empty: FeatureFlags = Reader::decode(&no_flags).unwrap();
+    assert!(!empty.contains("minecraft:vanilla"));
+    assert_eq!(empty.iter().next(), None);
     out.clear();
     out.put(&empty);
-    assert_eq!(out.bytes(), expected);
+    assert_eq!(out.bytes(), &no_flags);
 }
 
 #[test]
@@ -363,25 +341,6 @@ fn snapshot_and_reload_records_have_declared_field_bytes() {
     fields(DamageContainer::from(values.clone()), (values,));
     let revision = crate::item::containers::ModRevision::from_snapshot(31, 47);
     fields(revision, (31u64, 47u64));
-    let snapshot = crate::item::containers::ModBlockEntitySnapshot {
-        id: "example:machine".into(),
-        fields: crate::item::containers::ModBlockEntityFields {
-            nbt: Compound::new(),
-            items: vec![None],
-            data: vec![19, -3],
-        },
-        revision,
-        client_update_fields: Some(Compound::new()),
-    };
-    let (decoded,): (crate::item::containers::ModBlockEntitySnapshot,) =
-        decode(ModBlockEntity::from(snapshot));
-    assert_eq!(decoded.id, "example:machine");
-    assert_eq!(decoded.fields.nbt, Compound::new());
-    assert_eq!(decoded.fields.items, vec![None]);
-    assert_eq!(decoded.fields.data, vec![19, -3]);
-    assert_eq!(decoded.revision.identity(), 31);
-    assert_eq!(decoded.revision.changes(), 47);
-    assert_eq!(decoded.client_update_fields, Some(Compound::new()));
     let files = std::collections::BTreeMap::from([(id("example:recipe"), vec![3u8, 5, 7])]);
     fields(
         crate::world::reload::ReloadFiles::new(files.clone()),
@@ -479,6 +438,30 @@ fn registration_and_attribute_records_have_declared_field_bytes() {
                     None,
                 )],
                 PackageDetails::default(),
+                None::<String>,
+            ),
+        ),
+    );
+    fields(
+        PackageInfo::new(
+            "runes".into(),
+            "1.0.0".into(),
+            PackageKind::Content,
+            Side::Both,
+            vec!["runes".into()],
+            vec![],
+        )
+        .with_served_by(Some("horizon_java".into())),
+        (
+            "runes".to_owned(),
+            "1.0.0".to_owned(),
+            PackageKind::Content,
+            Side::Both,
+            vec!["runes".to_owned()],
+            (
+                Vec::<PackageDependency>::new(),
+                PackageDetails::default(),
+                Some("horizon_java".to_owned()),
             ),
         ),
     );
@@ -530,7 +513,6 @@ fn registration_and_attribute_records_have_declared_field_bytes() {
     let details = PackageDetails {
         name: "Example".into(),
         icon_path: Some("icon.png".into()),
-        runtime: Some(PackageRuntime::Native),
         properties: [("ratio".into(), PropertyValue::Float(0.5))].into(),
         ..Default::default()
     };
@@ -547,7 +529,6 @@ fn registration_and_attribute_records_have_declared_field_bytes() {
             (
                 None::<String>,
                 Some("icon.png".to_owned()),
-                Some(PackageRuntime::Native),
                 details.properties.clone(),
             ),
         ),
@@ -623,10 +604,8 @@ fn particle_record_has_declared_field_bytes() {
             [4.0, 5.0, 6.0],
             23,
         )),
-        legacy_entity_effect: Some(true),
-        legacy_trail_lifetime: true,
     };
-    // Nested tuples add no framing: two groups allow all twelve fields to be decoded
+    // Nested tuples add no framing: two groups allow all ten fields to be decoded
     // with the same declared types despite Wire's six-element tuple limit.
     fields(
         particle,
@@ -651,8 +630,6 @@ fn particle_record_has_declared_field_bytes() {
                     [4.0f64, 5.0, 6.0],
                     23i32,
                 )),
-                Some(true),
-                true,
             ),
         ),
     );
@@ -732,10 +709,8 @@ fn newtype_widths_and_unit_enum_tags_match_their_encodings() {
     fields(SoundRef { id: 71 }, (71u64,));
     fields(crate::__private::biome_id(11), (11u32,));
     fields(crate::__private::mod_color_resolver(13), (13u32,));
-    fields(crate::wire::wire_slots::Id(0x100000003), (0x100000003u64,));
     fields(BlockUpdateFlags(17), (17u32,));
     fields(PackageKind::Code, (0u32,));
-    fields(PackageRuntime::Wasm, (1u32,));
     fields(Side::Both, (1u32,));
     fields(Reduction::Armor, (1u8,));
     fields(SpawnerKind::Patrol, (1u32,));
@@ -1000,18 +975,6 @@ fn every_attachment_error_and_write_case_has_declared_tag_type() {
     fields(AttachmentWrite::Decoded, (0u32,));
     fields(AttachmentWrite::Default, (1u32,));
     fields(AttachmentWrite::Set, (2u32,));
-}
-
-#[test]
-fn erased_provider_record_uses_active_resource_scope() {
-    // Pin the layout at this layer; platform tests own active codec lifetimes.
-    fields(
-        OwnProvider {
-            handler: "example:handler".into(),
-            provider: std::sync::Arc::new(73u32),
-        },
-        ("example:handler".to_owned(), 0x100000007u64),
-    );
 }
 
 #[test]

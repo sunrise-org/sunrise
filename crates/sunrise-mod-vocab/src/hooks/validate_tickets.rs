@@ -5,6 +5,7 @@ pub trait Hooks {
     /// (NeoForge's `LoadingValidationCallback.validateTickets`), before its
     /// first tick and after `level_load`, once for each open and each
     /// controller registered with a validator that has tickets in the level.
+    /// At startup all built-in levels are available before validation begins.
     /// `validation` holds that controller's tickets, block owners and entity
     /// owners apart; the mod that owns the controller removes the ones that no
     /// longer hold (a machine that is gone), and they stop forcing their
@@ -13,7 +14,8 @@ pub trait Hooks {
         side = "server",
         contract = "listen",
         neoforge = "LoadingValidationCallback",
-        cancellable = false
+        cancellable = false,
+        version = 2
     )]
     fn validate_tickets();
 }

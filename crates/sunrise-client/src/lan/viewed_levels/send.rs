@@ -112,6 +112,27 @@ impl Runs {
             }
         }
     }
+    /// The scoped vanilla packet stays byte-identical. Its normal run comes
+    /// first in the outer bundle, followed by runs of only section group data.
+    pub(crate) fn push_grouped(&mut self, body: &[u8], groups: &[Vec<u8>]) -> bool {
+        if groups.is_empty() {
+            return self.push(body);
+        }
+        let mut primary = Self::new(self.level);
+        let mut metadata = Self::new(self.level);
+        if !primary.push(body) || !groups.iter().all(|packet| metadata.push(packet)) {
+            return false;
+        }
+        let body = primary.finish().pop().expect("one primary packet");
+        self.flush();
+        self.payloads
+            .extend(super::super::hub::block_changes::group_bundle(
+                body,
+                metadata.finish(),
+            ));
+        true
+    }
+
     fn flush(&mut self) {
         if let Some((run, _)) = self.run.take() {
             self.payloads.push(run.finish());
@@ -147,12 +168,13 @@ pub(crate) fn batch_runs<T>(
     level: Level,
     taken: &[(usize, T)],
     bodies: &[Vec<u8>],
+    mut groups: impl FnMut(&T) -> Vec<Vec<u8>>,
 ) -> (Vec<Vec<u8>>, Vec<usize>) {
     let mut runs = Runs::new(level);
     let sent = taken
         .iter()
         .zip(bodies)
-        .filter(|(_, body)| runs.push(body))
+        .filter(|((_, element), body)| runs.push_grouped(body, &groups(element)))
         .map(|((idx, _), _)| *idx)
         .collect();
     (runs.finish(), sent)
@@ -169,6 +191,9 @@ impl Hub {
         let world = &mut *ctx.world;
         if world.block_log.is_none() {
             world.block_log = Some(Vec::new());
+        }
+        if world.connection_group_log.is_none() {
+            world.connection_group_log = Some(Default::default());
         }
         if world.light_log.is_none() {
             world.light_log = Some(Default::default());
@@ -311,7 +336,16 @@ impl Hub {
         let bodies = self.encoder.bodies_with(&chunks, world, &|x, z| {
             streaming.and_then(|s| s.proto_sections(x, z))
         });
-        let (payloads, taken) = batch_runs(view.level, &taken, &bodies);
+        let sync_groups = g.negotiated_connection_groups();
+        let mut grouped = false;
+        let (payloads, taken) = batch_runs(view.level, &taken, &bodies, |chunk| {
+            if sync_groups && !chunk.connection_groups.is_empty() {
+                grouped = true;
+                super::super::hub::block_changes::encode_chunk_connection_groups(chunk)
+            } else {
+                Vec::new()
+            }
+        });
         if taken.is_empty() {
             return;
         }
@@ -320,7 +354,11 @@ impl Hub {
         self.guests.update(i, |g| {
             g.batch_quota -= size as f32;
             g.send(&C::ChunkBatchStart(Empty));
-            g.sender.send_many(payloads);
+            if grouped {
+                g.sender.send_batch(payloads);
+            } else {
+                g.sender.send_many(payloads);
+            }
             g.send(&C::ChunkBatchFinished(play::ChunkBatchFinished {
                 size: size as i32,
             }));

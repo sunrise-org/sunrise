@@ -1,5 +1,16 @@
 use super::*;
 
+/// The creative-slot wire codec bounds a stack's count to 1..=99; an item whose
+/// own max stack size a native mod raised past 99 becomes the ceiling instead.
+fn creative_count_bound(item_max_stack: u32) -> u32 {
+    item_max_stack.max(99)
+}
+
+/// Whether a creative stack's count is past the bound its item's own max stack gives it.
+fn creative_count_exceeds(count: u32, own_max: u32) -> bool {
+    count > creative_count_bound(own_max)
+}
+
 impl Game<'_> {
     /// DedicatedServer.isUnderSpawnProtection: no operators, an operator or a
     /// radius of 0 or less is never under it; else a block within the radius
@@ -130,6 +141,43 @@ impl Game<'_> {
 
     /// A packet from a guest that the hub does not handle itself.
     pub(in crate::game) fn lan_guest_packet(&mut self, conn: u32, packet: S) {
+        // The window's ordinary reply cannot fix a predicted swap in a player slot
+        // it doesn't show. Prepare the repair even if menu validation closes the window.
+        const OFFHAND_BUTTON: i8 = crate::game::shield::OFFHAND_SLOT as i8;
+        let swap = if let S::ContainerClick(click) = &packet
+            && click.input == sunrise_client::lan::menu::input::SWAP
+            && matches!(click.button, 0..=8 | OFFHAND_BUTTON)
+        {
+            use super::super::lan_menus::ClickReply;
+            self.lan
+                .as_ref()
+                .and_then(|host| host.hub.guest(conn))
+                .and_then(|guest| guest.menu.as_ref())
+                .filter(|menu| {
+                    menu.window == click.container
+                        && usize::try_from(click.slot).is_ok_and(|slot| slot < menu.slot_count())
+                })
+                .and_then(|menu| {
+                    if menu.mod_type.is_some() && menu.player_slots() == 0 {
+                        Some(ClickReply::Inventory)
+                    } else if click.button == OFFHAND_BUTTON
+                        && (menu.mod_type.is_some() || menu.slots == Slots::Native)
+                    {
+                        Some(ClickReply::Offhand)
+                    } else {
+                        None
+                    }
+                })
+        } else {
+            None
+        };
+        self.lan_guest_packet_inner(conn, packet);
+        if let Some(reply) = swap {
+            self.reply_menu_click(conn, reply);
+        }
+    }
+
+    fn lan_guest_packet_inner(&mut self, conn: u32, packet: S) {
         // A crossing the hub's move check passed; a dead player's is refused, not dropped.
         if let S::CustomPayload(p) = &packet
             && p.channel == sunrise_protocol::passage_sync::CROSS_CHANNEL
@@ -156,18 +204,32 @@ impl Game<'_> {
         {
             return;
         }
-        if matches!(
-            packet,
-            S::ContainerClick(_)
-                | S::ContainerButtonClick(_)
-                | S::ContainerSlotStateChanged(_)
-                | S::RenameItem(_)
-                | S::SetBeacon(_)
-                | S::SelectTrade(_)
-                | S::SelectBundleItem(_)
-                | S::PlaceRecipe(_)
-        ) {
-            self.guest_validate_menu(conn);
+        // The window a packet names is the open one, as in vanilla's handlers. With no menu open
+        // this is 0, so a container-0 packet asks the validity of no menu.
+        let open_window = |host: &LanHost| {
+            super::super::native_menus::open_menu_of(host, conn).map_or(0, |(window, _, _)| window)
+        };
+        let may_act_in =
+            |container| container == open_window(host) && !host.hub.guests[gi].spectator();
+        let validate_menu = match &packet {
+            S::ContainerClick(click) => {
+                // handleContainerClick ignores another window's click. A spectator's
+                // click goes straight to the menu's resync path, without a validity ask.
+                if click.container != open_window(host) {
+                    return;
+                }
+                !host.hub.guests[gi].spectator()
+            }
+            // handleContainerButtonClick, handleContainerSlotStateChanged and handlePlaceRecipe
+            // act only for the open window and a player who isn't a spectator.
+            S::ContainerButtonClick(p) => may_act_in(p.container),
+            S::ContainerSlotStateChanged(p) => may_act_in(p.container),
+            S::PlaceRecipe(p) => may_act_in(p.container),
+            S::RenameItem(_) | S::SetBeacon(_) | S::SelectTrade(_) | S::SelectBundleItem(_) => true,
+            _ => false,
+        };
+        if validate_menu && !self.guest_validate_menu(conn) {
+            return;
         }
         let Some(host) = self.lan.as_ref() else {
             return;
@@ -319,11 +381,7 @@ impl Game<'_> {
                     // ServerPlayerGameMode.abortDestroyBlock clears the dig and the crack; the
                     // clock `destroy_pos` names is left to the next START (#4124).
                     host.play.entry(conn).or_default().dig_ended();
-                    let state = self.world.block(a.pos[0], a.pos[1], a.pos[2]).0 as i32;
-                    host.hub.send_to(
-                        conn,
-                        &C::BlockUpdate(play::BlockUpdate { pos: a.pos, state }),
-                    );
+                    host.hub.send_authoritative_block(conn, &self.world, a.pos);
                     self.guest_crack_progress(conn, a.pos, -1);
                     let Some(host) = self.lan.as_ref() else {
                         return;
@@ -633,15 +691,6 @@ impl Game<'_> {
                     });
                 }
             }
-            // AbstractContainerMenu.quickMoveStack of a mod container: the mods first.
-            S::ContainerClick(p) if self.lan_mod_quick_move(conn, &p) => {}
-            S::ContainerClick(p) if self.lan_merchant_click(conn, &p) => {}
-            S::ContainerClick(p) if self.lan_inventory_click(conn, &p) => {}
-            S::ContainerClick(p) if self.lan_crafting_click(conn, &p) => {}
-            S::ContainerClick(p) if self.lan_machine_click(conn, &p) => {}
-            S::ContainerClick(p) if self.lan_station_click(conn, &p) => {}
-            S::ContainerClick(p) if self.lan_lectern_click(conn, &p) => {}
-            S::ContainerClick(p) if self.lan_mount_click(conn, &p) => {}
             // ServerboundPlayerCommandPacket OPEN_INVENTORY: the ridden
             // mount's inventory (`HasCustomInventoryScreen`).
             S::PlayerCommand(p) if p.action == 5 => {
@@ -705,16 +754,11 @@ impl Game<'_> {
             }
             S::SetBeacon(p) => self.lan_station_beacon(conn, p.primary, p.secondary),
             S::SelectTrade(p) => self.lan_select_trade(conn, p.item),
-            S::ContainerClose(p) if self.lan_merchant_closed(conn, Some(p.container)) => {
-                self.guest_carried_back(gi);
-            }
             S::ContainerClose(p)
-                if self.lan_crafting_closed(conn, Some(p.container))
+                if self.lan_merchant_closed(conn, Some(p.container))
+                    || self.lan_crafting_closed(conn, Some(p.container))
                     || self.lan_station_closed(conn, Some(p.container))
-                    || self.lan_mount_closed(conn, Some(p.container)) =>
-            {
-                self.guest_carried_back(gi);
-            }
+                    || self.lan_mount_closed(conn, Some(p.container)) => {}
             S::SelectBundleItem(p) => {
                 // ServerGamePacketListenerImpl.handleBundleItemSelectedPacket: the slot
                 // is the open menu's (#4436).
@@ -741,31 +785,9 @@ impl Game<'_> {
                 }
             }
             S::ContainerClick(p) => {
-                let Some(host) = self.lan.as_mut() else {
-                    return;
-                };
-                let slots = host.hub.guests[gi]
-                    .menu
-                    .as_ref()
-                    .filter(|m| m.window == p.container)
-                    .map(|m| m.slots);
-                let before = slots.and_then(|s| s.read(&self.world, &host.hub.guests[gi]));
-                let drops = self.lan_hub_click(conn, &p);
-                // A click that changed the container's slots: BlockEntity.setChanged,
-                // so comparators read it again (a double chest's other half follows).
-                let Some(host) = self.lan.as_ref() else {
-                    return;
-                };
-                if let Some(Slots::Block(key) | Slots::Double(key, _)) = slots
-                    && slots.and_then(|s| s.read(&self.world, &host.hub.guests[gi])) != before
-                {
-                    self.container_changed(key);
+                if !self.menu_clicked_decided(conn, &p) {
+                    self.lan_default_container_click(conn, &p);
                 }
-                // A vehicle's menu edits the vehicle's own items.
-                if let Some(Slots::Block(key)) = slots {
-                    self.store_cart_items(key);
-                }
-                self.drop_guest_items(gi, drops);
             }
             S::ContainerClose(p) => {
                 // A vehicle's menu closed: its slots go back to the vehicle
@@ -794,11 +816,11 @@ impl Game<'_> {
                 if let Some(key) = vehicle {
                     self.close_guest_vehicle_menu(conn, key);
                 }
-                let Some(host) = self.lan.as_mut() else {
-                    return;
-                };
-                host.hub.container_closed(conn, p.container);
-                self.guest_carried_back(gi);
+                if let Some(carried) =
+                    self.with_own_record(gi, |host, _| host.hub.container_closed(conn, p.container))
+                {
+                    self.lan_place_back(gi, vec![carried]);
+                }
                 if closing {
                     self.player_menu_closing(conn);
                 }
@@ -1219,15 +1241,15 @@ impl Game<'_> {
     /// What ServerboundSetCreativeModeSlotPacket asks of a stack. Its codec
     /// (`ItemStack.validatedStreamCodec`) encodes the stack with `ItemStack.CODEC`, whose count is
     /// 1 to 99: more fails the packet and disconnects the player, as vanilla's decoder error does.
-    /// A native mod can raise an item's stack size past 99 (`item_defaults::MAX_STACK_SIZE`), so
-    /// the count is held to what the wire carries instead. handleSetCreativeModeSlot's `validData`
-    /// then ignores a stack beyond its own stack size.
+    /// A native mod can raise an item's own stack size past 99, which raises the ceiling instead.
+    /// handleSetCreativeModeSlot's `validData` then ignores a stack beyond its own stack size.
     pub(super) fn creative_stack_valid(&mut self, gi: usize, s: &ItemStack) -> bool {
+        let size = self.stack_max_size(s);
+        let max = creative_count_bound(size);
         let Some(host) = self.lan.as_mut() else {
             return false;
         };
-        let max = sunrise_world::item_defaults::MAX_STACK_SIZE as u32;
-        if s.count > max {
+        if creative_count_exceeds(s.count, size) {
             let g = &host.hub.guests[gi];
             let conn = g.conn;
             let reason = format!("Invalid packet: count {} is not in 1..={max}", s.count);
@@ -1236,7 +1258,7 @@ impl Game<'_> {
                 .kick(conn, sunrise_protocol::text::literal(&reason));
             return false;
         }
-        s.count <= self.stack_max_size(s)
+        s.count <= size
     }
 
     pub(super) fn item_from_network(
@@ -1294,5 +1316,120 @@ impl Game<'_> {
             g.new_body(true);
         });
         host.hub.teleport(gi, Some(at));
+    }
+
+    /// Ordinary click routing. A scoped override calls this inside its action on Continue;
+    /// an unsubscribed click uses it directly. False means the route refused the click.
+    pub(in crate::game) fn lan_default_container_click(
+        &mut self,
+        conn: u32,
+        p: &play::ContainerClick,
+    ) -> bool {
+        let Some(gi) = self.guest_index(conn) else {
+            return false;
+        };
+        let guest = &self.lan.as_ref().unwrap().hub.guests[gi];
+        if let Some(open) = guest.menu.as_ref().filter(|m| m.window == p.container) {
+            if open.mod_type.is_some()
+                && usize::try_from(p.slot).is_ok_and(|s| s >= open.slot_count())
+            {
+                return false;
+            }
+            if open.slots == Slots::Native && open.owned_slots().is_none() && !guest.spectator() {
+                // Display menus do not move items unless their slots were explicitly backed.
+                if let Some(applied) = self.place_menu_click(
+                    guest.uuid,
+                    p.container,
+                    i32::from(p.slot),
+                    i32::from(p.button),
+                    p.input,
+                ) {
+                    return applied;
+                }
+                self.reply_predicted_menu_click(conn, p, Vec::new());
+                return true;
+            }
+        }
+        if let Some(applied) = self
+            .lan_owned_menu_click(conn, p)
+            .or_else(|| self.lan_mod_quick_move(conn, p))
+        {
+            return applied;
+        }
+        if self.lan_merchant_click(conn, p)
+            || self.lan_inventory_click(conn, p)
+            || self.lan_crafting_click(conn, p)
+        {
+            return true;
+        }
+        if let Some(applied) = self.lan_machine_click_asked(conn, p, Default::default()) {
+            return applied;
+        }
+        if self.lan_station_click(conn, p)
+            || self.lan_lectern_click(conn, p)
+            || self.lan_mount_click(conn, p)
+        {
+            return true;
+        }
+        let Some(host) = self.lan.as_ref() else {
+            return false;
+        };
+        let slots = host.hub.guests[gi]
+            .menu
+            .as_ref()
+            .filter(|m| m.window == p.container)
+            .map(|m| m.slots);
+        let before = slots.and_then(|s| s.read(&self.world, &host.hub.guests[gi]));
+        let Some(drops) = self.lan_hub_click(conn, p) else {
+            return false;
+        };
+        let Some(host) = self.lan.as_ref() else {
+            return false;
+        };
+        if let Some(Slots::Block(key) | Slots::Double(key, _)) = slots
+            && slots.and_then(|s| s.read(&self.world, &host.hub.guests[gi])) != before
+        {
+            self.after_commit(super::super::transactions::After::Changed(key));
+        }
+        if let Some(Slots::Block(key)) = slots {
+            self.after_commit(super::super::transactions::After::StoreCartItems(key));
+        }
+        if !drops.is_empty() {
+            self.after_commit(super::super::transactions::After::GuestMenu(
+                conn,
+                Box::new(super::super::lan_crafting::GuestMenuEffects::dropped(drops)),
+            ));
+        }
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{creative_count_bound, creative_count_exceeds};
+
+    #[test]
+    fn creative_count_bound_kicks_vanilla_100_but_not_modded_own_size() {
+        // A vanilla item (own max stack 64 or 1) stays on the wire's 1..=99 bound.
+        for own_max in [1, 64] {
+            let bound = creative_count_bound(own_max);
+            assert_eq!(bound, 99);
+            assert!(99 <= bound, "99 must not kick a vanilla item");
+            assert!(100 > bound, "100 must kick a vanilla item");
+        }
+        // An item a native mod raised past 99 is allowed up to its own max stack.
+        let bound = creative_count_bound(500);
+        assert_eq!(bound, 500);
+        assert!(500 <= bound, "500 must not kick a modded item");
+        assert!(501 > bound, "501 must kick a modded item");
+    }
+
+    #[test]
+    fn creative_count_exceeds_the_bound_of_the_items_own_max() {
+        assert!(creative_count_exceeds(100, 64));
+        assert!(creative_count_exceeds(100, 1));
+        assert!(!creative_count_exceeds(99, 64));
+        assert!(!creative_count_exceeds(500, 500));
+        assert!(creative_count_exceeds(501, 500));
     }
 }

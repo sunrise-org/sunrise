@@ -216,7 +216,7 @@ pub enum AttachmentWrite {
 }
 
 /// The current server's holders' values, erased to what crosses any boundary: the typed
-/// [`AttachmentType`] methods are built on it, for a native mod and a wasm mod alike.
+/// [`AttachmentType`] methods are built on it, for mods.
 pub trait AttachmentStore {
     /// Validate an attachment type against the loaded declarations.
     fn validate_attachment(
@@ -1140,7 +1140,11 @@ impl Attachments {
     pub fn apply_sync(&mut self, change: AttachmentSync) {
         let key = (change.namespace, change.name);
         let entry = change.value.map(|value| {
-            let raw = [("value".into(), Tag::Compound(value))].into();
+            let raw = [
+                ("value".into(), Tag::Compound(value)),
+                ("sync".into(), Tag::Byte(1)),
+            ]
+            .into();
             Arc::new(AttachmentEntry::raw(raw))
         });
         self.write_entry(&key, entry);

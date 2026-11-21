@@ -777,7 +777,10 @@ fn resolved_ui_resources_do_not_restore_a_filtered_panorama_face() {
     }
     assert!(base.contains("assets/minecraft/textures/gui/title/background/panorama_1.png"));
     let gui = crate::game::UiResources::load(&ResourceSource::indexed(files), &scratch.0).unwrap();
-    assert_eq!(gui.panorama.texels(), [96, 110, 111, 255].repeat(6));
+    assert_eq!(
+        gui.panorama.texels().unwrap(),
+        [96, 110, 111, 255].repeat(6)
+    );
 }
 
 #[test]
@@ -794,7 +797,6 @@ fn refused_client_context_keeps_pack_and_listeners() {
             &[],
             &game.mods,
             game.register_client_reload_listeners(),
-            &[],
             &[],
             &game.pack.assets,
             &game.res,
@@ -860,12 +862,12 @@ fn client_completion_reads_published_resources_without_world_access() {
             let version = host.block_sprites_version();
             let refused =
                 catch_unwind(AssertUnwindSafe(|| host.level("minecraft:overworld"))).unwrap_err();
-            let text = refused
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| refused.downcast_ref::<&str>().copied())
-                .unwrap();
-            assert!(text.contains("Reloading"), "{text}");
+            assert_eq!(
+                refused
+                    .downcast_ref::<mod_api::__private::PhaseRefusal>()
+                    .map(|refusal| refusal.phase),
+                Some(ModPhase::Reloading)
+            );
             self.0.lock().unwrap().push(version);
         }
     }

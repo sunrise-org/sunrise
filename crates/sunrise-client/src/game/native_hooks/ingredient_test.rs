@@ -2,7 +2,6 @@ use super::*;
 
 /// Helpers for native mods, kept as stable as the hook points.
 // Native mods use these; nothing in Sunrise does.
-#[allow(dead_code)]
 impl Game<'_> {
     /// Enumerate once at publication using the engine predicate, never a second matcher.
     pub(in crate::game) fn recipe_ingredient_item_keys(

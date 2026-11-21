@@ -36,7 +36,7 @@ use sunrise_client::{
     collisions::{self, LookupCollisions, no_collision_empty},
     items::{ItemStack, Items},
     mobs::{
-        MobTypes, Species,
+        MobType, MobTypes, Species,
         data::MobData,
         spawn_rules::SpawnLevel,
         spawn_selection::{
@@ -261,14 +261,8 @@ impl NaturalLevel for World<'_> {
     fn has_ceiling(&self) -> bool {
         self.dimension.id == "minecraft:the_nether"
     }
-    fn mob_type(&self, entity: &str) -> Option<(Species, f32, f32, Category)> {
-        let t = self.s.types.types.get(entity)?;
-        Some((
-            t.species,
-            t.width as f32,
-            t.height as f32,
-            Category::from_name(&t.category),
-        ))
+    fn mob_type(&self, entity: &str) -> Option<&MobType> {
+        self.s.types.types.get(entity)
     }
     fn biome_spawns(&self, x: i32, y: i32, z: i32) -> Option<&HashMap<String, Vec<SpawnEntry>>> {
         self.biome_info(x, y, z).map(|b| &b.spawns)
@@ -714,9 +708,10 @@ pub fn main() -> sunrise_client::Result<()> {
                 .collect();
             // EntityType.create makes no monsters in peaceful.
             if get("difficulty", "normal") == "peaceful"
-                && types.types.get(parts[0]).is_some_and(|t| {
-                    !sunrise_client::mobs::spawn_rules::allowed_in_peaceful(t.species)
-                })
+                && types
+                    .types
+                    .get(parts[0])
+                    .is_some_and(|t| !t.allowed_in_peaceful())
             {
                 continue;
             }
@@ -1022,8 +1017,8 @@ fn spawner_case(
 
 /// `TrialSpawner.tickServer` `ticks` times from game time `t0` at `spos` on a
 /// trial spawner block in state `state` (ominous with `ominous=1`) loaded from
-/// `snbt` (base64 SNBT), as the oracle logs it. Every `kill` ticks the mobs it
-/// spawned die.
+/// `snbt` (base64 SNBT), as the oracle logs it. `warmup_snbt`, if provided,
+/// is loaded first on the same spawner. Every `kill` ticks the mobs it spawned die.
 fn trial_case(
     world: &World,
     registry: &sunrise_world::registry::BlockRegistry,
@@ -1050,9 +1045,17 @@ fn trial_case(
         .placed
         .borrow_mut()
         .push((pos, registry.resolve(&block_state(state, ominous))?));
-    let text = sunrise_client::skins::base64_decode(&get("snbt", "")).ok_or("bad snbt")?;
-    let tag = sunrise_core::nbt::parse_snbt(&String::from_utf8(text)?)?.0;
-    let mut spawner = TrialSpawner::load(&tag);
+    let decode = |text: &str| -> sunrise_client::Result<Tag> {
+        let text = sunrise_client::skins::base64_decode(text).ok_or("bad snbt")?;
+        Ok(sunrise_core::nbt::parse_snbt(&String::from_utf8(text)?)?.0)
+    };
+    let warmup = get("warmup_snbt", "");
+    let previous = if warmup.is_empty() {
+        None
+    } else {
+        Some(TrialSpawner::load(&decode(&warmup)?, None))
+    };
+    let mut spawner = TrialSpawner::load(&decode(&get("snbt", ""))?, previous.as_ref());
     let ticks: i64 = get("ticks", "1").parse()?;
     let t0: i64 = get("t0", "0").parse()?;
     let kill: i64 = get("kill", "0").parse()?;

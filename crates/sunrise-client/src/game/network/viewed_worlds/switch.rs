@@ -52,7 +52,6 @@ impl Game<'_> {
         if p.keep != KEEP_ALL_DATA {
             return None;
         }
-        let base = self.res.environment();
         let r = self.remote.as_mut()?;
         if p.spawn.dimension == r.level {
             return None;
@@ -61,7 +60,7 @@ impl Game<'_> {
         let opened = r.viewed.get_mut(slot)?.world.shape;
         // A level whose dimension type changed since its `open` (a server's error) is entered
         // afresh: its columns would not fit.
-        if r.level_format(&p.spawn, base).shape != opened {
+        if r.level_format(&p.spawn).shape != opened {
             return None;
         }
         let entered = r.viewed.take(slot)?;

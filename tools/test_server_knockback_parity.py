@@ -21,9 +21,9 @@ players made of vanilla's protocol code, joins them both and runs one script on 
   velocity, before the server's next travel tick reduces it.
 
 The script waits on the server, not on the wall: `ticks N` is N ticks of its game clock (with a `sync` round trip
-before and after, so each client holds what the server sent), `tickstep` is one `/tick step` that has run, `frozen`
-a frozen game that has stopped, and `hit` a hit that has landed (a frozen server still ticks its players, so a hit
-lands in Alice's next tick). A server that stalls under load gets the same ticks as an idle one.
+before and after, so each client holds what the server sent), `tickstep [N]` runs one or N ticks while frozen,
+`frozen` waits for a frozen game to stop, and `hit` waits for a hit to land (a frozen server still ticks its
+players, so a hit lands in Alice's next tick). A server that stalls under load gets the same ticks as an idle one.
 
 Each case is compared on its own. KNOWN lists the cases Sunrise still gets wrong and why; one that matches
 again is reported, and should leave the list.
@@ -237,12 +237,6 @@ SETUP = ['cmd Alice gamerule spawn_mobs false', 'cmd Alice gamerule spawn_monste
          f'cmd Alice tp Alice {A[0]} {A[1]} {A[2]} -90 0', f'cmd Alice tp Bob {V[0]} {V[1]} {V[2]} 90 0', 'ticks 40']
 
 
-def age_of(text):
-    """The number in a `/data get ... Age` reply (`60`, `4500s`)."""
-    digits = ''.join(c for c in text.split(':')[-1] if c.isdigit())
-    return int(digits) if digits else 0
-
-
 def server_data(server, selector, path, timeout=120):
     """An entity's data, asked from the console (its reply stays in the server's log, out of the clients')."""
     deadline = time.time() + timeout
@@ -321,29 +315,20 @@ def run_side(label, server_command, client_command, build, world):
                     while server_data(server, mob, 'Motion') == before:
                         time.sleep(0.05)
                     sync()
-                elif word == 'waitage':
-                    # Hold until an entity's `Age` has reached N. A value that
-                    # decays with the entity's own ticks (a blast's push on an
-                    # item) then belongs to a known age on both servers, whose
-                    # game clocks need not advance together between commands.
-                    # The console's own round trip can be two ticks, so the wait
-                    # is `>=` and the age is carried beside the value it pins.
-                    sync()
-                    selector, age = line.split()[1], int(line.split()[2])
-                    deadline = time.time() + 120
-                    while age_of(server_data(server, selector, 'Age')) < age:
-                        if time.time() > deadline:
-                            raise AssertionError(f'{server.log_path.name}: {selector} never reached Age {age}')
-                        time.sleep(0.05)
-                    sync()
                 elif word == 'tickstep':
-                    # `/tick step 1` answers at once and the tick runs after: the clock says when it has.
+                    # The command replies before the steps run. Wait for all of them before sampling.
                     sync()
-                    before = game_time(server)
-                    client.stdin.write('cmd Alice tick step 1\n')
+                    count = int(line.partition(' ')[2] or '1')
+                    end = game_time(server) + count
+                    client.stdin.write(f'cmd Alice tick step {count}\n')
                     client.stdin.flush()
-                    while game_time(server) == before:
+                    deadline = time.monotonic() + 120
+                    while (now := game_time(server, max(1, deadline - time.monotonic()))) < end:
+                        if time.monotonic() >= deadline:
+                            raise AssertionError(f'{label}: game time did not reach {end} after tick step {count}')
                         time.sleep(0.05)
+                    if now != end:
+                        raise AssertionError(f'{label}: game time advanced past {end} after tick step {count}: {now}')
                     sync()
                 elif word == 'takeoff-hit':
                     sync()

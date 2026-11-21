@@ -97,6 +97,7 @@ pub trait EntityMoveWorld {
     fn restitute(
         &mut self,
         state: BlockStateId,
+        position: BlockPos,
         collided_x: bool,
         collided_z: bool,
         resolved: Vec3,
@@ -204,7 +205,7 @@ pub fn move_entity<W: EntityMoveWorld>(
     if world.can_simulate()?
         && (nonzero_y && world.collision_flags().vertical || world.collision_flags().horizontal)
     {
-        world.restitute(state, x, z, resolved)?;
+        world.restitute(state, p, x, z, resolved)?;
     }
     if !world.client_side()? || world.locally_authoritative()? {
         let emission = world.movement_emission()?;

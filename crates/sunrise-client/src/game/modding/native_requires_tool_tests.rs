@@ -1,7 +1,7 @@
 //! `BlockStates::requires_correct_tool` through the game's block facts:
 //! `BlockState.requiresCorrectToolForDrops()` for vanilla's blocks.
 
-use super::native_entity_refs::tests::with_game;
+use super::{native_block_tables::BlockTables, native_entity_refs::tests::with_game};
 
 /// Stone, ores and obsidian need a correct tool; dirt, logs and air don't.
 #[test]
@@ -19,7 +19,7 @@ fn requires_correct_tool_is_the_states_own_fact() {
             ("minecraft:air", false),
         ] {
             assert_eq!(
-                game.block_state_requires_correct_tool(state(id)),
+                BlockTables::of(game).block_state_requires_correct_tool(state(id)),
                 Some(requires),
                 "{id}"
             );

@@ -1,6 +1,7 @@
 //! Original depth-buffer GPU regressions from public format documentation; no pack assets.
 use super::*;
 use crate::{gfx::Frame, hud::HudBatch};
+use sunrise_shaders::Group;
 use wgpu::{TextureFormat as T, util::DeviceExt};
 
 pub(super) const SIZE: [u32; 2] = [16, 16];
@@ -158,7 +159,10 @@ impl Gpu {
             SIZE,
             &[],
             terrain,
-        );
+            &std::sync::atomic::AtomicBool::new(false),
+            super::super::in_flight::poll_live,
+        )
+        .unwrap();
         encoder.copy_texture_to_buffer(
             screen.texture().as_image_copy(),
             wgpu::TexelCopyBufferInfo {
@@ -323,7 +327,9 @@ fn check(sampler: &str, stage: Stage, scene: Scene, expected: [u8; 4]) {
     let water = matches!(scene, Scene::Terrain { water: true, .. } | Scene::WaterOnly);
     let inputs=sunrise_shaders::GameInputs {
         terrain:terrain.then(|| sunrise_shaders::GbuffersInputs { declarations:"layout(location=0)in vec3 fixture_position;\n".into(),body:"hz_Vertex=vec4(fixture_position,1.0);hz_Color=vec4(1.0);hz_MultiTexCoord0=vec4(0.0);hz_MultiTexCoord1=vec4(240.0);hz_MultiTexCoord2=vec4(240.0);hz_Normal=vec3(0.0,0.0,1.0);\n".into(),attributes:vec![],after:String::new(),alpha_test:None,parts:None,item_id_declared:false,far_depth:false,paged_maps:false,water_mask:false,water_patches:false }),
-        hand:hand.then(crate::gfx::pack_hand::inputs),..Default::default()
+        hand:hand.then(|| {
+            crate::gfx::pack_hand::adapt_hand_inputs(crate::gfx::pack_entities::inputs())
+        }),..Default::default()
     };
     let mut post = gpu.load(
         shaders(sampler, stage, scene),
@@ -642,6 +648,7 @@ pub(super) fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
         see_through: &[],
         world_primitives: Default::default(),
         celestial: &[],
+        celestial_bodies: &[],
         stars: None,
         hand: &[],
         hand_items: &[],

@@ -19,8 +19,7 @@ does) can't see tag parts, and warns once.
 ## Right click on a block
 
 `Hooks::right_click_block` corresponds to NeoForge 26.3's
-`PlayerInteractEvent.RightClickBlock`, on the clicking client and server, with
-identical switches for native and wasm mods:
+`PlayerInteractEvent.RightClickBlock`, on the clicking client and server:
 
 - `use_block = TriState::True` allows block use even while sneaking with an item
   in either hand. `Default` skips while sneaking with either hand full; `False` skips block use.
@@ -44,7 +43,7 @@ as `UseOnEvent` does: on a server the acting player's UUID and entity id (a gues
 own, never the host's), on a client this client's own player. They come with the
 event, so a Part does not need `players().acting_player()` to be set while it runs. `living_used_item_hand` instead answers only during active item use and
 cannot identify an instantaneous click. The Part runs on both sides with `HostSide`,
-after the global right-click event and before the item's own use, on native and wasm.
+after the global right-click event and before the item's own use.
 Return `Some(InteractionResult::Success)` to consume and swing on the client,
 `Some(SuccessServer)` to consume and swing on the server, or `Some(Consume)`
 to consume without a swing. `Some(Fail)` skips this item's own use without
@@ -61,13 +60,13 @@ The hand field corresponds to NeoForge's
 `Hooks::right_click_item` runs before `Item.use`, including after the same hand's
 unhandled block or entity interaction. A block success or FAIL, or an entity success, stops fallback.
 The server fires it for the separate use-item packet, once for that packet's hand.
-Canceling skips the item Part and vanilla action on native and wasm alike.
+Canceling skips the item Part and vanilla action.
 `Success`, `SuccessServer` and `Consume` end the client's hand loop.
 `Success` swings on the client, `SuccessServer` on the server, and `Consume` has no swing.
 
 ## Item use on a block
 
-`Hooks::use_item_on_block` (`UseItemOnBlockEvent`) runs on native and wasm with
+`Hooks::use_item_on_block` (`UseItemOnBlockEvent`) runs with
 `HostSide` before each selected phase: `ItemBeforeBlock`, `Block`, then
 `ItemAfterBlock`. `event.click` describes the hit, hand, held stack and player.
 Return `Flow::Cancel` to skip the selected phase's Part and vanilla behaviour,
@@ -110,7 +109,7 @@ not asked when Unbreaking already saved the item or for a creative player's tool
 one table lookup. With no part, the vanilla amount applies.
 
 To change wear without attaching a Part to an item, use an enchantment's
-`minecraft:item_damage` effect (the component Unbreaking uses), or an injection.
+`minecraft:item_damage` effect (the component Unbreaking uses).
 A part does not get the wearing entity;
 `host.players().acting_player()` names the player on the paths a player takes.
 
@@ -208,5 +207,13 @@ A client without this mod predicts vanilla here; the server corrects it.
   contents) and the item slots a mod gives an item. A hopper filling a shulker box doesn't ask. A `true` for a
   shulker box lets shulker boxes nest: that is the mod's choice, bounded by the NBT readers' depth limit.
 
-Global events cover the rest of these menus: `grindstone_place` and `grindstone_take` change a grindstone's result
-after it is made, and `MenuPart::menu_slot_rules` answers per menu type and slot.
+`grindstone_place` can replace the result when the inputs change. A cancel or refusal leaves no
+result. `grindstone_take` can replace the two inputs and the experience award. Cancelling a take
+keeps the click that took the result but skips the input replacement and experience. Refusing a
+take (for example, because the backing block changed or the answer is invalid) instead restores
+the click, including the result, cursor, inventory and any dropped item. Both cancel and refusal
+undo the listener's writes. An accepted take is still tentative until the enclosing transaction
+commits.
+
+`MenuPart::menu_slot_rules` answers per menu type and slot, including for a replacement from
+`item_stacked_on_other`.

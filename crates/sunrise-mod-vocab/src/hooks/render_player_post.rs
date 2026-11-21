@@ -6,9 +6,12 @@ pub trait Hooks {
     /// `render_living_pre` when only that one was canceled. `player`, `who` and `draw` are as
     /// `render_player_pre` has them, and what it draws is kept; `parts` are the posed parts
     /// `render_living_post` gets, None when the living pre hook was canceled. The player's name tag, leash,
-    /// flames and shadow are drawn after it, as `render_living_post` says.
+    /// flames and shadow are drawn after it, as `render_living_post` says. In the ordered body pass,
+    /// this player's pair finishes at its slot in level join order, before the next body submits,
+    /// including bodies drawn by a general entity renderer.
     #[hook(
         side = "client",
+        version = 4,
         contract = "listen",
         neoforge = "RenderPlayerEvent.Post",
         cancellable = false

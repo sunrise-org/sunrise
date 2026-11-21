@@ -218,6 +218,18 @@ pub(super) struct ExplosionSource {
     pub(super) portal_proof: bool,
     /// The entity that exploded and its kind (`Explosion.getDirectSourceEntity`), when known.
     entity: Option<(u32, &'static str)>,
+    /// The blast damage source's direct entity and its class (`DamageSource.getDirectEntity`),
+    /// as its producer knows them: the exploding entity for a default source
+    /// (`Explosion.getDefaultDamageSource`), none for a blast without one.
+    damage_direct: Option<(u32, sunrise_client::health::DirectEntity)>,
+}
+
+/// An explicit blast `DamageSource` (`ServerLevel.explode(source, damageSource, ...)`): its own
+/// direct entity (id, type for its name, class) and causing entity, apart from the exploding one.
+pub(super) struct ExplicitBlastSource {
+    pub direct: (u32, &'static str, sunrise_client::health::DirectEntity),
+    /// `None` is an explicitly ownerless source.
+    pub cause: Option<ExplosionCause>,
 }
 impl ExplosionSource {
     pub(super) fn with_silence(mut self, silent: bool) -> Self {
@@ -228,8 +240,22 @@ impl ExplosionSource {
         self.portal_proof = portal_proof;
         self
     }
-    pub(super) fn with_entity(mut self, id: u32, kind: &'static str) -> Self {
+    /// The exploding entity, which a default damage source also names as its direct entity.
+    pub(super) fn with_entity(
+        mut self,
+        id: u32,
+        kind: &'static str,
+        class: sunrise_client::health::DirectEntity,
+    ) -> Self {
         self.entity = Some((id, kind));
+        self.with_damage_direct(id, class)
+    }
+    pub(super) fn with_damage_direct(
+        mut self,
+        id: u32,
+        class: sunrise_client::health::DirectEntity,
+    ) -> Self {
+        self.damage_direct = Some((id, class));
         self
     }
 }
@@ -969,6 +995,7 @@ impl Game<'_> {
         damage_type: &str,
         interaction: BlockInteraction,
         blocks: &[[i32; 3]],
+        blast_source_spec: ExplosionSource,
     ) -> Vec<(u32, [f64; 3])> {
         if radius < 1.0e-5 {
             return Vec::new();
@@ -1074,6 +1101,30 @@ impl Game<'_> {
             }
         }
         // Mobs. `WitherBoss.hurtServer`: a wither shrugs off an undead cause.
+        let (blast_direct_id, blast_direct_kind) = blast_source_spec.damage_direct.map_or(
+            (0, sunrise_client::health::DirectEntity::Other),
+            |(id, class)| (id as i32, class),
+        );
+        let mut blast_attack = self.combat.attack().clone();
+        blast_attack.direct = Some(blast_direct_id);
+        blast_attack.direct_kind = Some(blast_direct_kind);
+        if blast_attack.attacker == 0
+            && let Some(Some(cause)) = &self.combat.explicit_explosion_cause
+            && cause.player
+        {
+            blast_attack.attacker = cause.entity.0 as i32;
+        }
+        if blast_attack.player_uuid.is_none() {
+            if let Some(Some(cause)) = &self.combat.explicit_explosion_cause
+                && cause.player
+            {
+                blast_attack.player_uuid = self.player_uuid_of(cause.guest);
+            } else if self.combat.blast_owner_player
+                && self.combat.explicit_explosion_cause.is_none()
+            {
+                blast_attack.player_uuid = self.player_uuid_of(self.combat.blast_guest);
+            }
+        }
         let cause = self
             .combat
             .explicit_explosion_cause
@@ -1177,8 +1228,8 @@ impl Game<'_> {
                 match handle {
                     _ if !hurts => {}
                     EntityHandle::Mob(i) => {
-                        let hurtable = teams_allow(self, self.mob_team(self.mobs[i].id));
-                        let m = &mut self.mobs[i];
+                        let victim = self.mobs[i].id;
+                        let hurtable = teams_allow(self, self.mob_team(victim));
                         // The exploding mob is the damage source's entity, so
                         // victims it kills drop its charged-creeper loot
                         // (`Creeper.killedEntity`).
@@ -1202,7 +1253,7 @@ impl Game<'_> {
                                     attacker
                                         .as_ref()
                                         .map(|&(id, _)| id)
-                                        .filter(|&o| o != m.id)
+                                        .filter(|&o| o != victim)
                                         .filter(|_| {
                                             self.combat
                                                 .explicit_explosion_cause
@@ -1219,42 +1270,39 @@ impl Game<'_> {
                         // `EXPLOSION_KNOCKBACK_RESISTANCE`, not `KNOCKBACK_RESISTANCE`:
                         // its base is 0 for every mob type, so iron golems and
                         // ravagers are pushed.
-                        let victim = m.id;
+                        let plan = self.prepare_knockback_credit(
+                            victim as i32,
+                            source.attacker,
+                            &blast_attack,
+                        );
+                        let mut credit = plan.lend(&mut self.last_hurt_by_player);
                         let hurt = hurt_mob(
                             crate::game::entity::damage_level_of!(
                                 self,
-                                self.combat.attack(),
-                                no_push,
+                                &blast_attack,
+                                &mut credit,
                                 None
                             ),
-                            m,
+                            &mut self.mobs[i],
                             hurtable,
                             cause,
                             (amount, source),
                         );
-                        if hurt {
-                            if source.attacker == Some(Who::Player) {
-                                let guest = self.combat.blast_guest;
-                                if let Some(uuid) = self.player_uuid_of(guest) {
-                                    self.last_hurt_by_player.insert(
-                                        victim,
-                                        crate::game::combat::PlayerCredit(
-                                            sunrise_client::lan::playerdata::ints_uuid(uuid),
-                                        ),
-                                    );
+                        self.settle_mob_hurt(victim);
+                        // The loan recorded the accepted hit's player credit
+                        // (`resolvePlayerResponsibleForDamage`); a guest's also names its connection.
+                        if hurt
+                            && source.attacker == Some(Who::Player)
+                            && let Some(host) = self.lan.as_mut()
+                        {
+                            match self.combat.blast_guest {
+                                Some(conn) => {
+                                    host.mob_players.insert(victim, conn);
                                 }
-                                if let Some(host) = self.lan.as_mut() {
-                                    match guest {
-                                        Some(conn) => {
-                                            host.mob_players.insert(victim, conn);
-                                        }
-                                        None => {
-                                            host.mob_players.remove(&victim);
-                                        }
-                                    }
+                                None => {
+                                    host.mob_players.remove(&victim);
                                 }
                             }
-                            self.resolve_player_responsible(victim, source);
                         }
                         // Enderman.hurtServer teleports inside the hurt, before
                         // the push (the mob order stays as it was).
@@ -1500,6 +1548,7 @@ impl Game<'_> {
             let a = &self.armor_stands[i];
             let p = a.position;
             if !super::armor_stands::spared_by_blast(a)
+                && !self.target_removed(&super::commands::Target::Stand(a.id))
                 && self.combat.visits(a.id)
                 && blast_reaches(center, diameter, [p.x, p.y, p.z])
             {
@@ -1521,7 +1570,20 @@ impl Game<'_> {
                     i += 1;
                     continue;
                 }
-                self.break_armor_stand_by_anything(i, damage_type, causing);
+                // The invulnerability callback can move or remove the stand.
+                let index = if self.armor_stands.get(i).is_some_and(|stand| stand.id == id) {
+                    Some(i)
+                } else {
+                    self.armor_stands.iter().position(|stand| stand.id == id)
+                };
+                if let Some(index) = index {
+                    self.break_armor_stand_by_anything(index, damage_type, causing);
+                }
+                // An accepted removal advances the list under us. If the row
+                // stayed, advance the cursor ourselves, even after a refusal.
+                if self.armor_stands.get(i).is_some_and(|stand| stand.id == id) {
+                    i += 1;
+                }
             } else {
                 i += 1;
             }
@@ -1559,11 +1621,10 @@ impl Game<'_> {
         let mut i = 0;
         while i < self.cushions.len() {
             let p = self.cushions[i].position;
-            if self.combat.visits(self.cushions[i].id)
+            if !(self.combat.visits(self.cushions[i].id)
                 && blast_reaches(center, diameter, [p.x, p.y, p.z])
+                && self.break_cushion_by(i, self.explosion_kill_credit()))
             {
-                self.break_cushion_by(i, self.explosion_kill_credit());
-            } else {
                 i += 1;
             }
         }
@@ -1630,13 +1691,17 @@ impl Game<'_> {
         interaction: BlockInteraction,
         fire: bool,
         source: ExplosionSource,
-        cause: Option<Option<ExplosionCause>>,
+        explicit: Option<ExplicitBlastSource>,
     ) -> Result<()> {
+        let source = match &explicit {
+            Some(e) => source.with_damage_direct(e.direct.0, e.direct.2),
+            None => source,
+        };
         let blast = |g: &mut Self| {
             let damage_type = g.blast_damage_type();
             g.server_explode_as_source(center, radius, interaction, fire, damage_type, None, source)
         };
-        match cause {
+        match explicit {
             // A player causes it (a lit TNT's igniter, a mod blast's source):
             // their hits land as that player's.
             None if self.combat.blast_owner_player => {
@@ -1644,10 +1709,10 @@ impl Game<'_> {
                 self.with_attack(attack, blast)
             }
             None => blast(self),
-            Some(cause) => {
-                let (id, kind) = source.entity.ok_or_else(|| {
-                    io::Error::other("an explicit explosion cause needs its direct entity")
-                })?;
+            Some(ExplicitBlastSource {
+                direct: (id, kind, _),
+                cause,
+            }) => {
                 let direct = (id, self.explosion_entity_name(id, kind));
                 self.with_explosion_cause(cause, direct, blast)
             }
@@ -1746,8 +1811,14 @@ impl Game<'_> {
         let outer = std::mem::take(&mut self.combat.blast_hit_list);
         let outer_ids = std::mem::take(&mut self.combat.blast_hit_ids);
         self.explosion_detonate(center, radius, &mut targets);
-        let pushed =
-            self.explosion_hurt_entities(center, radius, damage_type, interaction, &targets);
+        let pushed = self.explosion_hurt_entities(
+            center,
+            radius,
+            damage_type,
+            interaction,
+            &targets,
+            source,
+        );
         self.combat.blast_hit_list = outer;
         self.combat.blast_hit_ids = outer_ids;
         self.explosion_block_step(&mut targets, radius, interaction, fire, &start)?;
@@ -2166,6 +2237,7 @@ impl Game<'_> {
                     "minecraft:explosion",
                     BlockInteraction::Destroy,
                     &[],
+                    ExplosionSource::default(),
                 );
                 let mut remaining: Vec<_> = self
                     .dropped
@@ -3197,9 +3269,20 @@ mod explicit_source_tests {
                         BlockInteraction::Keep,
                         false,
                         ExplosionSource::default()
-                            .with_entity(7, "minecraft:end_crystal")
+                            .with_entity(
+                                7,
+                                "minecraft:end_crystal",
+                                sunrise_client::health::DirectEntity::Other,
+                            )
                             .with_silence(true),
-                        Some(cause),
+                        Some(ExplicitBlastSource {
+                            direct: (
+                                7,
+                                "minecraft:end_crystal",
+                                sunrise_client::health::DirectEntity::Other,
+                            ),
+                            cause,
+                        }),
                     )
                     .unwrap();
                 }

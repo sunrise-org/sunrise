@@ -515,6 +515,8 @@ mod tests {
                         source: SoundSource::Blocks as usize,
                         entity: None,
                         except_entity: None,
+                        seed: 0,
+                        particles_before: 0,
                     })
                     .collect(),
                 );

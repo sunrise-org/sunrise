@@ -42,7 +42,8 @@ pub trait LevelSpawningBackendMut {
     /// living route as [`SpawnBody::Living`] through `level_spawn_entity`, at rest. The
     /// level's spawn limits, flags and spawn rules don't apply, as they don't
     /// to `/summon`. The new mob as a handle. None, with nothing spawned, for a
-    /// kind that isn't a mob, a position that isn't finite or is outside the
+    /// kind that isn't a mob or is disallowed in Peaceful at that difficulty,
+    /// a position that isn't finite or is outside the
     /// spawnable bounds (`Level.isInSpawnableBounds`), an unloaded chunk, a
     /// stale handle, a level not in place, a client, a `finalize_spawn` that
     /// cancelled the spawn or a mob a mod kept out.
@@ -78,7 +79,8 @@ pub trait LevelSpawningBackendMut {
     ///   from the level random unless `spawn.rotation` names one, then
     ///   `finalize_spawn` and `finalizeSpawn` with that reason (equipment,
     ///   variants, jockeys), and it joins the level (`entity_join_level`), not
-    ///   persistent. A mob takes no owner. `kind` resolves as `/summon`'s
+    ///   persistent. In Peaceful, a type disallowed at that difficulty is refused
+    ///   before construction. A mob takes no owner. `kind` resolves as `/summon`'s
     ///   (`cow` is `minecraft:cow`); the ender dragon takes its own creation,
     ///   facing `spawn.rotation`'s yaw, and is refused with a velocity or a
     ///   pitch, which it has no state for.

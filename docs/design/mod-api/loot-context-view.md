@@ -1,5 +1,9 @@
 # Design: Read-only typed loot context
 
+> Historical: this design predates the removal of WebAssembly mods.
+> See [loot functions and conditions](../../modding/src/how-to/items/loot-functions-and-conditions.md) for the current native API.
+> The guest snapshot and acceptance plan below is historical; use the current codec registration contract.
+
 Provisional proposal for [#2647](https://github.com/arismoko/horizon/issues/2647). Docs only; approval precedes code. Broaden the existing `LootContext` snapshot at the condition/function evaluation boundary. Do not provide a mutable Host, live world access, or another loot hook. [#2648](https://github.com/arismoko/horizon/issues/2648) owns the narrow tags view. [PR #2595](https://github.com/arismoko/horizon/pull/2595) owns `LevelRef::roll_loot` and its FISHING-shaped input; this proposal neither expands that input nor changes random ownership.
 
 The codec registration contract supersedes the seed convention in this older proposal:

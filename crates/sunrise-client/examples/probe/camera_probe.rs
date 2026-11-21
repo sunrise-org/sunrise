@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! Runs the JSON-lines scenarios of tools/test_camera_parity.py through the
-//! Rust camera, field-of-view, avatar bob and view/hurt bobbing code.
+//! Rust camera, field-of-view, avatar bob, view/hurt bobbing and boat view
+//! clamp code.
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -12,7 +13,8 @@ use sunrise_client::{
     Result,
     camera::{
         AvatarBob, BobState, Camera, CameraEntity, CameraFluid, CameraType, FovPlayer, HurtBob,
-        LivingCamera, UseItem, bob_matrix, field_of_view_modifier, perspective,
+        LivingCamera, UseItem, bob_matrix, clamp_boat_rotation, field_of_view_modifier,
+        perspective,
     },
 };
 use sunrise_core::{
@@ -343,6 +345,12 @@ pub fn main() -> Result<()> {
             "camera" => camera(&c, &mut out)?,
             "bob" => bob(&c, &mut out)?,
             "avatar" => avatar(&c, &mut out)?,
+            "boat" => {
+                for pair in c["views"].as_array().unwrap() {
+                    let (yaw, turn) = clamp_boat_rotation(fl(&pair[0]), fl(&pair[1]));
+                    writeln!(out, "{} {}", fb(yaw), fb(turn))?;
+                }
+            }
             other => panic!("{other}"),
         }
     }

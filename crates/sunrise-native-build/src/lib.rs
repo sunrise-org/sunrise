@@ -18,24 +18,25 @@ pub mod contract;
 mod crates;
 mod diagnostics;
 pub mod discover;
+pub mod game_uses;
 pub mod host;
-mod inject;
 pub mod internals;
 pub mod library_record;
 mod mixins_patch;
 pub mod package;
 pub mod patch;
 pub mod prebuilt;
+pub mod present;
 pub mod registry_compile;
 pub mod registry_generate;
 mod registry_inventory;
 mod registry_lock;
 pub mod registry_plan;
+mod registry_resolve;
 mod registry_runtime;
 pub mod registry_rustc;
 mod registry_shared;
 pub mod rust;
-mod slots;
 
 pub use mixins_patch::MixinsIdentity;
 pub use prebuilt::{Refusal, compiling};
@@ -205,7 +206,7 @@ impl Bundle {
 
 /// The flat native project in `folder`, or the native projects directly inside it.
 pub fn bundles(folder: &Path) -> Result<Vec<Bundle>, String> {
-    let found = package::checked_bundles(folder)?;
+    let found = scan_bundles(folder)?;
     if found.is_empty() {
         return Err(format!(
             "{} holds no native mod ({NATIVE_MANIFEST} and Cargo.toml).",
@@ -308,7 +309,13 @@ pub fn source_digest(bundle: &Bundle) -> Option<String> {
 /// An error ends with its first `error` lines and the last lines: a failed build script's output
 /// alone could push the line naming its crate out of the last ones.
 pub fn run(cmd: Command, what: &str, line: impl FnMut(&str)) -> Result<(), String> {
-    run_checked(cmd, what, line, None).map_err(|e| e.error)
+    run_checked(cmd, what, line, None, None).map_err(|e| e.error)
+}
+
+/// [`run`] for a compiler started with `--error-format=json`: a diagnostic it prints is shown at
+/// the author's files (`sources`), and the build log keeps what the compiler printed.
+pub fn run_diagnosed(cmd: Command, what: &str, sources: &present::Sources) -> Result<(), String> {
+    run_checked(cmd, what, |_| {}, None, Some(sources)).map_err(|e| e.error)
 }
 
 /// A failed command, with diagnostic ownership for build isolation.
@@ -321,6 +328,7 @@ fn run_checked(
     what: &str,
     mut line: impl FnMut(&str),
     stdout_file: Option<fs::File>,
+    sources: Option<&present::Sources>,
 ) -> Result<(), Ran> {
     let ran = |error: String| Ran { error };
     let mut log = fs::OpenOptions::new()
@@ -366,19 +374,31 @@ fn run_checked(
             .lines()
             .map_while(Result::ok)
         {
-            if let Some(kept) = log_text(&text) {
-                let _ = writeln!(log, "{kept}");
+            // A diagnostic is one line of JSON: its rendered text goes on as lines, each as the
+            // compiler printed it (for the log and the matchers) and as shown to the author.
+            let lines = match sources.zip(present::Diagnostic::parse(&text)) {
+                Some((sources, diagnostic)) => sources
+                    .lines(&diagnostic)
+                    .into_iter()
+                    .map(|(raw, shown)| (raw.to_owned(), shown))
+                    .collect(),
+                None => vec![(text.clone(), text)],
+            };
+            for (raw, shown) in lines {
+                if let Some(kept) = log_text(&raw) {
+                    let _ = writeln!(log, "{kept}");
+                }
+                line(&raw);
+                blocked |= rust::blocked_by_app_control(&raw);
+                libraries |= rust::missing_system_libraries(&raw);
+                if shown.starts_with("error") && errors.len() < 4 {
+                    errors.push(shown.clone());
+                }
+                if tail.len() == 12 {
+                    tail.pop_front();
+                }
+                tail.push_back(shown);
             }
-            line(&text);
-            blocked |= rust::blocked_by_app_control(&text);
-            libraries |= rust::missing_system_libraries(&text);
-            if text.starts_with("error") && errors.len() < 4 {
-                errors.push(text.clone());
-            }
-            if tail.len() == 12 {
-                tail.pop_front();
-            }
-            tail.push_back(text);
         }
         let status = child.wait();
         // Before the watcher's join, which can wait out its 100 ms poll.
@@ -414,15 +434,8 @@ fn run_checked(
         let tail: Vec<String> = tail.into();
         let error =
             diagnostics::with_internals_hint(failure(what, &status.to_string(), &errors, &tail));
-        let error = match libraries {
-            true => with_system_libraries(error),
-            false => error,
-        };
         Err(Ran {
-            error: match blocked {
-                true => with_app_control(error),
-                false => app_control(error),
-            },
+            error: advised(error, blocked, libraries),
         })
     })
 }
@@ -474,12 +487,31 @@ fn app_control(error: String) -> String {
 }
 
 fn with_app_control(error: String) -> String {
-    format!("{}\n\n{error}", rust::smart_app_control())
+    match error.starts_with(&*rust::smart_app_control()) {
+        true => error,
+        false => format!("{}\n\n{error}", rust::smart_app_control()),
+    }
 }
 
 /// `error` led by what to install when the build's link could not find udev or ALSA.
 fn with_system_libraries(error: String) -> String {
-    format!("{}\n\n{error}", rust::system_libraries())
+    match error.starts_with(&*rust::system_libraries()) {
+        true => error,
+        false => format!("{}\n\n{error}", rust::system_libraries()),
+    }
+}
+
+/// `error` led by the advice the build's output (`blocked`: Application Control refused a
+/// program, `libraries`: the link could not find udev or ALSA) and the error itself call for.
+pub(crate) fn advised(error: String, blocked: bool, libraries: bool) -> String {
+    let error = match libraries {
+        true => with_system_libraries(error),
+        false => error,
+    };
+    match blocked {
+        true => with_app_control(error),
+        false => app_control(error),
+    }
 }
 
 /// [`run`]'s error: the `errors` lines not already among the last ones (`tail`), then those.

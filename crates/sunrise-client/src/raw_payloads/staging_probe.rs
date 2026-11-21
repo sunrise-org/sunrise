@@ -14,7 +14,6 @@ struct Watched {
     counts: Counts,
     endpoints: Vec<std::sync::Arc<super::endpoint::Observation>>,
     pause: Option<Pause>,
-    failures: Vec<String>,
 }
 static WATCH: Mutex<Option<Watched>> = Mutex::new(None);
 pub struct Watch;
@@ -27,7 +26,6 @@ impl Watch {
             counts: Counts::default(),
             endpoints: Vec::new(),
             pause: None,
-            failures: Vec::new(),
         });
         Self
     }
@@ -56,9 +54,6 @@ impl Watch {
         let (resume, release) = std::sync::mpsc::channel();
         WATCH.lock().unwrap().as_mut().unwrap().pause = Some(Pause { entered, release });
         (observed, resume)
-    }
-    pub fn failures(&self) -> Vec<String> {
-        WATCH.lock().unwrap().as_ref().unwrap().failures.clone()
     }
 }
 impl Drop for Watch {
@@ -95,13 +90,5 @@ pub(super) fn capture(channel: &str, endpoint: &super::Endpoint) {
         watch
             .endpoints
             .push(std::sync::Arc::new(endpoint.observation()));
-    }
-}
-
-pub(super) fn failure(channel: &str, diagnostic: &str) {
-    if let Some(watch) = WATCH.lock().unwrap().as_mut()
-        && watch.channel == channel
-    {
-        watch.failures.push(diagnostic.into());
     }
 }

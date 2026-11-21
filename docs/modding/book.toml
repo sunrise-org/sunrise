@@ -1,6 +1,6 @@
 [book]
 title = "Modding Sunrise"
-description = "Guide and reference for making Sunrise mods: content, native and WebAssembly"
+description = "Guide and reference for making Sunrise mods: content and native"
 language = "en"
 src = "src"
 
@@ -72,6 +72,9 @@ edit-url-template = "https://github.com/sunrise-org/sunrise/edit/main/docs/moddi
 # Pages that moved keep their old address.
 [output.html.redirect]
 "/start/installing.html" = "../players/installing-mods.html"
+"/concepts/injections.html" = "./hooks-and-the-host.html"
+"/concepts/injections/typed-api.html" = "../hooks-and-the-host.html"
+"/how-to/entities/named-hook-points.html" = "./entity-hooks.html"
 
 # The how-to groups are long: show each part's top chapters, open one to see its pages.
 [output.html.fold]

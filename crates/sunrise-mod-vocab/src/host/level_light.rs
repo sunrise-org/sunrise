@@ -22,7 +22,7 @@ pub trait LevelLightBackend {
     /// `BlockAndLightGetter.canSeeSky`: whether the level's published sky light at `pos` is 15.
     /// Works in an open server level or the current client level; stale or unavailable levels
     /// return None. Never loads chunks. See `LevelHost::can_see_sky` for the light storage rules
-    /// and the known gap at its boundaries.
+    /// at its boundaries.
     #[access(WorldOnly)]
     fn level_can_see_sky(&self, level: LevelRef, pos: [i32; 3]) -> Option<bool>;
 }

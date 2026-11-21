@@ -1191,6 +1191,10 @@ impl Dispatcher {
         reg: &Registries,
     ) -> (Range, Vec<Suggestion>) {
         let (range, list, _, _) = self.suggestions_within(parse, cursor, reg, u8::MAX);
+        // CommandDispatcher.getCompletionSuggestions: a merged empty list is
+        // `Suggestions.empty()` — `StringRange.at(0)`. The token range the chat
+        // merge needs is only kept by the `client_suggestions` entries.
+        let range = if list.is_empty() { (0, 0) } else { range };
         (range, list)
     }
     /// The suggestions the player's chat shows: the client's tree only holds

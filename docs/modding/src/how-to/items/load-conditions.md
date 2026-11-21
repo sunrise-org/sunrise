@@ -38,14 +38,12 @@ A recipe can use the registered name alongside the built-in conditions:
 The handler receives a borrowed raw JSON value: the condition's object without
 `type`. It reads and validates its own arguments, retaining JSON booleans,
 numbers, strings, lists and objects. Invalid mod input must return
-`ConditionError`; handlers must not panic while reading it. `ConditionError`
-has explicit Wire encoding. Native and WebAssembly registrants cross the same generated route.
+`ConditionError`; handlers must not panic while reading it.
 Startup data loaders and the server's candidate data reload both use registered
 handlers before entries become visible. Results are retained for each entry and
 condition payload in that load, so repeated readers do not call the handler
 again. A new load reevaluates the entry. Handlers must not mutate live data.
-A native handler panic becomes a named load error ("handler panicked"). A wasm
-trap follows the runtime's normal failure policy.
+A handler panic becomes a named load error ("handler panicked").
 
 `true` loads the entry; `false` omits it, without exposing a lower pack's
 version. The loader handles callback errors and unknown condition types as

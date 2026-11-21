@@ -15,7 +15,6 @@ static BACKEND: OnceLock<Option<Backend>> = OnceLock::new();
 // no wire: process-local scope ownership or callbacks cannot cross a mod boundary.
 pub struct Backend {
     pub registration: &'static crate::__private::RegistrationAccess,
-    pub validate_attachment_use: fn(&str, &str, bool) -> Result<(), crate::AttachmentError>,
     pub diagnostics: &'static Diagnostics,
     pub unresolved_fluids: crate::__private::UnresolvedFluidAccess,
     pub enter: fn(ModGuardFactory, ModCall) -> ModGuard,
@@ -32,6 +31,8 @@ pub struct Backend {
     pub phase_state: fn() -> crate::__private::PhaseState,
     pub set_phase: fn(crate::__private::PhaseState),
     pub packages: fn() -> std::sync::Arc<[crate::PackageInfo]>,
+    pub namespace_authority: fn() -> std::sync::Arc<crate::parts::NamespaceAuthority>,
+    pub owns_namespace: fn(&str, &str) -> bool,
     pub registration_data: fn() -> Option<crate::__private::RegistrationData>,
 }
 
@@ -43,6 +44,8 @@ pub struct Backend {
 pub struct Diagnostics {
     pub first_broken_warning: fn(&str) -> bool,
     pub first_off_thread_warning: fn() -> bool,
+    pub first_output_refusal: fn(crate::HookId, &'static str) -> bool,
+    pub reset_output_refusals: fn(),
 }
 
 /// Plain per-call instrumentation data. The platform must validate the pool

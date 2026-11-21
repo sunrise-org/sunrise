@@ -3,7 +3,7 @@ pub mod item {
         pub struct MenuButtonContext {
             pub player: u128,
             pub player_entity_id: i32,
-            pub pos: [i32; 3],
+            pub pos: Option<[i32; 3]>,
             pub id: i32,
         }
         pub struct AnvilCraft;

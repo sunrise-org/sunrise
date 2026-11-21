@@ -14,14 +14,20 @@ pub trait LevelEntitiesBackend {
     /// Returns None while any lookup member is temporarily extracted, rather
     /// than returning an incomplete list.
     /// Order is lookup admission order, preserved across temporary extraction;
-    /// removal and re-admission moves an entity to the end. A chunk's entities
-    /// join in the order it stored them: section by section, each in admission
-    /// order, as vanilla stores them. An entity that moved into another section
-    /// since it joined keeps its admission place there, where vanilla moves it
-    /// to the end of that section. Zero runtime IDs fall back to stable storage
-    /// join order, not runtime admission order. Unregistered entity kinds have
-    /// no authoritative lookup handle and are omitted. These limitations mean
-    /// saved-world and whole-level ordering parity is not guaranteed.
+    /// removal and re-admission moves an entity to the end. An entity spawned
+    /// during play is admitted as it spawns, even when its id comes later. A
+    /// chunk's entities join in the order it stored them: section by section,
+    /// each in the order its entities entered it, as vanilla stores them. A
+    /// server section crossing is recorded as the entity moves
+    /// (`Callback.onMove`), whether or not a mod listens: a move out and back is
+    /// two crossings, and a passenger enters after its vehicle. Minecarts,
+    /// boats, projectiles, items, primed TNT, falling blocks, fireworks, orbs and
+    /// the other server entities that report after their own update count
+    /// several moves within one tick as one, from where it was to where it
+    /// ended; a block piston's push is recorded only while a mod listens to
+    /// `entity_entering_section`. Entities kept outside the residency families
+    /// (lingering potion clouds, lightning bolts, eyes of ender) are not
+    /// members.
     /// Allocates a result buffer, not one allocation per entity; sorting is
     /// O(n log n), followed by one authoritative handle lookup per candidate.
     #[access(WorldOnly)]

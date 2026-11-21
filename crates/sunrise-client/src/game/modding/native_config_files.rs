@@ -58,7 +58,7 @@ impl Game<'_> {
         self
     }
     /// Whether a mod with the `sunrise-mod.toml` id `id` is installed: a
-    /// native, wasm or content package (Fabric's `FabricLoader.isModLoaded`,
+    /// native or content package (Fabric's `FabricLoader.isModLoaded`,
     /// NeoForge's `ModList.isLoaded`). The list is fixed at startup.
     pub(super) fn is_loaded(id: &str) -> bool {
         mod_api::__private::loaded_mods().get(id).is_some()
@@ -911,103 +911,6 @@ mod tests {
                 Game::data_files().read(&path("server-cache")).unwrap(),
                 b"game-cache"
             );
-        });
-    }
-    #[test]
-    #[ignore = "daily"]
-    fn compiled_wasm_bulk_files_use_actual_game_filesystem_roots() {
-        use crate::game::native_entity_refs::tests::run_fresh_cases;
-        use crate::game::native_guest_turn_tests::with_guests_at;
-        if run_fresh_cases(
-            "game::native_config_files::tests::compiled_wasm_bulk_files_use_actual_game_filesystem_roots",
-            "SUNRISE_WASM_BULK_FILES_CHILD",
-            &["game"],
-        ) {
-            return;
-        }
-        sunrise_guest_stack::run_on_guest_stack(|| {
-            sunrise_mod_wasm::copy_probe::with_load_budget(|| {
-                use sunrise_mod_package::manifest::Package;
-                use sunrise_mod_wasm::{WasmPackage, load};
-                let package_path = PathBuf::from(std::env::var_os("SUNRISE_WASM_FIXTURE").unwrap());
-                let mut manifest = Package::read(&package_path).unwrap().manifest;
-                manifest.inject.clear();
-                let info = mod_api::PackageInfo::new(
-                    manifest.id.clone(),
-                    manifest.version.to_string(),
-                    mod_api::PackageKind::Code,
-                    mod_api::Side::Both,
-                    vec![manifest.id.clone()],
-                    vec![],
-                );
-                let loaded = load(
-                    &fs::read(std::env::var_os("SUNRISE_WASM_STD").unwrap()).unwrap(),
-                    vec![WasmPackage {
-                        manifest,
-                        module: Package::read_wasm(&package_path).unwrap(),
-                    }],
-                );
-                assert!(loaded.refused.is_empty(), "{:?}", loaded.refused);
-                loaded.initialize(&[info]).unwrap();
-                let mods: mod_api::Mods = loaded.mods.into();
-                mod_platform::testing::with_mods(mods.clone(), || {
-                    crate::game::api_values::install_parts(&mods).unwrap();
-                    let base = PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
-                    let root =
-                        super::super::mods::content_root(&base, &Default::default()).unwrap();
-                    with_guests_at(root.prepared().to_owned(), |game| {
-                        let world = Root::new("wasm-world");
-                        game.world_root = world.0.path.clone();
-                        game.set_allow_commands(true);
-                        game.build_registries();
-                        game.register_native_commands();
-                        assert!(game.native_run_command("wasmbulkfiles"));
-                        let game_dir = Game::game_dir();
-                        assert_eq!(
-                            fs::read(game_dir.join("config/wasm_fixture/a.bin")).unwrap(),
-                            [0]
-                        );
-                        assert_eq!(
-                            fs::read(
-                                game_dir.join("sunrise-mod-data/wasm_fixture/wasm_fixture/a.bin")
-                            )
-                            .unwrap(),
-                            [1, 1]
-                        );
-                        assert_eq!(
-                            fs::read(
-                                world
-                                    .0
-                                    .path
-                                    .join("sunrise-mod-data/wasm_fixture/wasm_fixture/a.bin")
-                            )
-                            .unwrap(),
-                            [2, 2, 2]
-                        );
-                        as_mod("wasm_fixture", || {
-                            let host: &dyn mod_api::ServerHost = game;
-                            assert_eq!(
-                                host.data_files().read(&path("wasm_fixture/a.bin")).unwrap(),
-                                [1, 1]
-                            );
-                            assert_eq!(
-                                host.world_data_files()
-                                    .read(&path("wasm_fixture/a.bin"))
-                                    .unwrap(),
-                                [2, 2, 2]
-                            );
-                        });
-                        as_mod("other", || {
-                            assert_eq!(
-                                Game::data_files().read(&path("wasm_fixture/a.bin")),
-                                Err(ConfigFileError::NotFound)
-                            );
-                        });
-                        game.world_root.clear();
-                        assert!(game.native_run_command("wasmbulkfilesnoworld"));
-                    });
-                });
-            });
         });
     }
 }

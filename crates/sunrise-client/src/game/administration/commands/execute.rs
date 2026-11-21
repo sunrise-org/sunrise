@@ -103,8 +103,11 @@ impl Game<'_> {
             cart: None,
         }
     }
-    /// The server as a source (function ticks and schedules): the world spawn.
+    /// The server as a source (function ticks and schedules,
+    /// `MinecraftServer.createCommandSourceStack`): the world spawn, in its level
+    /// (`findRespawnDimension`), whichever level is in place.
     pub(in crate::game) fn server_source(&self) -> Source {
+        let level = self.world_spawn_level();
         Source {
             entity: None,
             pos: self.server_position(),
@@ -112,8 +115,8 @@ impl Game<'_> {
             eyes: false,
             silent: true,
             store: None,
-            dimension: self.dim,
-            origin_dimension: self.dim,
+            dimension: level,
+            origin_dimension: level,
             origin_player: false,
             level: None,
             block: None,
@@ -157,6 +160,13 @@ impl Game<'_> {
                 .iter()
                 .find(|o| o.id == id)
                 .map_or([0.0; 2], |o| [o.yaw, o.pitch]),
+            Target::General(id) => self
+                .resident_entities
+                .general
+                .row(id)
+                .map(|row| row.rotation)
+                .or_else(|| self.shown_remote_general(id as i32).map(|row| row.rotation))
+                .unwrap_or([0.0; 2]),
             _ => [0.0; 2],
         }
     }
@@ -869,30 +879,37 @@ impl Game<'_> {
                         .iter()
                         .find(|m| m.id == id)
                         .and_then(|m| {
-                            if attacker {
+                            use sunrise_client::mobs::{Species, Who, ai::brain_target};
+                            if !attacker && m.species() == Species::Warden {
+                                return self
+                                    .warden_attack_target(m, None)
+                                    .map(|(_, target)| target);
+                            }
+                            let who = if attacker {
                                 m.ai.last_hurt_by
                             } else {
-                                m.ai.target
-                            }
-                        })
-                        .map(|w| match w {
-                            sunrise_client::mobs::Who::Player => {
-                                // LivingEntity.getLastHurtByMob is the player
-                                // who hit it, not whichever client is reading it.
-                                match self
-                                    .last_hurt_by_player
-                                    .get(&id)
-                                    .and_then(|credit| self.resolve_player_credit(*credit))
-                                {
-                                    Some(Some(conn))
-                                        if attacker && self.lan_acting != Some(conn) =>
-                                    {
-                                        Target::Guest(conn)
-                                    }
-                                    _ => Target::Player,
+                                // `Mob.getTarget`, as brain-backed mobs override it.
+                                brain_target(m).unwrap_or(m.ai.target)
+                            }?;
+                            match who {
+                                Who::Player => {
+                                    let conn = if attacker {
+                                        // `getLastHurtByMob`: the player who hit it,
+                                        // not whichever client is reading it.
+                                        self.last_hurt_by_player.get(&id).and_then(|credit| {
+                                            self.resolve_player_credit(*credit).flatten()
+                                        })
+                                    } else {
+                                        None
+                                    };
+                                    Some(
+                                        conn.filter(|&conn| self.lan_acting != Some(conn))
+                                            .map_or(Target::Player, Target::Guest),
+                                    )
                                 }
+                                Who::Mob(i) if attacker => Some(Target::Mob(i)),
+                                Who::Mob(i) => self.level_entity(i as i32),
                             }
-                            sunrise_client::mobs::Who::Mob(i) => Target::Mob(i),
                         })
                         .into_iter()
                         .collect(),

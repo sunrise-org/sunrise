@@ -423,7 +423,7 @@ impl EntityFluidTickWorld for MotionWorld<'_, '_, '_> {
         Ok(!self.player.flying)
     }
     fn reset_fall_distance(&mut self) -> Result<()> {
-        self.player.fall_distance = 0.0;
+        self.player.reset_fall_distance();
         Ok(())
     }
     fn was_touching_water(&self) -> bool {

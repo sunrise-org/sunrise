@@ -77,8 +77,8 @@ fn picture(
             hand: false,
         },
         sunrise_shaders::GameInputs {
-            sky: Some(super::super::pack_sky::inputs()),
-            celestial: Some(super::super::pack_sky::celestial_inputs()),
+            sky: Some(crate::gfx::pack_sky::inputs()),
+            celestial: Some(crate::gfx::pack_sky::celestial_inputs()),
             ..Default::default()
         },
     );
@@ -88,6 +88,12 @@ fn picture(
     frame.title = false;
     frame.skybox = true;
     frame.celestial = celestial;
+    // The sun's quad, then the moon's.
+    let bodies = [
+        crate::gfx::CelestialBody::Sun,
+        crate::gfx::CelestialBody::Moon,
+    ];
+    frame.celestial_bodies = &bodies[..celestial.len() / 4];
     let format = post.formats[1];
     let pixels = gpu.render(&mut post, &color, &depth, &frame, &mut |_, _, _, _| {});
     (pixels, format)

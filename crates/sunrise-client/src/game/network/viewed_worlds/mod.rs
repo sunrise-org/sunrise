@@ -30,6 +30,7 @@ pub(in crate::game) mod tests {
     use sunrise_protocol::{
         buf::Reader,
         chunk::{ChunkData, LightData, Paletted, Section, Strategy},
+        connection::Pipe,
         packets::play::{self, Clientbound as C},
         viewed_levels,
     };
@@ -57,9 +58,16 @@ pub(in crate::game) mod tests {
     pub(in crate::game) fn client(
         resources: &mut Option<std::sync::Arc<crate::game::Resources>>,
     ) -> Game<'_> {
+        client_with_pipe(resources).0
+    }
+
+    /// As `client`, retaining the server half so the executor stays connected for negotiation.
+    pub(in crate::game) fn client_with_pipe(
+        resources: &mut Option<std::sync::Arc<crate::game::Resources>>,
+    ) -> (Game<'_>, Pipe) {
         let mut game = server_game(resources);
         game.options.execution_role = crate::game::execution_role::ExecutionRole::Client;
-        let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();
+        let (pipe, server) = Pipe::pair();
         game.connect_local(pipe, "Steve").unwrap();
         game.handle_packet(C::Login(play::Login {
             player_id: 7,
@@ -94,7 +102,7 @@ pub(in crate::game) mod tests {
         );
         game.remote.as_mut().unwrap().registries = Arc::new(registries);
         EPOCHS.with(|epochs| *epochs.borrow_mut() = Default::default());
-        game
+        (game, server)
     }
 
     thread_local! {

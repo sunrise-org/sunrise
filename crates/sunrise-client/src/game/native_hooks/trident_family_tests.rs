@@ -357,7 +357,7 @@ fn unlistened_projectile_factory_keeps_family_without_copying_weapon() {
                         }
                         let attack = game.projectile_attack(&shot);
                         assert_eq!(attack.projectile, Some(71));
-                        assert_eq!(attack.projectile_is_arrow, is_arrow);
+                        assert_eq!(attack.projectile_kind.is_arrow(), is_arrow);
                         assert!(attack.projectile_weapon.is_none());
                         assert!(attack.held.iter().all(Option::is_none));
                         assert_eq!(

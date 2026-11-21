@@ -39,12 +39,12 @@ use sunrise_core::nbt::{JavaString, Tag};
 use sunrise_perf_format::v1::{StopReason, Trigger};
 use sunrise_protocol::text::translatable;
 
-mod biome_regions;
+pub(super) mod biome_regions;
 mod missing_mods;
 pub(crate) use missing_mods::is_missing_mods_refusal;
 pub(super) mod events;
 mod management;
-mod predicate_graph;
+use sunrise_gameplay::dedicated::predicate_graph;
 pub(super) mod report;
 mod status;
 mod transfer;
@@ -239,7 +239,7 @@ fn log_from(thread: &str, level: &str, message: &str) {
         "ERROR" => ::log::Level::Error,
         _ => ::log::Level::Info,
     };
-    sunrise_client::logging::write_as(thread, file_level, message);
+    sunrise_client::logging::write_mirrored_as(thread, file_level, message);
     CAPTURE.with_borrow_mut(|lines| {
         if let Some(lines) = lines {
             lines.push(message.to_owned());
@@ -548,8 +548,6 @@ const LEGACY_PRESET_NAMES: [(&str, sunrise_client::save::WorldPreset); 2] = [
     ),
 ];
 
-/// server.properties' line for `server.toml`'s `max_view_distance` (sunrise-server writes it).
-const FAR_PROPERTY: &str = "sunrise-max-view-distance";
 /// A tick slower than this, in milliseconds, enters the slow ring (five ticks' worth, a stall players feel) unless `SUNRISE_SPIKES` names another.
 pub(super) const SLOW_TICK_MS: f32 = 250.0;
 /// `MinecraftServer.OVERLOADED_WARNING_INTERVAL_NANOS` plus 100 ticks: the
@@ -599,6 +597,26 @@ impl Game<'_> {
         });
         lang::set(language);
         self.native_server_starting(true);
+    }
+
+    /// `LevelStorageAccess.hasWorldData`: a backup alone still belongs to an
+    /// existing world. Let world loading recover it instead of replacing the
+    /// world's saved generator settings with server.properties. Returns whether
+    /// the world is new.
+    fn prepare_world_metadata(
+        &mut self,
+        dir: &std::path::Path,
+        props: &ServerProperties,
+        allow_missing_mods: bool,
+    ) -> Result<bool> {
+        let new_world = !dir.join("level.dat").exists() && !dir.join("level.dat_old").exists();
+        if new_world {
+            self.write_world_gen(dir, props)?;
+        } else {
+            // Before anything writes the world: a refusal leaves it as it was saved.
+            self.check_missing_mods(dir, allow_missing_mods)?;
+        }
+        Ok(new_world)
     }
 
     /// DedicatedServerProperties.createDimensions for a world that doesn't
@@ -850,16 +868,8 @@ impl Game<'_> {
             .get()
             .and_then(|m| m.lock().unwrap().take())
             .ok_or("dedicated server not prepared")?;
-        // Main's WorldLoader: a new world's dimensions come from
-        // server.properties before the server starts.
         let world_dir = std::env::current_dir()?.join(&universe).join(&level_name);
-        let new_world = !world_dir.join("level.dat").exists();
-        if new_world {
-            self.write_world_gen(&world_dir, &props)?;
-        } else {
-            // Before anything writes the world: a refusal leaves it as it was saved.
-            self.check_missing_mods(&world_dir, allow_missing_mods)?;
-        }
+        let new_world = self.prepare_world_metadata(&world_dir, &props, allow_missing_mods)?;
         // The console thread starts first, as in initServer.
         let (tx, console) = mpsc::channel();
         std::thread::Builder::new()
@@ -961,9 +971,6 @@ impl Game<'_> {
         let folder = world_dir.to_string_lossy().into_owned();
         // The mods' common and server configs, read before the server starts.
         self.native_configs_server_start(&world_dir, true);
-        if !new_world {
-            biome_regions::choose(&world_dir)?;
-        }
         let prepared = self.prepare_world_and_rules(WorldRequest::new(
             &folder,
             Some(&level_name),
@@ -1184,22 +1191,7 @@ impl Game<'_> {
         }
         self.sync_ops(&lists);
         self.read_runtime_level_cap(|key| props.raw.get(key));
-        // Sunrise's far ring (docs/hosting.md): server.toml's `max_view_distance`.
-        let far = props
-            .raw
-            .get(FAR_PROPERTY)
-            .and_then(|v| v.trim().parse::<i32>().ok())
-            .unwrap_or(0)
-            .clamp(0, 32);
-        let (registry, biomes) = (self.pack.assets.registry, self.res.biomes().clone());
         if let Some(host) = self.lan.as_mut() {
-            if far > host.hub.config.view_distance {
-                host.hub.far = Some(sunrise_client::lan::far::Far::new(far, registry, biomes));
-                log(
-                    "INFO",
-                    &format!("Sending saved chunks up to {far} chunks away (max_view_distance)"),
-                );
-            }
             // The viewed areas' chunk caps (#3716): server.toml's `max_viewed_*` settings.
             let (caps, clamped) = viewed::ViewedCaps::from_properties(|key| props.raw.get(key));
             if let Some(asked) = clamped {
@@ -1251,11 +1243,6 @@ impl Game<'_> {
             ),
             perf_epoch: Instant::now(),
             sunrise: sunrise_client::server_perf::sunrise_options(
-                if self.lan.as_ref().is_some_and(|h| h.hub.far.is_some()) {
-                    far as u32
-                } else {
-                    0
-                },
                 sunrise_client::lod_net::distance_property(
                     props.raw.get(sunrise_client::lod_net::PROPERTY).as_deref(),
                 ),
@@ -1287,7 +1274,6 @@ impl Game<'_> {
         self.fns.permission = Some(props.function_permission_level.clamp(0, 4) as u8);
         let watchdog = Watchdog::start(props.max_tick_time);
         let _stop_watchdog = StopWatchdog(watchdog.clone());
-        let mut braked = Instant::now();
         let mut overload_warned: Option<Instant> = None;
         // `/stop`, or a stop signal (the shutdown hook's `halt`): either way the players and levels are
         // saved below, after the wait `[transfer]` may make (transfer.rs).
@@ -1404,15 +1390,6 @@ impl Game<'_> {
                 || self.wire_bytes(),
             );
             self.poll_server_memory_snapshot(&mut state);
-            // The far ring's brake, once a second on the average tick.
-            if braked.elapsed() >= Duration::from_secs(1)
-                && let Some(host) = self.lan.as_mut()
-                && let Some(far) = host.hub.far.as_mut()
-            {
-                braked = Instant::now();
-                let mspt = self.clock.average_nanos() as f64 / 1e6;
-                far.brake(mspt, host.hub.config.view_distance);
-            }
             state.ticked(Instant::now());
             // MinecraftServer.runServer: a server more than a second's ticks
             // behind skips them and says so, at most every 15 seconds.
@@ -1493,7 +1470,7 @@ impl Game<'_> {
                 .loading_chunks(|g| super::game_mode::loads_chunks(rule, g.spectator()))
                 .next()
         });
-        if self.is_dedicated_server() {
+        if self.is_dedicated_server() || self.dim != super::Dim::Overworld || guest.is_some() {
             self.streaming.radius = if guest.is_some() {
                 self.settings.render_distance
             } else {
@@ -1694,11 +1671,13 @@ impl Game<'_> {
     }
 
     /// `MinecraftServer.createCommandSourceStack`: the console's source is
-    /// bound to the overworld, whichever level the last server tick left in
-    /// place (the last one ticked, often the nether). Its commands run there
-    /// and the level in place is put back afterwards.
-    pub(super) fn as_console_in_overworld<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        let back = console_level(self.dim).and_then(|dim| self.enter_command_level(dim));
+    /// bound to the world spawn's level (`findRespawnDimension`), whichever
+    /// level the last server tick left in place (the last one ticked, often
+    /// the nether). Its commands run there and the level in place is put back
+    /// afterwards.
+    pub(super) fn as_console_in_spawn_level<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let back = console_level(self.dim, self.world_spawn_level())
+            .and_then(|dim| self.enter_command_level(dim));
         let source = super::commands::execute::Source {
             silent: false,
             ..self.server_source()
@@ -1710,6 +1689,22 @@ impl Game<'_> {
             self.enter_command_level(back);
         }
         out
+    }
+
+    /// A console or RCON announcement, logged without adding to the source's command output.
+    pub(super) fn dedicated_console_say(&mut self, message: String) {
+        let name = if self.rcon_source { "Rcon" } else { "Server" };
+        let Some(hidden) = self.chat_hidden_from(|_| (0, name, message.as_str())) else {
+            return;
+        };
+        let held = self.rcon_source.then(|| CAPTURE.take());
+        log("INFO", &format!("[Not Secure] [{name}] {message}"));
+        if let Some(held) = held {
+            CAPTURE.set(held);
+        }
+        if let Some(host) = &self.lan {
+            host.hub.console_say(name, &message, &hidden);
+        }
     }
 
     /// DedicatedServer.handleConsoleInputs: one console line, run as the
@@ -1725,7 +1720,7 @@ impl Game<'_> {
         let lit = |s: &str| Text::literal(s.to_owned());
         #[cfg(feature = "state-digest")]
         if command == "digest-sync" {
-            match self.as_console_in_overworld(|g| g.state_digest_sync(&rest)) {
+            match self.as_console_in_spawn_level(|g| g.state_digest_sync(&rest)) {
                 Ok(()) => log("INFO", "digest-sync done"),
                 Err(e) => log("WARN", &format!("digest-sync: {e}")),
             }
@@ -2058,29 +2053,14 @@ impl Game<'_> {
                     ],
                 ));
             }
-            "say" if !rest.is_empty() => {
-                // SayCommand from the console: an unsigned system chat
-                // message of type say_command, logged as not secure.
-                let message = rest.join(" ");
-                // An RCON client's `say` is `[Rcon] message`, and its reply stays empty: the line is
-                // the console's own log, not a message to the source.
-                let name = if self.rcon_source { "Rcon" } else { "Server" };
-                let held = self.rcon_source.then(|| CAPTURE.take());
-                log("INFO", &format!("[Not Secure] [{name}] {message}"));
-                if let Some(held) = held {
-                    CAPTURE.set(held);
-                }
-                if let Some(h) = &self.lan {
-                    h.hub.say(name, &message);
-                }
-            }
+            "say" if !rest.is_empty() => self.dedicated_console_say(rest.join(" ")),
             _ => {
                 // The game's dispatcher, captured for the console.
                 self.chat_capture = Some(Vec::new());
                 // A command a native mod registered goes to the mods first,
                 // looked up by the same first word the match above read.
                 if !self.perform_native_console_command(line.trim()) {
-                    self.as_console_in_overworld(|g| g.run_command(line));
+                    self.as_console_in_spawn_level(|g| g.run_command(line));
                 }
                 for text in self.chat_capture.take().unwrap_or_default() {
                     self.console_reply(text);
@@ -2366,10 +2346,9 @@ impl Game<'_> {
 /// the tick panics there, to see what crash teardown keeps.
 /// `armed` is asked only when the variable names `point`, so the tick pays one
 /// load of a `OnceLock` without it.
-pub(super) fn crash_fixture(point: &str, armed: impl FnOnce() -> bool) {
-    static FIXTURE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    let fixture = FIXTURE.get_or_init(|| std::env::var("SUNRISE_CRASH_FIXTURE").ok());
-    if fixture.as_deref() == Some(point) && armed() {
+pub(super) fn crash_fixture(point: &'static str, armed: impl FnOnce() -> bool) {
+    use sunrise_world::crash_fixture::{CrashFixture, selected};
+    if selected() == Some(CrashFixture::Panic(point)) && armed() {
         panic!("crash fixture at {point}");
     }
 }
@@ -2393,11 +2372,10 @@ fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
     Some((w, h))
 }
 
-/// The level a console command runs in when `active` is in place: always
-/// the overworld (`MinecraftServer.createCommandSourceStack` uses
-/// `overworld()`), so None when it already is.
-fn console_level(active: super::Dim) -> Option<super::Dim> {
-    (active != super::Dim::Overworld).then_some(super::Dim::Overworld)
+/// The level a console line runs in, when it is not `active`, the one in place: the world
+/// spawn's (`MinecraftServer.createCommandSourceStack` uses `findRespawnDimension`).
+fn console_level(active: super::Dim, spawn: super::Dim) -> Option<super::Dim> {
+    (active != spawn).then_some(spawn)
 }
 
 impl Game<'_> {
@@ -2468,13 +2446,19 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    /// A console line runs in the overworld even after a server tick left the nether in place.
+    /// A console line runs in the world spawn's level whichever level a server tick left in place.
     #[test]
-    fn console_commands_run_in_the_overworld() {
+    fn console_commands_run_in_the_world_spawn_level() {
         use super::super::Dim;
-        assert_eq!(super::console_level(Dim::Nether), Some(Dim::Overworld));
-        assert_eq!(super::console_level(Dim::End), Some(Dim::Overworld));
-        assert_eq!(super::console_level(Dim::Overworld), None);
+        let overworld = Dim::Overworld;
+        assert_eq!(
+            super::console_level(Dim::Nether, overworld),
+            Some(overworld)
+        );
+        assert_eq!(super::console_level(Dim::End, overworld), Some(overworld));
+        assert_eq!(super::console_level(overworld, overworld), None);
+        assert_eq!(super::console_level(overworld, Dim::End), Some(Dim::End));
+        assert_eq!(super::console_level(Dim::End, Dim::End), None);
     }
 
     /// `BanIpCommands.banIp`: the info line names the affected players, one or several, and is
@@ -2539,6 +2523,42 @@ mod tests {
             assert_eq!(game.ip_ban_players("0.0.0.0"), [12]);
             assert_eq!(game.ip_ban_players("127.0.0.1"), [13]);
         });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_missing_level_file_keeps_the_existing_world_generator() {
+        use sunrise_client::save::Level;
+        use sunrise_java_properties::Properties;
+
+        let world = tempfile::tempdir().unwrap();
+        let dir = world.path();
+        Level {
+            seed: 12345,
+            ..Level::default()
+        }
+        .write_without_player(dir)
+        .unwrap();
+        let settings_path = dir.join("data/minecraft/world_gen_settings.dat");
+        assert!(settings_path.is_file(), "test world has no saved generator");
+        fs::rename(dir.join("level.dat"), dir.join("level.dat_old")).unwrap();
+        let mut properties = Properties::default();
+        properties.put("level-seed", "54321".into());
+        let props =
+            super::ServerProperties::new(properties, &mut super::SystemEntropy::default()).unwrap();
+        let resources = std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap().into();
+        crate::game::native_entity_refs::tests::with_game_role(
+            resources,
+            crate::game::execution_role::ExecutionRole::DedicatedServer,
+            |game| {
+                game.prepare_world_metadata(dir, &props, false).unwrap();
+            },
+        );
+        let generation = sunrise_client::save::read_dat(&settings_path).unwrap();
+        assert_eq!(
+            generation.get("data").and_then(|data| data.get("seed")),
+            Some(&sunrise_core::nbt::Tag::Long(12345)),
+        );
     }
 
     /// A server folder that still has the forwarding secret is told what to do.
@@ -2892,7 +2912,7 @@ mod console_source_tests {
     /// Runs `command` as the console does and returns whether it worked and every message it printed.
     fn console(game: &mut Game<'_>, command: &str) -> (bool, String) {
         game.chat_capture = Some(Vec::new());
-        let ok = game.as_console_in_overworld(|g| g.run_command(command));
+        let ok = game.as_console_in_spawn_level(|g| g.run_command(command));
         let said = game.chat_capture.take().unwrap_or_default();
         let said = said
             .iter()

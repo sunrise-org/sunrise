@@ -6,7 +6,7 @@ commit; rollback, disconnect or a protocol change cancels it. Submission applies
 prediction or inventory effects, and the server still checks reach, permissions and state.
 
 Build common packet bodies with these portable associated constructors. Each returns
-`Result<ServerboundPlayPacket, PacketBuildError>` on both native and wasm:
+`Result<ServerboundPlayPacket, PacketBuildError>`:
 
 | Constructor | Values |
 | --- | --- |

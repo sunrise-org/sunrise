@@ -20,14 +20,14 @@ holds: register it `before_game` if the block also has slots.
 
 ## Moving items
 
- `transfer(host, from, to, resource, max, tx)` moves one kind as one step of `move_resources`: all or
-nothing, a partial take retried, and `StorageError::Overanswered` when a handler answers more than it was asked. It queries the source amount and destination space before extracting and inserting.
+`transfer(host, from, to, resource, max, tx)` moves one kind: all or nothing, a partial take
+retried, and `StorageError::Overanswered` when a handler answers more than it was asked.
+It queries the source amount and destination space before extracting and inserting.
 A partial move can require additional calls. `transfer_matching(host, from, to, filter, max, tx)` moves up to `max` items accepted by
 the filter, listing the source a page at a time.
 
 **Limits the host keeps.** A `StoragePage` holds at most `MAX_STORAGE_PAGE` (256) entries whatever limit a caller asks,
-and a limit of 0 is refused with `StorageError::ZeroPage`. A handler cannot push past its page, and a page crossing the
-wasm boundary is checked again when it is read. Totals and cursors that do not fit in 64 bits are refused with
+and a limit of 0 is refused with `StorageError::ZeroPage`. A handler cannot push past its page. Totals and cursors that do not fit in 64 bits are refused with
 `StorageError::Overflow`, never wrapped.
 
 **Cost.** A bulk store can use a by-kind index to avoid scanning slots. The game's adapter answers in one pass over the slots
@@ -36,6 +36,6 @@ stack. A wrapped mod `ITEMS` handler costs one handler call per slot.
 
 ## Choosing a capability
 
-Use `ITEMS` and `move_resources` for slot-specific operations and small transfers between
+Use `ITEMS` and `resource_util::move_resources` for slot-specific operations and small transfers between
 ordinary containers. Use `STORAGE` for bulk stores and by-kind routing. The cost depends on
 the provider and the slots it exposes; `STORAGE` does not guarantee constant-time access.

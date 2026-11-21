@@ -31,7 +31,6 @@ for name, patch in tomllib.loads((ROOT / 'Cargo.toml').read_text())['patch']['cr
     '{"/STACK:8388608"} else {"-Wl,--stack,8388608"}; println!("cargo:rustc-link-arg={arg}"); }}')
 main = (ROOT / 'crates/sunrise-client/src/native_main.rs.template').read_text()
 main = main.replace('/* MOD_ENTRIES */', f'{quote(manifest["id"])} => paper_trace_mod::hooks,')
-main = main.replace('/* MOD_SLOTS */', '')
 main = main.replace('/* BUILT_MODS */', 'mod_api::__private::native::BuiltMod {'
     f'id: {quote(manifest["id"])}, version: {quote(manifest["version"])}, '
     f'side: mod_api::Side::{manifest.get("side", "client").title()} }},')

@@ -20,7 +20,8 @@ pub trait Hooks {
     /// advance its revision or notify containers/comparators. The original
     /// placeholder must still exist; independent Host writes keep their own effects,
     /// including accepted item writes, while aborted Host transactions stay aborted.
-    /// The default `Changed` retains full checked write-back.
+    /// The default `Changed` retains full checked write-back. With no Part
+    /// subscribed for this type, the tick does not take a snapshot or write back.
     #[hook(
         side = "server",
         contract = "listen",

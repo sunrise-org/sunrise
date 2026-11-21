@@ -17,9 +17,8 @@ impl dyn Registrar + '_ {
     /// for built-ins. Data files under `data/<namespace>/loot_modifiers/` enable
     /// prepared instances; a registered type with no file does not run.
     ///
-    /// Native and wasm use the same resource interface. Reload decodes new
-    /// instances without recompiling code; old instances retain their code store
-    /// until every roll using their generation has returned.
+    /// Reload decodes new instances without recompiling code. An in-progress roll keeps
+    /// using the generation it started with.
     pub fn register_global_loot_modifier_serializer<T: crate::GlobalLootModifierSerializer>(
         &mut self,
         name: &str,

@@ -26,13 +26,13 @@ INPUTS = ROOT / "crates/sunrise-mod-package/src/sdk/inputs.json"
 KINDS = {
     "surface": "The stable surface: everything an API-only mod can name, each item with its fingerprint "
                "([`surface.json`](02-surface.md)).",
-    "build-data": "`points.json`, `internals.json`, `loops.json` and `functions.json`: data pinned to this build, "
+    "build-data": "`internals.json`, `loops.json` and `functions.json`: data pinned to this build, "
                   "with no compatibility promise.",
     "api-source": "The mod API's crates with their generated code written out: what a mod project's "
                   "`.sunrise/sdk/api/` holds.",
     "runtime": "The game's libraries, the prebuilt program the API route links mods into, its stub mods library "
                "and the package's identity file.",
-    "api": "Metadata of the mod API's crates and their procedural macros, the point data and the mods library's "
+    "api": "Metadata of the mod API's crates and their procedural macros, build data and the mods library's "
            "template: what a mod on the mod API alone builds against.",
     "engine": "Every other file of the prebuilt game: what a mod with a `[native.*]` table, game internals or a "
               "registry dependency builds against as well.",

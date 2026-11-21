@@ -62,27 +62,36 @@ pub(super) fn unpack_loot(
     }
 }
 
+/// [`Game::pot_data`] over the world and the block facts.
+pub(in crate::game) fn pot_data_in(
+    world: &sunrise_client::world::World,
+    facts: &sunrise_client::blocks::BlockFacts,
+    pos: [i32; 3],
+) -> Option<Tag> {
+    let state = world.block(pos[0], pos[1], pos[2]);
+    if &*facts.get(state).name != "minecraft:decorated_pot" {
+        return None;
+    }
+    let mut tag = spill::saved_entity(world, pos).unwrap_or_else(|| {
+        Tag::compound([
+            ("id", Tag::String("minecraft:decorated_pot".into())),
+            ("x", Tag::Int(pos[0])),
+            ("y", Tag::Int(pos[1])),
+            ("z", Tag::Int(pos[2])),
+        ])
+    });
+    tag = sunrise_client::block_entity_nbt::canonical(&tag)?;
+    if let Tag::Compound(map) = &mut tag {
+        map.remove(&"keepPacked".into());
+    }
+    Some(tag)
+}
+
 impl Game<'_> {
     /// `DecoratedPotBlockEntity.saveAdditional` for commands: a pure view of
     /// the existing saved state. Unlike pot_tag, this never unpacks loot.
     pub(super) fn pot_data(&self, pos: [i32; 3]) -> Option<Tag> {
-        let state = self.world.block(pos[0], pos[1], pos[2]);
-        if &*self.res.facts().get(state).name != "minecraft:decorated_pot" {
-            return None;
-        }
-        let mut tag = spill::saved_entity(&self.world, pos).unwrap_or_else(|| {
-            Tag::compound([
-                ("id", Tag::String("minecraft:decorated_pot".into())),
-                ("x", Tag::Int(pos[0])),
-                ("y", Tag::Int(pos[1])),
-                ("z", Tag::Int(pos[2])),
-            ])
-        });
-        tag = sunrise_client::block_entity_nbt::canonical(&tag)?;
-        if let Tag::Compound(map) = &mut tag {
-            map.remove(&"keepPacked".into());
-        }
-        Some(tag)
+        pot_data_in(&self.world, self.res.facts(), pos)
     }
     /// `DecoratedPotBlockEntity.loadAdditional`: command edits and BlockInput
     /// loading write back to the same saved tag that live pot interactions use.

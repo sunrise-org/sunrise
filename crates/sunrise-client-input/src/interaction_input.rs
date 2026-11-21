@@ -87,6 +87,10 @@ impl InteractionInput {
     pub fn press(&mut self, button: Button) {
         self.clicks[button as usize].press();
     }
+    /// The clicks of `button` waiting for a tick.
+    pub fn queued(&self, button: Button) -> u32 {
+        self.clicks[button as usize].count()
+    }
     /// Take the pending input, leaving empty callback queues with the same refusal latches.
     /// The owner must merge callback input back after the tick. Clearing or temporarily taking
     /// input must not restart diagnostics during the lifetime of the owning Remote.

@@ -1,4 +1,4 @@
-//! Immutable physical-process information shared by native and wasm mods.
+//! Immutable physical-process information.
 
 /// The physical process, independent of a hook's logical side.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, sunrise_mod_api_macros::Wire)]

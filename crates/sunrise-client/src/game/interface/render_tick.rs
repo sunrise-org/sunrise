@@ -6,7 +6,7 @@ use sunrise_client::assets::Properties;
 use sunrise_client::camera::NearPlane;
 use sunrise_client::fog::{FogData, FogInputs, FogType, settle_rain_fog, update_rain_fog};
 use sunrise_client::{
-    animate_tick::{AnimateContext, animate_tick, campfire_particles, marker_particle_target},
+    animate_tick::{AnimateContext, AnimateSampling, campfire_particles, marker_particle_target},
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
     containers::BlockEntity,
@@ -123,48 +123,33 @@ fn rains_at(world: &World, biomes: &Biomes, x: i32, y: i32, z: i32) -> bool {
 }
 
 impl Game<'_> {
-    /// Polytone GPU particles, before the frame's quads are built: their heightmap every half
-    /// second (a custom shader's `Sampler1`, and the surface rain drawn as quads dies under),
-    /// and the renderer's verdict on each shader.
+    /// Polytone GPU particles, before the frame's quads are built: any pending clear, the
+    /// renderer's verdict on each shader and on the quads drawn here, then the heightmap for the readers that draw (a custom shader's `Sampler1`,
+    /// and the surface rain drawn as quads dies under), every half second.
     pub(super) fn polytone_gpu_decide(&mut self, camera: glam::DVec3) {
-        let world = &self.world;
-        if let Some(refresh) = self.particles.polytone_heightmap_due(
-            camera,
-            sunrise_client::gfx::POLYTONE_HEIGHTMAP_SIZE,
-            world.bottom_y(),
-        ) {
-            let area = refresh.area;
-            let properties = &self.pack.assets.properties;
-            let size = area.size as i32;
-            let heights: Vec<u16> = (0..size * size)
-                .map(|i| {
-                    let (x, z) = (area.origin[0] + i % size, area.origin[1] + i / size);
-                    let top = motion_blocking_height(world, properties, x, z);
-                    (top - area.min_y).clamp(0, i32::from(u16::MAX)) as u16
-                })
-                .collect();
-            if refresh.for_shaders
-                && let Some(renderer) = &self.renderer
-            {
-                renderer.set_polytone_heightmap(&heights);
-            }
-            self.particles.set_polytone_surface(area, &heights);
-        }
-        if let Some(renderer) = self.renderer.as_mut() {
-            renderer.decide_polytone_shaders(&self.particles.polytone_shaders());
-        }
+        // A mod's clear asked since the last frame goes first: cleared records read nothing.
+        self.apply_mod_particle_clear();
+        let (world, properties) = (&self.world, &self.pack.assets.properties);
+        let top = |x, z| motion_blocking_height(world, properties, x, z);
+        let source = sunrise_client::particles::polytone_gpu::HeightmapSource {
+            size: sunrise_client::gfx::POLYTONE_HEIGHTMAP_SIZE,
+            min_y: world.bottom_y(),
+            top: &top,
+        };
+        let renderer = self.renderer.as_mut().map(|r| r as _);
+        self.particles
+            .polytone_gpu_decide(renderer, camera, &source);
     }
 
     /// After the frame's quads (and any clear in their extraction): the records of the types
     /// the renderer draws with their own shader go to it.
     pub(super) fn polytone_gpu_particles(&mut self, camera: glam::DVec3, alpha: f64) {
         let world = &self.world;
-        let batches = self
-            .particles
-            .polytone_shader_batches(camera, alpha as f32, &|b| world.light(b[0], b[1], b[2]));
-        if let Some(renderer) = self.renderer.as_mut() {
-            renderer.set_polytone_batches(batches);
-        }
+        let renderer = self.renderer.as_mut().map(|r| r as _);
+        self.particles
+            .polytone_gpu_hand_over(renderer, camera, alpha as f32, &|b| {
+                world.light(b[0], b[1], b[2])
+            });
     }
 
     /// `GameRenderer`'s cardinal light: the level's type uses the Nether's diffuse lights.
@@ -678,6 +663,15 @@ impl Game<'_> {
         Some((TrackingTarget::Entity(id), mob_tracking_body(mob)))
     }
 
+    /// `Hud.updateVignetteBrightness`, from the local player's eye: `Gui.tick` runs it on every tick
+    /// the game isn't paused, frozen level or not.
+    pub(in crate::game) fn tick_vignette(&mut self) {
+        if let Some(e) = self.eye_position() {
+            let brightness = self.eye_brightness(e);
+            self.screen_fx.tick_vignette(brightness);
+        }
+    }
+
     pub(super) fn tick_particles(&mut self) {
         // A client mod's `clear_particles`, before this tick adds any.
         self.apply_mod_particle_clear();
@@ -685,9 +679,13 @@ impl Game<'_> {
         let mut laps = sunrise_client::spans::laps();
         let eye = self.eye_position();
         if let Some(e) = eye {
-            let brightness = self.eye_brightness(e);
+            // A client of a server eases the vignette in `tick_hud`, frozen level or not.
+            if self.remote.is_none() {
+                let brightness = self.eye_brightness(e);
+                self.screen_fx.tick_vignette(brightness);
+            }
             let inside_portal = self.client_portal_effect();
-            self.screen_fx.tick(brightness, inside_portal);
+            self.screen_fx.tick_portal(inside_portal);
             // LocalPlayer.aiStep: processPortalCooldown after the transition
             // effect (a local world's player counts down in handlePortal).
             if self.remote.is_some() && self.portals.player.cooldown > 0 {
@@ -708,167 +706,189 @@ impl Game<'_> {
         }
         let (rain, _) = self.weather_levels(1.0);
         let marker = marker_particle_target(self.mode, self.stack_in(self.selected));
-        let marker_options = |state| {
-            // BlockMarker: the particle sprite, untinted.
-            let sprite = Self::block_particle_sprite(&self.pack, state)?;
-            Some(ParticleOptions::block(
-                ParticleType::BlockMarker,
-                sprite,
-                0xFFFFFF,
-            ))
-        };
-        let world = &self.world;
-        let facts = self.res.facts();
-        let biomes = world_biomes!(self);
-        let properties = &self.pack.assets.properties;
-        let raining = rain > 0.2;
-        let raining_at = |p: [i32; 3]| {
-            raining
-                && motion_blocking_height(world, properties, p[0], p[2]) <= p[1]
-                && rains_at(world, biomes, p[0], p[1], p[2])
-        };
-        let height_no_leaves =
-            |p: [i32; 3]| motion_blocking_leaves(world, facts, p[0], p[2], i32::MAX, false);
         // The day timeline: firefly bush sounds from 12600 to 23400.
         let firefly_bush_sounds = self.dimension_type().has_timeline("minecraft:day")
             && (12600..23401).contains(&self.world.day_time.rem_euclid(24000));
         // EnvironmentAttributes.CREAKING_ACTIVE: the same overworld night.
         let creaking_active = self.dimension_type().has_timeline("minecraft:day")
             && (12600..23401).contains(&self.world.day_time.rem_euclid(24000));
-        let tables = &self.pack.context.tables;
-        let model_offset = |state, x, z| tables.offset(state, x, z);
-        let gateway_particles = |state, p| {
-            self.res
-                .block_entity_render()
-                .gateway_faces(world, state, p)
-                .len()
-        };
         // Level.isThundering: a thunder level above 0.9 where the sky is open.
-        let thundering = self.can_have_weather() && world.weather.levels(1.0).1 > 0.9;
-        let ctx = AnimateContext {
-            enchant_power: &self.ambience.enchant_power,
-            world,
-            facts,
-            collision: self.collision,
-            biomes,
-            registry: self.pack.assets.registry,
-            raining_at: &raining_at,
-            height_no_leaves: &height_no_leaves,
-            firefly_bush_sounds,
-            creaking_active,
-            sky_darken: self.sky_darken(),
-            marker: marker.map(|name| (name, &marker_options as &dyn Fn(_) -> _)),
-            model_offset: &model_offset,
-            gateway_particles: &gateway_particles,
-            thundering,
-            ultrawarm: self.dimension_type().water_evaporates,
-        };
-        if let Some(e) = eye {
-            let block = [
-                e[0].floor() as i32,
-                e[1].floor() as i32,
-                e[2].floor() as i32,
-            ];
-            laps.lap("tp_ctx");
-            self.particles
-                .set_polytone(self.pack.polytone_particles.clone());
-            if let Some(registry) = &self.pack.polytone_particles {
-                registry.set_biomes(biomes);
-            }
-            animate_tick(self.res.animate(), &mut self.particles, &ctx, block);
-            laps.lap("tp_animate");
-            // The Sunrise Weather option off means no rain visuals or sounds at all.
-            if rain > 0.0 && self.settings.sunrise.weather {
-                // ClientLevel.tickWeatherEffects: rain splashes within the weather
-                // radius, and the rain sound.
-                let mut random = LegacyRandom::new(self.world.game_time.wrapping_mul(312_987_231));
-                let radius = self.settings.weather_radius;
-                let diameter = 2 * radius + 1;
-                let count = (0.225 * (diameter * diameter) as f32 * rain * rain) as i32
-                    / if self.settings.particles == 1 { 2 } else { 1 };
-                let mut rain_position = None;
-                for _ in 0..count {
-                    let x = block[0] + random.next_int_bound(diameter).unwrap_or(0) - radius;
-                    let z = block[2] + random.next_int_bound(diameter).unwrap_or(0) - radius;
-                    let Some(top) = splash_height(world, properties, x, block[1], z) else {
-                        continue;
-                    };
-                    if !rains_at(world, biomes, x, top, z) {
-                        continue;
-                    }
-                    let below = top - 1;
-                    rain_position = Some([x, below, z]);
-                    // The Minimal option stops at the first spot that rains (the
-                    // rain sound still plays there).
-                    if self.settings.particles >= 2 {
-                        break;
-                    }
-                    let (bx, bz) = (random.next_double(), random.next_double());
-                    let state = world.block(x, below, z);
-                    let f = facts.get(state);
-                    let block_top = self
-                        .collision
-                        .cached_shapes()
-                        .cached_collision_top(state, [x, below, z], bx, bz)
-                        .ok()
-                        .flatten()
-                        .unwrap_or(0.0);
-                    let fluid_top = if f.fluid == Fluid::None {
-                        0.0
-                    } else {
-                        f64::from(f.fluid_level) / 9.0
-                    };
-                    let smoke = f.fluid == Fluid::Lava
-                        || &*f.name == "minecraft:magma_block"
-                        || (f.name.ends_with("campfire")
-                            && self.res.animate().is_lit_campfire(state.0));
-                    let ty = if smoke {
-                        ParticleType::Smoke
-                    } else {
-                        ParticleType::Rain
-                    };
-                    let p = [
-                        f64::from(x) + bx,
-                        f64::from(below) + block_top.max(fluid_top),
-                        f64::from(z) + bz,
-                    ];
+        let thundering = self.can_have_weather() && self.world.weather.levels(1.0).1 > 0.9;
+        let sky_darken = self.sky_darken();
+        let ultrawarm = self.dimension_type().water_evaporates;
+        // Whether the picks ask for the mod block parts' `animate_tick`.
+        let parts = self.mod_animate_parts();
+        let block = eye.map(|e| e.map(|v| v.floor() as i32));
+        let mut sampling = block.map(AnimateSampling::new);
+        // `ClientLevel.animateTick`, then the rain and the campfires. The sampling stops in each
+        // pick whose block has a part, for the game to call it there (`mod_animate_tick`); the
+        // context borrows the game, so it is made again for the rest of the tick.
+        loop {
+            let marker_options = |state| {
+                // BlockMarker: the particle sprite, untinted.
+                let sprite = Self::block_particle_sprite(&self.pack, state)?;
+                Some(ParticleOptions::block(
+                    ParticleType::BlockMarker,
+                    sprite,
+                    0xFFFFFF,
+                ))
+            };
+            let world = &self.world;
+            let facts = self.res.facts();
+            let biomes = world_biomes!(self);
+            let properties = &self.pack.assets.properties;
+            let raining = rain > 0.2;
+            let raining_at = |p: [i32; 3]| {
+                raining
+                    && motion_blocking_height(world, properties, p[0], p[2]) <= p[1]
+                    && rains_at(world, biomes, p[0], p[1], p[2])
+            };
+            let height_no_leaves =
+                |p: [i32; 3]| motion_blocking_leaves(world, facts, p[0], p[2], i32::MAX, false);
+            let tables = &self.pack.context.tables;
+            let model_offset = |state, x, z| tables.offset(state, x, z);
+            let gateway_particles = |state, p| {
+                self.res
+                    .block_entity_render()
+                    .gateway_faces(world, state, p)
+                    .len()
+            };
+            let ctx = AnimateContext {
+                enchant_power: &self.ambience.enchant_power,
+                world,
+                facts,
+                collision: self.collision,
+                biomes,
+                registry: self.pack.assets.registry,
+                raining_at: &raining_at,
+                height_no_leaves: &height_no_leaves,
+                firefly_bush_sounds,
+                creaking_active,
+                sky_darken,
+                marker: marker.map(|name| (name, &marker_options as &dyn Fn(_) -> _)),
+                model_offset: &model_offset,
+                gateway_particles: &gateway_particles,
+                thundering,
+                ultrawarm,
+                block_parts: parts
+                    .then_some(&Self::animate_part_listens as &dyn Fn(BlockStateId) -> bool),
+            };
+            if let (Some(block), Some(sampling)) = (block, sampling.as_mut()) {
+                if !sampling.started() {
+                    laps.lap("tp_ctx");
                     self.particles
-                        .add(&ParticleOptions::simple(ty), p, [0.0; 3]);
+                        .set_polytone(self.pack.polytone_particles.clone());
+                    if let Some(registry) = &self.pack.polytone_particles {
+                        registry.set_biomes(biomes);
+                    }
                 }
-                // The last rain column of the tick makes the sound, more often the
-                // longer it has been quiet; indoors it is the quieter one.
-                if let Some(at) = rain_position {
-                    let waited = self.rain_sound_time;
-                    self.rain_sound_time += 1;
-                    if random.next_int_bound(3).unwrap_or(0) < waited {
-                        self.rain_sound_time = 0;
-                        let roof = motion_blocking_height(world, properties, block[0], block[2]);
-                        let (name, volume, pitch) = if at[1] > block[1] + 1 && roof > block[1] {
-                            ("minecraft:weather.rain.above", 0.1, 0.5)
-                        } else {
-                            ("minecraft:weather.rain", 0.2, 1.0)
+                if let Some((state, pos)) =
+                    sampling.run(self.res.animate(), &mut self.particles, &ctx)
+                {
+                    // `Block.animateTick` of the picked block's parts, inside its pick: after the
+                    // block's own effects, before its fluid's and the next pick.
+                    self.mod_animate_tick(state, pos);
+                    continue;
+                }
+                laps.lap("tp_animate");
+                // The Sunrise Weather option off means no rain visuals or sounds at all.
+                if rain > 0.0 && self.settings.sunrise.weather {
+                    // ClientLevel.tickWeatherEffects: rain splashes within the weather
+                    // radius, and the rain sound.
+                    let mut random =
+                        LegacyRandom::new(self.world.game_time.wrapping_mul(312_987_231));
+                    let radius = self.settings.weather_radius;
+                    let diameter = 2 * radius + 1;
+                    let count = (0.225 * (diameter * diameter) as f32 * rain * rain) as i32
+                        / if self.settings.particles == 1 { 2 } else { 1 };
+                    let mut rain_position = None;
+                    for _ in 0..count {
+                        let x = block[0] + random.next_int_bound(diameter).unwrap_or(0) - radius;
+                        let z = block[2] + random.next_int_bound(diameter).unwrap_or(0) - radius;
+                        let Some(top) = splash_height(world, properties, x, block[1], z) else {
+                            continue;
                         };
-                        let p = at.map(|c| f64::from(c) + 0.5);
-                        // playLocalSound: guests make their own rain, so a host
-                        // must not capture it for them.
-                        self.audio.play_unshared(name, Some(p), volume, pitch);
+                        if !rains_at(world, biomes, x, top, z) {
+                            continue;
+                        }
+                        let below = top - 1;
+                        rain_position = Some([x, below, z]);
+                        // The Minimal option stops at the first spot that rains (the
+                        // rain sound still plays there).
+                        if self.settings.particles >= 2 {
+                            break;
+                        }
+                        let (bx, bz) = (random.next_double(), random.next_double());
+                        let state = world.block(x, below, z);
+                        let f = facts.get(state);
+                        let block_top = self
+                            .collision
+                            .cached_shapes()
+                            .cached_collision_top(state, [x, below, z], bx, bz)
+                            .ok()
+                            .flatten()
+                            .unwrap_or(0.0);
+                        let fluid_top = if f.fluid == Fluid::None {
+                            0.0
+                        } else {
+                            f64::from(f.fluid_level) / 9.0
+                        };
+                        let smoke = f.fluid == Fluid::Lava
+                            || &*f.name == "minecraft:magma_block"
+                            || (f.name.ends_with("campfire")
+                                && self.res.animate().is_lit_campfire(state.0));
+                        let ty = if smoke {
+                            ParticleType::Smoke
+                        } else {
+                            ParticleType::Rain
+                        };
+                        let p = [
+                            f64::from(x) + bx,
+                            f64::from(below) + block_top.max(fluid_top),
+                            f64::from(z) + bz,
+                        ];
+                        self.particles
+                            .add(&ParticleOptions::simple(ty), p, [0.0; 3]);
+                    }
+                    // The last rain column of the tick makes the sound, more often the
+                    // longer it has been quiet; indoors it is the quieter one.
+                    if let Some(at) = rain_position {
+                        let waited = self.rain_sound_time;
+                        self.rain_sound_time += 1;
+                        if random.next_int_bound(3).unwrap_or(0) < waited {
+                            self.rain_sound_time = 0;
+                            let roof =
+                                motion_blocking_height(world, properties, block[0], block[2]);
+                            let (name, volume, pitch) = if at[1] > block[1] + 1 && roof > block[1] {
+                                ("minecraft:weather.rain.above", 0.1, 0.5)
+                            } else {
+                                ("minecraft:weather.rain", 0.2, 1.0)
+                            };
+                            let p = at.map(|c| f64::from(c) + 0.5);
+                            // playLocalSound: guests make their own rain, so a host
+                            // must not capture it for them.
+                            self.audio.play_unshared(name, Some(p), volume, pitch);
+                        }
                     }
                 }
             }
+            if let Some(r) = &self.renderer {
+                campfire_particles(
+                    self.res.animate(),
+                    &mut self.particles,
+                    &ctx,
+                    r.block_entities(),
+                    &|pos| match self.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+                        Some(BlockEntity::Campfire(c)) => c.items.each_ref().map(Option::is_some),
+                        _ => [false; 4],
+                    },
+                );
+            }
+            laps.lap("tp_rain_campfire");
+            break;
         }
-        if let Some(r) = &self.renderer {
-            campfire_particles(
-                self.res.animate(),
-                &mut self.particles,
-                &ctx,
-                r.block_entities(),
-                &|pos| match self.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
-                    Some(BlockEntity::Campfire(c)) => c.items.each_ref().map(Option::is_some),
-                    _ => [false; 4],
-                },
-            );
-        }
-        laps.lap("tp_rain_campfire");
+        let world = &self.world;
+        let facts = self.res.facts();
         // SpellParticle.isCloseToScopingPlayer: the eye of a local player looking
         // through a spyglass in first person.
         let scope_eye = self
@@ -999,6 +1019,55 @@ impl Game<'_> {
         if let Some(renderer) = &mut self.renderer {
             renderer.set_animation_inputs(day_time, [rain, thunder], Some(&frame), screen);
         }
+    }
+}
+
+/// The packs' expression uniforms on core shaders (`shader_modifiers`, wiki "Shaders").
+impl Game<'_> {
+    /// Whether an installed pack core shader reads expression uniforms this frame. Fullbright
+    /// excludes the lightmap only, and a frame where no world runs the text
+    /// ([`Self::world_runs`]). The frame's expression context is made only when needed.
+    pub(in crate::game) fn reads_pack_expressions(&mut self) -> bool {
+        let world = self.world_runs();
+        (self.renderer.as_mut()).is_some_and(|r| r.reads_pack_expressions(world))
+    }
+
+    /// Whether an installed pack core shader reads Polytone's `PolyGlobals` this frame (the
+    /// text's only where a world runs).
+    pub(in crate::game) fn reads_poly_globals(&mut self) -> bool {
+        let world = self.world_runs();
+        (self.renderer.as_mut()).is_some_and(|r| r.reads_poly_globals(world))
+    }
+
+    /// The frame's `PolyGlobals` for the pack core shaders that read them; none leaves them 0.
+    pub(in crate::game) fn give_poly_globals(
+        &mut self,
+        globals: Option<&sunrise_client::polytone_post::PolyGlobals>,
+    ) {
+        let world = self.world_runs();
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.set_poly_globals(globals.map(|g| g.bytes()).as_ref(), world);
+        }
+    }
+
+    /// Evaluate the installed pack pipelines' expression uniforms from `frame`, skipping the
+    /// lightmap under fullbright, and the text's where no world runs
+    /// ([`Self::world_runs`]). Values are uploaded when each pipeline prepares its draw.
+    pub(in crate::game) fn evaluate_pack_expressions(
+        &mut self,
+        frame: Option<&sunrise_client::environment::Frame>,
+    ) {
+        let world = self.world_runs();
+        if let (Some(frame), Some(renderer)) = (frame, self.renderer.as_mut()) {
+            renderer.evaluate_pack_expressions(frame, world);
+        }
+    }
+
+    /// Whether the text's Polytone blocks are given this frame: only where a world runs. On a
+    /// title frame (the title screen and its menus) the renderer writes them as 0, as it does on
+    /// the loading, file fixer and saving screens' frames.
+    fn world_runs(&self) -> bool {
+        !self.shows_panorama()
     }
 }
 

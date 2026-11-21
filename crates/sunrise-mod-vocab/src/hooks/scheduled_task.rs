@@ -10,8 +10,8 @@ pub trait Hooks {
 
 `host.schedule_task(delay_ticks, token)` asks for a call back after `delay_ticks` server ticks
 and `host.cancel_task(id)` withdraws it, the stand-in for vanilla's
-`MinecraftServer.tell(new TickTask(getTickCount() + delay, runnable))`. A closure cannot cross
-into a wasm mod or outlive the borrowed host, so the callback is this hook: `Hooks::scheduled_task`
+`MinecraftServer.tell(new TickTask(getTickCount() + delay, runnable))`. Rather than storing a
+closure that could borrow the host, the scheduler calls this hook: `Hooks::scheduled_task`
 gets the `TaskId`, the `owner` (the scheduling mod's `[mod] id`) and the `token` the mod passed,
 on the server thread, at the start of the due tick right after `server_tick`'s start phase. Every
 mod is asked about every task, so a mod ignores tasks whose `owner` is not its own.

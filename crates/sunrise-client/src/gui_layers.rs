@@ -1,29 +1,55 @@
-//! The HUD's layer order (NeoForge's `GuiLayerManager`): vanilla's layers in the order Sunrise
-//! draws them, with the layers native mods register (`register_gui_layers`) placed among them
+//! The HUD's layer registration order (NeoForge's `GuiLayerManager`), not its draw order.
+//! Layers native mods register (`register_gui_layers`) are placed among the built-in anchors
 //! once at start, as `RegisterGuiLayersEvent` inserts them.
 
 use mod_api::{GuiLayer, GuiLayerPlacement, Identifier};
 use std::sync::OnceLock;
 
-/// Vanilla's HUD layers in the order Sunrise draws them (`VanillaGuiLayers`, without the camera
-/// overlays and the debug screen, which the HUD pass does not draw): the ids `gui_layer_pre` fires.
-pub const VANILLA: [&str; 15] = [
-    "minecraft:crosshair",
-    "minecraft:hotbar",
-    "minecraft:effects",
-    "minecraft:boss_overlay",
-    "minecraft:vehicle_health",
-    "minecraft:contextual_info_bar",
-    "minecraft:player_health",
-    "minecraft:selected_item_name",
-    "minecraft:sleep_overlay",
-    "minecraft:overlay_message",
-    "minecraft:title",
-    "minecraft:scoreboard_sidebar",
-    "minecraft:subtitle_overlay",
-    "minecraft:chat",
-    "minecraft:tab_list",
+/// Vanilla HUD paint IDs. Keep the current order of public layers; `false` IDs are
+/// internal only, and neither register as anchors nor fire hooks.
+const VANILLA_PAINT_IDS: [(&str, bool); 24] = [
+    ("minecraft:camera_overlays", false),
+    ("minecraft:crosshair", true),
+    ("minecraft:after_camera_decorations", false),
+    ("minecraft:hotbar", true),
+    ("minecraft:effects", true),
+    ("minecraft:boss_overlay", true),
+    ("minecraft:vehicle_health", true),
+    ("minecraft:contextual_info_bar_background", false),
+    ("minecraft:contextual_info_bar", true),
+    ("minecraft:experience_level", false),
+    ("minecraft:player_health", true),
+    ("minecraft:armor_level", false),
+    ("minecraft:food_level", false),
+    ("minecraft:air_level", false),
+    ("minecraft:selected_item_name", true),
+    ("minecraft:spectator_tooltip", false),
+    ("minecraft:sleep_overlay", true),
+    ("minecraft:demo_overlay", false),
+    ("minecraft:overlay_message", true),
+    ("minecraft:title", true),
+    ("minecraft:scoreboard_sidebar", true),
+    ("minecraft:subtitle_overlay", true),
+    ("minecraft:chat", true),
+    ("minecraft:tab_list", true),
 ];
+
+/// The public HUD layer IDs in registration order: the anchors `register_gui_layers` accepts.
+pub const VANILLA: [&str; 15] = {
+    let mut ids = [""; 15];
+    let mut layer = 0;
+    let mut public = 0;
+    while layer < VANILLA_PAINT_IDS.len() {
+        let (id, exposed) = VANILLA_PAINT_IDS[layer];
+        if exposed {
+            ids[public] = id;
+            public += 1;
+        }
+        layer += 1;
+    }
+    assert!(public == ids.len());
+    ids
+};
 
 /// The whole layer order: vanilla's layers and the mods'.
 #[derive(Debug, PartialEq, Eq)]
@@ -221,10 +247,52 @@ mod tests {
     }
 
     #[test]
-    fn no_registration_leaves_vanilla_alone() {
-        let order = GuiLayers::place(Vec::new());
+    fn only_existing_vanilla_layers_are_registration_anchors() {
+        let staged_ids = [
+            "camera_overlays",
+            "after_camera_decorations",
+            "contextual_info_bar_background",
+            "experience_level",
+            "armor_level",
+            "food_level",
+            "air_level",
+            "spectator_tooltip",
+            "demo_overlay",
+        ];
+        let order = GuiLayers::place(
+            staged_ids
+                .into_iter()
+                .map(|id| {
+                    layer(
+                        "compass:bar",
+                        GuiLayerPlacement::Above(format!("minecraft:{id}")),
+                    )
+                })
+                .collect(),
+        );
         assert!(!order.has_mod_layers());
-        assert!(order.ids().eq(VANILLA));
+        assert!(
+            order
+                .ids()
+                .map(|id| id.strip_prefix("minecraft:").unwrap())
+                .eq([
+                    "crosshair",
+                    "hotbar",
+                    "effects",
+                    "boss_overlay",
+                    "vehicle_health",
+                    "contextual_info_bar",
+                    "player_health",
+                    "selected_item_name",
+                    "sleep_overlay",
+                    "overlay_message",
+                    "title",
+                    "scoreboard_sidebar",
+                    "subtitle_overlay",
+                    "chat",
+                    "tab_list",
+                ])
+        );
         assert!(order.mod_layer(0).is_none());
         assert!(!NONE.has_mod_layers() && NONE.is_empty());
     }

@@ -72,6 +72,8 @@ impl Game {
         }
     }
     fn add_orb(&mut self, _: [f64; 3], value: u32) { self.added.push(value); }
+    // This isolated hook fixture has no open transaction.
+    fn journal_orb_merge(&mut self, _: join_seq::JoinSeq, _: (i32, u32, i32)) {}
     RESTORE_ORB
     ORB_MERGES
     AWARD_ORB

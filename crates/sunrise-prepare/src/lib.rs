@@ -63,38 +63,6 @@ pub const SCHEMA: i64 = 7;
 /// folder's sources: keep it on one line, as it is.
 pub const OUTPUT_VERSION: u32 = 5;
 
-/// Digest of this crate's sources (build.rs): the launcher prepares a version in-process when
-/// that version ships these same sources, and runs the version's own binary otherwise.
-pub const SOURCES_SHA256: &str = env!("SUNRISE_PREPARE_SOURCES_SHA256");
-
-/// `SOURCES_SHA256` of the sources in `crate_dir` (a version folder's crates/sunrise-prepare),
-/// computed as build.rs computes it; None when the folder has none.
-pub fn sources_sha256(crate_dir: &Path) -> Option<String> {
-    let mut files = Vec::new();
-    for name in ["Cargo.toml", "build.rs"] {
-        files.push((name.to_string(), fs::read(crate_dir.join(name)).ok()?));
-    }
-    let mut sources: Vec<String> = fs::read_dir(crate_dir.join("src"))
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.ends_with(".rs"))
-        .collect();
-    sources.sort();
-    for name in sources {
-        let data = fs::read(crate_dir.join("src").join(&name)).ok()?;
-        files.push((format!("src/{name}"), data));
-    }
-    let mut hash = sha2::Sha256::new();
-    for (name, data) in files {
-        // Line endings as checked out: a Windows checkout's CRLF is the same source.
-        let data: Vec<u8> = data.into_iter().filter(|b| *b != b'\r').collect();
-        hash.update(format!("{name}\0{}\0", data.len()));
-        hash.update(&data);
-    }
-    Some(hex(&hash.finalize()))
-}
-
 pub struct Options {
     /// The version folder (a release folder, or a checkout): research-lock.json, the exporters'
     /// Java sources, optional precompiled `exporters/`, and `.local/` where everything is written.
@@ -1587,8 +1555,7 @@ fn worldgen_blocks(run: &Run, worker: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// What an exporter's output kept beside its stamp depends on: every exporter source and pin
-/// (the exporter bundle's key), the server jar, and this preparer.
+/// What a stamped export depends on: the exporter bundle's key, the server jar and [`OUTPUT_VERSION`].
 fn stamp_inputs(run: &Run) -> Result<Value, String> {
     Ok(Value::Object(vec![
         ("exporters".into(), Value::Str(exporters::key(&run.root)?)),
@@ -1599,7 +1566,10 @@ fn stamp_inputs(run: &Run) -> Result<Value, String> {
                 .cloned()
                 .unwrap_or(Value::Null),
         ),
-        ("preparer".into(), Value::str(SOURCES_SHA256)),
+        (
+            "output_version".into(),
+            Value::Int(OUTPUT_VERSION.to_string()),
+        ),
     ]))
 }
 
@@ -1848,15 +1818,6 @@ mod tests {
         let lib = include_str!("lib.rs");
         let line = format!("pub const OUTPUT_VERSION: u32 = {OUTPUT_VERSION};");
         assert!(lib.lines().any(|l| l == line));
-    }
-
-    #[test]
-    fn the_source_digest_is_the_one_build_rs_computed() {
-        assert_eq!(
-            sources_sha256(Path::new(env!("CARGO_MANIFEST_DIR"))).as_deref(),
-            Some(SOURCES_SHA256)
-        );
-        assert_eq!(sources_sha256(Path::new("/nonexistent")), None);
     }
 
     #[test]

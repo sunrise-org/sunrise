@@ -244,32 +244,57 @@ impl adv::World for View<'_, '_> {
         self.0.block_entity_nbt(p)
     }
     fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool {
+        let tags = TagSources {
+            pack_tags: self.0.world_tables.as_ref().map(|t| &t.pack_tags),
+            items: self.0.items(),
+            mob_data: self.0.res.mob_data(),
+            resources: &self.0.options.resources,
+        };
+        tags.contains(registry, tag, id).unwrap_or_else(|| {
+            registry == "damage_type"
+                && self
+                    .0
+                    .health_resources
+                    .damage
+                    .id(id)
+                    .is_some_and(|source| self.0.health_resources.damage.in_tag(source, tag))
+        })
+    }
+}
+/// The tag tables a predicate's `#tag` reads, as borrows of the game's fields.
+#[derive(Clone, Copy)]
+pub(in crate::game) struct TagSources<'a> {
+    /// The world's packs' tags over the game's own, by registry.
+    pub(in crate::game) pack_tags: Option<
+        &'a std::collections::HashMap<
+            &'static str,
+            std::collections::HashMap<String, std::collections::HashSet<String>>,
+        >,
+    >,
+    pub(in crate::game) items: &'a sunrise_client::items::Items,
+    pub(in crate::game) mob_data: &'a sunrise_client::mobs::MobData,
+    pub(in crate::game) resources: &'a std::path::Path,
+}
+impl TagSources<'_> {
+    /// Whether `id` is in `#tag` of `registry`, `None` for a registry that
+    /// has no table here.
+    pub(in crate::game) fn contains(&self, registry: &str, tag: &str, id: &str) -> Option<bool> {
         // The world's packs' tags over the game's own, as the server's
         // registries bind them (`TagLoader.loadTagsForExistingRegistries`).
-        if let Some(tags) = self
-            .0
-            .world_tables
-            .as_ref()
-            .and_then(|t| t.pack_tags.get(registry))
-        {
-            return tags.get(tag).is_some_and(|t| t.contains(id));
+        if let Some(tags) = self.pack_tags.and_then(|t| t.get(registry)) {
+            return Some(tags.get(tag).is_some_and(|t| t.contains(id)));
         }
-        let items = self.0.items();
         match registry {
-            "item" => items.item_in_tag(tag, id),
-            "block" => items.block_in_tag(tag, id),
-            "entity_type" => self.0.res.mob_data().entity_has(tag, id),
-            "worldgen/biome" => self.0.res.mob_data().biome_has(tag, id),
-            "worldgen/structure" => vanilla_structure_tags(&self.0.options.resources)
-                .get(tag)
-                .is_some_and(|t| t.contains(id)),
-            "damage_type" => self
-                .0
-                .health_resources
-                .damage
-                .id(id)
-                .is_some_and(|source| self.0.health_resources.damage.in_tag(source, tag)),
-            _ => false,
+            "item" => Some(self.items.item_in_tag(tag, id)),
+            "block" => Some(self.items.block_in_tag(tag, id)),
+            "entity_type" => Some(self.mob_data.entity_has(tag, id)),
+            "worldgen/biome" => Some(self.mob_data.biome_has(tag, id)),
+            "worldgen/structure" => Some(
+                vanilla_structure_tags(self.resources)
+                    .get(tag)
+                    .is_some_and(|t| t.contains(id)),
+            ),
+            _ => None,
         }
     }
 }
@@ -483,16 +508,22 @@ impl Game<'_> {
         this: Option<&EntityView>,
         origin: [f64; 3],
     ) -> bool {
-        adv::conditions(
+        self.conditions_hold_in(
             v,
             &adv::Entities {
                 this,
                 origin,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             },
-            &View(self),
         )
+    }
+    /// A `ContextAwarePredicate` in a loot context that may also carry
+    /// `target_entity` and `interacting_entity`.
+    pub(in crate::game) fn conditions_hold_in(&self, v: &Value, entities: &adv::Entities) -> bool {
+        adv::conditions(v, entities, &View(self))
     }
     /// `ExecuteCommand.checkCustomPredicate`: no seed/sequence override;
     /// reached literal chance leaves use this active level's random source.
@@ -507,6 +538,8 @@ impl Game<'_> {
             origin,
             tool: None,
             block_pos: None,
+            target: None,
+            interacting: None,
         };
         // An invalid reference anywhere fails the whole tree, even under an inversion.
         if !adv::references_valid(v, &View(self)) {
@@ -525,12 +558,30 @@ impl Game<'_> {
     /// of conditions or an item modifier): the player with the level,
     /// statistics, advancements and recipes it may ask for, and nothing
     /// copied when it asks for none.
-    pub(super) fn entity_view_asked(
+    pub(in crate::game) fn entity_view_asked(
         &self,
         t: super::commands::Target,
         predicate: &Value,
     ) -> EntityView {
         self.entity_view_asking(t, adv::facts_asked_in(predicate))
+    }
+    /// [`Self::entity_view_asked`] with the holder's live scoreboard scores,
+    /// which `entity_scores` reads.
+    pub(in crate::game) fn entity_view_scored(
+        &mut self,
+        t: super::commands::Target,
+        predicate: &Value,
+    ) -> EntityView {
+        let mut view = self.entity_view_asked(t, predicate);
+        view.scores = self.holder_name(t).map(|holder| {
+            self.score
+                .board
+                .holder_scores(&holder)
+                .into_iter()
+                .map(|(objective, value)| (objective.name.clone(), value))
+                .collect()
+        });
+        view
     }
     /// [`Self::entity_view_of`] with the player's records `asked` names.
     pub(super) fn entity_view_asking(
@@ -688,7 +739,7 @@ impl Game<'_> {
         EntityView {
             kind: b.entity_type(),
             position: [b.position.x, b.position.y, b.position.z],
-            on_ground: b.on_ground,
+            on_ground: b.ground.on_ground,
             passengers: self
                 .mobs
                 .iter()
@@ -704,7 +755,7 @@ impl Game<'_> {
         EntityView {
             kind: "minecraft:item".into(),
             position: [e.position.x, e.position.y, e.position.z],
-            on_ground: e.on_ground,
+            on_ground: e.ground.on_ground,
             on_fire: e.fire_ticks > 0,
             ..Default::default()
         }
@@ -1080,7 +1131,14 @@ impl Game<'_> {
         let result = sunrise_client::recipe_book::Settings::knowledge_book_recipes(
             index, &mut hand, infinite,
         );
+        let depleted = hand
+            .is_none()
+            .then(|| self.stack_in(slot).cloned())
+            .flatten();
         *self.stack_in_mut(slot) = hand;
+        if let Some(original) = depleted {
+            self.player_item_destroyed(&original, self.item_slot_hand(slot));
+        }
         match result {
             Ok(recipes) => {
                 self.award_recipes(&recipes);
@@ -1127,6 +1185,14 @@ impl Game<'_> {
         if let (Some(player), Some(name)) = (self.lan_acting_uuid, self.lan_acting_name.clone()) {
             self.native_player_advancement_done(player, &name, &a.id);
         }
+        if self.defer_merchant_reward(a) {
+            return;
+        }
+        self.commit_merchant_reward(a);
+    }
+
+    /// Publish a completed advancement's rewards after its tentative criterion commits.
+    pub(super) fn commit_merchant_reward(&mut self, a: &adv::Advancement) {
         let rewards = self.grant_rewards(a);
         if let Some(d) = &a.display {
             // A network player's client shows its own toast.
@@ -1334,13 +1400,25 @@ impl Game<'_> {
                         origin: me.position,
                         tool: None,
                         block_pos: None,
+                        target: None,
+                        interacting: None,
                     },
                     w,
                 )
         });
     }
-    /// `PlayerTrigger.LOCATION` every second, and the other per-tick checks.
+    /// Per-tick checks for the player already in place, without a guest connection turn.
     pub(super) fn tick_advancements(&mut self) {
+        self.tick_level_advancements();
+        if let Some(player) = &self.player
+            && player.health.tick_count % 20 == 0
+        {
+            self.trigger_location_advancement();
+        }
+    }
+
+    /// Criteria on the level path (`ServerPlayer.tick`).
+    pub(super) fn tick_level_advancements(&mut self) {
         if self.player.is_none() || self.remote.is_some() {
             return;
         }
@@ -1353,6 +1431,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &ctx, w)
         });
@@ -1379,18 +1459,22 @@ impl Game<'_> {
             self.trigger_levitation(start, (self.ticks - since) as i64);
         }
         self.tick_marks();
-        if self.ticks.is_multiple_of(20) {
-            let me = self.player_entity_for("minecraft:location");
-            self.trigger("minecraft:location", |c, w| {
-                let ctx = adv::Entities {
-                    this: Some(&me),
-                    origin: me.position,
-                    tool: None,
-                    block_pos: None,
-                };
-                adv::conditions(&c["player"], &ctx, w)
-            });
-        }
+    }
+
+    /// `ServerPlayer.doTick` fires LOCATION after the player body, every 20 entity ticks.
+    pub(super) fn trigger_location_advancement(&mut self) {
+        let me = self.player_entity_for("minecraft:location");
+        self.trigger("minecraft:location", |c, w| {
+            let ctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+                target: None,
+                interacting: None,
+            };
+            adv::conditions(&c["player"], &ctx, w)
+        });
     }
     /// A player condition plus one entity (`player`, `entity` keys).
     pub(super) fn trigger_entity(&mut self, name: &str, key: &str, target: &EntityView) {
@@ -1403,12 +1487,16 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             let ectx = adv::Entities {
                 this: Some(&target),
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w) && adv::conditions(&c[&key], &ectx, w)
         });
@@ -1457,6 +1545,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w)
                 && (c["distance"].is_null() || adv::distance(&c["distance"], start, me.position))
@@ -1541,13 +1631,28 @@ impl Game<'_> {
     /// `DistanceTrigger`: the player's `player` condition, `start_position`
     /// at `start`, and the `distance` from `start` to the player.
     pub(super) fn trigger_distance(&mut self, name: &str, start: [f64; 3]) {
-        let me = self.player_entity_for(name);
+        self.trigger_distance_at(name, start, None);
+    }
+
+    /// Complete a distance trigger at the position recorded by its call site.
+    pub(in crate::game) fn trigger_distance_at(
+        &mut self,
+        name: &str,
+        start: [f64; 3],
+        end: Option<[f64; 3]>,
+    ) {
+        let mut me = self.player_entity_for(name);
+        if let Some(end) = end {
+            me.position = end;
+        }
         self.trigger(name, move |c, w| {
             let pctx = adv::Entities {
                 this: Some(&me),
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w)
                 && adv::location(&c["start_position"], start, w)
@@ -1566,6 +1671,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w)
                 && adv::location(&c["start_position"], impact, w)
@@ -1577,6 +1684,8 @@ impl Game<'_> {
                             origin: me.position,
                             tool: None,
                             block_pos: None,
+                            target: None,
+                            interacting: None,
                         };
                         adv::conditions(&c["cause"], &cctx, w)
                     }))
@@ -1592,6 +1701,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             let effects = c["effects"].is_null()
                 || adv::entity(
@@ -1607,6 +1718,8 @@ impl Game<'_> {
                         origin: me.position,
                         tool: None,
                         block_pos: None,
+                        target: None,
+                        interacting: None,
                     };
                     adv::conditions(&c["source"], &sctx, w)
                 });
@@ -1645,6 +1758,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w)
                 && (c["item"].is_null() || adv::item(&c["item"], &item, w))
@@ -1665,6 +1780,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w) && adv::item(&c["item"], &it, w)
         });
@@ -1682,6 +1799,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w) && matches_sqr(&c["distance"], sqr_distance)
         });
@@ -1755,6 +1874,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             let vctx = adv::Entities {
                 this: Some(&victim),
@@ -1799,6 +1920,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w)
                 && adv::damage(&c["damage"], &damage, w, me.position)
@@ -1814,6 +1937,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w) && adv::item(&c["item"], &it, w)
         });
@@ -1866,6 +1991,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w) && adv::range_i(&c["level"], i64::from(levels))
         });
@@ -1880,6 +2007,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w)
                 && adv::item(&c["item"], &it, w)
@@ -1897,6 +2026,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w)
                 && adv::potions(&c["potion"], potion.as_deref(), w)
@@ -1913,6 +2044,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             let vctx = adv::Entities {
                 this: Some(&villager),
@@ -1941,6 +2074,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             let ectx = adv::Entities {
                 this: Some(&hooked),
@@ -1970,6 +2105,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             block_ok && state_ok && adv::conditions(&c["player"], &pctx, w)
         });
@@ -1983,6 +2120,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &ctx, w) && adv::block(c, pos, w)
         });
@@ -1998,6 +2137,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             let target = adv::Entities {
                 this: Some(&projectile),
@@ -2020,6 +2161,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: Some(&it),
                 block_pos: Some(pos),
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["location"], &ctx, w)
         });
@@ -2047,6 +2190,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             let location = adv::Entities {
                 origin: centre,
@@ -2069,6 +2214,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             let bctx = adv::Entities {
                 this: Some(&bolt),
@@ -2100,6 +2247,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w)
                 && c["victims"].as_array().into_iter().flatten().all(|want| {
@@ -2125,6 +2274,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w)
                 && c["count"].as_u64().is_none_or(|n| stabbed as u64 >= n)
@@ -2149,6 +2300,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             let state_ok = c["state"]
                 .as_object()
@@ -2183,6 +2336,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w)
         });
@@ -2214,6 +2369,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w)
                 && adv::id_matches(&c["recipes"], "recipe", &recipe, w)
@@ -2231,6 +2388,8 @@ impl Game<'_> {
                 origin: me.position,
                 tool: None,
                 block_pos: None,
+                target: None,
+                interacting: None,
             };
             adv::conditions(&c["player"], &pctx, w)
                 && adv::id_matches(&c["loot_tables"], "loot_table", &table, w)
@@ -2252,6 +2411,8 @@ impl Game<'_> {
                     origin: me.position,
                     tool: None,
                     block_pos: None,
+                    target: None,
+                    interacting: None,
                 }
                 .this
                 .map(|_| ())
@@ -2267,6 +2428,8 @@ impl Game<'_> {
                                 origin: me.position,
                                 tool: None,
                                 block_pos: None,
+                                target: None,
+                                interacting: None,
                             },
                             w,
                         )
@@ -2401,7 +2564,7 @@ impl Game<'_> {
             // RecipeToast: black description under a purple title, the
             // station at 0.6 scale in the corner over the cycling result.
             let atlas = &self.gui.atlas;
-            batch.sprite(atlas, "gui/sprites/toast/recipe", x, y);
+            batch.sprite(atlas, "toast/recipe", x, y);
             batch.text_styled(atlas, title, x + 30.0, y + 7.0, 0xFF50_0050, false);
             batch.text_styled(atlas, description, x + 30.0, y + 18.0, 0xFF00_0000, false);
             let start = batch.vertices.len();
@@ -2411,7 +2574,7 @@ impl Game<'_> {
             return;
         }
         let atlas = &self.gui.atlas;
-        batch.sprite(atlas, "gui/sprites/toast/advancement", x, y);
+        batch.sprite(atlas, "toast/advancement", x, y);
         let (_, color) = toast_label(frame);
         // AdvancementToast.extractRenderState: a title of one line sits under
         // the frame's label; a longer one is wrapped at 125, the label fading

@@ -36,12 +36,11 @@ process exit. Assertions check:
 
 - The shared dependency's static address and counter, with ordered mutations
   through both separately loaded consumers.
-- Actual `mod_points` registry address identity and cross-image/thread writes.
 - Actual `mod_api` crash detail registry writes from the shared dependency, read
   by the executable.
 - Actual `mod_api` native-call TLS, entered by the executable and observed by
   consumers; entered by each consumer and dropped by the executable; isolated
-  from another thread while sharing the global points registry.
+  from another thread.
 - Heap vectors allocated and dropped across executable, dependency and consumer
   boundaries.
 - One allocator. The std runtime library carries its own default-allocator shim,
@@ -82,7 +81,7 @@ The unchanged SDK completed release/client compilation (18 existing staging
 visibility warnings). All four probe targets passed metadata checking and Clippy;
 runtime assertions passed and both Python refusal tests passed. Every
 allocator binding in the process, from the executable, both consumers, the shared
-dependency, the wasm runtime library and std itself, resolves to the game.
+dependency and std itself, resolves to the game.
 The consumer libraries also allocate vectors and return them for executable drop.
 
 An initial harness draft failed because it omitted the explicit game dependency
@@ -92,8 +91,7 @@ crate type or dependency architecture was changed.
 
 CI runs the probe on the Linux and Windows GNU client legs of
 `.github/workflows/prebuilt-game-build.yml`, against each leg's own SDK before
-packing. Linux also checks the starter against the API source alone on the host
-and on wasm32. The macOS leg builds one native mod through the shipped route, `cargo sunrise-mod native-build`
+packing. Linux also checks the starter against the API source alone on the host. The macOS leg builds one native mod through the shipped route, `cargo sunrise-mod native-build`
 (`tools/ci/native_build_route.py`), so a library linked with the game executable's link policy fails there: `ld` accepts a
 stack size only for a main executable. If the SDK for the commit is already published, the workflow skips
 the build and its checks.

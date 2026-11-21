@@ -7,6 +7,8 @@ use sunrise_client::particles::{ParticleOptions as EngineOptions, ParticleType};
 pub(crate) enum ParticleValueError {
     UnknownProvider,
     NonFinite,
+    /// An item crumb's colour has a component outside `0.0..=1.0`.
+    ColorRange,
     InvalidStack,
 }
 
@@ -69,6 +71,9 @@ impl<C: ParticleItems + ?Sized> TryIntoEngine<C> for ApiOptions {
                 )),
             ),
         };
+        if ty.is_item_crumb() && !self.color.into_iter().all(|c| (0.0..=1.0).contains(&c)) {
+            return Err(ParticleValueError::ColorRange);
+        }
         Ok(EngineOptions {
             polytone_seed: None,
             source: None,
@@ -95,8 +100,6 @@ impl<C: ParticleItems + ?Sized> TryIntoEngine<C> for ApiOptions {
                 .transpose()?,
             geyser: self.geyser,
             vibration: self.vibration.clone(),
-            legacy_entity_effect: self.legacy_entity_effect,
-            legacy_trail_lifetime: self.legacy_trail_lifetime,
         })
     }
 }
@@ -128,8 +131,6 @@ impl TryIntoApi for EngineOptions {
                 .transpose()?,
             geyser: self.geyser,
             vibration: self.vibration.clone(),
-            legacy_entity_effect: self.legacy_entity_effect,
-            legacy_trail_lifetime: self.legacy_trail_lifetime,
         })
     }
 }
@@ -153,7 +154,12 @@ mod tests {
     fn prepare() {
         mod_platform::__private::part_tests::install_parts_fixture(&[]).unwrap();
         mod_api::__private::resolve_particles(
-            ["minecraft:smoke", "minecraft:trail", "test:spark"],
+            [
+                "minecraft:smoke",
+                "minecraft:trail",
+                "minecraft:item",
+                "test:spark",
+            ],
             |id| {
                 if id == "test:spark" {
                     Some(ParticleKind::Custom)
@@ -168,8 +174,6 @@ mod tests {
     fn particle_keys_preserve_provider_and_every_option_slot() {
         prepare();
         let mut original = EngineOptions::trail([3.0, 4.0, 5.0], 0x112233, 19);
-        original.legacy_entity_effect = Some(true);
-        original.legacy_trail_lifetime = true;
         original.scale = 2.5;
         original.to_color = [0.1, 0.3, 0.7];
         original.block = Some(("test:sprite".into(), 0x123456));
@@ -187,11 +191,7 @@ mod tests {
             mod_api::__private::particle_kind(api.ty),
             Some(ParticleKind::Vanilla(ParticleType::Trail as u32))
         );
-        assert_eq!(api.legacy_entity_effect, Some(true));
-        assert!(api.legacy_trail_lifetime);
         let result = api.try_into_engine(&()).unwrap();
-        assert_eq!(result.legacy_entity_effect, Some(true));
-        assert!(result.legacy_trail_lifetime);
         assert_eq!(result.ty, ParticleType::Trail);
         assert_eq!(result.trail, Some(([3.0, 4.0, 5.0], 19)));
         assert_eq!(
@@ -251,6 +251,32 @@ mod tests {
         assert_eq!(
             options.try_into_engine(&()),
             Err(ParticleValueError::NonFinite)
+        );
+    }
+    #[test]
+    fn an_item_crumbs_colour_must_stay_inside_zero_to_one() {
+        prepare();
+        let colour = |ty, color| {
+            let mut options = EngineOptions::simple(ty).try_into_api().unwrap();
+            options.color = color;
+            options.try_into_engine(&())
+        };
+        assert_eq!(
+            colour(ParticleType::Item, [1.5, 0.0, 0.0, 1.0]).map(|_| ()),
+            Err(ParticleValueError::ColorRange)
+        );
+        assert_eq!(
+            colour(ParticleType::Item, [0.8, 0.5, 0.0, 1.0])
+                .unwrap()
+                .color,
+            [0.8, 0.5, 0.0, 1.0]
+        );
+        // Another particle's colour is not bounded here.
+        assert_eq!(
+            colour(ParticleType::Smoke, [1.5, 0.0, 0.0, 1.0])
+                .unwrap()
+                .color,
+            [1.5, 0.0, 0.0, 1.0]
         );
     }
 }

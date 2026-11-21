@@ -200,13 +200,27 @@ fn colormap(root: &ResourceSource, name: &str) -> Result<Vec<u32>> {
     decoder.ignore_checksums(true);
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info()?;
-    let mut bytes = vec![0; reader.output_buffer_size().ok_or("colormap too large")?];
+    crate::hud::check_pack_size(reader.info().width, reader.info().height)?;
+    use crate::hud::{MAX_IMAGE_BYTES, image_buffer};
+    let size = reader.output_buffer_size().unwrap_or(usize::MAX);
+    let mut bytes = image_buffer(&[size], MAX_IMAGE_BYTES)?;
+    bytes.resize(size, 0);
     let info = reader.next_frame(&mut bytes)?;
     let channels = info.color_type.samples();
-    Ok(bytes[..info.buffer_size()]
-        .chunks_exact(channels)
-        .map(|p| u32::from(p[0]) << 16 | u32::from(p[1]) << 8 | u32::from(p[2]))
-        .collect())
+    let mut map = image_buffer(
+        &[info.width as usize, info.height as usize],
+        MAX_IMAGE_BYTES,
+    )?;
+    // A grey map (one channel, two with alpha) has its grey for red, green and blue.
+    map.extend(bytes[..info.buffer_size()].chunks_exact(channels).map(|p| {
+        let [r, g, b] = if channels < 3 {
+            [p[0]; 3]
+        } else {
+            [p[0], p[1], p[2]]
+        };
+        u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)
+    }));
+    Ok(map)
 }
 /// `GrassColor.get`/`FoliageColor.get`: temperature and downfall index a 256x256 map.
 fn sample(map: &[u32], temperature: f32, downfall: f32, fallback: u32) -> u32 {
@@ -1024,6 +1038,62 @@ mod source_tests {
         )]));
         assert_eq!(colormap(&source, "grass").unwrap(), [0x0c2238]);
         assert!(colormap(&source, "missing").is_err());
+    }
+
+    /// A colormap is refused by the side its PNG header claims when no atlas
+    /// would take it, before the reader sizes a buffer from that header.
+    #[test]
+    fn a_colormap_claiming_a_side_no_atlas_takes_is_refused() {
+        use sunrise_assets::resource_source::Resource;
+        let colormap_of_width = |width: u32| {
+            let mut png = Vec::new();
+            let mut encoder = png::Encoder::new(&mut png, width, 1);
+            encoder.set_color(png::ColorType::Rgb);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer
+                .write_image_data(&vec![0; width as usize * 3])
+                .unwrap();
+            writer.finish().unwrap();
+            let source = ResourceSource::indexed(std::collections::BTreeMap::from([(
+                "assets/minecraft/textures/colormap/grass.png".into(),
+                Resource::bytes(png),
+            )]));
+            colormap(&source, "grass").map(|map| map.len())
+        };
+        assert_eq!(colormap_of_width(32_768).unwrap(), 32_768);
+        let refused = colormap_of_width(40_000);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.is::<crate::hud::OverSizeLimit>()),
+            "{refused:?}"
+        );
+    }
+
+    /// A grey colormap has one channel (two with alpha): each pixel is its
+    /// grey in red, green and blue.
+    #[test]
+    fn a_grey_colormap_reads_its_grey_into_every_channel() {
+        use sunrise_assets::resource_source::Resource;
+        for (color, pixels) in [
+            (png::ColorType::Grayscale, vec![0x10, 0x20]),
+            (png::ColorType::GrayscaleAlpha, vec![0x10, 0xff, 0x20, 0xff]),
+        ] {
+            let mut png = Vec::new();
+            {
+                let mut encoder = png::Encoder::new(&mut png, 2, 1);
+                encoder.set_color(color);
+                encoder.set_depth(png::BitDepth::Eight);
+                let mut writer = encoder.write_header().unwrap();
+                writer.write_image_data(&pixels).unwrap();
+            }
+            let source = ResourceSource::indexed(std::collections::BTreeMap::from([(
+                "assets/minecraft/textures/colormap/grass.png".into(),
+                Resource::bytes(png),
+            )]));
+            assert_eq!(colormap(&source, "grass").unwrap(), [0x101010, 0x202020]);
+        }
     }
 }
 

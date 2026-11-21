@@ -66,10 +66,10 @@ pub trait LevelTicketsBackendMut {
     /// without a player. This is the world's own `/forceload` state, not a
     /// ticket the mod owns: the chunk stays forced across restarts, and after
     /// the mod is unloaded or removed, until `set_forced(false)` or
-    /// `/forceload remove` clears it. Unlike vanilla, the chunk is not loaded before
-    /// this returns: it loads over the next ticks, as after `/forceload`.
-    /// False for a stale handle, on a client, and for a level the server
-    /// has not opened.
+    /// `/forceload remove` clears it. A successful add loads the chunk before
+    /// returning. If streaming is paused, the ticket is recorded and takes
+    /// effect when its level starts streaming. False for a stale handle, on a
+    /// client, outside the world, or when adding after generation has stopped.
     #[access(WorldOnly)]
     fn chunk_set_forced(&mut self, chunk: ChunkRef, forced: bool) -> bool;
     /// Side: server.

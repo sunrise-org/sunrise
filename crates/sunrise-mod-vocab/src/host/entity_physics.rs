@@ -15,6 +15,22 @@ pub trait EntityPhysicsBackend {
     #[access(WorldOnly)]
     fn entity_velocity(&self, entity: EntityRef) -> Option<[f64; 3]>;
     /// Side: both.
+    /// How the entity reacts to a piston (`Entity.getPistonPushReaction`), including
+    /// the current marker flag of an armor stand. `Ok(None)` for a stale handle;
+    /// `Err(LevelReadError::Unavailable)` if the host does not support that read.
+    #[access(WorldOnly)]
+    fn entity_piston_push_reaction(
+        &self,
+        entity: EntityRef,
+    ) -> Result<Option<PushReaction>, LevelReadError>;
+    /// Side: both.
+    /// Whether this is a vanilla `HangingEntity`: a painting, item frame or glow item frame.
+    /// Leash knots and cushions are block-attached but do not inherit `HangingEntity`.
+    /// `Ok(None)` for a stale handle; `Err(LevelReadError::Unavailable)` if the host
+    /// does not support that read.
+    #[access(WorldOnly)]
+    fn entity_is_hanging(&self, entity: EntityRef) -> Result<Option<bool>, LevelReadError>;
+    /// Side: both.
     /// The entity's box (`Entity.getBoundingBox`): its lowest and highest
     /// corner. Displays and markers have zero-sized physical boxes; interactions use
     /// their saved dimensions. End crystals have their 2 x 2 box. None for the dragon; a dragon part's is its own. On a client, reads

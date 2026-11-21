@@ -197,7 +197,7 @@ impl InteractionState {
         }
     }
     /// `Interaction.addAdditionalSaveData`: the settings, and each action when set.
-    pub fn write(&self, c: &mut sunrise_core::nbt::Compound) {
+    pub fn write(&self, c: &mut sunrise_client::entity_nbt::EntityTagWriter) {
         use sunrise_core::nbt::Tag;
         c.insert("width".into(), Tag::Float(self.width.to_bits()));
         c.insert("height".into(), Tag::Float(self.height.to_bits()));

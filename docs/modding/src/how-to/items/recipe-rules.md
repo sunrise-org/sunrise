@@ -59,4 +59,6 @@ change: query it when you use it, rather than keeping an answer from
 `recipes_received`. A viewer's "+" needs no book id: `transfer_recipe_id`
 moves any recipe the server knows by its id, and `transfer_recipe_check` (the
 same id) says beforehand what it would do, for a recipe the player's book holds
-or not.
+or not. Call it while the answer is wanted, for example while hovering the
+"+". On a remote server the client asks again when the cached answer is one
+second old, even if the menu has not changed.

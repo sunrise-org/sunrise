@@ -16,6 +16,9 @@ mod tests {
     use sunrise_mod_runtime::attachments::ATTACHMENTS_KEY;
     use sunrise_world::region::RegionFile;
 
+    thread_local! {
+        static SAVED_AT: std::cell::RefCell<Vec<([i32; 3], mod_api::LevelRef)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
     struct Counter(Arc<AtomicI32>);
     #[mod_api::sunrise_part]
     impl mod_api::BlockPart for Counter {}
@@ -26,6 +29,7 @@ mod tests {
             _: &dyn LevelHost,
             event: &mut BlockEntitySaveAdditionalEvent<'_>,
         ) {
+            SAVED_AT.with_borrow_mut(|seen| seen.push((event.pos, event.level)));
             let serial = self.0.fetch_add(1, Ordering::Relaxed);
             match event.tag.get(&"count".into()) {
                 Some(Tag::Int(-3)) => {
@@ -229,6 +233,13 @@ mod tests {
                         Some(Tag::Int(7))
                     );
                     assert_eq!(count.load(Ordering::Relaxed), 16);
+                    // The unload capture names the entity's place after its chunk left the world.
+                    let level = game.level("minecraft:overworld").unwrap();
+                    SAVED_AT.with_borrow(|seen| {
+                        assert!(seen.len() >= 3);
+                        assert!(seen.contains(&([1, 64, 1], level)));
+                        assert!(seen.iter().all(|(_, at)| *at == level));
+                    });
 
                     // A malformed individual payload is refused at the callback seam.
                     // Other entities' valid edits still reach the actual region record.
@@ -264,6 +275,183 @@ mod tests {
                 })
             },
         );
+    }
+
+    struct SaveItemsPart;
+    #[mod_api::sunrise_part]
+    impl mod_api::BlockPart for SaveItemsPart {}
+    #[mod_api::sunrise_part]
+    impl BlockEntityPart for SaveItemsPart {
+        fn block_entity_ticks(
+            &self,
+            _: &dyn mod_api::Host,
+            event: &mut mod_api::BlockEntityTicksEvent<'_>,
+        ) {
+            event.ticks = true;
+        }
+
+        fn block_entity_save_additional(
+            &self,
+            _: &dyn LevelHost,
+            event: &mut BlockEntitySaveAdditionalEvent<'_>,
+        ) {
+            let key = "Items".into();
+            if event.pos[0] <= 2 {
+                assert_eq!(event.tag.get(&key), Some(&saved_stack("minecraft:stone")));
+            } else {
+                assert!(
+                    !event.tag.contains_key(&key),
+                    "modeled slots are not listener input"
+                );
+            }
+            if event.pos[0] == 2 {
+                event.tag.remove(&key);
+            } else {
+                event.tag.insert(key, saved_stack("minecraft:dirt"));
+            }
+        }
+    }
+
+    fn saved_stack(id: &str) -> Tag {
+        Tag::List(vec![Tag::Compound(Compound::from([
+            ("Slot".into(), Tag::Byte(0)),
+            ("id".into(), Tag::String(id.into())),
+            ("count".into(), Tag::Int(1)),
+        ]))])
+    }
+
+    struct SaveItemsMod;
+    #[mod_api::__subscriptions]
+    impl Hooks for SaveItemsMod {
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            let holder = r
+                .block_entity_type("holder")
+                .blocks(&["save_items:slotless", "save_items:container"])
+                .build();
+            r.block_entity_part(&holder, SaveItemsPart).unwrap();
+            let container = r.block_key("save_items:container");
+            r.block_container(
+                &container,
+                mod_api::ModContainer {
+                    slots: 1,
+                    ..Default::default()
+                },
+            );
+        }
+
+        fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
+            for id in ["save_items:slotless", "save_items:container"] {
+                event
+                    .register(mod_api::Block::new(id, "minecraft:stone").with_item(false))
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn save_edits_slotless_items_but_keeps_declared_slots_after_a_skipped_tick() {
+        use crate::game::native_entity_refs::tests::{fixture_root, run_fresh_cases, with_game_at};
+        const NAME: &str = "game::native_hooks::block_entity_save_additional_tests::tests::save_edits_slotless_items_but_keeps_declared_slots_after_a_skipped_tick";
+        if run_fresh_cases(NAME, "SUNRISE_SAVE_ITEMS_CHILD", &["save"]) {
+            return;
+        }
+        let mods: mod_api::Mods = vec![ModEntry::new("save_items", Box::new(SaveItemsMod))].into();
+        mod_platform::testing::with_mods(mods.clone(), || {
+            crate::game::api_values::install_parts(&mods).unwrap();
+            let root =
+                crate::game::mods::content_root(&fixture_root(), &Default::default()).unwrap();
+            with_game_at(root.prepared().to_path_buf(), |game| {
+                game.options.dedicated = Some(Vec::new());
+                let registry = game.pack.assets.registry;
+                let mut chunk = Chunk::empty(0, 0);
+                for (x, block) in [(1, "slotless"), (2, "slotless"), (3, "container")] {
+                    let state = registry
+                        .default_state(&format!("save_items:{block}"))
+                        .unwrap();
+                    chunk.set(x, 64, 1, state.0);
+                    chunk.block_entities.push((
+                        (x, 64, 1),
+                        BlockEntity::Mod(Box::new(ModBlockEntity::new(
+                            "save_items:holder".into(),
+                            ModBlockEntityFields {
+                                nbt: Compound::from([(
+                                    "Items".into(),
+                                    saved_stack("minecraft:stone"),
+                                )]),
+                                ..Default::default()
+                            },
+                        ))),
+                    ));
+                }
+                game.save
+                    .save(&[Arc::new(chunk)], registry, game.res.biomes())
+                    .unwrap();
+                let mut chunk = game.save.load(0, 0, registry, game.res.biomes()).unwrap();
+                game.world.install_chunk_block_entities(&mut chunk);
+                game.world.chunks.insert((0, 0), Arc::new(chunk));
+                assert!(game.streaming.set_forced(0, 0, true));
+                game.update_chunk_tickets();
+                game.tick_block_entities().unwrap();
+                let expected = [
+                    Some(saved_stack("minecraft:dirt")),
+                    None,
+                    Some(saved_stack("minecraft:stone")),
+                ];
+                for (x, items) in (1..=3).zip(&expected) {
+                    assert_eq!(
+                        game.world
+                            .block_entities
+                            .ticking(game.world.block(x, 64, 1).0),
+                        sunrise_client::block_entities::Ticking::Yes,
+                    );
+                    let Some(BlockEntity::Mod(row)) = game.world.block_entities.get(&(x, 64, 1))
+                    else {
+                        panic!("missing resident holder at {x}");
+                    };
+                    assert!(row.numeric_id().is_some());
+                    assert!(row.nbt.get(&"Items".into()).is_none());
+                    assert_eq!(
+                        row.items[0].as_ref().unwrap().item.as_ref(),
+                        "minecraft:stone"
+                    );
+                    let captured = game.block_entity_nbt([x, 64, 1]).unwrap();
+                    assert_eq!(captured.get("Items"), items.as_ref());
+                }
+
+                let capture = game.with_entities([&game.world.chunks[&(0, 0)]]);
+                game.save
+                    .save_later(&capture, registry, game.res.biomes())
+                    .unwrap();
+                game.save.flush().unwrap();
+                let reloaded = game.save.load(0, 0, registry, game.res.biomes()).unwrap();
+                for (x, item) in [
+                    (1, Some("minecraft:dirt")),
+                    (2, None),
+                    (3, Some("minecraft:stone")),
+                ] {
+                    let (_, BlockEntity::Mod(row)) = reloaded
+                        .block_entities
+                        .iter()
+                        .find(|(pos, _)| *pos == (x, 64, 1))
+                        .unwrap()
+                    else {
+                        panic!("missing saved holder at {x}");
+                    };
+                    assert_eq!(
+                        row.items
+                            .first()
+                            .and_then(Option::as_ref)
+                            .map(|stack| stack.item.as_ref()),
+                        item
+                    );
+                    assert!(
+                        row.nbt.get(&"Items".into()).is_none(),
+                        "Items survived as opaque data at {x}"
+                    );
+                }
+            });
+        });
     }
 
     struct BreakObserver(Arc<Mutex<Vec<(&'static str, Option<Tag>)>>>);

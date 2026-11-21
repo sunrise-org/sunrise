@@ -483,7 +483,9 @@ mod tests {
                     let mut restored = body.clone();
                     assert_eq!(restored.pose_fit_sizes, body.pose_fit_sizes);
                     body.pose_fit_sizes = [None; 3];
+                    let side = game_side!(game);
                     let mut world = MotionWorld {
+                        side: &side,
                         entities: &[],
                         player: &mut restored,
                         scene: &mut game.world,

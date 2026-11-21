@@ -13,6 +13,7 @@ use sunrise_assets::item_model::{
 };
 use sunrise_client::{
     block_entity_render::{diffuse_lights, vertex_light},
+    camera::joml,
     cit::{Hand as CitHand, Kind as CitKind},
     graphics::EntityCullingMode,
     hud::{HudBatch, Rect},
@@ -369,6 +370,36 @@ impl SpecialHost for Host<'_> {
     }
 }
 
+/// One item a block entity renderer hands to the item renderer
+/// (`ItemStackRenderState.submit`): the stack it resolved, as
+/// `ItemModelResolver.updateForTopItem` was asked for it, under `pose`
+/// (camera-relative) at `light` (packed lightmap coordinates).
+/// `stack`, `display` and `seed` are what the parity test compares with vanilla's renderers;
+/// drawing reads only the resolved `state`.
+pub(super) struct BlockItemDraw<'a> {
+    #[cfg(test)]
+    pub(super) stack: &'a ItemStack,
+    #[cfg(test)]
+    pub(super) display: DisplayContext,
+    #[cfg(test)]
+    pub(super) seed: i32,
+    pub(super) state: &'a ItemRenderState,
+    pub(super) pose: glam::Mat4,
+    pub(super) light: u32,
+}
+
+/// The pose `LevelRenderer` gives a block entity's renderer: a `PoseStack`
+/// translated to the block from the camera (`translate(double...)`, narrowed).
+pub(super) fn block_entity_pose(key: (i32, i32, i32), camera: glam::DVec3) -> joml::Mat4 {
+    let mut pose = joml::Mat4::IDENTITY;
+    pose.translate(
+        (f64::from(key.0) - camera.x) as f32,
+        (f64::from(key.1) - camera.y) as f32,
+        (f64::from(key.2) - camera.z) as f32,
+    );
+    pose
+}
+
 /// `ItemOwner` of an entity holding or showing an item.
 pub(super) fn owner_at(position: [f64; 3], yaw: f32, entity_type: &str) -> OwnerState {
     OwnerState {
@@ -451,7 +482,11 @@ impl Game<'_> {
             sun_angle: sky.sun_angle,
             moon_phase: (self.world.day_time.div_euclid(24_000)).rem_euclid(8) as i32,
             respawn: self.spawn.map(|s| GlobalPos {
-                dimension: "minecraft:overworld".to_owned(),
+                dimension: self
+                    .level
+                    .world_spawn_dimension
+                    .clone()
+                    .unwrap_or_else(|| "minecraft:overworld".to_owned()),
                 pos: [s.x.floor() as i32, s.y.floor() as i32, s.z.floor() as i32],
             }),
             runs_normally: true,
@@ -527,6 +562,27 @@ impl Game<'_> {
     ) -> ItemRenderState {
         self.resolve_item_in_level(stack, display, owner, Some(&self.item_level()), seed, hand)
     }
+    /// Tint only the resolved draw, never the model shared by other holders or contexts.
+    pub(super) fn tint_held_item(
+        &self,
+        state: &mut ItemRenderState,
+        stack: &ItemStack,
+        entity_id: u32,
+        hand: mod_api::Hand,
+        partial_tick: f32,
+    ) {
+        // Resolving an empty stack produces no layers.
+        if state.is_empty()
+            || !mod_api::__private::item_listens(mod_api::HookId::HeldItemTint, &stack.item)
+        {
+            return;
+        }
+        let mut tint = None;
+        self.native_held_item_tint(entity_id, hand, stack, partial_tick, &mut tint);
+        if let Some(rgb) = tint {
+            state.set_held_tint(rgb);
+        }
+    }
     /// [`Self::resolve_item_in_hand`] with the level the model reads given: `None` for a
     /// resolution that has no level, whose `context_dimension` selects take their fallback.
     pub(super) fn resolve_item_in_level(
@@ -601,6 +657,29 @@ impl Game<'_> {
             self.glint_frame.speed,
             self.glint_frame.alpha,
         );
+    }
+    /// An item under `pose` (GUI pixels), cut by no slot and with a depth of its own: what
+    /// `DrawContext::model_3d` draws a turned item with.
+    pub(super) fn draw_item_model_posed(
+        &self,
+        batch: &mut HudBatch,
+        stack: &ItemStack,
+        pose: glam::Mat4,
+    ) -> bool {
+        let owner = self.player_owner(Some(stack));
+        let state = self.resolve_item(stack, DisplayContext::Gui, Some(&owner), 0);
+        let host = self.item_host();
+        item_render::gui::draw_posed(
+            &state,
+            &item_render::gui::GuiItemEnv {
+                renderer: &self.pack.item_renderer,
+                sprites: &self.gui.atlas.sprites,
+                host: &host,
+            },
+            batch,
+            pose,
+            self.glint_frame,
+        )
     }
     /// The glint clock, options and sprite for this frame: read once per
     /// frame, not per item (`GameRenderer.extractOptions`).
@@ -757,8 +836,9 @@ impl Game<'_> {
         camera: glam::DVec3,
         alpha: f64,
         out: &mut Vec<Vertex>,
+        run: std::ops::Range<usize>,
     ) {
-        let live = self.dropped.iter().map(|item| {
+        let live = self.dropped[run].iter().map(|item| {
             let (p, q) = (item.previous, item.position);
             let at = [
                 p.x + (q.x - p.x) * alpha,
@@ -969,6 +1049,37 @@ mod tests {
     use super::*;
     use mod_api::ClientHost;
     use serde_json::json;
+
+    /// `ClientLevel.setRespawnData`: the client keeps the packet's level beside its position,
+    /// so the spawn compass's target names the level the world spawn is in.
+    #[test]
+    #[ignore = "daily"]
+    fn the_spawn_compass_target_keeps_the_world_spawn_level() {
+        use sunrise_protocol::{
+            connection::Pipe,
+            packets::play::{self, Clientbound as C},
+        };
+        super::super::native_entity_refs::tests::with_client_game(|game| {
+            let (client, _server) = Pipe::pair();
+            game.connect_local(client, "spawn-compass").unwrap();
+            for (dimension, pos) in [
+                ("minecraft:the_nether", [3, 40, 9]),
+                ("minecraft:overworld", [-7, 90, 12]),
+            ] {
+                game.handle_packet(C::SetDefaultSpawnPosition(play::SetDefaultSpawnPosition {
+                    pos: play::GlobalPos {
+                        dimension: dimension.into(),
+                        pos,
+                    },
+                    yaw: 0.0,
+                    pitch: 0.0,
+                }))
+                .unwrap();
+                let respawn = game.level_state_now("minecraft:overworld").respawn.unwrap();
+                assert_eq!((respawn.dimension.as_str(), respawn.pos), (dimension, pos));
+            }
+        });
+    }
 
     /// The resolver skips a mod that leaves `item_model_property` at its default;
     /// a mod that implements it is asked on every resolve.

@@ -358,6 +358,7 @@ class DynaRoutingTests(unittest.TestCase):
         self.assertEqual(fetch["env"]["HISTORY_FILTER"], "tree:0")
         self.assertEqual(select["env"]["FILES"],
                          "${{ steps.files.outputs.listed == 'true' && format('{0}/pr-files', runner.temp) || '' }}")
+        self.assertEqual(select["env"]["ENTRIES"], "${{ steps.files.outputs.entries }}")
         # The selection step as written: the API's list when there is one, else git's diff of base...head.
         with tempfile.TemporaryDirectory() as directory:
             def git(*args):
@@ -373,11 +374,13 @@ class DynaRoutingTests(unittest.TestCase):
             head = git("rev-parse", "HEAD")
             listing_file = Path(directory, "pr-files")
             listing_file.write_bytes(b"M\0docs/setup.md\0")
-            for files, rust in (("", "true"), (str(listing_file), "false")):
-                with self.subTest(files=files):
+            # A listing that lost a record (the producer printed 2 entries, one remains) selects everything.
+            for files, entries, rust in (("", "", "true"), (str(listing_file), "1", "false"),
+                                         (str(listing_file), "2", "true")):
+                with self.subTest(files=files, entries=entries):
                     output = Path(directory, "output")
                     output.write_text("")
-                    env = dict(os.environ, BASE_SHA=base, HEAD_SHA=head, FILES=files, GITHUB_OUTPUT=str(output))
+                    env = dict(os.environ, BASE_SHA=base, HEAD_SHA=head, FILES=files, ENTRIES=entries, GITHUB_OUTPUT=str(output))
                     subprocess.run(["bash", "-e", "-c", select["run"].replace("tools/ci/", f"{ROOT}/tools/ci/")],
                                    cwd=directory, env=env, check=True)
                     self.assertIn(f"rust_required={rust}\n", output.read_text())
@@ -483,31 +486,29 @@ class DynaRoutingTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertFalse(environment.exists())
 
-    def assert_positive_stage_export(self, verify):
-        command = "python3 tools/ci/test_stage_catalog.py -v"
-        name = "- name: Validate prebuilt source stage and listed slots\n"
-        step = verify.split(name, 1)[1].split("\n      - ", 1)[0]
+    def assert_positive_stage_export(self, build):
+        command = "python tools/ci/test_stage_catalog.py -v"
+        name = "- name: The source stages with this commit's build data\n"
+        step = build.split(name, 1)[1].split("\n      - ", 1)[0]
         # Inspect active scalar values in this named step, not command text in
         # comments or another step. Require the exact executable invocation.
         fields = dict(line.strip().split(":", 1) for line in step.splitlines()
                       if line.startswith("        ") and ":" in line and not line.lstrip().startswith("#"))
         self.assertEqual(fields.get("run", "").strip(), command)
-        self.assertIn("steps.stage.outcome == 'success'", fields.get("if", ""))
+        self.assertEqual(fields.get("if", "").strip(), "matrix.name == 'linux'")
+        self.assertEqual(fields.get("SUNRISE_STAGE_TOOL", "").strip(), "target/prebuilt/tools/release/sunrise-stage")
         self.assertEqual(fields.get("continue-on-error", "false").strip(), "false")
-        self.assertEqual(verify.count(command), 1)
-        self.assertLess(verify.index(name), verify.index("- name: Test Rust documentation examples"))
-        self.assertNotIn("python3 tools/ci/stage_slots.py", verify)
-        self.assertLess(verify.index("- name: Install Rust toolchain and the runner image's packages"), verify.index(name))
-        self.assertLess(verify.index("uses: actions/setup-python@v5"), verify.index(name))
-        build = verify.split("- name: Build the source stage generator (test profile)\n", 1)[1].split("\n      - ", 1)[0]
-        self.assertIn("cargo build $JOBS --locked --profile test -p sunrise-mod-api-gen --bin sunrise-stage", build)
-        self.assertIn("SUNRISE_STAGE_TOOL=", build)
-        self.assertLess(verify.index("- name: Build the source stage generator (test profile)"), verify.index(name))
+        self.assertEqual(build.count(command), 1)
+        # After the build that compiles the tool, and before the leg's assets upload: a tree that does not stage
+        # publishes no SDK.
+        self.assertLess(build.index("- name: Build and collect\n"), build.index(name))
+        self.assertLess(build.index(name), build.index("uses: actions/upload-artifact@v4"))
 
-    def test_positive_stage_export_runs_once_before_docs_outside_offline_discovery(self):
+    def test_positive_stage_export_runs_in_the_sdk_linux_leg_and_not_in_verify(self):
         from test_ci_runners import jobs
-        verify = dict(jobs((ROOT / ".github/workflows/dyna-ci.yml").read_text()))["verify"]
-        self.assert_positive_stage_export(verify)
+        build = dict(jobs((ROOT / ".github/workflows/prebuilt-game-build.yml").read_text()))["build"]
+        self.assert_positive_stage_export(build)
+        self.assertNotIn("run: python3 tools/ci/test_stage_catalog.py", (ROOT / ".github/workflows/dyna-ci.yml").read_text())
 
     def test_the_surface_report_runs_after_the_stage_build_on_pull_requests_and_dispatches(self):
         from test_ci_runners import jobs
@@ -532,15 +533,15 @@ class DynaRoutingTests(unittest.TestCase):
 
     def test_positive_stage_guard_rejects_commented_command_noop_and_ignored_failure(self):
         from test_ci_runners import jobs
-        verify = dict(jobs((ROOT / ".github/workflows/dyna-ci.yml").read_text()))["verify"]
-        command = "        run: python3 tools/ci/test_stage_catalog.py -v"
+        build = dict(jobs((ROOT / ".github/workflows/prebuilt-game-build.yml").read_text()))["build"]
+        command = "        run: python tools/ci/test_stage_catalog.py -v"
         for replacement in (
-            "        # run: python3 tools/ci/test_stage_catalog.py -v\n        run: true",
-            "        run: '# python3 tools/ci/test_stage_catalog.py -v'",
+            "        # run: python tools/ci/test_stage_catalog.py -v\n        run: true",
+            "        run: '# python tools/ci/test_stage_catalog.py -v'",
             command + "\n        continue-on-error: true",
         ):
             with self.subTest(replacement=replacement), self.assertRaises(AssertionError):
-                self.assert_positive_stage_export(verify.replace(command, replacement, 1))
+                self.assert_positive_stage_export(build.replace(command, replacement, 1))
 
     def test_optional_map_upload_is_nonblocking_and_reports_its_failure(self):
         from test_ci_runners import jobs
@@ -641,6 +642,31 @@ class DynaRoutingTests(unittest.TestCase):
             subprocess.run(["bash", "-e", "-c", script], cwd=tree, env=env, check=True)
             self.assertEqual(calls.read_text().splitlines(), ["test --locked --no-run -p sunrise-client-lib --lib",
                                                              "test --locked --no-run -p sunrise-client --lib"])
+
+class PersistentTargetTests(unittest.TestCase):
+    def test_every_job_that_can_build_on_a_self_hosted_runner_keeps_the_source_snapshot_first(self):
+        # A job that builds in the runner's persistent target without tools/ci/source_mtimes.py leaves artifacts of
+        # its tree under a snapshot of another, which a later job then judges fresh: R55's verify linked a
+        # sunrise-mod-surface from a tree before 09339ddb31 (2026-11-19). The first step that can compile (cargo, or a
+        # repository tool that runs it) must come after the snapshot.
+        import re
+        from test_ci_concurrency import yaml
+        builds = re.compile(r"\bcargo (build|test|run|clippy|check|doc|fetch)\b|tools/ci/check_ignored_test_rows\.py|"
+                            r"tools/ci/check_machine_sample\.py|tools/parity\.py|tools/prebuilt_game\.py|xtask")
+        checked = 0
+        for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            for name, job in yaml.load(path.read_text(), Loader=yaml.BaseLoader)["jobs"].items():
+                if not re.search(r"dyna|DYNA", str(job.get("runs-on", ""))):
+                    continue
+                steps = [str(step.get("run", "")) for step in job.get("steps", [])]
+                first = next((index for index, run in enumerate(steps) if builds.search(run)), None)
+                if first is None:
+                    continue
+                checked += 1
+                with self.subTest(workflow=path.name, job=name):
+                    self.assertTrue(any("tools/ci/source_mtimes.py" in run for run in steps[:first]))
+        self.assertGreater(checked, 8)
+
 
 class ParityWorkflowTests(unittest.TestCase):
     def setUp(self):

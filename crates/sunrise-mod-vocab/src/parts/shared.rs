@@ -65,7 +65,7 @@ pub struct Parts {
     /// Block entity parts by block, for the hooks asked by block (`block_entity`).
     pub(crate) block_entities: HashMap<Box<str>, Vec<Attached<dyn BlockEntityPart>>>,
     /// Block entity parts by block entity type, for the hooks asked by the entity
-    /// (`block_entity_tick`, `menu_button`): its type id need not be its block's id.
+    /// (`block_entity_tick`): its type id need not be its block's id.
     pub(crate) block_entity_kinds: HashMap<Box<str>, Vec<Attached<dyn BlockEntityPart>>>,
     pub(crate) items: HashMap<Box<str>, Vec<Attached<dyn ItemPart>>>,
     pub(crate) menus: HashMap<Box<str>, Vec<Attached<dyn MenuPart>>>,
@@ -113,8 +113,9 @@ pub struct Parts {
     pub(crate) entity_selectors: Vec<EntitySelectorInfo>,
     /// Frozen raw payload declarations and their sole receiving owners.
     pub(crate) payloads: Option<Arc<crate::parts::payloads::Payloads>>,
-    /// Only the parts that override each scoped hook, resolved at load or reload.
-    pub(crate) hooks: Vec<Option<HookParts>>,
+    /// Only the parts that override each scoped hook, resolved at load or reload. Boxed: most of the
+    /// table is empty, and a slot holds eight maps.
+    pub(crate) hooks: Vec<Option<Box<HookParts>>>,
     /// Who listens, as plain bits derived from `hooks` when the table is resolved.
     pub(crate) listens: Arc<ListenIndex>,
 }
@@ -130,6 +131,7 @@ pub struct HookParts {
     pub(crate) block_entity_kinds: HashMap<Box<str>, Vec<Attached<dyn BlockEntityPart>>>,
     pub(crate) items: HashMap<Box<str>, Vec<Attached<dyn ItemPart>>>,
     pub(crate) menus: HashMap<Box<str>, Vec<Attached<dyn MenuPart>>>,
+    pub(crate) menu_screens: HashMap<Box<str>, crate::parts::menus::MenuScreenIndex>,
     pub(crate) effects: HashMap<Box<str>, Vec<Attached<dyn MobEffectPart>>>,
     pub(crate) fluids: HashMap<Box<str>, Vec<Attached<dyn FluidPart>>>,
     pub(crate) entities: HashMap<Box<str>, Vec<Attached<dyn EntityPart>>>,
@@ -442,7 +444,7 @@ pub fn prepare_parts(
         "block",
     );
     add_tagged(&mut parts.items, &installed.tags.items, item_tags, "item");
-    parts.index_hooks();
+    parts.index_hooks(&installed.menu_recipe_books, &installed.namespace_authority);
     for table in parts.hooks.iter_mut().flatten() {
         if table.blocks.is_empty() {
             continue;
@@ -550,17 +552,20 @@ pub(crate) fn add_tagged<P: ?Sized>(
 
 impl Parts {
     pub(crate) fn for_hook(&self, hook: HookId) -> Option<&HookParts> {
-        self.hooks.get(hook as usize).and_then(Option::as_ref)
+        self.hooks.get(hook as usize).and_then(Option::as_deref)
     }
-    pub(super) fn index_hooks(&mut self) {
+    pub(super) fn index_hooks(
+        &mut self,
+        menu_recipe_books: &HashMap<String, crate::parts::menus::MenuBookDeclaration>,
+        authority: &crate::parts::NamespaceAuthority,
+    ) {
         self.hooks = vec![None; HOOK_COUNT];
         macro_rules! index {
             ($field:ident, $method:ident) => {
                 for (key, parts) in &self.$field {
                     for part in parts {
                         for hook in part.part.$method().iter().flatten() {
-                            let table =
-                                self.hooks[*hook as usize].get_or_insert_with(HookParts::default);
+                            let table = self.hooks[*hook as usize].get_or_insert_with(Box::default);
                             table
                                 .$field
                                 .entry(key.clone())
@@ -579,6 +584,15 @@ impl Parts {
         index!(effects, effect_subscribed);
         index!(fluids, fluid_subscribed);
         index!(entities, entity_subscribed);
+        for table in self.hooks.iter_mut().flatten() {
+            if !table.menus.is_empty() {
+                table.menu_screens = crate::parts::menus::index_menu_screens(
+                    &table.menus,
+                    menu_recipe_books,
+                    authority,
+                );
+            }
+        }
     }
 }
 
@@ -649,7 +663,11 @@ mod lookup_context_tests {
     #[test]
     fn unsubscribed_scoped_dispatch_never_looks_up_parts() {
         struct Level;
-        impl crate::LevelHost for Level {}
+        impl crate::LevelHost for Level {
+            fn block_entity_data(&self, _: crate::BlockEntityRef) -> Option<crate::Compound> {
+                None
+            }
+        }
         struct Hook;
         #[mod_api::__subscriptions]
         impl crate::Hooks for Hook {}

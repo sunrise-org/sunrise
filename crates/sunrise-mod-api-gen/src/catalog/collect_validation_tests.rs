@@ -25,3 +25,26 @@ fn validators_are_paths_and_only_apply_to_global_collectors() {
         assert!(parse(api).is_err());
     }
 }
+
+#[test]
+fn an_output_validator_is_a_path_on_an_isolated_hook_only() {
+    let parse = |api| {
+        Hook::parse(json!({
+            "name": "checked", "doc": "Doc.", "side": "server", "target": "crate::native_checked",
+            "mod_api": api,
+        }))
+    };
+    assert_eq!(
+        parse(json!({"contract":"cancel", "out":"canceled", "isolate":true, "output_validator":"crate::check"}))
+            .unwrap()
+            .output_validator
+            .as_deref(),
+        Some("crate::check")
+    );
+    for api in [
+        json!({"contract":"cancel", "out":"canceled", "output_validator":"crate::check"}),
+        json!({"contract":"cancel", "out":"canceled", "isolate":true, "output_validator":"not a path"}),
+    ] {
+        assert!(parse(api).is_err());
+    }
+}

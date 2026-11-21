@@ -161,6 +161,7 @@ impl Host {
             next_entity: &mut self.next_entity,
             spawn: [8.5, f64::from(MIN_Y + 5), 8.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -231,6 +232,23 @@ fn drive<T>(
         host.tick();
         for receipt in session.poll() {
             let (event, _credit) = receipt.into_parts();
+            let event = match event {
+                Event::Configuration(task) => {
+                    let Some(effect) = task.handle() else {
+                        continue;
+                    };
+                    effect
+                }
+                Event::Cookie(task) => {
+                    task.handle();
+                    continue;
+                }
+                Event::FinishConfiguration(change) => {
+                    change.acknowledge();
+                    continue;
+                }
+                event => event,
+            };
             if let Some(found) = done(host, event) {
                 return found;
             }
@@ -477,4 +495,127 @@ fn a_refused_reload_disconnects_instead_of_retaining_the_old_generation() {
         }
         _ => None,
     });
+}
+
+#[test]
+#[ignore = "daily"]
+fn an_incomplete_configuration_snapshot_refuses_finish_after_earlier_replies() {
+    let _turn = begin();
+    let (_resources, data) = Resources::new("incomplete_configuration");
+    let (client, server) = sunrise_protocol::connection::Pipe::pair();
+    let session = Session::connect_local(
+        client,
+        "Mage",
+        None,
+        ClientInformation::new(8),
+        Arc::new(sunrise_protocol::text::Language::new()),
+        data,
+    );
+    let mut server = Connection::local(server);
+    server
+        .reader
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    server.recv().unwrap(); // Handshake.
+    server.recv().unwrap(); // Login hello.
+    server
+        .send(
+            &login::Clientbound::LoginFinished(login::LoginFinished {
+                profile: login::GameProfile {
+                    uuid: 1,
+                    name: "Mage".into(),
+                    properties: vec![],
+                },
+                session: 1,
+            })
+            .encode(),
+        )
+        .unwrap();
+    server.recv().unwrap(); // Login acknowledged.
+    server.recv().unwrap(); // Brand.
+    server.recv().unwrap(); // Client information.
+
+    let partial = datapack_net::chunks(&vec![0; 1 << 20])
+        .unwrap()
+        .next()
+        .unwrap();
+    for packet in [
+        cfg::Clientbound::CookieRequest(cfg::CookieRequest {
+            key: "test:cookie".into(),
+        }),
+        cfg::Clientbound::Ping(cfg::Ping { id: 11 }),
+        cfg::Clientbound::CustomPayload(cfg::CustomPayload {
+            channel: datapack_net::CHANNEL.into(),
+            data: partial,
+        }),
+        cfg::Clientbound::FinishConfiguration(Empty),
+    ] {
+        server.send(&packet.encode()).unwrap();
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut frozen = Vec::new();
+    loop {
+        frozen.extend(
+            session
+                .poll()
+                .into_iter()
+                .map(|receipt| receipt.into_parts()),
+        );
+        if frozen
+            .iter()
+            .any(|(event, _)| matches!(event, Event::FinishConfiguration(_)))
+        {
+            break;
+        }
+        assert!(
+            session.accepts_packets(),
+            "the reader closed ahead of the main turn"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "finish never reached the main turn"
+        );
+        std::thread::yield_now();
+    }
+    for (event, _credit) in frozen {
+        match event {
+            Event::Cookie(task) => task.handle(),
+            Event::Configuration(task) => {
+                assert!(task.handle().is_none());
+            }
+            Event::FinishConfiguration(task) => task.acknowledge(),
+            Event::Status(_) => {}
+            _ => panic!("unexpected event before finish"),
+        }
+    }
+    for expected in [
+        cfg::Serverbound::CookieResponse(cfg::CookieResponse {
+            key: "test:cookie".into(),
+            payload: None,
+        }),
+        cfg::Serverbound::Pong(cfg::Ping { id: 11 }),
+    ] {
+        let (id, body) = server.recv().unwrap();
+        assert_eq!(cfg::Serverbound::decode(id, &body).unwrap(), expected);
+    }
+    assert!(
+        server
+            .recv()
+            .expect_err("a failed Finish must not ACK or enter Play")
+            .is_end_of_stream()
+    );
+    loop {
+        for receipt in session.poll() {
+            if let (Event::Disconnected { reason, .. }, _) = receipt.into_parts() {
+                assert!(
+                    reason.contains("Incomplete datapack registry snapshot"),
+                    "{reason}"
+                );
+                return;
+            }
+        }
+        assert!(Instant::now() < deadline, "refusal not reported");
+        std::thread::yield_now();
+    }
 }

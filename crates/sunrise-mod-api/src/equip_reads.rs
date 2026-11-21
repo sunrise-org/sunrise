@@ -1,4 +1,4 @@
-//! One read surface for native and guest equipment predicates.
+//! Read snapshots for equipment predicates.
 use crate::{EntityRef, EntityTypeKey, EquipReadRow, EquipmentSlot, ItemStack, LivingRef};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 // no wire: process-local indices over a scoped immutable read snapshot.
@@ -24,7 +24,7 @@ struct Active {
     index: usize,
 }
 thread_local! { static ACTIVE:RefCell<Option<Active>>=const { RefCell::new(None) }; }
-// no wire: a call-scoped transport guard, never serialized.
+// no wire: a call-scoped snapshot guard, never serialized.
 pub struct EquipReadGuard(Option<Active>);
 pub fn enter_equip_reads(set: Rc<EquipReadSet>, entity: EntityRef) -> EquipReadGuard {
     let active = set

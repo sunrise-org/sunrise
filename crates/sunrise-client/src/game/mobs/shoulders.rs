@@ -70,7 +70,7 @@ impl Game<'_> {
         }
         let (uuid, now) = (self.acting_uuid(), self.world.game_time);
         self.creatures.shoulder_time.insert(uuid, now);
-        self.mobs[i].removed = true;
+        self.remove_mob_now(self.mobs[i].id, false);
     }
 
     /// `ServerPlayer.handleShoulderEntities`: the parrots leave the shoulder

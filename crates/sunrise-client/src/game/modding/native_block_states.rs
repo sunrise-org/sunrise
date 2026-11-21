@@ -1,18 +1,15 @@
 //! Block state ids and names, and item tags, for native mods:
 //! registry queries with no level, so they answer anywhere a host is given.
-use super::{Game, WorldRest, api_values::TryIntoEngine};
+use super::Game;
 use mod_api::{
-    BlockEntityTypeKey, BlockKey, BlockSoundType, BlockStateRange, BlockStateRecord, EffectKey,
-    EnchantmentKey, EntityTypeKey, FluidDefinition, FluidKey, FluidState, FluidStateError,
-    FluidTypeProperties, ItemKey, MenuKey, StateConstraint, StateMatchError, StateProperty,
-    WeatheringAge,
+    BlockEntityTypeKey, BlockKey, EffectKey, EnchantmentKey, EntityTypeKey, FluidKey, FluidState,
+    ItemKey, MenuKey, StateConstraint, StateMatchError,
 };
 use std::sync::{Arc, Mutex};
 use sunrise_client::command::{Reader, args::Registries, block};
 use sunrise_client::items::ItemStack;
 use sunrise_world::chunk::BlockState;
 use sunrise_world::fluid::{FluidKind, FluidState as EngineFluidState};
-use sunrise_world::level::{fluid_drip_particle, fluid_explosion_resistance, fluid_randomly_ticks};
 use sunrise_world::registry::{BlockRegistry, BlockStateId};
 
 /// The engine's fluid state for an exported one, or none for a state no fluid can be in: no
@@ -30,110 +27,12 @@ pub(super) fn engine_fluid_state(state: FluidState) -> Option<EngineFluidState> 
 }
 
 impl Game<'_> {
-    /// The exported definition of a world fluid, or a tank-only identity.
-    pub(super) fn fluid_state_definition(&self, fluid: FluidKey) -> Option<FluidDefinition> {
-        let id = mod_api::__private::fluid_id(fluid)?;
-        let Some(definition) = self.res.behaviours().fluid_definitions().get(id) else {
-            return Some(FluidDefinition::TankOnly);
-        };
-        let default = super::native_world_read::api_fluid_state(definition.default)?;
-        let properties = definition
-            .properties
-            .iter()
-            .map(|(name, values)| StateProperty::new(name.clone(), values.clone()))
-            .collect();
-        Some(FluidDefinition::World {
-            default,
-            properties,
-        })
-    }
-
-    /// A registered fluid's type properties: its block's light and name for a world fluid,
-    /// vanilla's `FluidTags.WATER` and `FluidTags.LAVA` behaviours by its family. None for a
-    /// key the registry doesn't hold.
-    pub(super) fn fluid_type_properties(&self, fluid: FluidKey) -> Option<FluidTypeProperties> {
-        let id = mod_api::__private::fluid_id(fluid)?;
-        let behaviours = self.res.behaviours();
-        let block = behaviours.fluid_definitions().get(id).map(|definition| {
-            self.res
-                .facts()
-                .get(behaviours.legacy_block(definition.default))
-        });
-        let description_id = match &block {
-            Some(block) => description_id("block", &block.name)?,
-            None => description_id("fluid_type", id)?,
-        };
-        let kind = FluidKind::from_name(id);
-        let water = kind.is_some_and(|kind| kind.same_family(FluidKind::Water));
-        let lava = kind.is_some_and(|kind| kind.same_family(FluidKind::Lava));
-        Some(FluidTypeProperties {
-            description_id,
-            light_level: block.map_or(0, |block| block.emission),
-            fall_distance_modifier: match (water, lava) {
-                (true, _) => 0.0,
-                (_, true) => 0.5,
-                _ => 1.0,
-            },
-            can_push_entity: water || lava,
-            can_swim: water,
-            can_drown: water,
-            can_extinguish: water,
-            can_hydrate: water,
-            supports_boating: water,
-            explosion_resistance: kind.map_or(0.0, fluid_explosion_resistance),
-            randomly_ticks: kind.is_some_and(fluid_randomly_ticks),
-            drip_particle: kind.and_then(fluid_drip_particle).map(str::to_owned),
-        })
-    }
-
-    /// `FluidState.createLegacyBlock` for `state`, through the one table the engine converts
-    /// fluid states with. None for a state no fluid can be in: no world form, an amount above
-    /// 8, a zero amount for anything but the empty fluid, or a source that isn't full.
-    pub(super) fn fluid_legacy_block(&self, state: FluidState) -> Option<mod_api::BlockStateId> {
-        let engine = engine_fluid_state(state)?;
-        Some(mod_api::BlockStateId(
-            self.res.behaviours().legacy_block(engine).0,
-        ))
-    }
-
-    /// Validate fluid constraints against the exported property definition.
-    pub(super) fn fluid_state_validate(
-        &self,
-        fluid: FluidKey,
-        constraints: &[StateConstraint],
-    ) -> Result<(), FluidStateError> {
-        let definition = mod_api::__private::fluid_id(fluid)
-            .and_then(|id| self.res.behaviours().fluid_definitions().get(id))
-            .ok_or(FluidStateError::NoWorldState)?;
-        for (index, constraint) in constraints.iter().enumerate() {
-            if constraints[..index]
-                .iter()
-                .any(|previous| previous.name == constraint.name)
-            {
-                return Err(FluidStateError::Duplicate(index as u32));
-            }
-            match_state_properties(
-                &definition.properties,
-                true,
-                |_, _| true,
-                std::slice::from_ref(constraint),
-            )
-            .map_err(|error| match error {
-                StateMatchError::UnknownProperty(_) => {
-                    FluidStateError::UnknownProperty(index as u32)
-                }
-                StateMatchError::InvalidValue(_) => FluidStateError::InvalidValue(index as u32),
-                _ => unreachable!("StateMatchError: unhandled variant"),
-            })?;
-        }
-        Ok(())
-    }
     /// Resolve a registered fluid identifier.
     pub(super) fn fluid_key(&self, id: &str) -> Option<FluidKey> {
         mod_api::__private::fluid_key(id)
     }
     /// The canonical block id retained by the load-owned registration slot. An invalid slot
-    /// is a boundary error, including when a wasm guest supplies it.
+    /// is a boundary error.
     pub(super) fn block_key_id(&self, key: BlockKey) -> String {
         mod_api::__private::block_key_id(key)
             .expect("invalid block key slot")
@@ -229,167 +128,6 @@ impl Game<'_> {
     pub(super) fn block_state_default(&self, block: BlockKey) -> Option<BlockStateId> {
         super::api_values::default_state(block)
     }
-    /// Convert the canonical ordinal before reading the published weathering tables.
-    fn weathering_state(&self, state: BlockStateRecord) -> Option<(&WorldRest, BlockStateId)> {
-        Some((
-            self.res.rest.get()?,
-            mod_api::BlockState::from(state).try_into_engine(&()).ok()?,
-        ))
-    }
-
-    pub(super) fn block_weathering_age(&self, state: BlockStateRecord) -> Option<WeatheringAge> {
-        let (rest, state) = self.weathering_state(state)?;
-        Some(match rest.behaviours.weathering_age(state)? {
-            0 => WeatheringAge::Unaffected,
-            1 => WeatheringAge::Exposed,
-            2 => WeatheringAge::Weathered,
-            3 => WeatheringAge::Oxidized,
-            _ => return None,
-        })
-    }
-
-    pub(super) fn block_next_weathering_stage(
-        &self,
-        state: BlockStateRecord,
-    ) -> Option<BlockStateId> {
-        let (rest, state) = self.weathering_state(state)?;
-        rest.behaviours.weathering_next(state)
-    }
-
-    pub(super) fn block_previous_weathering_stage(
-        &self,
-        state: BlockStateRecord,
-    ) -> Option<BlockStateId> {
-        let (rest, state) = self.weathering_state(state)?;
-        rest.behaviours.weathering_previous(state)
-    }
-
-    pub(super) fn block_state_waxed(&self, state: BlockStateRecord) -> Option<BlockStateId> {
-        let (_, state) = self.weathering_state(state)?;
-        self.honeycomb_waxed(state)
-    }
-
-    pub(super) fn block_state_unwaxed(&self, state: BlockStateRecord) -> Option<BlockStateId> {
-        let (rest, state) = self.weathering_state(state)?;
-        if let Some(unwaxed) = rest.behaviours.mapped_unwaxed(state) {
-            return Some(unwaxed);
-        }
-        let registry = self.pack.assets.registry;
-        registry
-            .resolve(
-                &rest
-                    .transformers
-                    .unwaxed(registry, registry.state(state)?)?,
-            )
-            .ok()
-    }
-
-    /// `BlockState.canBeReplaced()`: whether placing a block where this state stands
-    /// replaces it (air, grass, water, snow layers). None for an unknown state.
-    pub(super) fn block_state_replaceable(&self, state: BlockStateId) -> Option<bool> {
-        self.pack.assets.registry.state(state)?;
-        Some(self.res.facts().get(state).replaceable)
-    }
-    /// `BlockBehaviour.Properties.destroyTime`, as `BlockState.getDestroySpeed` reads it:
-    /// stone 1.5, obsidian 50, bedrock -1 (it can't be broken). None for an unknown state.
-    pub(super) fn block_state_destroy_speed(&self, state: BlockStateId) -> Option<f32> {
-        self.pack.assets.registry.state(state)?;
-        Some(self.res.facts().get(state).hardness)
-    }
-    /// `BlockState.requiresCorrectToolForDrops()`. None for an unknown state.
-    pub(super) fn block_state_requires_correct_tool(&self, state: BlockStateId) -> Option<bool> {
-        self.pack.assets.registry.state(state)?;
-        Some(self.res.facts().get(state).requires_tool)
-    }
-    /// The explosion resistance the block of this state declares (`Block.getExplosionResistance`):
-    /// stone 6, obsidian 1200, bedrock 3,600,000. None for an unknown state.
-    pub(super) fn block_state_explosion_resistance(&self, state: BlockStateId) -> Option<f32> {
-        self.pack.assets.registry.state(state)?;
-        Some(self.res.facts().get(state).explosion_resistance)
-    }
-    /// `BlockState.getSoundType()`: its volume, pitch and the sound events for breaking,
-    /// stepping on, placing, hitting and falling on it. None for an unknown state.
-    pub(super) fn block_state_sound(&self, state: BlockStateId) -> Option<BlockSoundType> {
-        self.pack.assets.registry.state(state)?;
-        Some(sunrise_client::block_sounds::own(
-            &self.res.facts().get(state).sounds,
-        ))
-    }
-    /// `BlockState.hasBlockEntity()`. None for an unknown state.
-    pub(super) fn block_state_has_block_entity(&self, state: BlockStateId) -> Option<bool> {
-        self.pack.assets.registry.state(state)?;
-        Some(self.res.facts().get(state).block_entity)
-    }
-    /// `BlockState.getMapColor`: the state's `MapColor.id`, 0 for none. None for an unknown state.
-    pub(super) fn block_state_map_color(&self, state: BlockStateId) -> Option<u8> {
-        self.pack.assets.registry.state(state)?;
-        Some(self.res.facts().get(state).map_color)
-    }
-    /// Decode a packed pixel with the same palette and shade arithmetic as map rendering.
-    pub(super) fn block_state_map_color_rgba(&self, packed: u8) -> Option<[u8; 4]> {
-        Some(super::maps::packed_rgba(packed))
-    }
-    /// `BlockState.getLightEmission()`. None for an unknown state.
-    pub(super) fn block_state_light_emission(&self, state: BlockStateId) -> Option<u8> {
-        self.pack.assets.registry.state(state)?;
-        Some(self.res.facts().get(state).emission)
-    }
-    /// `BlockBehaviour.getFriction()` of the state's block. None for an unknown state.
-    pub(super) fn block_state_friction(&self, state: BlockStateId) -> Option<f32> {
-        self.pack.assets.registry.state(state)?;
-        Some(self.res.facts().get(state).friction)
-    }
-    /// `BlockState.isSolidRender()`. None for an unknown state.
-    pub(super) fn block_state_is_solid_render(&self, state: BlockStateId) -> Option<bool> {
-        self.pack.assets.registry.state(state)?;
-        Some(self.res.facts().get(state).solid_render)
-    }
-    /// `BlockState.isRedstoneConductor` for a state alone, not a block in a level.
-    pub(super) fn block_state_is_redstone_conductor(&self, state: BlockStateId) -> Option<bool> {
-        self.res.behaviours().state_redstone_conductor(state)
-    }
-    /// The immutable local ordinals of `block`, independent of current world ID order.
-    pub(super) fn block_states_of(&self, block: BlockKey) -> Option<BlockStateRange> {
-        mod_api::__private::block_state_range(block).ok()
-    }
-
-    /// The properties of a resolved block, copied for the mod as plain data.
-    pub(super) fn block_state_definition(&self, block: BlockKey) -> Option<Vec<StateProperty>> {
-        let default = super::api_values::default_state(block)?;
-        let state = self.pack.assets.registry.state(default)?;
-        let properties = self.pack.block_registries.blocks.get(&state.name)?;
-        Some(
-            properties
-                .iter()
-                .map(|(name, values)| StateProperty::new(name.clone(), values.clone()))
-                .collect(),
-        )
-    }
-
-    /// Match against the existing command registry definitions without allocating on the call.
-    pub(super) fn block_state_matches(
-        &self,
-        state: BlockStateId,
-        block: BlockKey,
-        constraints: &[StateConstraint],
-    ) -> Option<Result<bool, StateMatchError>> {
-        let default = super::api_values::default_state(block)?;
-        let registry = self.pack.assets.registry;
-        let target = registry.state(default)?;
-        let state = registry.state(state)?;
-        let definition = self.pack.block_registries.blocks.get(&target.name)?;
-        Some(match_state_properties(
-            definition,
-            state.name == target.name,
-            |name, value| {
-                state
-                    .properties
-                    .get(name)
-                    .is_some_and(|actual| actual == value)
-            },
-            constraints,
-        ))
-    }
 
     /// `Item.getCraftingRemainder`: Sunrise currently stores the remainder's
     /// item id, so the result is a single plain stack.
@@ -457,7 +195,7 @@ pub(super) fn match_state_properties(
 
 /// The command registries' block table of `registry` alone, built once: what
 /// the parser checks properties against, whether a world is open or not.
-pub(super) fn block_registries(registry: &'static BlockRegistry) -> Arc<Registries> {
+pub(super) fn block_registries(registry: &BlockRegistry) -> Arc<Registries> {
     static CACHE: Mutex<Vec<(usize, Arc<Registries>)>> = Mutex::new(Vec::new());
     // Derived from the registry's data alone, so equal data across installations shares one.
     let key = registry.payload_identity();
@@ -507,7 +245,7 @@ pub(super) fn serialize(state: &BlockState) -> String {
 }
 
 /// `Util.makeDescriptionId`: `<kind>.<namespace>.<path>`, `/` in the path as `.`.
-fn description_id(kind: &str, id: &str) -> Option<String> {
+pub(super) fn description_id(kind: &str, id: &str) -> Option<String> {
     let (namespace, path) = id.split_once(':')?;
     Some(format!("{kind}.{namespace}.{}", path.replace('/', ".")))
 }
@@ -521,6 +259,7 @@ impl crate::crafting::CraftingRemainder for Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mod_api::{FluidDefinition, FluidStateError, FluidTypeProperties};
 
     /// Air, a stair with two properties (its default `facing=north,half=bottom`)
     /// and wheat with an integer `age`, as `parse` reads them.
@@ -628,8 +367,8 @@ mod tests {
                 event: &mut mod_api::BlocksEvent<'_>,
             ) {
                 event
-                    .blocks
-                    .push(mod_api::Block::new(CRATE, "minecraft:stone"));
+                    .register(mod_api::Block::new(CRATE, "minecraft:stone"))
+                    .unwrap();
             }
         }
         let mods: mod_api::Mods =

@@ -8,8 +8,11 @@ impl GeneralTypesRegistrar for PartRegistrar {
         category: GeneralEntityCategory,
         width: f64,
         height: f64,
+        passenger_attachment: Option<[f64; 3]>,
         save_policy: GeneralSavePolicy,
         summonable: bool,
+        pickable: bool,
+        piston_push_reaction: Option<PushReaction>,
         tracking_chunks: i32,
         update_interval: i32,
         payload_version: u16,
@@ -44,10 +47,7 @@ impl GeneralTypesRegistrar for PartRegistrar {
         };
         let id_for_log = id.clone();
         let result = (|| {
-            if mod_vocab::__private::parts_installation::loaded_mods()
-                .get(self.mod_id)
-                .is_some_and(|package| package.side() != crate::Side::Both)
-            {
+            if self.declaration_side_not_both(&id) {
                 return Err(Error::WrongSide);
             }
             if self
@@ -57,7 +57,11 @@ impl GeneralTypesRegistrar for PartRegistrar {
             {
                 return Err(Error::Duplicate);
             }
-            if ![width, height].into_iter().all(f64::is_finite) {
+            if ![width, height]
+                .into_iter()
+                .chain(passenger_attachment.into_iter().flatten())
+                .all(f64::is_finite)
+            {
                 return Err(Error::NotFinite);
             }
             for feature in required_features {
@@ -75,8 +79,11 @@ impl GeneralTypesRegistrar for PartRegistrar {
                     category,
                     width,
                     height,
+                    passenger_attachment,
                     save_policy,
                     summonable,
+                    pickable,
+                    piston_push_reaction: piston_push_reaction.unwrap_or_default(),
                     tracking_chunks,
                     update_interval,
                     payload_version,
@@ -121,8 +128,11 @@ mod tests {
             GeneralEntityCategory::Misc,
             width,
             height,
+            None,
             GeneralSavePolicy::Save,
             true,
+            false,
+            None,
             tracking_chunks,
             update_interval,
             1,
@@ -186,6 +196,31 @@ mod tests {
     }
 
     #[test]
+    fn a_non_finite_passenger_attachment_refuses_registration() {
+        crate::__private::initialize().unwrap();
+        let (_phase, mut registrar) = registrar();
+        assert_eq!(
+            registrar.declare_general_entity(
+                "robot",
+                GeneralEntityCategory::Misc,
+                0.8,
+                1.9,
+                Some([1.0, f64::NAN, 0.0]),
+                GeneralSavePolicy::Save,
+                true,
+                false,
+                None,
+                8,
+                3,
+                1,
+                &[],
+            ),
+            Err(Error::NotFinite)
+        );
+        assert!(registrar.general_entity_types.is_empty());
+    }
+
+    #[test]
     fn vanilla_ranges_and_no_update_interval_are_accepted() {
         crate::__private::initialize().unwrap();
         let (_phase, mut registrar) = registrar();
@@ -225,6 +260,52 @@ mod tests {
                 Err(Error::WrongSide)
             );
             assert!(registrar.general_entity_types.is_empty());
+        });
+    }
+
+    #[test]
+    fn served_by_entity_type_enforces_supplier_side() {
+        crate::__private::initialize().unwrap();
+        use crate::load_state::with_test_package_inventory;
+        use crate::{PackageInfo, PackageKind};
+        let packages = vec![
+            PackageInfo::new(
+                "host".to_owned(),
+                "1".to_owned(),
+                PackageKind::Code,
+                crate::Side::Both,
+                vec!["host".to_owned()],
+                vec![],
+            ),
+            PackageInfo::new(
+                "runes".to_owned(),
+                "1".to_owned(),
+                PackageKind::Content,
+                crate::Side::Both,
+                vec!["runes".to_owned()],
+                vec![],
+            )
+            .with_served_by(Some("host".to_owned())),
+            PackageInfo::new(
+                "srv_runes".to_owned(),
+                "1".to_owned(),
+                PackageKind::Content,
+                crate::Side::Server,
+                vec!["srv_runes".to_owned()],
+                vec![],
+            )
+            .with_served_by(Some("host".to_owned())),
+        ];
+        let _scope = PhaseOwner::scope(ModPhase::Registration);
+        with_test_package_inventory(packages, || {
+            let mut registrar = PartRegistrar::new("host");
+            declare(&mut registrar, "runes:drone", 0.8, 1.9, 8, 3, &[]).unwrap();
+            assert_eq!(
+                declare(&mut registrar, "srv_runes:drone", 0.8, 1.9, 8, 3, &[]),
+                Err(Error::WrongSide)
+            );
+            assert_eq!(registrar.general_entity_types.len(), 1);
+            assert_eq!(registrar.general_entity_types[0].id, "runes:drone");
         });
     }
 
@@ -323,8 +404,11 @@ mod tests {
                 GeneralEntityCategory::Misc,
                 0.8,
                 1.9,
+                None,
                 GeneralSavePolicy::Save,
                 true,
+                false,
+                Some(PushReaction::IgnoreEntity),
                 8,
                 3,
                 1,
@@ -332,5 +416,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(registrar.general_entity_types.len(), 1);
+        assert_eq!(
+            registrar.general_entity_types[0].piston_push_reaction,
+            PushReaction::IgnoreEntity
+        );
     }
 }

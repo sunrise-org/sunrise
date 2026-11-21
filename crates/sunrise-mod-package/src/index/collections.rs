@@ -37,7 +37,13 @@ fn is_default(default: &bool) -> bool {
 }
 
 impl Collection {
-    pub(super) fn check<'a>(&self, project: impl Fn(&str) -> Option<&'a Kind>) -> Vec<String> {
+    /// `taken` says whether the collection's id is a project's, whatever that project publishes;
+    /// `project` gives the kind of a project with versions, which is what a member must be.
+    pub(super) fn check<'a>(
+        &self,
+        taken: bool,
+        project: impl Fn(&str) -> Option<&'a Kind>,
+    ) -> Vec<String> {
         let mut errors = page::check_title(&self.name, &self.summary);
         errors.extend(page::check_description_limit(&self.description));
         if self.owners.is_empty() {
@@ -46,7 +52,7 @@ impl Collection {
         if !valid_id(&self.id) || RESERVED_IDS.contains(&self.id.as_str()) {
             errors.push("pick a non-reserved id matching [a-z0-9_]{1,64}".into());
         }
-        if project(&self.id).is_some() {
+        if taken {
             errors.push("its id is already a project id: pick another collection id".into());
         }
         if let Err(error) = super::https(&self.icon) {

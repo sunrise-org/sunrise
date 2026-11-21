@@ -1,11 +1,15 @@
-//! Placement writes and the `Block.setPlacedBy` step for code that chooses the block state.
-use super::{Game, native_server::PlayerRead};
+//! Placement-state reads, placement writes and the `Block.setPlacedBy` step.
+use super::{Game, api_values::block_state::block_listens, native_server::PlayerRead};
 use mod_api::{
-    BlockUpdateFlags, LevelRef, LevelWriteError, PlayerRef, PlayerWorldRefusal as Refusal,
+    BlockKey, BlockUpdateFlags, HookId, LevelReadError, LevelRef, LevelWriteError, PlayerRef,
+    PlayerWorldRefusal as Refusal,
 };
 use sunrise_client::{containers::BlockEntity, items::ItemStack};
-use sunrise_core::position::BlockPos;
-use sunrise_world::{level::classes::Class, registry::BlockStateId};
+use sunrise_core::{geometry::Vec3, position::BlockPos};
+use sunrise_world::{
+    level::{PlacementContext, classes::Class},
+    registry::BlockStateId,
+};
 
 /// A placement's write flags: neighbours and clients told, shapes updated unless known.
 fn placement_flags(update_neighbour_shapes: bool) -> BlockUpdateFlags {
@@ -82,6 +86,55 @@ impl Game<'_> {
         });
         if ran { Ok(()) } else { Err(Refusal::Stale) }
     }
+    pub(super) fn level_state_for_placement(
+        &mut self,
+        level: LevelRef,
+        block: BlockKey,
+        context: &mod_api::PlacementContext,
+    ) -> Result<Option<BlockStateId>, LevelReadError> {
+        let world = self.native_level_world_result(level)?;
+        if level.dimension() != self.dim.key() {
+            return Err(LevelReadError::Unavailable);
+        }
+        let BlockPos { x, y, z } = context.pos;
+        if !context.hit.iter().all(|n| n.is_finite())
+            || !context.yaw.is_finite()
+            || !context.pitch.is_finite()
+            || !(-30_000_000..30_000_000).contains(&x)
+            || !(-30_000_000..30_000_000).contains(&z)
+            || !world.is_loaded_at(x, y, z)
+        {
+            return Ok(None);
+        }
+        let Some(block) = super::api_values::behavior_block(block, self.res.behaviours()) else {
+            return Ok(None);
+        };
+        let item = match context.item {
+            Some(key) => {
+                let Some(item) = mod_api::__private::item_key_id(key) else {
+                    return Ok(None);
+                };
+                item
+            }
+            None => "",
+        };
+        Ok(self.preview_state_for_placement(
+            block,
+            &PlacementContext {
+                pos: context.pos,
+                hit_pos: context.hit_pos,
+                face: context.face,
+                hit: Vec3::new(context.hit[0], context.hit[1], context.hit[2]),
+                inside: context.inside,
+                yaw: context.yaw,
+                pitch: context.pitch,
+                sneaking: context.sneaking,
+                item: item.to_owned(),
+                replace_clicked: context.replace_clicked,
+            },
+        ))
+    }
+
     /// A chosen state written as a placement writes it, then `Block.setPlacedBy`, with no
     /// player: the write and the extra halves are those of `player_place_block`. `Ok(false)`
     /// when the write was refused or changed nothing.
@@ -203,6 +256,13 @@ impl Game<'_> {
                 _ => {}
             }
         }
-        self.check_wither_spawn(pos)
+        self.check_wither_spawn(pos)?;
+        if self.is_logical_server()
+            && block_listens(HookId::SetPlacedBy, placed)
+            && let Some(level) = self.level(self.dim.id())
+        {
+            self.native_set_placed_by(level, pos, placed, placer.map(PlayerRef::entity), stack);
+        }
+        Ok(())
     }
 }

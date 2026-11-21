@@ -24,6 +24,9 @@ impl Fixture {
         }
     }
     pub(super) fn world(&self, folder: &str, name: &str) {
+        let generated = self.root.join("generated").join(folder);
+        crate::save::write_world_gen_settings(&generated, 123456, Default::default()).unwrap();
+        let settings = crate::save::world_gen_settings(&generated).unwrap();
         crate::save::write_dat(
             &self.title.saves.join(folder).join("level.dat"),
             Tag::compound([
@@ -34,10 +37,7 @@ impl Fixture {
                         ("DataVersion", Tag::Int(sunrise_world::DATA_VERSION)),
                         ("GameType", Tag::Int(1)),
                         ("allowCommands", Tag::Byte(1)),
-                        (
-                            "WorldGenSettings",
-                            Tag::compound([("seed", Tag::Long(123456))]),
-                        ),
+                        ("WorldGenSettings", settings),
                         (
                             "Version",
                             Tag::compound([("Name", Tag::String("26.3".into()))]),
@@ -1261,9 +1261,9 @@ fn icon_buttons_show_their_tooltip_while_hovered() {
     // MenuTooltipPositioner puts the text 12 right of the pointer and at
     // 195 + 3 + round(lerp(13 / 20, 17, 5)) = 198 + 9 = 207.
     for (id, text, top_left) in [
-        (5, "Friends", (240.0, 207.0)),
-        (6, "Change Language", (264.0, 207.0)),
-        (7, "Accessibility Settings", (288.0, 207.0)),
+        (5, "Friends", (228.0, 207.0)),
+        (6, "Change Language", (252.0, 207.0)),
+        (7, "Accessibility Settings", (276.0, 207.0)),
     ] {
         let mouse = button_middle(&f.title, id);
         let (tooltip, drawn) = draw_hovered(&f.title, &atlas, mouse, &mut frame);
@@ -2092,7 +2092,13 @@ fn an_experimental_world_is_backed_up_then_opened_without_asking_again() {
                 ]),
             ),
         ]);
-        let overworld = Tag::compound([("type", Tag::String("minecraft:overworld".into()))]);
+        let overworld = Tag::compound([
+            ("type", Tag::String("minecraft:overworld".into())),
+            (
+                "generator",
+                Tag::compound([("type", Tag::String("minecraft:noise".into()))]),
+            ),
+        ]);
         let end = Tag::compound([
             ("type", Tag::String("minecraft:the_end".into())),
             (
@@ -2432,8 +2438,9 @@ fn a_button_label_wider_than_its_button_stays_inside_it() {
         .iter()
         .map(|v| v.pos[0])
         .fold(f32::INFINITY, f32::min);
-    assert!(
-        (lo - (b.x + 2.0 + (b.w - 4.0) / 2.0 - (width / 2.0).floor())).abs() < 0.001,
+    assert_eq!(
+        lo,
+        b.x + 2.0 + (b.w - 4.0) / 2.0 - (width / 2.0).floor(),
         "a fitting label starts at {lo}"
     );
 }
@@ -2683,6 +2690,30 @@ mod text_and_icon {
         }
         let plain = button(&text, None);
         assert!(draw(&plain, 0) == drawn_from(center - half), "plain {text}");
+    }
+
+    /// Negative, odd-width rectangle: x = -31, w = 21 gives left -29, right
+    /// -12, and vanilla's `(left + right) / 2` truncates to -20, not -21. The
+    /// plain button takes that midpoint; the icon button keeps `x + w / 2` =
+    /// -21, which the clamp keeps (a 1 px icon: right -15, bounds -23..=-21).
+    #[test]
+    fn a_label_on_a_negative_odd_width_button_uses_vanilla_centres() {
+        let atlas = atlas();
+        let first_x = |icon: Option<(&'static str, f32)>| {
+            let mut b = button("Hi", icon);
+            b.x = -31.0;
+            b.w = 21.0;
+            let mut batch = HudBatch::scratch([640, 480]);
+            b.draw_label_at(&mut batch, &atlas, u32::MAX, 0);
+            xs(&batch).into_iter().fold(f32::INFINITY, f32::min)
+        };
+        let glyph_x = |from: f32| {
+            let mut batch = HudBatch::scratch([640, 480]);
+            batch.text(&atlas, "Hi", from, 46.0, u32::MAX, true);
+            xs(&batch).into_iter().fold(f32::INFINITY, f32::min)
+        };
+        assert_eq!(first_x(None), glyph_x(-26.0));
+        assert_eq!(first_x(Some(("icon/music_notes", 1.0))), glyph_x(-27.0));
     }
 
     /// A label wider than the room beside the icon scrolls inside

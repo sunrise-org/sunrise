@@ -427,6 +427,71 @@ fn a_title_screen_opens_through_screen_opening() {
     });
 }
 
+/// `Vanilla` opens another vanilla screen where it can: the death screen's
+/// way to the title ends on the server list, while the same title target
+/// asked for in the world keeps the screen asked for.
+#[test]
+#[ignore = "daily"]
+fn replacing_opening_opens_another_vanilla_screen_where_it_can() {
+    use mod_api::ScreenTarget;
+    run(|game, log, answer| {
+        let saves = std::env::temp_dir().join("sunrise-title-gate-test-no-saves");
+        game.title = None;
+        game.set_screen(Screen::Dead);
+        take(log);
+        *answer.lock().unwrap() = Some(ScreenOpening::Vanilla(ScreenTarget::Multiplayer));
+        // Leaving the world: no title screen opens in it.
+        game.set_screen(Screen::Playing);
+        assert_eq!(game.screen, Screen::Playing);
+        game.show_title(game.new_title(saves));
+        assert_eq!(game.title.as_ref().unwrap().mode.id(), "multiplayer");
+        // The replacement fires nothing again.
+        assert_eq!(
+            take(log),
+            [
+                "opening dead->playing",
+                "closing dead",
+                "opening playing->title"
+            ]
+        );
+    });
+}
+
+/// `ModScreen` opens the mod's screen over the title's screens with no world,
+/// and Escape or the controller's Back returns to the title screen.
+#[test]
+#[ignore = "daily"]
+fn replacing_a_title_screen_opens_the_mods_screen_over_the_title() {
+    use sunrise_client::title::Mode;
+    run(|game, log, answer| {
+        let saves = std::env::temp_dir().join("sunrise-title-gate-test-no-saves");
+        game.player = None;
+        game.title = Some(game.new_title(saves));
+        game.settle_title_mode();
+        let back: [fn(&mut Game<'_>); 2] = [
+            |game| game.key_pressed(KeyCode::Escape, KeyCode::Escape).unwrap(),
+            |game| game.pad_back().unwrap(),
+        ];
+        for back in back {
+            *answer.lock().unwrap() = Some(ScreenOpening::ModScreen);
+            game.title.as_mut().unwrap().set_mode(Mode::Select {
+                worlds: Vec::new(),
+                selected: None,
+            });
+            game.settle_title_mode();
+            assert_eq!(game.screen, Screen::Mod);
+            assert_eq!(game.mod_screen(), Some("screens"));
+            assert!(matches!(game.title.as_ref().unwrap().mode, Mode::Main));
+            assert_eq!(take(log), ["opening title->world_select", "closing title"]);
+            *answer.lock().unwrap() = None;
+            back(game);
+            assert_eq!(game.screen, Screen::Playing);
+            assert!(matches!(game.title.as_ref().unwrap().mode, Mode::Main));
+            assert_eq!(take(log), ["opening mod->title", "closing mod"]);
+        }
+    });
+}
+
 /// The title appearing (a world closed) and going (a world opened) fires
 /// `screen_opening`, then `screen_closing` for what it leaves, before the
 /// change, so the frame's observer has nothing left to announce. With no
@@ -484,6 +549,45 @@ fn an_overlay_fires_init_post_after_it_opens() {
     with_game_of(mods, |game| {
         game.open_sign_editor((0, 64, 0), true);
         assert_eq!(take(&log), ["opening sign_editor", "init sign_editor"]);
+    });
+}
+
+/// An overlay a mod's `Vanilla` answer replaced is followed by the screen
+/// that opened's `screen_init_post`, once, with no second Opening.
+#[test]
+#[ignore = "daily"]
+fn an_overlay_replaced_by_a_vanilla_screen_fires_its_init_post() {
+    use mod_api::{ScreenInitPostEvent, ScreenTarget};
+    /// Answers the pause screen for every opening; logs Opening and Init.Post.
+    struct ToPause(Arc<Mutex<Vec<String>>>);
+    #[mod_api::__subscriptions]
+    impl Hooks for ToPause {
+        fn screen_opening(
+            &self,
+            _host: &dyn ClientHost,
+            event: &mut ScreenOpeningEvent<'_>,
+        ) -> Option<ScreenOpening> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("opening {}", event.new.id));
+            Some(ScreenOpening::Vanilla(ScreenTarget::Pause))
+        }
+        fn screen_init_post(&self, _host: &dyn ClientHost, event: &mut ScreenInitPostEvent<'_>) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("init {}", event.screen.id));
+        }
+    }
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let mods = vec![ModEntry::new("pause", Box::new(ToPause(log.clone())))].into();
+    with_game_of(mods, |game| {
+        game.title = None;
+        game.open_sign_editor((0, 64, 0), true);
+        assert!(game.sign_edit.is_none());
+        assert_eq!(game.screen, Screen::Paused);
+        assert_eq!(take(&log), ["opening sign_editor", "init paused"]);
     });
 }
 

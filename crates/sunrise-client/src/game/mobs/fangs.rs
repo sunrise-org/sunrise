@@ -252,17 +252,26 @@ impl Game<'_> {
             Vec::new()
         };
         let attacker = owner.map(sunrise_client::mobs::Who::Mob);
-        for index in 0..self.mobs.len() {
-            let m = &self.mobs[index];
-            let id = m.id;
-            if id == f.owner || allies.contains(&id) || !m.alive() || !m.bounds().intersects(b) {
+        // A hurt can run server hooks that change the mob list. Keep the selected
+        // victims by identity, as `EvokerFangs.tick` does before `dealDamageTo`.
+        let victims: Vec<_> = self
+            .mobs
+            .iter()
+            .filter(|m| m.id != f.owner && !allies.contains(&m.id) && m.bounds().intersects(b))
+            .map(|m| m.id)
+            .collect();
+        for id in victims {
+            let Some(index) = self.mob_index.find(&self.mobs, id) else {
+                continue;
+            };
+            if !self.mobs[index].alive() {
                 continue;
             }
             // So `living_knockback` sees who the fangs' owner is and what they hold.
             let attack = self.attack_of_who(attacker);
             let plan = self.prepare_knockback_credit(id as i32, attacker, &attack);
             let mut credit = plan.lend(&mut self.last_hurt_by_player);
-            if self.mobs[index].damage(
+            let hurt = self.mobs[index].damage(
                 crate::game::entity::damage_level_of!(self, &attack, &mut credit, None),
                 6.0,
                 sunrise_client::mobs::Damage {
@@ -275,8 +284,9 @@ impl Game<'_> {
                     from: Some(f.pos),
                     attacker_species: None,
                 },
-            ) && owner.is_some()
-            {
+            );
+            self.settle_mob_hurt(id);
+            if hurt && owner.is_some() {
                 self.mob_post_attack(
                     id,
                     attacker,
