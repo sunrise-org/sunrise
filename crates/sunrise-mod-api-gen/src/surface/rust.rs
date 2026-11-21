@@ -179,7 +179,7 @@ impl Paths<'_, '_> {
         if !self.aliases.insert(id) {
             return;
         }
-        let Item::Type(alias) = self.index.item(id).clone() else {
+        let Item::Type(mut alias) = self.index.item(id).clone() else {
             return;
         };
         let old_module = self.module;
