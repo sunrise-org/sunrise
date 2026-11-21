@@ -539,27 +539,40 @@ impl Button {
     /// icon has `right` 2 short of its edge, where `centerX` is the middle of
     /// the box and nothing moves.
     fn draw_label_at(&self, batch: &mut HudBatch, atlas: &HudAtlas, color: u32, now_ms: i64) {
-        let right = match self.trailing {
-            Some((_, size)) => self.x + self.w - size - 4.0,
-            None => self.x + self.w - 2.0,
-        };
         let room = if self.action.is_some() && self.enabled {
             crate::widgets::action_glyph_room()
         } else {
             0.0
         };
-        crate::ui::scrolling_text_around_at(
-            batch,
-            atlas,
-            &Text::literal(&self.label),
-            self.x + (self.w / 2.0).floor(),
-            self.x + 2.0 + room,
-            right,
-            self.y,
-            self.y + 20.0,
-            now_ms,
-            color,
-        );
+        let left = self.x + 2.0 + room;
+        let (y0, y1) = (self.y, self.y + 20.0);
+        let text = Text::literal(&self.label);
+        match self.trailing {
+            Some((_, size)) => crate::ui::scrolling_text_around_at(
+                batch,
+                atlas,
+                &text,
+                self.x + (self.w / 2.0).floor(),
+                left,
+                self.x + self.w - size - 4.0,
+                y0,
+                y1,
+                now_ms,
+                color,
+            ),
+            // `acceptScrollingWithDefaultCenter`: the centre is the box's own midpoint.
+            None => crate::ui::scrolling_text_at(
+                batch,
+                atlas,
+                &text,
+                left,
+                self.x + self.w - 2.0,
+                y0,
+                y1,
+                now_ms,
+                color,
+            ),
+        }
     }
 }
 

@@ -284,25 +284,6 @@ pub fn centered_text(
         batch.text_styled(atlas, &shown, x + 1.0, y, color, true);
     }
 }
-/// `ActiveTextCollector.defaultScrollingHelper`'s slide: a label `overflow`
-/// pixels too wide moves from its end back to its start and out again, one
-/// sine period every `max(overflow * 0.5, 3)` seconds of `Util.getMillis`.
-///
-/// Evaluated in vanilla's order with `Math.sin`/`Math.cos` (`jmath`, not the
-/// `Mth` tables): `sin(PI / 2 * cos(2 * PI * time / period)) / 2 + 0.5`, then
-/// `Mth.lerp(alpha, 0.0, overflow)`.
-fn scroll_offset(overflow: f32, now_ms: i64) -> f64 {
-    let max_position = f64::from(overflow);
-    let time = now_ms as f64 / 1000.0;
-    let period = (max_position * 0.5).max(3.0);
-    let alpha = sunrise_core::jmath::sin(
-        std::f64::consts::FRAC_PI_2
-            * sunrise_core::jmath::cos(std::f64::consts::TAU * time / period),
-    ) / 2.0
-        + 0.5;
-    0.0 + alpha * (max_position - 0.0)
-}
-
 /// `defaultScrollingHelper`'s `textTop`: `(top + bottom - 9) / 2 + 1` in Java
 /// `int` arithmetic, where the division truncates toward zero (so a negative
 /// sum rounds up, not down).
@@ -312,7 +293,7 @@ fn scrolling_text_top(top: f32, bottom: f32) -> f32 {
 
 /// Where an overflowing label's left edge is drawn: `left - (int) pos`.
 fn scrolled_left(left: f32, overflow: f32, now_ms: i64) -> f32 {
-    left - scroll_offset(overflow, now_ms) as i32 as f32
+    left - crate::screen_draw::scroll_position(f64::from(overflow), now_ms) as i32 as f32
 }
 
 /// A widget's label as `AbstractWidget.extractScrollingStringOverContents`
@@ -1857,6 +1838,7 @@ impl EditBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::screen_draw::scroll_position;
     use std::path::Path;
 
     #[test]
@@ -1932,14 +1914,17 @@ mod tests {
     fn an_overflowing_label_slides_from_its_end_to_its_start_and_back() {
         let overflow = 40.0;
         // max(40 * 0.5, 3) = 20 s.
-        assert!((scroll_offset(overflow, 0) - 40.0).abs() < 1.0e-9);
-        assert!(scroll_offset(overflow, 10_000).abs() < 1.0e-9);
-        assert!((scroll_offset(overflow, 20_000) - 40.0).abs() < 1.0e-9);
+        assert_eq!(scroll_position(overflow, 0), 40.0);
+        assert_eq!(scroll_position(overflow, 10_000), 0.0);
+        assert_eq!(scroll_position(overflow, 20_000), 40.0);
         // A label one pixel too wide waits the floor of three seconds.
-        assert!(scroll_offset(1.0, 1_500).abs() < 1.0e-9);
-        assert!((scroll_offset(1.0, 0) - 1.0).abs() < 1.0e-9);
+        assert_eq!(scroll_position(1.0, 1_500), 0.0);
+        assert_eq!(scroll_position(1.0, 0), 1.0);
+        // Java `Math.sin`/`Math.cos` give 7.745040016214215 for overflow 149 at
+        // 176 938 ms; the host's trig gives ...223, so the old formula fails.
+        assert_eq!(scroll_position(149.0, 176_938), 7.745040016214215);
         for ms in 0..40_000 {
-            let offset = scroll_offset(overflow, ms);
+            let offset = scroll_position(overflow, ms);
             assert!((0.0..=40.0).contains(&offset), "{ms} ms: {offset}");
         }
     }
@@ -2124,7 +2109,7 @@ mod tests {
         assert_eq!(scrolled_left(10.0, 40.0, 0), -30.0);
         assert_eq!(scrolled_left(10.0, 40.0, 10_000), 10.0);
         // A fractional slide is cut, not rounded.
-        let offset = scroll_offset(40.0, 1_000) as i32 as f32;
+        let offset = scroll_position(40.0, 1_000) as i32 as f32;
         assert!(offset > 0.0);
         assert_eq!(scrolled_left(10.0, 40.0, 1_000), 10.0 - offset);
     }
@@ -2176,11 +2161,30 @@ mod tests {
         [lo_x, lo_y]
     }
 
+    /// Top-left of the glyphs `text_styled` draws for `label` at `x, y`.
+    fn glyph_origin(atlas: &HudAtlas, label: &str, x: f32, y: f32) -> [f32; 2] {
+        let mut batch = HudBatch::scratch([640, 480]);
+        batch.text_styled(
+            atlas,
+            &Text::literal(label).resolved(),
+            x,
+            y,
+            u32::MAX,
+            true,
+        );
+        let glyphs = || batch.vertices.iter().filter(|v| v.text == 1);
+        [
+            glyphs().map(|v| v.pos[0]).fold(f32::INFINITY, f32::min),
+            glyphs().map(|v| v.pos[1]).fold(f32::INFINITY, f32::min),
+        ]
+    }
+
     /// `defaultScrollingHelper`'s `textTop = (top + bottom - 9) / 2 + 1` is Java
     /// `int` arithmetic: a 15 px button at y = 20 starts its label at 24, and a
-    /// negative sum truncates toward zero.
+    /// negative sum truncates toward zero. Tops are vanilla's, written out.
     #[test]
     fn a_button_label_top_follows_vanilla_integer_division() {
+        let atlas = atlas();
         for (y, h, top) in [
             (20.0, 15.0, 24.0),
             (20.0, 20.0, 26.0),
@@ -2191,14 +2195,13 @@ mod tests {
             (-31.0, 20.0, -24.0),
             (-4.0, 4.0, -5.0),
         ] {
-            let sum = (y + (y + h) - 9.0) as i32;
-            assert_eq!(sum / 2 + 1, top as i32, "reference for y {y} h {h}");
             assert_eq!(scrolling_text_top(y, y + h), top, "y {y} h {h}");
-            // Glyph quads may start below the text top (ascent), but moving the
-            // button by 1 px moves them by exactly 1.
-            let at = label_origin([10.0, y, 60.0, h], "Hi");
-            let moved = label_origin([10.0, y + 1.0, 60.0, h], "Hi");
-            assert_eq!(moved[1] - at[1], 1.0);
+            // "Hi" is 12 px: centred in x 10..70 it starts at 34.
+            assert_eq!(
+                label_origin([10.0, y, 60.0, h], "Hi"),
+                glyph_origin(&atlas, "Hi", 34.0, top),
+                "y {y} h {h}"
+            );
         }
     }
 
@@ -2207,44 +2210,17 @@ mod tests {
     #[test]
     fn a_button_label_x_truncates_toward_zero_for_negative_origins() {
         let atlas = atlas();
-        let width = atlas.font.width_text(&Text::literal("Hi").resolved());
-        assert_eq!(width, 12.0);
+        assert_eq!(atlas.font.width_text(&Text::literal("Hi").resolved()), 12.0);
         // x = -31, w = 21: left -29, right -12, (left + right) / 2 = -20 (not -21).
-        let shown = label_origin([-31.0, 0.0, 21.0, 20.0], "Hi");
-        let mut want = HudBatch::scratch([640, 480]);
-        want.text_styled(
-            &atlas,
-            &Text::literal("Hi").resolved(),
-            -26.0,
-            6.0,
-            u32::MAX,
-            true,
+        assert_eq!(
+            label_origin([-31.0, 0.0, 21.0, 20.0], "Hi"),
+            glyph_origin(&atlas, "Hi", -26.0, 6.0)
         );
-        let want_x = want
-            .vertices
-            .iter()
-            .filter(|v| v.text == 1)
-            .map(|v| v.pos[0])
-            .fold(f32::INFINITY, f32::min);
-        assert_eq!(shown[0], want_x);
         // x = 10, w = 21: (12 + 29) / 2 = 20.
-        let shown = label_origin([10.0, 0.0, 21.0, 20.0], "Hi");
-        let mut want = HudBatch::scratch([640, 480]);
-        want.text_styled(
-            &atlas,
-            &Text::literal("Hi").resolved(),
-            14.0,
-            6.0,
-            u32::MAX,
-            true,
+        assert_eq!(
+            label_origin([10.0, 0.0, 21.0, 20.0], "Hi"),
+            glyph_origin(&atlas, "Hi", 14.0, 6.0)
         );
-        let want_x = want
-            .vertices
-            .iter()
-            .filter(|v| v.text == 1)
-            .map(|v| v.pos[0])
-            .fold(f32::INFINITY, f32::min);
-        assert_eq!(shown[0], want_x);
     }
 
     /// An overflowing label is drawn from `left - (int) pos`, from the same top.
@@ -2255,7 +2231,8 @@ mod tests {
         let width = atlas.font.width_text(&label.resolved());
         // 12 missing glyphs: 72 px in a 40 px button (36 px of room): overflow 36.
         assert_eq!(width, 72.0);
-        let slid = scrolled_left(12.0, 36.0, 3_000) - 12.0;
+        // Vanilla at 3 000 ms: period 18 s, alpha 0.8536, (int) 30.73 = 30, so the
+        // label starts at 12 - 30 = -18.
         for (y, h, top) in [(20.0, 15.0, 24.0), (-30.0, 14.0, -26.0)] {
             let mut batch = HudBatch::scratch([640, 480]);
             scrolling_text_with_offset(
@@ -2271,7 +2248,7 @@ mod tests {
                 u32::MAX,
             );
             let mut want = HudBatch::scratch([640, 480]);
-            want.text_styled(&atlas, &label.resolved(), 12.0 + slid, top, u32::MAX, true);
+            want.text_styled(&atlas, &label.resolved(), -18.0, top, u32::MAX, true);
             want.clip_since(0, 12.0, y, 48.0, y + h);
             assert_eq!(
                 bytemuck::cast_slice::<_, u8>(&batch.vertices),
