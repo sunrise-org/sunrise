@@ -190,24 +190,16 @@ pub fn button_with_room(
     };
     ui::nine_slice(batch, atlas, sprite, x, y, w, h, WHITE);
     let color = if live { WHITE } else { muted() };
-    let ty = y + ((h - 8.0) / 2.0).floor();
     let left = x + 2.0 + room;
-    scrolling_label(
-        batch,
-        atlas,
-        label,
-        [left, ty, w - 4.0 - room],
-        (y, h),
-        color,
-    );
+    scrolling_label(batch, atlas, label, [left, w - 4.0 - room], (y, h), color);
 }
-/// A widget label of `[left, y, width]` inside the widget's `(top, height)`: centred when it fits,
+/// A widget label of `[left, width]` inside the widget's `(top, height)`: centred when it fits,
 /// else slid (vanilla `AbstractWidget.extractScrollingStringOverContents`) and clipped to the box.
 fn scrolling_label(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
     text: &Text,
-    [left, y, width]: [f32; 3],
+    [left, width]: [f32; 2],
     (top, height): (f32, f32),
     color: u32,
 ) {
@@ -219,7 +211,6 @@ fn scrolling_label(
         left + width,
         top,
         top + height,
-        y,
         color,
     );
 }
@@ -251,9 +242,8 @@ pub fn slider(
     ui::nine_slice(batch, atlas, track, x, y, w, h, tint);
     let at = x + (position.clamp(0.0, 1.0) * (w - 8.0)).floor();
     ui::nine_slice(batch, atlas, handle, at, y, 8.0, h, tint);
-    let ty = y + ((h - 8.0) / 2.0).floor();
     let color = if live { WHITE } else { muted() };
-    scrolling_label(batch, atlas, value, [x + 2.0, ty, w - 4.0], (y, h), color);
+    scrolling_label(batch, atlas, value, [x + 2.0, w - 4.0], (y, h), color);
 }
 /// A value that a press steps through: a button showing the value, as vanilla's `CycleButton`.
 pub fn cycler(
