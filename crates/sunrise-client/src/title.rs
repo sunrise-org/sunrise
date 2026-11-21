@@ -2483,6 +2483,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     lan,
                     realm: false,
                 },
+                crate::multiplayer::Outcome::Copy(text) => Action::CopyText(text),
                 crate::multiplayer::Outcome::None | crate::multiplayer::Outcome::Open(_) => {
                     Action::None
                 }

@@ -14,6 +14,7 @@ again restores vanilla's behaviour completely.
 | Dynamic lights: item glow, nearest sources | `crates/sunrise-client-render/src/dynamic_light.rs` (unit tested), `game/interface/dynamic_lights.rs`, `terrain.wgsl` and `entity.wgsl` (`dynamic_block_light`) |
 | HUD drawing (mods' panels, corner stacking) | `crates/sunrise-client/src/extras_hud.rs` |
 | Auto-reconnect: its setting, its row, the policy and the backoff | crate `sunrise-reconnect`, which the official executable registers ([forking.md](forking.md#modding-and-rendering)); the engine shows its countdown and connects again when it asks (`Hooks::retry`, `game/network/remote/connection.rs`) |
+| Kick reports: their setting, their row and which ends count as a kick | crate `sunrise-kick-report`, which the official executable registers; the engine keeps the packets, shows its paragraphs and button, writes the report and copies it (`Hooks::trace_packets`, `Hooks::report`, `game/network/remote/packet_trace.rs`, `multiplayer.rs` `Report`, `logging::shareable_report`) |
 | Game glue (input hooks, per-frame update) | `crates/sunrise-client/src/game/interface/extras.rs`; each extra's own glue in a child module, `game/interface/extras/` |
 | Mouse Tweaks-style controls, sort buttons | `crates/sunrise-client/src/game/interface/extras/mouse_tweaks.rs`, `game/interface/extras/sorting.rs` |
 | Sort order and its clicks | `crates/sunrise-client/src/inv_sort.rs` (pure, unit tested) |
@@ -121,6 +122,32 @@ it is built in, else a note saying to install it from the Mods page.
   written to disk.
 - Only in the official executable (`sunrise-official`), which registers it: sunrise-client's own executable has
   no such row or setting, and never connects again by itself.
+
+### Kick reports (`kickReport`, default off)
+- After a server kicks or bans the player, the Disconnected screen says, under
+  the reason, that Sunrise may have done something vanilla wouldn't, and asks
+  them to report it on GitHub or Discord with the report, which is anonymous. Its Copy Report button puts the report
+  on the clipboard: the reason, Sunrise's and Minecraft's versions, the
+  connection's recent packets and the end of `logs/latest.log`
+  (`logging::REPORT_LINES`), so the run can be recreated and compared with
+  vanilla.
+- The packets (`game/network/remote/packet_trace.rs`, the last `KEPT`): every
+  play packet sent, with what movement, actions, use, attacks, clicks and
+  teleport answers carried, and the server's setbacks (`PlayerPosition`) and
+  pushes on the player (`SetEntityMotion`). Chat, commands, signs, books and
+  payloads keep their name only. They are kept only while the switch is on
+  (`Hooks::trace_packets`), in a ring allocated once that copies a few numbers
+  per packet; the text is written when the screen opens.
+- Counts as a kick: whatever the server ends the connection with (vanilla's
+  kicks and bans, a plugin's or an anticheat's own text) except the reasons
+  that say nothing about the client: a stopping or full server, a whitelist or
+  version refusal, a duplicate login, an unverified account
+  (`sunrise-kick-report`'s `NOT_THE_CLIENT`). Lost connections and ends this
+  client chose offer nothing.
+- The report leaves out the server's address, the player's name, the user
+  folder, e-mail and IP addresses and UUIDs (`sunrise_system::scrub`). Nothing
+  is sent: the player pastes it where they choose.
+- Only in the official executable (`sunrise-official`), which registers it.
 
 ### Keep channels for UI sounds (`uiSoundReserve`, default off)
 - Positional sounds (a block breaking, a mob, an explosion) start only while at

@@ -727,6 +727,7 @@ impl Logger<'_> {
 /// still printed when the file cannot be opened.
 pub fn init(home: &Path, main_thread: &'static str) {
     let dir = logs_dir(home);
+    let _ = LOG_DIR.set(dir.clone());
     let file = match open_latest(&dir) {
         Ok(Some(latest)) => Some(latest),
         Ok(None) => {
@@ -823,6 +824,56 @@ pub fn flush() {
     }
 }
 
+/// The folder [`init`] logs to.
+static LOG_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Lines of `latest.log` a [`shareable_report`] carries.
+pub const REPORT_LINES: usize = 200;
+
+/// A report the player can attach to a bug report: `heading`, then the last [`REPORT_LINES`] lines
+/// of this game's `latest.log`, flushed first. What could say who or where the player is comes out:
+/// the `private` terms (the server's address, the player's name) and what [`Scrubber`] finds by
+/// itself (the user folder, e-mail and IP addresses, UUIDs).
+///
+/// [`Scrubber`]: sunrise_system::scrub::Scrubber
+pub fn shareable_report(heading: &[String], private: &[String]) -> String {
+    flush();
+    let log = LOG_DIR.get().map(|dir| dir.join("latest.log"));
+    report_text(
+        heading,
+        log.as_deref(),
+        private,
+        sunrise_system::scrub::Scrubber::new(),
+    )
+}
+
+fn report_text(
+    heading: &[String],
+    log: Option<&Path>,
+    private: &[String],
+    scrubber: sunrise_system::scrub::Scrubber,
+) -> String {
+    let scrubber = private
+        .iter()
+        .fold(scrubber, |scrubber, term| scrubber.term(term.as_str()));
+    let mut out = heading.join("\n");
+    out.push_str("\n\n");
+    match log.map(|path| tail(path, REPORT_LINES)) {
+        Some(Ok(lines)) => {
+            out.push_str(&format!(
+                "--- logs/latest.log, last {} lines ---\n",
+                lines.len()
+            ));
+            for line in lines {
+                out.push_str(&line);
+                out.push('\n');
+            }
+        }
+        _ => out.push_str("--- logs/latest.log could not be read ---\n"),
+    }
+    scrubber.scrub(&out)
+}
+
 /// The last `lines` lines of a text file.
 pub fn tail(path: &Path, lines: usize) -> io::Result<Vec<String>> {
     let text = fs::read(path)?;
@@ -851,6 +902,40 @@ pub fn newest_crash_report(home: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shareable_report_keeps_the_end_of_the_log_without_the_server_or_player() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("latest.log");
+        let mut text: String = (0..REPORT_LINES + 5)
+            .map(|i| format!("[12:00:00] [Render thread/INFO]: line {i}\n"))
+            .collect();
+        text.push_str("[12:00:01] [Render thread/INFO]: Connecting to play.example.org, 25565\n");
+        text.push_str("[12:00:02] [Render thread/INFO]: Sunrise: disconnected: Steve was kicked\n");
+        fs::write(&log, text).unwrap();
+        let heading = ["Reason: Steve was kicked".to_owned()];
+        let private = ["play.example.org".to_owned(), "Steve".to_owned()];
+        let report = report_text(
+            &heading,
+            Some(&log),
+            &private,
+            sunrise_system::scrub::Scrubber::bare(),
+        );
+        let lines: Vec<&str> = report.lines().collect();
+        assert_eq!(lines[0], "Reason: <private> was kicked");
+        assert_eq!(
+            lines[2],
+            format!("--- logs/latest.log, last {REPORT_LINES} lines ---")
+        );
+        assert_eq!(lines.len(), 3 + REPORT_LINES);
+        assert_eq!(lines[3], "[12:00:00] [Render thread/INFO]: line 7");
+        assert!(!report.contains("example.org"), "{report}");
+        assert!(!report.contains("Steve"), "{report}");
+        assert!(
+            report.ends_with("disconnected: <private> was kicked\n"),
+            "{report}"
+        );
+    }
 
     #[test]
     fn the_tap_keeps_lines_while_on_and_skips_untapped_ones() {

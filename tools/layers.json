@@ -68,6 +68,7 @@
     "sunrise-perf-share": "sunrise",
     "sunrise-perf-overlay": "sunrise",
     "sunrise-reconnect": "sunrise",
+    "sunrise-kick-report": "sunrise",
     "sunrise-relay": "sunrise",
     "sunrise-release-sign": "sunrise",
     "sunrise-server": "sunrise",

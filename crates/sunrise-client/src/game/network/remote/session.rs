@@ -332,6 +332,9 @@ impl Game<'_> {
             server_links: Vec::new(),
             debug_query: Default::default(),
             transfer: None,
+            packets: std::cell::RefCell::new(super::packet_trace::PacketTrace::new(
+                sunrise_hooks::engine::trace_packets(),
+            )),
         });
         // The level's TickRateManager follows the server's ticking packets.
         self.clock = sunrise_client::clock::FixedStep::client();
@@ -587,6 +590,7 @@ impl Game<'_> {
             server_links: Vec::new(),
             debug_query: Default::default(),
             transfer: None,
+            packets: std::cell::RefCell::new(super::packet_trace::PacketTrace::new(false)),
         });
         self.clock = sunrise_client::clock::FixedStep::client();
         self.adv = Default::default();
@@ -611,6 +615,15 @@ impl Game<'_> {
                 sunrise_hooks::connection::By::Client,
             ),
         }
+        // What the Disconnected screen may offer to report about that end (`Hooks::report`), and
+        // what the report leaves out: the server's address and the player's name.
+        let report = sunrise_hooks::engine::report().map(|offer| {
+            let (private, packets) = self.remote.as_ref().map_or_else(Default::default, |r| {
+                let private = vec![r.session.address.clone(), r.session.name.clone()];
+                (private, r.packets.borrow().lines())
+            });
+            sunrise_client::multiplayer::Report::new(offer, private, packets)
+        });
         self.clear_waypoints();
         self.hud_disconnected();
         // Vanilla's Hud also ticks on the title and connect screens, so the
@@ -714,6 +727,7 @@ impl Game<'_> {
                 reason,
                 retry: None,
                 lines: std::cell::Cell::new(1),
+                report,
             },
             None => sunrise_client::multiplayer::Screen::list(&saves),
         });

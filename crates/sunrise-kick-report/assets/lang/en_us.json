@@ -1,0 +1,9 @@
+{
+  "sunrise.extras.kick_report": "Kick Reports",
+  "sunrise.extras.kick_report.tooltip": "After a server kicks or bans you, the Disconnected screen explains how to report it and copies what the game sent and logged recently for the report.",
+  "sunrise.kick_report.about": "If you didn't break this server's rules, Sunrise may have done something vanilla Minecraft wouldn't, and the server noticed.",
+  "sunrise.kick_report.ask": "Please report it on Sunrise's GitHub or Discord: say what you were doing and paste the report.",
+  "sunrise.kick_report.private": "The report is anonymous: it holds what the game sent and logged recently, without the server's address or your name.",
+  "sunrise.kick_report.copy": "Copy Report",
+  "sunrise.kick_report.copied": "Report Copied"
+}

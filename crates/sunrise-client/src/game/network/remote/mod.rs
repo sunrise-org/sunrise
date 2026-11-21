@@ -23,6 +23,7 @@ use inventory::{
     mark_synced, menu_items, predict_clicks,
 };
 mod level_format;
+mod packet_trace;
 mod raw_ingress;
 mod recipe_properties;
 mod use_item;
@@ -608,6 +609,8 @@ pub(super) struct Remote {
     /// `ClientboundTransferPacket`'s target: when the connection ends the
     /// game connects here, the stored cookies carried over (`TransferState`).
     transfer: Option<String>,
+    /// The recent packets, for the Disconnected screen's report (`Hooks::trace_packets`).
+    packets: std::cell::RefCell<packet_trace::PacketTrace>,
     /// `ClientCommonPacketListenerImpl.serverLinks`: the links "Server
     /// Links..." in the pause menu lists (only `http`/`https` URIs kept).
     pub(super) server_links: Vec<sunrise_protocol::packets::configuration::ServerLink>,

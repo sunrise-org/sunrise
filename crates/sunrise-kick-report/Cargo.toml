@@ -1,0 +1,13 @@
+[package]
+name = "sunrise-kick-report"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Kick reports: after a kick or ban the Disconnected screen asks for a report and copies the recent log for it (docs/extras.md)"
+
+[dependencies]
+sunrise-platform = { path = "../sunrise-platform" }
+
+[lints]
+workspace = true

@@ -181,6 +181,7 @@ impl Game<'_> {
     pub(in crate::game) fn send_play(&self, packet: S) -> bool {
         let queued = self.remote.is_some() && !self.client_packet_send_canceled(&packet);
         if queued {
+            self.trace_sent(&packet);
             self.send_or_hold_play(packet);
         }
         queued

@@ -274,7 +274,10 @@ impl Game<'_> {
                     C::CustomPayload(p) if p.channel == sunrise_client::perf_net::CHANNEL => {
                         self.remote_perf_reply(&p.data)
                     }
-                    packet => self.handle_packet(packet)?,
+                    packet => {
+                        self.trace_received(&packet);
+                        self.handle_packet(packet)?
+                    }
                 },
             }
             chunks += started.map_or(Duration::ZERO, |t| t.elapsed());

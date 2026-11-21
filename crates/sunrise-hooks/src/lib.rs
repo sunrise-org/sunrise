@@ -147,6 +147,19 @@ pub trait Hooks: Sync {
     fn retry(&self) -> Option<connection::Retry> {
         None
     }
+
+    /// Whether the Disconnected screen offers to copy a report of how the connection ended, and
+    /// what it says about it: asked once right after [`Hooks::ended`]. The first hook that answers
+    /// is used; with none the screen offers nothing, as vanilla's.
+    fn report(&self) -> Option<connection::Report> {
+        None
+    }
+
+    /// Whether the engine keeps the connection's recent packets in memory for that report: asked
+    /// as each connection starts. With no hook answering yes, nothing is kept.
+    fn trace_packets(&self) -> bool {
+        false
+    }
 }
 
 /// What [`Hooks::get_the_game`] answers. The texts are translation keys of the game's own strings
@@ -408,6 +421,16 @@ pub mod engine {
     /// [`Hooks::retry`]: the first registered hook's answer.
     pub fn retry() -> Option<connection::Retry> {
         all().iter().find_map(|hooks| hooks.retry())
+    }
+
+    /// [`Hooks::report`]: the first registered hook's answer.
+    pub fn report() -> Option<connection::Report> {
+        all().iter().find_map(|hooks| hooks.report())
+    }
+
+    /// [`Hooks::trace_packets`]: whether any hook asks.
+    pub fn trace_packets() -> bool {
+        all().iter().any(|hooks| hooks.trace_packets())
     }
 }
 

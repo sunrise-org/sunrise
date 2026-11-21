@@ -4741,6 +4741,13 @@ name = "sunrise-java-properties"
 version = "0.1.0"
 
 [[package]]
+name = "sunrise-kick-report"
+version = "0.1.0"
+dependencies = [
+ "sunrise-platform",
+]
+
+[[package]]
 name = "sunrise-mcp"
 version = "0.1.0"
 dependencies = [
@@ -4994,6 +5001,7 @@ dependencies = [
  "sunrise-friends",
  "sunrise-game",
  "sunrise-heartbeat",
+ "sunrise-kick-report",
  "sunrise-perf-overlay",
  "sunrise-perf-share",
  "sunrise-platform",

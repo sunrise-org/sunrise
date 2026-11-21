@@ -35,6 +35,9 @@ const PARTS: &[&dyn Hooks] = &[
     // Auto-reconnect: the Disconnected screen connects again.
     #[cfg(feature = "sunrise-extras")]
     &sunrise_reconnect::HOOKS,
+    // Kick reports: the Disconnected screen asks for a report after a kick or ban.
+    #[cfg(feature = "sunrise-extras")]
+    &sunrise_kick_report::HOOKS,
     // Frames per second and frame times over the game.
     #[cfg(feature = "sunrise-extras")]
     &sunrise_perf_overlay::HOOKS,
@@ -112,15 +115,20 @@ const STORES: &[&dyn settings::Store] = &[
     #[cfg(feature = "sunrise-extras")]
     &sunrise_reconnect::SETTING,
     #[cfg(feature = "sunrise-extras")]
+    &sunrise_kick_report::SETTING,
+    #[cfg(feature = "sunrise-extras")]
     &mod_audio::SETTING,
     &sunrise_discord::SETTING,
     #[cfg(feature = "sunrise-extras")]
     &sunrise_perf_overlay::SETTING,
 ];
-/// Their rows and pages in the options screens, in order: auto-reconnect's row above Discord's.
+/// Their rows and pages in the options screens, in order: auto-reconnect's and kick reports' rows
+/// above Discord's.
 const PAGES: &[&dyn pages::Page] = &[
     #[cfg(feature = "sunrise-extras")]
     &sunrise_reconnect::SECTION,
+    #[cfg(feature = "sunrise-extras")]
+    &sunrise_kick_report::SECTION,
     #[cfg(feature = "sunrise-extras")]
     &mod_audio::SECTION,
     &sunrise_discord::SECTION,
@@ -145,6 +153,8 @@ pub fn register() {
     let late = late.chain(std::iter::once(lang::register(LANG)));
     #[cfg(feature = "sunrise-extras")]
     let late = late.chain(std::iter::once(lang::register(sunrise_reconnect::LANG)));
+    #[cfg(feature = "sunrise-extras")]
+    let late = late.chain(std::iter::once(lang::register(sunrise_kick_report::LANG)));
     let late = late.chain(PAGES.iter().copied().map(pages::register));
     for result in late.chain(LAYERS.iter().copied().map(hud::register)) {
         if let Err(e) = result {

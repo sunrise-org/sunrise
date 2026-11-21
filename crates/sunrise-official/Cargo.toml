@@ -15,7 +15,7 @@ test = false
 
 [features]
 default = ["sunrise-extras"]
-sunrise-extras = ["dep:sunrise-reconnect", "dep:sunrise-perf-overlay", "sunrise-game/sunrise-extras"]
+sunrise-extras = ["dep:sunrise-reconnect", "dep:sunrise-kick-report", "dep:sunrise-perf-overlay", "sunrise-game/sunrise-extras"]
 
 [dependencies]
 sunrise-game = { path = "../sunrise-game", default-features = false, features = ["audio", "controllers"] }
@@ -26,6 +26,7 @@ sunrise-addresses = { path = "../sunrise-addresses" }
 sunrise-discord = { path = "../sunrise-discord" }
 sunrise-perf-share = { path = "../sunrise-perf-share" }
 sunrise-reconnect = { path = "../sunrise-reconnect", optional = true }
+sunrise-kick-report = { path = "../sunrise-kick-report", optional = true }
 sunrise-perf-overlay = { path = "../sunrise-perf-overlay", optional = true }
 log = "0.4"
 

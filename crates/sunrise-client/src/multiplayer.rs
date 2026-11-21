@@ -149,9 +149,68 @@ pub enum Screen {
         retry: Option<String>,
         /// Wrapped reason lines, set by the last draw; the buttons sit below them.
         lines: std::cell::Cell<usize>,
+        /// The offer to copy a report of how the connection ended, while something makes it
+        /// (`sunrise_hooks::Hooks::report`).
+        report: Option<Report>,
     },
 }
 mod page;
+
+/// The Disconnected screen's offer to copy a report of how the connection ended: the paragraphs
+/// under the reason and a button that puts the report on the clipboard.
+#[derive(Clone, Debug)]
+pub struct Report {
+    offer: sunrise_hooks::connection::Report,
+    /// What the report leaves out besides what the scrubber finds: the server's address, the
+    /// player's name.
+    private: Vec<String>,
+    /// The connection's recent packets, one line each, oldest first.
+    packets: Vec<String>,
+    /// Wrapped paragraph lines, set by the last draw; the buttons sit below them.
+    lines: std::cell::Cell<usize>,
+    /// The report was copied: the button says so.
+    copied: bool,
+}
+
+impl Report {
+    pub fn new(
+        offer: sunrise_hooks::connection::Report,
+        private: Vec<String>,
+        packets: Vec<String>,
+    ) -> Self {
+        Self {
+            offer,
+            private,
+            packets,
+            lines: std::cell::Cell::new(offer.paragraphs.len()),
+            copied: false,
+        }
+    }
+    /// The paragraphs in the player's language, one string each.
+    fn paragraphs(&self) -> impl Iterator<Item = String> + '_ {
+        self.offer
+            .paragraphs
+            .iter()
+            .map(|key| crate::lang::get(key))
+    }
+    /// The text the button copies: the reason and the game's version, the recent packets, then
+    /// the end of the log.
+    fn text(&self, reason: &Text) -> String {
+        let mut head = vec![
+            "Sunrise disconnect report".to_owned(),
+            format!("Sunrise: {}", crate::crash::version()),
+            format!("Minecraft: {}", sunrise_core::version::VERSION_ID),
+            format!("Reason: {}", reason_plain(reason)),
+            String::new(),
+            format!(
+                "--- packets, last {} (ms since joining, game tick, > sent, < received) ---",
+                self.packets.len()
+            ),
+        ];
+        head.extend(self.packets.iter().cloned());
+        crate::logging::shareable_report(&head, &self.private)
+    }
+}
 
 /// What the title screen's Friends icon opens: the page a crate registered there
 /// (`Place::Title`), else Join a Friend when an invite code can be joined. None: it is inactive.
@@ -174,7 +233,12 @@ pub enum Outcome {
     /// through `Title::set_mode`, so a mod's `screen_opening` answer is heard
     /// first.
     Open(Box<Screen>),
+    /// Text for the clipboard: the Disconnected screen's report.
+    Copy(String),
 }
+
+/// The Disconnected screen's button that copies the report.
+const COPY_REPORT: u8 = 61;
 
 /// The job of [`Screen::buttons`]'s button `id`, for the controller.
 pub fn button_action(id: u8) -> Option<crate::widgets::Action> {
@@ -788,16 +852,39 @@ impl Screen {
                     57,
                 ),
             ],
-            Self::Disconnected { retry, lines, .. } => {
-                let btn = disconnected_layout(h, lines.get(), retry.is_some()).buttons;
-                let mut v = vec![b(
+            Self::Disconnected {
+                retry,
+                lines,
+                report,
+                ..
+            } => {
+                let notes = report.as_ref().map(|r| r.lines.get());
+                let mut btn = disconnected_layout(h, lines.get(), retry.is_some(), notes).buttons;
+                let mut v = Vec::new();
+                if let Some(report) = report {
+                    let label = if report.copied {
+                        report.offer.copied
+                    } else {
+                        report.offer.button
+                    };
+                    v.push(b(
+                        half(w) - 100.0,
+                        btn,
+                        200.0,
+                        &crate::lang::get(label),
+                        true,
+                        COPY_REPORT,
+                    ));
+                    btn += 24.0;
+                }
+                v.push(b(
                     half(w) - 100.0,
                     btn,
                     200.0,
                     &crate::lang::get_or("gui.toMenu", "Back to Server List"),
                     true,
                     54,
-                )];
+                ));
                 if retry.is_some() {
                     v.push(b(
                         half(w) - 100.0,
@@ -896,13 +983,15 @@ impl Screen {
                 get("sunrise.multiplayer.join_friend", "Join a Friend"),
             ),
             // DisconnectedScreen: its title and the reason.
-            Self::Disconnected { reason, .. } => ScreenInfo::new(
-                "multiplayer/disconnected",
-                join(&[
-                    &get("disconnect.lost", "Connection Lost"),
-                    &reason_plain(reason),
-                ]),
-            ),
+            Self::Disconnected { reason, report, .. } => {
+                let mut parts = vec![
+                    get("disconnect.lost", "Connection Lost"),
+                    reason_plain(reason),
+                ];
+                parts.extend(report.iter().flat_map(Report::paragraphs));
+                let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
+                ScreenInfo::new("multiplayer/disconnected", join(&parts))
+            }
         }
     }
     /// What button `id` narrates: Server Resource Packs is a CycleButton,
@@ -1391,13 +1480,28 @@ impl Screen {
                 reason,
                 retry,
                 lines,
+                report,
             } => {
                 // DisconnectedScreen: the reason wraps to width - 50, rendered in the language
                 // the player has now, not the one it was resolved in.
+                let width = (w.ceil() - 50.0).max(1.0);
                 let reason = reason_plain(reason);
-                let wrapped = wrap(&reason, (w.ceil() - 50.0).max(1.0), atlas);
+                let wrapped = wrap(&reason, width, atlas);
                 lines.set(wrapped.len());
-                let l = disconnected_layout(h, wrapped.len(), retry.is_some());
+                let notes: Option<Vec<String>> = report.as_ref().map(|report| {
+                    let notes: Vec<String> = report
+                        .paragraphs()
+                        .flat_map(|paragraph| wrap(&paragraph, width, atlas))
+                        .collect();
+                    report.lines.set(notes.len());
+                    notes
+                });
+                let l = disconnected_layout(
+                    h,
+                    wrapped.len(),
+                    retry.is_some(),
+                    notes.as_ref().map(Vec::len),
+                );
                 centered(
                     batch,
                     &crate::lang::get_or("disconnect.lost", "Connection Lost"),
@@ -1409,6 +1513,14 @@ impl Screen {
                 }
                 if let Some(line) = retry {
                     centered(batch, line, l.retry, rgba(170, 170, 170, 255));
+                }
+                for (i, line) in notes.iter().flatten().enumerate() {
+                    centered(
+                        batch,
+                        line,
+                        l.notes + i as f32 * 9.0,
+                        rgba(170, 170, 170, 255),
+                    );
                 }
             }
         }
@@ -1677,6 +1789,17 @@ impl Screen {
                 Some(51 | 53 | 54 | 57),
             ) => return Outcome::Open(Box::new(Self::list(saves))),
             (Self::Disconnected { retry, .. }, Some(55)) => *retry = None,
+            (
+                Self::Disconnected {
+                    reason,
+                    report: Some(report),
+                    ..
+                },
+                Some(COPY_REPORT),
+            ) => {
+                report.copied = true;
+                return Outcome::Copy(report.text(reason));
+            }
             (Self::Direct { address }, Some(52)) => {
                 let address = direct_address(address);
                 remember_direct_join(saves, &address);
@@ -2046,21 +2169,32 @@ struct DisconnectedLayout {
     title: f32,
     message: f32,
     retry: f32,
+    notes: f32,
     buttons: f32,
 }
 /// `DisconnectedScreen.init`: a vertical layout centred on the screen. The
 /// title and message cells pad 10 on each side, the buttons 2; the message
-/// is `lines` rows of 9, so the buttons always sit below it.
-fn disconnected_layout(h: f32, lines: usize, retry: bool) -> DisconnectedLayout {
+/// is `lines` rows of 9, so the buttons always sit below it. A report offer
+/// (`notes`: its paragraphs' rows) adds its rows, padded 10 on each side, and
+/// its button above Back to Server List; without one the layout is vanilla's.
+fn disconnected_layout(
+    h: f32,
+    lines: usize,
+    retry: bool,
+    notes: Option<usize>,
+) -> DisconnectedLayout {
     let message_h = lines as f32 * 9.0 + 20.0;
     let retry_h = if retry { 13.0 } else { 0.0 };
-    let buttons = if retry { 48.0 } else { 24.0 };
-    let top = half(h - (29.0 + message_h + retry_h + buttons));
+    let notes_h = notes.map_or(0.0, |rows| rows as f32 * 9.0 + 20.0);
+    // Back to Server List, then Cancel Reconnecting and Copy Report when they show.
+    let buttons = (1 + usize::from(retry) + usize::from(notes.is_some())) as f32 * 24.0;
+    let top = half(h - (29.0 + message_h + retry_h + notes_h + buttons));
     DisconnectedLayout {
         title: top + 10.0,
         message: top + 39.0,
         retry: top + 29.0 + message_h + 2.0,
-        buttons: top + 29.0 + message_h + retry_h + 2.0,
+        notes: top + 29.0 + message_h + retry_h + 10.0,
+        buttons: top + 29.0 + message_h + retry_h + notes_h + 2.0,
     }
 }
 
@@ -2346,11 +2480,12 @@ mod tests {
             reason: Text::empty(),
             retry: None,
             lines: std::cell::Cell::new(1),
+            report: None,
         };
         assert_eq!(at(&lost, 427.0, 253.0), [(113.0, 145.0)]);
         // Taller messages push the button down instead of under the text.
-        let l1 = disconnected_layout(253.0, 1, false);
-        let l6 = disconnected_layout(253.0, 6, false);
+        let l1 = disconnected_layout(253.0, 1, false, None);
+        let l6 = disconnected_layout(253.0, 6, false, None);
         assert!(l6.buttons >= l6.message + 6.0 * 9.0);
         assert!(l1.buttons >= l1.message + 9.0);
         // centeredText: `width / 2 - font.width(text) / 2`.
@@ -2872,6 +3007,7 @@ mod tests {
                 reason: Text::translate("mymod.kicked", &[]),
                 retry: None,
                 lines: std::cell::Cell::new(1),
+                report: None,
             };
             assert_eq!(
                 translated.narration().title,
@@ -2881,6 +3017,7 @@ mod tests {
                 reason: Text::literal("You were kicked"),
                 retry: None,
                 lines: std::cell::Cell::new(1),
+                report: None,
             };
             assert_eq!(plain.narration().title, "Connexion perdue. You were kicked");
         });
@@ -2913,6 +3050,7 @@ mod tests {
                 reason,
                 retry: None,
                 lines: std::cell::Cell::new(1),
+                report: None,
             }
         });
         let ((), _missed) = crate::lang::scoped(english, || {

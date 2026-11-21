@@ -2830,6 +2830,7 @@ fn the_multiplayer_screens_have_their_own_ids() {
             reason: Text::empty(),
             retry: None,
             lines: std::cell::Cell::new(1),
+            report: None,
         }
         .id(),
         "disconnected"

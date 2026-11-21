@@ -86,3 +86,32 @@ pub enum Retry {
     /// Connect to this server now.
     Now(Server),
 }
+
+/// What the Disconnected screen offers for reporting how the connection ended ([`crate::Hooks::report`]):
+/// paragraphs under the reason and a button that copies a report of it. The texts are translation keys;
+/// the engine writes the report (the reason, the game's version and the end of its log, with what could
+/// say who or where the player is taken out) and puts it on the clipboard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Report {
+    /// The paragraphs under the reason, in order.
+    pub paragraphs: &'static [&'static str],
+    /// The button's label.
+    pub button: &'static str,
+    /// The button's label once the report was copied.
+    pub copied: &'static str,
+}
+
+impl Report {
+    pub const fn new(
+        paragraphs: &'static [&'static str],
+        button: &'static str,
+        copied: &'static str,
+    ) -> Self {
+        Self {
+            paragraphs,
+            button,
+            copied,
+        }
+    }
+}
