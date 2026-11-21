@@ -1022,11 +1022,11 @@ impl Game<'_> {
         self.native_players_leaving();
         // IntegratedServer.stopServer: teardownPublishedState.
         self.stop_serving();
-        // PlayerList.removeAll: the owner and every guest leave the game.
-        if !crashed {
-            self.award_leave_game_to_all();
-            self.save_leaving_guests();
-        }
+        // PlayerList.removeAll: the owner and every guest leave the game. A
+        // crash saves the players it did not interrupt as a stop does; an
+        // interrupted player keeps their last saved files (`crash_save`).
+        self.award_leave_game_to_all();
+        self.save_leaving_guests();
         if let Some(host) = self.lan.as_mut() {
             let conns: Vec<u32> = host.hub.guests.iter().map(|g| g.conn).collect();
             for conn in conns {

@@ -24,9 +24,12 @@ impl Game<'_> {
         let swap = self.enter_guest_at(gi, conn, self.dim)?;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::game::dedicated::crash_fixture("guest", || {
-                self.lan
-                    .as_ref()
-                    .is_some_and(|host| host.hub.guest(conn).is_some_and(|g| g.placed))
+                let only = std::env::var("SUNRISE_CRASH_FIXTURE_GUEST").ok();
+                self.lan.as_ref().is_some_and(|host| {
+                    host.hub.guest(conn).is_some_and(|g| {
+                        g.placed && only.as_deref().is_none_or(|name| g.name == name)
+                    })
+                })
             });
             let dimension = (self.serving.is_some() || self.options.dedicated.is_some())
                 .then_some(self.dim.id());
