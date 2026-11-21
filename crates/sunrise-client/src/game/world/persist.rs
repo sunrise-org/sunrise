@@ -2407,7 +2407,11 @@ impl Game<'_> {
             _ => None,
         };
         let owner = p.owner_uuid;
-        let raw = anon_raw(&self.persist, p.kind.id(), p.position);
+        // The summon compound is found by type and exact position, so only
+        // while the projectile has not moved; after that, what its load kept
+        // by id (`remember_tags`: the `Item` it flies as, among others).
+        let raw = anon_raw(&self.persist, p.kind.id(), p.position)
+            .or_else(|| self.persist.raw.get(&p.id).cloned());
         let uuid = saved_uuid(&self.persist, p.id);
         let in_block = p
             .arrow
@@ -4273,6 +4277,10 @@ mod invalid_passenger_tests {
 #[cfg(test)]
 #[path = "persist/summon_uuid_conflict_tests.rs"]
 mod summon_uuid_conflict_tests;
+
+#[cfg(test)]
+#[path = "persist/thrown_item_tests.rs"]
+mod thrown_item_tests;
 
 #[cfg(test)]
 mod h262_enderman_absolute_anger_tests {

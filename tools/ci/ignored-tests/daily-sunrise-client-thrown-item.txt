@@ -1,0 +1,1 @@
+sunrise-client game::persist::thrown_item_tests::a_moved_thrown_item_projectile_saves_its_loaded_item lib daily resources
