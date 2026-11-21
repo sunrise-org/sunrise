@@ -1,0 +1,1 @@
+sunrise-client game::commands::summon_bolt_tests::a_bolt_summoned_with_nbt_strikes_and_goes lib daily resources

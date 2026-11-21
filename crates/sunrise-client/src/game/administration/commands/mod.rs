@@ -2375,6 +2375,11 @@ impl Game<'_> {
         }
         let short = kind.trim_start_matches("minecraft:").to_owned();
         if let Some(Arg::Str(nbt)) = ctx.get("nbt").cloned() {
+            if kind == "minecraft:lightning_bolt" {
+                let name = self.summon_bolt_with_nbt(pos, &nbt)?;
+                self.feedback(Text::translate("commands.summon.success", &[name]));
+                return Ok(1);
+            }
             // With an NBT argument the entity is built from it, unfinalized.
             let before = self.spawned_mark();
             let name = match self.summon_with_nbt(&kind, pos, &nbt)? {
@@ -2420,15 +2425,7 @@ impl Game<'_> {
                     name = Text::translate("entity.minecraft.experience_orb", &[]);
                 }
                 "lightning_bolt" => {
-                    let block = [
-                        pos[0].floor() as i32,
-                        pos[1].floor() as i32,
-                        pos[2].floor() as i32,
-                    ];
-                    if !self.lightning_strike_allowed(self.lan_acting_uuid, block, "command") {
-                        return Err(err("commands.summon.failed", &[]));
-                    }
-                    self.spawn_bolt(pos, false);
+                    self.summon_bolt(pos)?;
                     name = Text::translate("entity.minecraft.lightning_bolt", &[]);
                 }
                 "end_crystal" => {
@@ -2486,6 +2483,39 @@ impl Game<'_> {
         }
         self.feedback(Text::translate("commands.summon.success", &[name]));
         Ok(1)
+    }
+    /// `/summon lightning_bolt`: a bolt that strikes and goes, never saved
+    /// (`EntityType.noSave`), unless a mod cancels the strike.
+    fn summon_bolt(&mut self, pos: [f64; 3]) -> R<()> {
+        let block = pos.map(|v| v.floor() as i32);
+        if !self.lightning_strike_allowed(self.lan_acting_uuid, block, "command") {
+            return Err(err("commands.summon.failed", &[]));
+        }
+        self.spawn_bolt(pos, false);
+        Ok(())
+    }
+    /// `/summon lightning_bolt <pos> <nbt>`: `EntityType.loadEntityRecursive`
+    /// makes an ordinary bolt from the compound (`LightningBolt` reads none of
+    /// it), refused when its `UUID` is taken; the reply names its `CustomName`.
+    fn summon_bolt_with_nbt(&mut self, pos: [f64; 3], nbt: &str) -> R<Text> {
+        let (tag, _) =
+            sunrise_core::nbt::parse_snbt(nbt).map_err(|e| err("argument.nbt.invalid", &[&e]))?;
+        if !matches!(tag, sunrise_core::nbt::Tag::Compound(_)) {
+            return Err(err("argument.nbt.expected.compound", &[]));
+        }
+        if sunrise_client::entity_nbt::uuid(&tag)
+            .and_then(|uuid| self.target_with_uuid(uuid))
+            .is_some_and(|t| t != Target::Player)
+        {
+            return Err(err("commands.summon.failed.uuid", &[]));
+        }
+        self.summon_bolt(pos)?;
+        Ok(match tag.get("CustomName") {
+            Some(name) => sunrise_client::scoreboard::comp_text(
+                &sunrise_client::scoreboard::tag_to_json(name),
+            ),
+            None => Text::translate("entity.minecraft.lightning_bolt", &[]),
+        })
     }
     /// What changes when an entity spawns, kinds that take their id only
     /// when first tracked (primed TNT, falling blocks, projectiles)
@@ -4257,6 +4287,10 @@ mod difficulty_tests {
 #[cfg(test)]
 #[path = "summon_item_orb_tests.rs"]
 mod summon_item_orb_tests;
+
+#[cfg(test)]
+#[path = "summon_bolt_tests.rs"]
+mod summon_bolt_tests;
 
 #[cfg(test)]
 mod summon_tests {
