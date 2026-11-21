@@ -125,6 +125,9 @@ impl Ranges<'_> {
     /// Whether a forced chunk lies within `reach` of `(x, z)` (Chebyshev): from the cover while
     /// `update` runs, else by a scan of every forced chunk.
     pub(super) fn forced_within(&self, x: i32, z: i32, reach: i32) -> bool {
+        if self.forced.is_empty() {
+            return false;
+        }
         if let Some(cover) = self.forced_cover {
             return cover.within(x, z, reach);
         }
