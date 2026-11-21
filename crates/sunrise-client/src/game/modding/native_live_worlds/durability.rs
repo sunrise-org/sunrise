@@ -8,6 +8,7 @@ pub(in crate::game) struct Durability {
     pub(super) coverage_epoch: u64,
     pub(super) last_barrier_epoch: u64,
     pub(super) saved_owner_profile: Option<[i32; 4]>,
+    pub(super) last_capture: Option<CaptureUsage>,
     in_server_tick: bool,
     global_frontier: bool,
     save_requested: bool,
@@ -19,6 +20,15 @@ pub(in crate::game) struct Durability {
     pub(super) migration: Option<(LevelRef, Vec<u8>, super::persistence_codec::SavedLevel)>,
     pub(super) next_transfer: u64,
     pub(super) transfers: BTreeMap<u64, super::transfer::Transfer>,
+}
+pub(super) struct CaptureUsage {
+    pub(super) epoch: u64,
+    /// None for an early payload-cap refusal, where only a lower bound is known.
+    pub(super) usage: Option<sunrise_client::save::live_world_journal::Usage>,
+    pub(super) payload_bound: Option<(u64, u32)>,
+    pub(super) limit: u64,
+    /// Size admission only, never a durable-success receipt.
+    pub(super) fits_byte_budget: bool,
 }
 pub(super) struct DurableLevel {
     pub(super) save: Arc<SaveDir>,

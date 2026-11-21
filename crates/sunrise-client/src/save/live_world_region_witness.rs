@@ -99,6 +99,28 @@ fn hash_range(file: &mut fs::File, offset: u64, bytes: u64) -> io::Result<[u8; 3
     Ok(hash.finalize().into())
 }
 impl RegionWitness {
+    pub fn encoded_bytes(&self) -> io::Result<u64> {
+        // level length, folder/coordinates, existence/length, original header and slot count.
+        let mut bytes = 2u64
+            .checked_add(self.key.level().len() as u64)
+            .and_then(|n| n.checked_add(1 + 8 + 1 + 8 + HEADER_BYTES as u64 + 2))
+            .ok_or_else(|| invalid("journal witness size overflow"))?;
+        for untouched in &self.untouched {
+            bytes = bytes
+                .checked_add(
+                    2 + 32
+                        + 1
+                        + if untouched.external.is_some() {
+                            4 + 32
+                        } else {
+                            0
+                        },
+                )
+                .ok_or_else(|| invalid("journal witness size overflow"))?;
+        }
+        Ok(bytes)
+    }
+
     fn validate(&self, images: &[&Image], limits: Limits) -> io::Result<()> {
         if region_key(&self.key).as_ref() != Some(&self.key) || self.length > limits.bytes {
             return Err(invalid("region witness key/length"));

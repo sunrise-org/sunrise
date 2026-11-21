@@ -1343,3 +1343,6 @@ mod shutdown_tests;
 
 #[path = "checkpoint_adverse_tests/retired_recapture_tests.rs"]
 mod retired_recapture_tests;
+
+#[path = "checkpoint_adverse_tests/budget_tests.rs"]
+mod budget_tests;

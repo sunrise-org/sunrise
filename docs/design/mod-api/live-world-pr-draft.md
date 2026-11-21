@@ -119,3 +119,34 @@ nonembedding, horizontal stability, no net rising-height loss and actual carry h
 The contact correction could be reviewed as an existing moving-collider bug fix, while its
 public viewed-source regression depends on the coupled runtime group. That is a proposed
 extraction boundary, not a separately tested branch or latest-main compatibility claim.
+
+
+Common-save follow-up: returning all bindings does not end terminal common player/storage
+coverage. Previously, subsequent ordinary saves encoded even clean resident terrain again,
+so unrelated near/far residency could exhaust the experimental raw journal budget. This
+change reuses ordinary terrain dirtiness, conservatively retaining BE/opaque/schedule/member/
+transfer columns and every entity/deletion/POI/deferred/player/metadata participant. Real queue
+mutation revisions preserve last-scheduled-tick deletion even when no block changes. Only
+matching actually acknowledged queues become clean; Budget and readset refusal retain them.
+The default/hard limits and publication/fencing/recovery rules are unchanged.
+
+The existing trusted inspection reports exact full-envelope usage or an explicitly partial
+frozen-payload lower bound. It does not promise arbitrary dirty worlds fit or turn a size
+admission into a durability receipt. New actual Game controls use ordinary save, real Return,
+asset-derived serialization tables, independent terrain/POI readers, last-tick/last-POI removal,
+opaque preservation and genuine oversized refusal. The independent final-artifact replay
+passed the selected core/filesystem/Game controls; all earlier new-fixture setup failures
+remain in the provenance log. This is not an installed-world fix claim or a new whole
+pr_ready pass. Normal exact SDK rebuild/consumer checks and the reported travel/save scenario
+remain coordinator-run gates.
+
+Internal cross-crate Rust changes add two private ChunkTicks fields, three hidden owner
+helpers, one LevelTicks ACK delegate and selected-terrain input to the hidden SaveDir helper.
+The hidden journal boundary adds scalar Usage, typed complete/partial budget errors,
+byte_budget_error and Prepared::encoded_usage. No mod catalog or WAL format changes; exact
+native build consumers rebuild. Mutations add
+constant integer bookkeeping; checkpoint scans/readsets, entity/POI work and bounded metadata
+allocations remain. Exact measurement reads borrowed lengths without another payload clone.
+This belongs with the coupled experimental save/runtime group, not a standalone current-main
+PR: the exact audited official tree lacks this common journal. No upstream claim, submission,
+clean-room assertion, maintainer spec approval or completed human DCO review is implied.

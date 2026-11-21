@@ -599,3 +599,72 @@ Only that ignore-attribute string changed after the frozen strict Clippy/runtime
 all ordinary function bodies and all production carry helpers remain byte-identical. The
 source9 receipt states this qualification explicitly instead of claiming another executable
 build. Indexed public-tree and real per-commit hook results are bound at the Git boundary.
+
+
+## Bounded common-save pressure follow-up
+
+After the frozen e062 experiment, the coordinator reported a generic common-save byte-budget
+refusal after returning projected contents and ordinary near/far travel. No caller code,
+coordinates, physics or private runtime output was supplied or read. The own-source audit
+found that the experimental common snapshot encoded every resident terrain column, while
+the ordinary save already selected modified terrain. Compressed save-directory size does
+not measure raw WAL afterimages, metadata and region witnesses.
+
+The bounded follow-up retains the existing limits, complete resident readsets and all
+entity/deletion, ordinary POI, deferred/proto, player, attachment and projection participants.
+It selects ordinary dirty terrain plus the conservative live/opaque/schedule/member/transfer
+union. A last stale scheduled occurrence can disappear without a block edit, so selection
+also needs bookkeeping on the actual ChunkTicks owner. The two private revision fields and
+four doc-hidden cross-crate helpers change Rust layout/dependency surface; no binary
+compatibility is asserted. The hidden journal module adds scalar Usage, typed complete/partial
+budget errors, byte_budget_error and Prepared::encoded_usage for the Game/lib boundary; its
+hidden SaveDir snapshot helper accepts selected terrain. No mod-vocabulary/catalog or
+persistence format changes. Exact queue revisions join the readset and only matching acknowledged selected queues become clean.
+
+The own typed envelope counter measures borrowed frozen bytes and exact witness encoding
+before allocating the envelope. Complete overflow reports exact required bytes; an earlier
+frozen-payload stop explicitly reports only a lower bound. The existing trusted simulation
+inspection exposes that distinction. Neither result is a durability receipt, and genuinely
+oversized dirty decisions still refuse before publication without clearing dirty state.
+
+Source-only review used Sunrise's own relevant source and the exact fetched official dc934ffa
+five-path diff. The ordinary save path and its neighboring entity/streaming/schema changes
+were inspected; the experimental common WAL/snapshot/checkpoint files are absent at that
+exact tree. No rebase, latest-main fit, missing-official-fix or no-overlap claim follows.
+The coordinator and independent reviewer supplied only generic observable requirements and
+own-Sunrise scheduler/navigation findings. Their earlier unrestricted access is not a
+clean-room certification. No foreign implementation or neighboring port source was read.
+
+Own source snapshots and raw failures remain under .local/live-world-evidence/checkpoint-budget.
+New test setup initially used unsupported ChunkMap.entry and invalid JSON, then omitted an
+ordinary dirty-column setup and actual producer/reader SaveTables. Those failures remain
+nonpasses. The actual stale-tick fixture then passed with a real raw saved occurrence and
+independent decoded reader before the actual common ACK. Another new assertion incorrectly
+required POI records for never-POI AIR columns; ordinary resolve_poi intentionally omits them.
+The final fixture instead uses a real vanilla composter, independent strict POI reads and
+actual last-removal empty Sections, preserving the far column's opaque payload.
+
+The final source5 artifact executes the stale-last deletion and synthetic near/far common
+save, completed Return, terminal common mode, oversized dirty refusal, dirty-queue retention,
+opaque deletion and POI preservation/deletion paths. Existing callback/readset, multi-owner
+metadata, player/guest, shutdown, handoff and fresh-process recovery controls remain selected.
+The independent reviewer repeated all 41 unique selected core/filesystem/Game tests on the
+pinned final binaries with all hashes unchanged. This is in-process/child-process generic
+fixture evidence, not the coordinator's installed application or earlier save. Its actual
+travel/save failure remains unresolved until the new exact SDK/runtime is rebuilt and tested.
+
+The retained warnings are xcrun/Xcode SDK discovery and Mach-O __eh_frame linker classes also
+observed in earlier own pre-e062 builds; this does not establish a pristine official baseline.
+Focused lint, formatting, ignored inventory and indexed public-tree/actual hook outcomes are
+recorded at the subsequent Git gate. Earlier whole-readiness and legacy WASM-load failures
+remain nonpasses. AI authorship, human DCO eligibility/source review and maintainer claim/spec
+approval remain explicit pending upstream decisions; no public action was made.
+
+
+The final focused strict Clippy command passed for sunrise-client, sunrise-client-lib and
+sunrise-core lib/tests with warnings denied and the complete Rust/config hash map unchanged.
+No new executable build followed the final source5 proof. Source-only documentation and
+input-list additions do not change that Rust scope. Formatting, ignored inventory, indexed
+public-tree and the command-local .githooks/pre-commit execution are bound in the final Git
+receipt; core.hooksPath being unset is not mistaken for an installed hook. Prior whole-readiness
+nonpasses and the separate installed-world/SDK gates remain explicitly unresolved.

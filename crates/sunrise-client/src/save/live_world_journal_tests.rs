@@ -436,3 +436,69 @@ fn missing_expected_payload_must_still_refuse_acknowledgment() {
         "a missing nonempty afterimage must still refuse"
     );
 }
+
+#[test]
+fn exact_envelope_usage_and_typed_budget_refuse_before_publish() {
+    let scratch = Scratch::new();
+    let root = &scratch.0;
+    let old = projection("fixture:source", r#"{"state":"old"}"#);
+    apply_image(root, &old, Limits::default()).unwrap();
+    let images = vec![
+        projection("fixture:source", r#"{"state":"new"}"#),
+        cell("fixture:source", 0, 7),
+        Image {
+            key: Key::Record {
+                level: "fixture:source".into(),
+                folder: Folder::Entities,
+                chunk: [0, 0],
+            },
+            after: None,
+        },
+        player(123, 2),
+        checkpoint_image(1),
+    ];
+    let prepared = Prepared::capture(root, 1, images.clone(), Limits::default()).unwrap();
+    let usage = prepared.encoded_usage().unwrap();
+    assert_eq!(
+        usage.serialized_bytes,
+        prepared.encode().unwrap().len() as u64
+    );
+    assert_eq!(
+        usage.payload_bytes,
+        images
+            .iter()
+            .filter_map(|image| image.after.as_ref())
+            .map(|bytes| bytes.len() as u64)
+            .sum::<u64>()
+    );
+    assert_eq!(
+        (
+            usage.records,
+            usage.levels,
+            usage.terrain_records,
+            usage.entity_records,
+            usage.metadata_records
+        ),
+        (5, 1, 1, 1, 3)
+    );
+    assert!(usage.witness_bytes > 16_384);
+    let limits = Limits {
+        bytes: usage.serialized_bytes - 1,
+        record_bytes: 4096,
+        ..Limits::default()
+    };
+    let error = match Prepared::capture(root, 1, images, limits) {
+        Ok(_) => panic!("full envelope exceeds exact limit"),
+        Err(error) => error,
+    };
+    let budget = byte_budget_error(&error).expect("typed complete-envelope budget");
+    assert_eq!(budget.usage, usage);
+    assert_eq!(budget.limit, limits.bytes);
+    assert!(!journal_path(root).unwrap().exists());
+    assert_eq!(read_epoch(root).unwrap(), 0);
+    assert_eq!(
+        read_image(root, &old.key, Limits::default()).unwrap(),
+        old.after
+    );
+    assert!(!root.join("dimensions/fixture/source/region").exists());
+}

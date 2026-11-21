@@ -153,6 +153,7 @@ impl LevelTicks {
                 .chunks
                 .get_mut(&key)
                 .ok_or(TransferTickError::MissingChunk)?;
+            let before_count = chunk.count();
             // Remove through the ordinary heap operation, preserving all unrelated heap behavior.
             chunk.queue.remove_if(
                 |tick| witness.cells.contains(&xyz(tick.pos)),
@@ -168,6 +169,9 @@ impl LevelTicks {
             chunk
                 .positions
                 .retain(|(_, p)| !witness.cells.contains(&xyz(*p)));
+            if chunk.count() != before_count {
+                chunk.changed_for_save();
+            }
             if chunk.held.is_empty() {
                 self.held_chunks.remove(&key);
             }
@@ -229,6 +233,7 @@ impl LevelTicks {
             } else {
                 chunk.positions.insert(tick.key());
                 chunk.queue.push(tick, ScheduledTick::drain_cmp);
+                chunk.changed_for_save();
             }
             if let Some(next) = chunk.peek() {
                 self.deadlines.put(key, next.trigger_tick);

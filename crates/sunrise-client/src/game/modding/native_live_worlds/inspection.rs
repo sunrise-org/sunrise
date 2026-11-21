@@ -100,8 +100,25 @@ impl Game<'_> {
                         "previous": pose_json(entry.sample.previous), "current": pose_json(entry.sample.current)},
                     "cells": cells}));
             }
+            let capture = self.live_world_durability.last_capture.as_ref().map(|capture| {
+                if let Some(usage) = capture.usage {
+                    json!({"epoch": capture.epoch, "fits_byte_budget": capture.fits_byte_budget,
+                        "exact": true, "limit_bytes": capture.limit, "required_bytes": usage.serialized_bytes,
+                        "payload_bytes": usage.payload_bytes, "witness_bytes": usage.witness_bytes,
+                        "records": usage.records, "levels": usage.levels,
+                        "terrain_records": usage.terrain_records, "entity_records": usage.entity_records,
+                        "poi_records": usage.poi_records, "metadata_records": usage.metadata_records})
+                } else {
+                    let (bytes, records) = capture.payload_bound.unwrap_or_default();
+                    json!({"epoch": capture.epoch, "fits_byte_budget": false, "exact": false,
+                        "limit_bytes": capture.limit, "required_bytes": null,
+                        "required_bytes_at_least": bytes, "records_encoded": records,
+                        "stage": "frozen payload"})
+                }
+            });
             Ok(
-                json!({"schema": 1, "projection_count": projections.len(), "cell_count": count, "projections": projections}),
+                json!({"schema": 1, "projection_count": projections.len(), "cell_count": count,
+                "projections": projections, "last_checkpoint_capture": capture}),
             )
         })();
         match snapshot {

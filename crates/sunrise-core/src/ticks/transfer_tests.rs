@@ -45,7 +45,11 @@ fn pending_refuses_then_settled_queued_and_held_duplicates_move_once() {
     destination
         .add_chunk(to.chunk(), ChunkTicks::default())
         .unwrap();
+    let source_revision = source.chunk(from.chunk()).unwrap().persistence_revision();
+    assert!(source.acknowledge_persistent_save(from.chunk(), source_revision));
     let mut owned = source.extract_transfer_cells(&witness).unwrap();
+    assert!(source.chunk(from.chunk()).unwrap().needs_persistent_save());
+    assert!(!source.acknowledge_persistent_save(from.chunk(), source_revision));
     assert_eq!(source.count(), 1);
     assert!(source.has_scheduled(unrelated, TickTypeId(9)));
     for (order, occurrence) in (20..).zip(&mut owned) {
@@ -54,6 +58,12 @@ fn pending_refuses_then_settled_queued_and_held_duplicates_move_once() {
         occurrence.tick.sub_tick_order = order;
     }
     destination.install_transfer_occurrences(owned).unwrap();
+    assert!(
+        destination
+            .chunk(to.chunk())
+            .unwrap()
+            .needs_persistent_save()
+    );
     let packed = destination.chunk(to.chunk()).unwrap().pack(300);
     assert_eq!(
         packed,

@@ -41,6 +41,7 @@ crates/sunrise-client-render/src/render_geometry.rs
 crates/sunrise-client-render/src/streaming.rs
 crates/sunrise-client-render/src/streaming/forced_cover.rs
 crates/sunrise-client-render/src/world.rs
+crates/sunrise-client-render/src/world/modified.rs
 crates/sunrise-client/Cargo.toml
 crates/sunrise-client/src/carrier_store.rs
 crates/sunrise-client/src/client_lib.rs
@@ -58,6 +59,7 @@ crates/sunrise-client/src/game/blocks/piston_carry_state.rs
 crates/sunrise-client/src/game/blocks/piston_push.rs
 crates/sunrise-client/src/game/blocks/piston_push/carrying.rs
 crates/sunrise-client/src/game/blocks/player_destroy.rs
+crates/sunrise-client/src/game/blocks/spill.rs
 crates/sunrise-client/src/game/entities/armor_stands.rs
 crates/sunrise-client/src/game/entities/collision_source.rs
 crates/sunrise-client/src/game/entities/entity.rs
@@ -76,6 +78,7 @@ crates/sunrise-client/src/game/modding/attachment_sync.rs
 crates/sunrise-client/src/game/modding/block_entity_tick_items_tests.rs
 crates/sunrise-client/src/game/modding/block_entity_tick_reply_tests.rs
 crates/sunrise-client/src/game/modding/decided_action.rs
+crates/sunrise-client/src/game/modding/mod_api_host.rs
 crates/sunrise-client/src/game/modding/mod_menu_decisions_tests.rs
 crates/sunrise-client/src/game/modding/mods/mod.rs
 crates/sunrise-client/src/game/modding/mods/runtime_files.rs
@@ -101,6 +104,7 @@ crates/sunrise-client/src/game/modding/native_live_worlds/actions.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/binding_journal.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/checkpoint.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/checkpoint_adverse_tests.rs
+crates/sunrise-client/src/game/modding/native_live_worlds/checkpoint_adverse_tests/budget_tests.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/checkpoint_adverse_tests/retired_recapture_tests.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/durability.rs
 crates/sunrise-client/src/game/modding/native_live_worlds/fence_tests.rs
@@ -230,6 +234,7 @@ crates/sunrise-core/src/geometry/shape.rs
 crates/sunrise-core/src/geometry/shape/create.rs
 crates/sunrise-core/src/level_id.rs
 crates/sunrise-core/src/nbt.rs
+crates/sunrise-core/src/ticks/generation.rs
 crates/sunrise-core/src/ticks/mod.rs
 crates/sunrise-core/src/ticks/transfer.rs
 crates/sunrise-core/src/ticks/transfer_tests.rs
@@ -348,6 +353,7 @@ crates/sunrise-world/src/level/update.rs
 crates/sunrise-world/src/liquid_collision.rs
 crates/sunrise-world/src/move_gate.rs
 crates/sunrise-world/src/piston_shape.rs
+crates/sunrise-world/src/poi.rs
 crates/sunrise-world/src/powder_snow_collision.rs
 crates/sunrise-world/src/region.rs
 crates/sunrise-world/src/registry.rs

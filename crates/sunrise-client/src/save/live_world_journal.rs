@@ -195,6 +195,74 @@ pub struct Prepared {
     limits: Limits,
 }
 
+/// Exact encoded decision size, measured from borrowed frozen bytes without cloning them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct Usage {
+    pub serialized_bytes: u64,
+    pub payload_bytes: u64,
+    /// Region count and allocation/header witnesses, excluding the common checksum.
+    pub witness_bytes: u64,
+    pub records: u32,
+    pub levels: u32,
+    pub terrain_records: u32,
+    pub entity_records: u32,
+    pub poi_records: u32,
+    pub metadata_records: u32,
+}
+
+#[derive(Debug)]
+#[doc(hidden)]
+pub struct ByteBudgetExceeded {
+    pub usage: Usage,
+    pub limit: u64,
+}
+impl std::fmt::Display for ByteBudgetExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "journal byte budget: required={} limit={} payload={} witnesses={} records={} levels={} terrain={} entities={} poi={} metadata={}",
+            self.usage.serialized_bytes,
+            self.limit,
+            self.usage.payload_bytes,
+            self.usage.witness_bytes,
+            self.usage.records,
+            self.usage.levels,
+            self.usage.terrain_records,
+            self.usage.entity_records,
+            self.usage.poi_records,
+            self.usage.metadata_records,
+        )
+    }
+}
+impl std::error::Error for ByteBudgetExceeded {}
+
+/// Distinguish this pre-decision operational refusal from malformed data or an I/O failure.
+#[doc(hidden)]
+pub fn byte_budget_error(error: &io::Error) -> Option<&ByteBudgetExceeded> {
+    error.get_ref()?.downcast_ref()
+}
+
+/// Early frozen-payload cap. Remaining records were not encoded, so this is explicitly a
+/// lower bound and must never be presented as the exact complete journal requirement.
+#[derive(Debug)]
+#[doc(hidden)]
+pub struct PayloadBudgetExceeded {
+    pub required_at_least: u64,
+    pub limit: u64,
+    pub records_encoded: u32,
+}
+impl std::fmt::Display for PayloadBudgetExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "live-world payload byte budget: required_at_least={} limit={} records_encoded={} (complete journal size not measured)",
+            self.required_at_least, self.limit, self.records_encoded
+        )
+    }
+}
+impl std::error::Error for PayloadBudgetExceeded {}
+
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
@@ -408,7 +476,9 @@ impl Prepared {
             regions,
             limits,
         };
-        prepared.encode()?;
+        // Count before allocating an envelope. Capturing a decision does not need a second
+        // full journal buffer, and a refusal can report the exact complete required size.
+        prepared.check_usage(prepared.encoded_usage()?)?;
         Ok(prepared)
     }
 
@@ -521,8 +591,98 @@ impl Prepared {
         Ok(())
     }
 
+    pub fn encoded_usage(&self) -> io::Result<Usage> {
+        let mut usage = Usage {
+            serialized_bytes: (MAGIC.len() + 8 + 4 + 32) as u64,
+            records: self.changes.len() as u32,
+            witness_bytes: 4,
+            ..Usage::default()
+        };
+        let mut levels = BTreeSet::new();
+        for change in &self.changes {
+            let level = change.image.key.level();
+            if !matches!(
+                change.image.key,
+                Key::CheckpointEpoch | Key::PlayerData { .. }
+            ) {
+                levels.insert(level);
+            }
+            let key_bytes = match change.image.key {
+                Key::Record { folder, .. } => {
+                    match folder {
+                        Folder::Region => usage.terrain_records += 1,
+                        Folder::Entities => usage.entity_records += 1,
+                        Folder::Poi => usage.poi_records += 1,
+                    }
+                    1 + 8
+                }
+                Key::PlayerData { .. } => {
+                    usage.metadata_records += 1;
+                    1 + 16
+                }
+                _ => {
+                    usage.metadata_records += 1;
+                    1
+                }
+            };
+            let payload = change
+                .image
+                .after
+                .as_ref()
+                .map_or(0, |bytes| bytes.len() as u64);
+            usage.payload_bytes = usage
+                .payload_bytes
+                .checked_add(payload)
+                .ok_or_else(|| invalid("journal payload size overflow"))?;
+            let bytes = 2u64
+                .checked_add(level.len() as u64)
+                .and_then(|n| {
+                    n.checked_add(key_bytes + 1 + if change.before.is_some() { 32 } else { 0 })
+                })
+                .and_then(|n| n.checked_add(1 + if change.image.after.is_some() { 4 } else { 0 }))
+                .and_then(|n| n.checked_add(payload))
+                .ok_or_else(|| invalid("journal record size overflow"))?;
+            usage.serialized_bytes = usage
+                .serialized_bytes
+                .checked_add(bytes)
+                .ok_or_else(|| invalid("journal size overflow"))?;
+        }
+        usage.levels = levels.len() as u32;
+        for region in &self.regions {
+            usage.witness_bytes = usage
+                .witness_bytes
+                .checked_add(region.encoded_bytes()?)
+                .ok_or_else(|| invalid("journal witness size overflow"))?;
+        }
+        usage.serialized_bytes = usage
+            .serialized_bytes
+            .checked_add(usage.witness_bytes)
+            .ok_or_else(|| invalid("journal size overflow"))?;
+        Ok(usage)
+    }
+
+    fn check_usage(&self, usage: Usage) -> io::Result<()> {
+        if usage.serialized_bytes > self.limits.bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                ByteBudgetExceeded {
+                    usage,
+                    limit: self.limits.bytes,
+                },
+            ));
+        }
+        Ok(())
+    }
+
     fn encode(&self) -> io::Result<Vec<u8>> {
+        let usage = self.encoded_usage()?;
+        self.check_usage(usage)?;
         let mut out = Vec::new();
+        out.try_reserve_exact(
+            usize::try_from(usage.serialized_bytes)
+                .map_err(|_| invalid("journal envelope address-space budget"))?,
+        )
+        .map_err(|_| io::Error::new(io::ErrorKind::OutOfMemory, "journal envelope allocation"))?;
         out.extend_from_slice(MAGIC);
         out.extend_from_slice(&self.epoch.to_le_bytes());
         out.extend_from_slice(&(self.changes.len() as u32).to_le_bytes());
@@ -573,6 +733,9 @@ impl Prepared {
             return Err(invalid("journal witness byte budget"));
         }
         out.extend_from_slice(&digest(&out));
+        if out.len() as u64 != usage.serialized_bytes {
+            return Err(invalid("journal size accounting diverged"));
+        }
         Ok(out)
     }
 

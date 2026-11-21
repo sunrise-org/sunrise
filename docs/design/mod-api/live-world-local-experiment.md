@@ -184,6 +184,50 @@ correcting ordinary stabilization overlap. Identity, generation, residency, once
 bounded motion/contact-consumer checks remain in force. The engine never feeds a canonical
 host sample back into the caller's dynamics state. Nested projected destinations refuse.
 
+## Common checkpoint budget and dirty terrain
+
+A common save counts raw encoded WAL bytes, including metadata, before signatures,
+region witnesses and checksum. The existing default common and per-record limits remain
+unchanged. Clean ordinary terrain follows the existing World.modified policy instead of
+being serialized again merely because it is resident. Live/raw/opaque block-entity data,
+chunk attachments, current or dirty schedules, active membership and transfer columns
+remain conservative terrain participants. Full column readsets, actual entities and
+deletions, ordinary POI resolution, deferred/proto records, player data, level
+attachments and projection metadata remain in the common decision. A never-POI column
+follows ordinary no-record behavior; a last-POI removal still writes empty Sections.
+
+The actual ChunkTicks owner tracks mutation since durable acknowledgment, including a
+last stale scheduled occurrence being consumed without a block change. Checkpoint
+readsets pin real queue revisions even when their packed list is empty. Only the exact
+captured selected queue can become clean after all common acknowledgments succeed. A
+post-capture transfer mutation remains conservatively dirty. Budget/refusal does not
+clear modified terrain, queue revisions, receipts or held retirement plans. No new
+queue, ticker or read authority is introduced.
+
+The existing trusted simulation live-world inspection includes last_checkpoint_capture:
+exact total/payload/witness bytes and record categories when the complete WAL was
+measured, or an explicitly partial lower bound if frozen payload admission stopped
+earlier. This is size admission, not a durable-success receipt. Oversized dirty
+decisions still refuse before Prepared and retain live ownership; clean-terrain omission
+is not a guarantee that arbitrary travel fits the common cap.
+
+Internal Rust dependency surface changes: ChunkTicks adds two private revision fields
+and doc-hidden persistence_revision, needs_persistent_save and conditional
+acknowledge_persistent_save; LevelTicks delegates the conditional acknowledgment.
+SaveDir's doc-hidden snapshot helper takes explicit selected terrain columns. The hidden
+journal module adds scalar Usage, typed complete/partial budget errors, byte_budget_error
+and Prepared::encoded_usage for the Game/lib boundary. No mod-vocabulary, catalog,
+LevelRef receipt or WAL format changes. Exact-build SDK/native
+consumers must rebuild; no binary compatibility promise.
+
+Queue mutations add constant integer bookkeeping with no allocation or new whole-level
+tick scan. Checkpoints still allocate full bounded readsets and entity/POI/frozen
+metadata, and walk all participating resident columns. Exact envelope size accounting
+visits borrowed byte lengths and witness metadata without cloning payloads to measure
+them. No allocation-free, arbitrary-world or causal before/after performance claim
+follows. Actual new tests, retained setup failures, source hashes and measurement
+commands are bound in .local/live-world-evidence/checkpoint-budget.
+
 ## Remaining acceptance boundaries
 
 The source tree retains an independent public native/wasm example under

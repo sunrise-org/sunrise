@@ -41,13 +41,15 @@ fn journal_folder(folder: Folder) -> JournalFolder {
     }
 }
 impl SaveDir {
-    /// Snapshot the real Game::with_entities chunks/BE/schedules, pending ordinary records and actual attachments.
+    /// Snapshot selected terrain from real Game::with_entities chunks/BE/schedules, all
+    /// supplied entity/POI columns, pending ordinary records and actual attachments.
     /// Acquire a lease first; it drained only earlier independent writes. Freeze never flushes current deferred data.
     #[doc(hidden)]
     pub fn freeze_live_world_save(
         &self,
         level: &str,
         chunks: &[Arc<Chunk>],
+        terrain_columns: &std::collections::BTreeSet<(i32, i32)>,
         entities: &[((i32, i32), Vec<Tag>)],
         registry: &'static BlockRegistry,
         biomes: &Arc<Biomes>,
@@ -64,12 +66,15 @@ impl SaveDir {
         let (generation, deferred) = self.snapshot_live_world_deferred()?;
         let cap = deferred
             .len()
-            .checked_add(
-                chunks
-                    .len()
-                    .checked_mul(3)
-                    .ok_or("live-world record overflow")?,
-            )
+            .checked_add(terrain_columns.len())
+            .and_then(|n| n.checked_add(entities.len()))
+            .and_then(|n| {
+                n.checked_add(if self.tables.get().is_some() {
+                    chunks.len()
+                } else {
+                    0
+                })
+            })
             .and_then(|n| n.checked_add(2))
             .ok_or("live-world record overflow")?;
         if cap > limits.records as usize {
@@ -94,7 +99,7 @@ impl SaveDir {
             generation,
             gate: self.live_world_gate.clone(),
             prepared_root: OnceLock::new(),
-            receipts: Vec::with_capacity(chunks.len()),
+            receipts: Vec::with_capacity(terrain_columns.len()),
             selected_deferred: HashSet::new(),
         };
         for chunk in chunks {
@@ -102,16 +107,18 @@ impl SaveDir {
             if !fresh_keys.insert(key) {
                 return Err("duplicate fresh chunk in live-world snapshot".into());
             }
-            let record = self
-                .capture_disk_record(Record::Chunk(
-                    chunk.clone(),
-                    encoding.clone(),
-                    self.calculated_blending(chunk.x, chunk.z),
-                ))?
-                .track_block_entity_edits();
-            frozen.receipts.push(record.clone());
-            selected_deferred.remove(&key);
-            records.insert(key, record);
+            if terrain_columns.contains(&(chunk.x, chunk.z)) {
+                let record = self
+                    .capture_disk_record(Record::Chunk(
+                        chunk.clone(),
+                        encoding.clone(),
+                        self.calculated_blending(chunk.x, chunk.z),
+                    ))?
+                    .track_block_entity_edits();
+                frozen.receipts.push(record.clone());
+                selected_deferred.remove(&key);
+                records.insert(key, record);
+            }
             // Explicit actual Game::entity_chunks snapshots, including ordinary deletions.
             // Chunk.entities belongs to loading and must not masquerade as the current live owners.
             let entities = entity_rows
@@ -140,6 +147,12 @@ impl SaveDir {
                     Record::Poi(chunk.clone(), tables.clone(), professions.clone()),
                 );
             }
+        }
+        if terrain_columns
+            .iter()
+            .any(|&(x, z)| !fresh_keys.contains(&(Folder::Region, x, z)))
+        {
+            return Err("live-world terrain selection outside snapshot".into());
         }
         // Existing callback rule: even a coalesced captured DiskRecord runs once. Its OnceLock prevents replay.
         let encoded = std::thread::scope(|scope| {
@@ -188,7 +201,11 @@ impl SaveDir {
                 .checked_add(after.as_ref().map_or(0, |data| data.len() as u64))
                 .ok_or("live-world byte overflow")?;
             if bytes > limits.bytes {
-                return Err("live-world byte budget".into());
+                return Err(Box::new(super::live_world_journal::PayloadBudgetExceeded {
+                    required_at_least: bytes,
+                    limit: limits.bytes,
+                    records_encoded: (frozen.images.len() + 1) as u32,
+                }));
             }
             frozen.images.push(Image { key, after });
             Ok(())

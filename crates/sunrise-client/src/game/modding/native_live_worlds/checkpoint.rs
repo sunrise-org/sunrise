@@ -16,7 +16,13 @@ struct Readset {
     time: i64,
     attachments: Compound,
     chunks: Vec<((i32, i32), usize)>,
-    schedules: Vec<((i32, i32), Vec<SavedTick>, Vec<SavedTick>)>,
+    schedules: Vec<(
+        (i32, i32),
+        Vec<SavedTick>,
+        Vec<SavedTick>,
+        Option<u64>,
+        Option<u64>,
+    )>,
     projection: Option<Vec<u8>>,
 }
 struct Captured {
@@ -24,6 +30,8 @@ struct Captured {
     save: Arc<SaveDir>,
     frozen: FrozenLevelSave,
     entities: Vec<((i32, i32), Vec<Tag>)>,
+    terrain_columns: BTreeSet<(i32, i32)>,
+    modified: BTreeSet<(i32, i32)>,
 }
 struct PlayerCapture {
     frozen: sunrise_client::lan::playerdata::FrozenPlayerSaves,
@@ -72,6 +80,14 @@ impl Game<'_> {
                         .fluids
                         .chunk(chunk)
                         .map_or_else(Vec::new, |ticks| ticks.pack(world.game_time)),
+                    ticks
+                        .blocks
+                        .chunk(chunk)
+                        .map(|ticks| ticks.persistence_revision()),
+                    ticks
+                        .fluids
+                        .chunk(chunk)
+                        .map(|ticks| ticks.persistence_revision()),
                 )
             })
             .collect();
@@ -101,6 +117,7 @@ impl Game<'_> {
         Ok(())
     }
     fn quiesce_live_world_save(&mut self) -> Result<(), Error> {
+        self.requeue_failed_chunk_saves();
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             match self.streaming.prepare_save(&mut self.world, true, deadline) {
@@ -118,6 +135,98 @@ impl Game<'_> {
         }
         self.spawn_loaded_entities();
         self.eject_player_riders(None);
+        Ok(())
+    }
+
+    /// Ordinary terrain dirtying already includes generation, edits, light and raw extra
+    /// changes. Be conservative for live/opaque BE data, attachments and scheduled work,
+    /// and always include active membership and prepared-transfer participants. Entity/POI
+    /// columns and deferred records are captured separately, never filtered by this set.
+    fn checkpoint_terrain_columns(
+        &self,
+        level: LevelRef,
+        chunks: &[Arc<sunrise_client::chunk::Chunk>],
+        readset: &Readset,
+        transfer: Option<&super::transfer_cells::PreparedCells>,
+    ) -> BTreeSet<(i32, i32)> {
+        let mut selected: BTreeSet<_> = self.world.modified.iter().copied().collect();
+        selected.extend(
+            self.world
+                .block_entities
+                .keys()
+                .map(|p| (p.0 >> 4, p.2 >> 4)),
+        );
+        selected.extend(
+            readset
+                .schedules
+                .iter()
+                .filter(|(key, blocks, fluids, _, _)| {
+                    let pos = ChunkPos::new(key.0, key.1);
+                    !blocks.is_empty()
+                        || !fluids.is_empty()
+                        || self
+                            .block_ticks
+                            .blocks
+                            .chunk(pos)
+                            .is_some_and(|ticks| ticks.needs_persistent_save())
+                        || self
+                            .block_ticks
+                            .fluids
+                            .chunk(pos)
+                            .is_some_and(|ticks| ticks.needs_persistent_save())
+                })
+                .map(|(key, ..)| *key),
+        );
+        selected.extend(
+            self.block_ticks
+                .comparator_outputs
+                .keys()
+                .map(|p| (p.x >> 4, p.z >> 4)),
+        );
+        selected.extend(
+            self.block_ticks
+                .moving_pistons
+                .iter()
+                .map(|(p, _)| (p.x >> 4, p.z >> 4)),
+        );
+        for chunk in chunks {
+            let owned_data = !chunk.block_entities.is_empty()
+                || chunk.saved.as_ref().is_some_and(|saved| {
+                    !saved.block_entities.is_empty()
+                        || !saved.block_entity_sources.is_empty()
+                        || !saved.block_entity_attachments.is_empty()
+                        || saved
+                            .block_entity_save_edits
+                            .as_ref()
+                            .is_some_and(|edits| !edits.is_empty())
+                        || !saved.pending_loot.is_empty()
+                        || !saved.block_ticks.is_empty()
+                        || !saved.fluid_ticks.is_empty()
+                        || !saved.attachments.to_nbt().is_empty()
+                });
+            if owned_data {
+                selected.insert((chunk.x, chunk.z));
+            }
+        }
+        for entry in self.live_worlds.borrow().entries.values() {
+            if entry.handle.level() == level {
+                selected.extend(entry.cells.iter().map(|p| (p[0] >> 4, p[2] >> 4)));
+            }
+        }
+        if let Some(columns) = transfer.and_then(|plan| plan.affected_columns().get(&level)) {
+            selected.extend(columns.iter().copied());
+        }
+        selected.retain(|key| self.world.chunks.contains_key(key));
+        selected
+    }
+
+    fn validate_captured_dirty(&self, captured: &Captured) -> Result<(), Error> {
+        let world = self
+            .native_level_world(captured.readset.level)
+            .ok_or(Error::Stale)?;
+        if world.modified.iter().copied().collect::<BTreeSet<_>>() != captured.modified {
+            return Err(Error::Revision);
+        }
         Ok(())
     }
     /// Retire one held Streaming plan at the same synchronous frontier that saved it. A callback
@@ -412,6 +521,7 @@ impl Game<'_> {
         )>,
         final_save: bool,
     ) -> Result<(mod_api::LiveWorldSaveReceipt, Vec<LiveWorldRef>), Error> {
+        self.live_world_durability.last_capture = None;
         for &level in extra {
             self.hold_live_world_level(level)?;
         }
@@ -447,12 +557,40 @@ impl Game<'_> {
             let mut images = players.images.clone();
             player_capture = Some(players);
             let mut snapshots = BTreeMap::new();
+            let mut snapshot_readsets = BTreeMap::new();
             for &level in &levels {
                 self.enter_level(Dim::from_id(level.dimension_id()))
                     .map_err(|_| Error::NotResident)?;
-                let chunks = self.with_entities(self.world.chunks.values());
-                self.native_full_chunk_snapshots(&chunks);
-                snapshots.insert(level, chunks);
+                let readset = self.checkpoint_readset(level, epoch)?;
+                let chunks: Vec<_> = self.world.chunks.values().cloned().collect();
+                let terrain_columns = self.checkpoint_terrain_columns(
+                    level,
+                    &chunks,
+                    &readset,
+                    transfer.as_ref().map(|(plan, _)| plan),
+                );
+                let modified: BTreeSet<_> = self.world.modified.iter().copied().collect();
+                // Clean ordinary terrain keeps its existing immutable column. Only real save
+                // participants clone live BE/schedule/opaque snapshots; POI/entities still see
+                // every resident column below.
+                let selected = self.with_entities(
+                    chunks
+                        .iter()
+                        .filter(|chunk| terrain_columns.contains(&(chunk.x, chunk.z))),
+                );
+                self.native_full_chunk_snapshots(&selected);
+                let mut selected: BTreeMap<_, _> = selected
+                    .into_iter()
+                    .map(|chunk| ((chunk.x, chunk.z), chunk))
+                    .collect();
+                snapshots.insert(
+                    level,
+                    chunks
+                        .into_iter()
+                        .map(|chunk| selected.remove(&(chunk.x, chunk.z)).unwrap_or(chunk))
+                        .collect(),
+                );
+                snapshot_readsets.insert(level, (readset, terrain_columns, modified));
             }
             if let Some((plan, _)) = &transfer {
                 self.transfer_cell_afterimages(plan, &mut snapshots)?;
@@ -460,7 +598,8 @@ impl Game<'_> {
             for &level in &levels {
                 self.enter_level(Dim::from_id(level.dimension_id()))
                     .map_err(|_| Error::NotResident)?;
-                let readset = self.checkpoint_readset(level, epoch)?;
+                let (readset, terrain_columns, modified) =
+                    snapshot_readsets.remove(&level).ok_or(Error::Storage)?;
                 if readset.chunks.len() > limits.records as usize {
                     return Err(Error::Budget);
                 }
@@ -477,6 +616,7 @@ impl Game<'_> {
                     .freeze_live_world_save(
                         level.dimension_id(),
                         &chunks,
+                        &terrain_columns,
                         &entities,
                         self.pack.assets.registry,
                         world_biomes!(self),
@@ -488,13 +628,33 @@ impl Game<'_> {
                         },
                         limits,
                     )
-                    .map_err(|error| Self::checkpoint_storage("capture", error))?;
+                    .map_err(|error| {
+                        if let Some(budget) = error.downcast_ref::<wal::PayloadBudgetExceeded>() {
+                            self.live_world_durability.last_capture =
+                                Some(super::durability::CaptureUsage {
+                                    epoch,
+                                    usage: None,
+                                    payload_bound: Some((
+                                        budget.required_at_least,
+                                        budget.records_encoded,
+                                    )),
+                                    limit: budget.limit,
+                                    fits_byte_budget: false,
+                                });
+                            log::warn!("live-world checkpoint capture: {error}");
+                            Error::Budget
+                        } else {
+                            Self::checkpoint_storage("capture", error)
+                        }
+                    })?;
                 images.extend(frozen.images.iter().cloned());
                 captured.push(Captured {
                     readset,
                     save,
                     frozen,
                     entities,
+                    terrain_columns,
+                    modified,
                 });
             }
             // Re-read the actual ordinary EntityStorage projection after all save callbacks,
@@ -531,10 +691,38 @@ impl Game<'_> {
                 });
             }
             images.push(wal::checkpoint_image(epoch));
-            let prepared = wal::Prepared::capture(&root, epoch, images, limits)
-                .map_err(|error| Self::checkpoint_storage("capture", error))?;
+            let prepared = match wal::Prepared::capture(&root, epoch, images, limits) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    if let Some(budget) = wal::byte_budget_error(&error) {
+                        self.live_world_durability.last_capture =
+                            Some(super::durability::CaptureUsage {
+                                epoch,
+                                usage: Some(budget.usage),
+                                payload_bound: None,
+                                limit: budget.limit,
+                                fits_byte_budget: false,
+                            });
+                        log::warn!("live-world checkpoint capture: {error}");
+                        return Err(Error::Budget);
+                    }
+                    return Err(Self::checkpoint_storage("capture", error));
+                }
+            };
+            self.live_world_durability.last_capture = Some(super::durability::CaptureUsage {
+                epoch,
+                usage: Some(
+                    prepared
+                        .encoded_usage()
+                        .map_err(|error| Self::checkpoint_storage("capture size", error))?,
+                ),
+                payload_bound: None,
+                limit: limits.bytes,
+                fits_byte_budget: true,
+            });
             for member in &captured {
                 self.validate_checkpoint_readset(&member.readset, epoch)?;
+                self.validate_captured_dirty(member)?;
                 member
                     .save
                     .validate_frozen_live_world_save(&member.frozen)
@@ -571,6 +759,9 @@ impl Game<'_> {
                     .map_err(|error| {
                         format!("live-world readset changed after Prepared: {error:?}")
                     })?;
+                self.validate_captured_dirty(member).map_err(|error| {
+                    format!("live-world dirty selection changed after Prepared: {error:?}")
+                })?;
                 member.save.ready_frozen_live_world_ack(&member.frozen)?;
             }
             self.validate_checkpoint_players(&players)
@@ -624,12 +815,34 @@ impl Game<'_> {
                     .map(|r| r.members),
             ));
             self.live_world_durability.dirty.remove(&level);
+            // Only the exact real queues represented by an acknowledged fresh terrain image
+            // become clean. Transfer/live mutations after capture conservatively stay dirty.
+            let ticks = if level.dimension() == self.dim.key() {
+                &mut self.block_ticks
+            } else {
+                self.levels
+                    .parked_transfer_parts_mut(level.dimension_id())
+                    .ok_or(Error::Stale)?
+                    .1
+            };
+            for (key, _, _, blocks, fluids) in &member.readset.schedules {
+                if !member.terrain_columns.contains(key) {
+                    continue;
+                }
+                let pos = ChunkPos::new(key.0, key.1);
+                if let Some(revision) = blocks {
+                    ticks.blocks.acknowledge_persistent_save(pos, *revision);
+                }
+                if let Some(revision) = fluids {
+                    ticks.fluids.acknowledge_persistent_save(pos, *revision);
+                }
+            }
             if level.dimension() == self.dim.key() {
-                for (key, _) in &member.readset.chunks {
+                for key in &member.terrain_columns {
                     self.world.modified.remove(key);
                 }
             } else if let Some(world) = self.levels.parked_world_mut_of(level.dimension_id()) {
-                for (key, _) in &member.readset.chunks {
+                for key in &member.terrain_columns {
                     world.modified.remove(key);
                 }
             }
