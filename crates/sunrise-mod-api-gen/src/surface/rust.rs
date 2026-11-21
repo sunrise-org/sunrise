@@ -149,7 +149,7 @@ impl<'a> ExternalTypes<'a> {
         }
     }
 
-    fn inspect(&self, index: &Index<'_>, module: usize, id: ItemId, path: &[String]) {
+    fn inspect(&self, index: &mut Index<'_>, module: usize, id: ItemId, path: &[String]) {
         if let Some(path) = self.outside.external_path(index, module, path) {
             self.first.borrow_mut().get_or_insert_with(|| (id, path));
         }
@@ -204,18 +204,23 @@ impl Paths<'_, '_> {
             return;
         }
         let written = match self.index.resolve_path(self.module, &segments) {
-            Ok(Found::Item(id)) => match self.public.get(&id) {
-                Some(public) => {
-                    if let Some(kind) = ref_kind(self.index.item(id)) {
-                        self.refs.insert(format!("{kind}:{}", public.join("::")));
+            Ok(Found::Item(id)) => {
+                if let Some((check, owner)) = self.check {
+                    check.inspect(self.index, self.module, owner, &segments);
+                }
+                match self.public.get(&id) {
+                    Some(public) => {
+                        if let Some(kind) = ref_kind(self.index.item(id)) {
+                            self.refs.insert(format!("{kind}:{}", public.join("::")));
+                        }
+                        public.clone()
                     }
-                    public.clone()
+                    None => {
+                        self.inspect_private_alias(id);
+                        vec![segments.last().cloned().unwrap_or_default()]
+                    }
                 }
-                None => {
-                    self.inspect_private_alias(id);
-                    vec![segments.last().cloned().unwrap_or_default()]
-                }
-            },
+            }
             Ok(Found::External(full)) => {
                 if let Some((check, id)) = self.check {
                     check.inspect(self.index, self.module, id, &full);
@@ -226,7 +231,12 @@ impl Paths<'_, '_> {
                     full
                 }
             }
-            Err(_) => segments.clone(),
+            Err(_) => {
+                if let Some((check, id)) = self.check {
+                    check.inspect(self.index, self.module, id, &segments);
+                }
+                segments.clone()
+            }
         };
         if written == segments {
             return;

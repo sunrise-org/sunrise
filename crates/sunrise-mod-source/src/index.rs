@@ -5,7 +5,7 @@ use syn::{Item, UseTree};
 
 /// One module: its crate, its path below the crate root, and its items.
 pub struct Module {
-    pub krate: &'static str,
+    pub krate: String,
     pub path: Vec<String>,
     pub items: Vec<Item>,
 }
@@ -32,7 +32,7 @@ pub struct Index<'a> {
     /// Sources included into an inline module with `include!`, by file name.
     included: &'a [(&'a str, &'a str)],
     pub modules: Vec<Module>,
-    by_path: HashMap<(&'static str, Vec<String>), usize>,
+    by_path: HashMap<(String, Vec<String>), usize>,
     /// How deep `resolve` is in following imports.
     depth: usize,
     /// Every source file read, for the build script to track.
@@ -40,9 +40,9 @@ pub struct Index<'a> {
     /// Rewrites a source file's text before it is parsed: the game's generated module lists.
     expand: fn(&Path, &str) -> Result<String, String>,
     /// Crates added for one consumer beside its crates ([`Index::add_crate`]).
-    extra: Vec<(&'static str, &'static str)>,
+    extra: Vec<(String, String)>,
     /// A crate's root file where it is not `lib.rs` (a library's `[lib] path`).
-    root_files: HashMap<&'static str, String>,
+    root_files: HashMap<String, String>,
 }
 
 /// The file a module's `#[path = "..."]` names.
@@ -87,8 +87,8 @@ impl<'a> Index<'a> {
     }
 
     /// Names the file `krate`'s root module lives in, below its source directory.
-    pub fn set_root_file(&mut self, krate: &'static str, file: &str) {
-        self.root_files.insert(krate, file.to_owned());
+    pub fn set_root_file(&mut self, krate: &str, file: &str) {
+        self.root_files.insert(krate.to_owned(), file.to_owned());
     }
 
     /// Reads each source file through `expand` before parsing it.
@@ -99,18 +99,36 @@ impl<'a> Index<'a> {
 
     /// Indexes one more crate, for this index only: the surface walk reads the facade crate
     /// (`sunrise_mod_api`), which no generated output resolves through.
-    pub fn add_crate(&mut self, name: &'static str, dir: &'static str) {
+    pub fn add_crate(&mut self, name: &str, dir: &str) {
         if self.crate_dir(name).is_none() {
-            self.extra.push((name, dir));
+            self.extra.push((name.to_owned(), dir.to_owned()));
         }
     }
 
-    fn crate_dir(&self, name: &str) -> Option<(&'static str, &'static str)> {
+    fn crate_name(&self, name: &str) -> Option<String> {
         self.crates
             .iter()
-            .chain(&self.extra)
             .find(|(krate, _)| *krate == name)
-            .copied()
+            .map(|(krate, _)| (*krate).to_owned())
+            .or_else(|| {
+                self.extra
+                    .iter()
+                    .find(|(krate, _)| krate == name)
+                    .map(|(krate, _)| krate.clone())
+            })
+    }
+
+    fn crate_dir(&self, name: &str) -> Option<(&str, &str)> {
+        self.crates
+            .iter()
+            .find(|(krate, _)| *krate == name)
+            .map(|(krate, dir)| (*krate, *dir))
+            .or_else(|| {
+                self.extra
+                    .iter()
+                    .find(|(krate, _)| krate == name)
+                    .map(|(krate, dir)| (krate.as_str(), dir.as_str()))
+            })
     }
 
     pub fn item(&self, id: ItemId) -> &Item {
@@ -118,21 +136,24 @@ impl<'a> Index<'a> {
     }
 
     /// The module at `path` in `krate`, parsed on first use.
-    pub fn module(&mut self, krate: &str, path: &[String]) -> Result<usize, String> {
+    pub fn module(&mut self, krate: impl AsRef<str>, path: &[String]) -> Result<usize, String> {
+        let requested = krate.as_ref();
         let krate = self
-            .crate_dir(krate)
-            .map(|(name, _)| name)
-            .ok_or_else(|| format!("{krate} is not a crate the mod API builds on"))?;
-        if let Some(&id) = self.by_path.get(&(krate, path.to_vec())) {
+            .crate_name(requested)
+            .ok_or_else(|| format!("{requested} is not a crate the mod API builds on"))?;
+        if let Some(&id) = self.by_path.get(&(krate.clone(), path.to_vec())) {
             return Ok(id);
         }
         let items = match path.split_last() {
             None => {
-                let file = self.root_files.get(krate).map_or("lib.rs", String::as_str);
-                self.parse(krate, file)?
+                let file = self
+                    .root_files
+                    .get(krate.as_str())
+                    .map_or("lib.rs", String::as_str);
+                self.parse(&krate, file)?
             }
             Some((last, parent)) => {
-                let parent = self.module(krate, parent)?;
+                let parent = self.module(&krate, parent)?;
                 let declared = self.modules[parent]
                     .items
                     .iter()
@@ -146,27 +167,27 @@ impl<'a> Index<'a> {
                     Some((Some((_, items)), _)) => self.expand_includes(items)?,
                     // A generated `#[path]` is absolute.
                     Some((None, Some(file))) if Path::new(&file).is_absolute() => {
-                        self.parse(krate, &file)?
+                        self.parse(&krate, &file)?
                     }
                     // `#[path]` is relative to the declaring file's directory: `parent.rs`
                     // sits beside it, `parent/mod.rs` below.
                     Some((None, Some(file))) => {
                         let beside = parent_dir(&path[..path.len() - 1]);
                         let below = parent_dir(path);
-                        self.parse(krate, &format!("{beside}{file}"))
-                            .or_else(|_| self.parse(krate, &format!("{below}{file}")))?
+                        self.parse(&krate, &format!("{beside}{file}"))
+                            .or_else(|_| self.parse(&krate, &format!("{below}{file}")))?
                     }
                     _ => {
                         let dir = path.join("/");
-                        self.parse(krate, &format!("{dir}.rs"))
-                            .or_else(|_| self.parse(krate, &format!("{dir}/mod.rs")))?
+                        self.parse(&krate, &format!("{dir}.rs"))
+                            .or_else(|_| self.parse(&krate, &format!("{dir}/mod.rs")))?
                     }
                 }
             }
         };
         let id = self.modules.len();
         self.modules.push(Module {
-            krate,
+            krate: krate.clone(),
             path: path.to_vec(),
             items,
         });
@@ -300,13 +321,16 @@ impl<'a> Index<'a> {
     }
 
     /// `path`, written in `module`, as a module of an indexed crate, if it is one.
-    pub fn absolute(&self, module: usize, path: &[String]) -> Option<(&'static str, Vec<String>)> {
+    pub fn absolute(&self, module: usize, path: &[String]) -> Option<(String, Vec<String>)> {
         let m = &self.modules[module];
         let (first, rest) = path.split_first()?;
         let mut base = match first.as_str() {
-            "crate" => (m.krate, Vec::new()),
-            "self" => (m.krate, m.path.clone()),
-            "super" => (m.krate, m.path[..m.path.len().checked_sub(1)?].to_vec()),
+            "crate" => (m.krate.clone(), Vec::new()),
+            "self" => (m.krate.clone(), m.path.clone()),
+            "super" => (
+                m.krate.clone(),
+                m.path[..m.path.len().checked_sub(1)?].to_vec(),
+            ),
             name if m
                 .items
                 .iter()
@@ -314,9 +338,9 @@ impl<'a> Index<'a> {
             {
                 let mut path = m.path.clone();
                 path.push(name.to_string());
-                (m.krate, path)
+                (m.krate.clone(), path)
             }
-            name => (self.crate_dir(name)?.0, Vec::new()),
+            name => (self.crate_name(name)?, Vec::new()),
         };
         for segment in rest {
             if segment == "super" {

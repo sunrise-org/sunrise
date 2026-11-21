@@ -159,7 +159,7 @@ impl<'i, 'a> Walker<'i, 'a> {
 
     fn module_name(&self, module: usize) -> String {
         let m = &self.index.modules[module];
-        std::iter::once(m.krate)
+        std::iter::once(m.krate.as_str())
             .chain(m.path.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join("::")
@@ -182,11 +182,11 @@ impl<'i, 'a> Walker<'i, 'a> {
         path: &[String],
         outside: &OutsideSeam,
     ) -> Result<Target, String> {
-        if let Some(target) = self.module_at(module, path) {
-            return Ok(Target::Module(target));
-        }
         if let Some(path) = outside.external_path(self.index, module, path) {
             return Ok(Target::External(path));
+        }
+        if let Some(target) = self.module_at(module, path) {
+            return Ok(Target::Module(target));
         }
         let (last, parent) = path.split_last().ok_or("an empty path")?;
         if parent.is_empty() {
@@ -281,42 +281,39 @@ impl<'i, 'a> Walker<'i, 'a> {
                                     self.module_name(module)
                                 )),
                             },
-                            None => match self.module_at(module, &path) {
-                                Some(target) => {
+                            None => {
+                                if let Some(external) =
+                                    outside.external_path(self.index, module, &path)
+                                {
+                                    globbed.push(Name {
+                                        name: String::new(),
+                                        target: Target::ExternalGlob {
+                                            path: external,
+                                            written: path.clone(),
+                                        },
+                                        hidden,
+                                    });
+                                } else if let Some(target) = self.module_at(module, &path) {
                                     for mut name in self.names(target, outside)? {
                                         name.hidden |= hidden;
                                         globbed.push(name);
                                     }
+                                } else {
+                                    self.notes.push(format!(
+                                        "pub use {}::* in {}: not a module of the API's crates",
+                                        path.join("::"),
+                                        self.module_name(module)
+                                    ));
                                 }
-                                None => {
-                                    if let Some(external) =
-                                        outside.external_path(self.index, module, &path)
-                                    {
-                                        globbed.push(Name {
-                                            name: String::new(),
-                                            target: Target::ExternalGlob {
-                                                path: external,
-                                                written: path.clone(),
-                                            },
-                                            hidden,
-                                        });
-                                    } else {
-                                        self.notes.push(format!(
-                                            "pub use {}::* in {}: not a module of the API's crates",
-                                            path.join("::"),
-                                            self.module_name(module)
-                                        ));
-                                    }
-                                }
-                            },
+                            }
                         }
                     }
                 }
                 Item::Mod(child) if matches!(child.vis, Visibility::Public(_)) => {
-                    let krate = self.index.modules[module].krate;
+                    let krate = self.index.modules[module].krate.clone();
                     let mut path = self.index.modules[module].path.clone();
                     path.push(child.ident.to_string());
-                    let target = self.index.module(krate, &path)?;
+                    let target = self.index.module(&krate, &path)?;
                     own.push(Name {
                         name: child.ident.to_string(),
                         target: Target::Module(target),
@@ -487,10 +484,10 @@ impl<'i, 'a> Walker<'i, 'a> {
     /// Whether the module that defines `id` is public all the way from its crate's root: every
     /// module on the way a compiled, public, not hidden `mod`.
     fn publicly_defined(&mut self, id: ItemId) -> bool {
-        let krate = self.index.modules[id.module].krate;
+        let krate = self.index.modules[id.module].krate.clone();
         let path = self.index.modules[id.module].path.clone();
         for depth in 0..path.len() {
-            let Ok(parent) = self.index.module(krate, &path[..depth]) else {
+            let Ok(parent) = self.index.module(&krate, &path[..depth]) else {
                 return false;
             };
             let public = self.index.modules[parent].items.iter().any(|item| {

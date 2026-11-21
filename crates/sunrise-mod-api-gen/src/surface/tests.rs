@@ -6,11 +6,15 @@ use std::collections::BTreeMap;
 const FILES: &[(&str, &str)] = &[
     (
         "Cargo.toml",
-        "[workspace]\nmembers = [\"engine-fixture\", \"crates/sunrise-mod-vocab\", \"crates/sunrise-mod-api\"]\n",
+        "[workspace]\nmembers = [\"engine-fixture\", \"crates/sunrise-mod-vocab\", \"crates/sunrise-mod-api\", \"crates/sunrise-mod-api-macros\"]\n",
     ),
     (
         "engine-fixture/Cargo.toml",
         "[package]\nname = \"engine-package\"\n[lib]\nname = \"engine_library\"\n",
+    ),
+    (
+        "engine-fixture/src/lib.rs",
+        "pub struct Secret;\npub mod nested { pub struct Hidden; }\n",
     ),
     (
         "crates/sunrise-mod-vocab/Cargo.toml",
@@ -19,6 +23,10 @@ const FILES: &[(&str, &str)] = &[
     (
         "crates/sunrise-mod-api/Cargo.toml",
         "[package]\nname = \"sunrise-mod-api\"\n[lib]\nname = \"mod_api\"\n",
+    ),
+    (
+        "crates/sunrise-mod-api-macros/Cargo.toml",
+        "[package]\nname = \"sunrise-mod-api-macros\"\n[lib]\nproc-macro = true\n",
     ),
     (
         "crates/sunrise-mod-api/src/lib.rs",
@@ -370,6 +378,34 @@ fn a_signature_cannot_hide_a_workspace_type_behind_an_import() {
 }
 
 #[test]
+fn a_signature_cannot_hide_a_workspace_type_behind_a_private_glob_import() {
+    let edited =
+        "use engine_library::*;\npub fn leak() -> Secret { unimplemented!() }\n/// A colour.";
+    let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
+        .err()
+        .expect("the glob-imported leak must fail the export");
+    assert!(error.contains("mod_api::leak"), "{error}");
+    assert!(error.contains("engine_library::Secret"), "{error}");
+}
+
+#[test]
+fn a_renamed_workspace_dependency_glob_cannot_hide_a_type() {
+    let edited = "use engine::*;\npub fn leak() -> Secret { unimplemented!() }\n/// A colour.";
+    let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
+        .err()
+        .expect("the aliased glob-imported leak must fail the export");
+    assert!(error.contains("mod_api::leak"), "{error}");
+    assert!(error.contains("engine_library::Secret"), "{error}");
+}
+
+#[test]
+fn primitive_and_prelude_types_after_a_workspace_glob_are_not_leaks() {
+    let edited = "use engine_library::*;\npub fn safe() -> (u32, Option<String>) { unimplemented!() }\n/// A colour.";
+    try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
+        .expect("primitive and prelude types are not imported from the workspace glob");
+}
+
+#[test]
 fn a_public_reexport_cannot_name_a_workspace_type_outside_the_seam() {
     let edited = "pub use engine_library::Secret as Leaked;\n/// A colour.";
     let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
@@ -410,12 +446,11 @@ fn a_whole_crate_import_alias_cannot_hide_a_workspace_type() {
 }
 
 #[test]
-fn a_glob_import_cannot_hide_a_workspace_type_from_a_public_signature() {
-    let edited =
-        "use engine_library::*;\npub fn leak() -> Secret { unimplemented!() }\n/// A colour.";
+fn a_local_module_alias_cannot_hide_a_workspace_type_from_a_public_signature() {
+    let edited = "mod hidden { pub use engine_library::Secret; }\nuse crate::hidden as h;\npub fn leak() -> h::Secret { unimplemented!() }\n/// A colour.";
     let error = try_export_fixture(&[(LIB, "/// A colour.", edited)], HOOKS)
         .err()
-        .expect("the glob-imported signature must fail the export");
+        .expect("the local-module alias must fail the export");
     assert!(error.contains("mod_api::leak"), "{error}");
     assert!(error.contains("engine_library::Secret"), "{error}");
 }

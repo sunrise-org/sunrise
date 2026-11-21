@@ -21,8 +21,15 @@ pub(crate) fn game<'a>(root: &'a Path, included: &'a [(&'a str, &'a str)]) -> In
 /// The workspace libraries that the public API cannot treat as opaque third-party types.
 pub(crate) struct OutsideSeam {
     crates: HashSet<String>,
+    indexed: Vec<WorkspaceCrate>,
     /// Dependency names as Rust spells them, keyed by the indexed crate that declares them.
     dependencies: HashMap<String, HashMap<String, String>>,
+}
+
+struct WorkspaceCrate {
+    name: String,
+    source: String,
+    root_file: Option<String>,
 }
 
 impl OutsideSeam {
@@ -40,6 +47,7 @@ impl OutsideSeam {
             .and_then(|workspace| workspace.get("dependencies"))
             .and_then(toml::Value::as_table);
         let mut crates = HashSet::new();
+        let mut indexed = Vec::new();
         let mut packages = HashMap::new();
         let mut member_manifests = Vec::new();
         for member in workspace_members {
@@ -74,11 +82,34 @@ impl OutsideSeam {
                 })
                 .unwrap_or_else(|| crate_name.clone());
             let seam = member == "crates/sunrise-mod-api"
+                || member == "crates/sunrise-mod-api-macros"
                 || CRATES
                     .iter()
                     .any(|(_, src)| Path::new(src).parent() == Some(Path::new(member)));
             if !seam {
-                crates.insert(crate_name);
+                crates.insert(crate_name.clone());
+                let lib_path = package
+                    .get("lib")
+                    .and_then(|lib| lib.get("path"))
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or("src/lib.rs");
+                let source_file = package_path.join(lib_path);
+                if source_file.is_file() {
+                    let source = source_file
+                        .parent()
+                        .and_then(|path| path.strip_prefix(root).ok())
+                        .ok_or_else(|| format!("{member}/Cargo.toml: invalid library path"))?
+                        .to_string_lossy()
+                        .into_owned();
+                    let root_file = source_file
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned());
+                    indexed.push(WorkspaceCrate {
+                        name: crate_name,
+                        source,
+                        root_file,
+                    });
+                }
             }
             member_manifests.push((indexed_name, package));
         }
@@ -129,47 +160,158 @@ impl OutsideSeam {
         }
         Ok(Self {
             crates,
+            indexed,
             dependencies,
         })
+    }
+
+    /// Adds outside workspace crates to the lazy source index so glob imports can be resolved to
+    /// actual exported names without treating primitives or prelude types as leaks.
+    pub(crate) fn add_to_index(&self, index: &mut Index<'_>) {
+        for krate in &self.indexed {
+            index.add_crate(&krate.name, &krate.source);
+            if let Some(file) = &krate.root_file
+                && file != "lib.rs"
+            {
+                index.set_root_file(&krate.name, file);
+            }
+        }
     }
 
     /// Resolves an indexed source path to an outside workspace crate, following Cargo and `use`
     /// aliases. The returned path uses the owning crate's real Rust library name.
     pub(crate) fn external_path(
         &self,
-        index: &Index<'_>,
+        index: &mut Index<'_>,
         module: usize,
         path: &[String],
     ) -> Option<Vec<String>> {
         self.resolve_external(index, module, path, &mut HashSet::new())
     }
 
-    fn resolve_external(
+    fn indexed_external_path(
         &self,
         index: &Index<'_>,
+        id: crate::index::ItemId,
+    ) -> Option<Vec<String>> {
+        let module = &index.modules[id.module];
+        if !self.crates.contains(&module.krate) {
+            return None;
+        }
+        let name = match index.item(id) {
+            Item::Const(item) => item.ident.to_string(),
+            Item::Enum(item) => item.ident.to_string(),
+            Item::Struct(item) => item.ident.to_string(),
+            Item::Trait(item) => item.ident.to_string(),
+            Item::Type(item) => item.ident.to_string(),
+            Item::Union(item) => item.ident.to_string(),
+            _ => return None,
+        };
+        Some(
+            std::iter::once(module.krate.to_owned())
+                .chain(module.path.iter().cloned())
+                .chain(std::iter::once(name))
+                .collect(),
+        )
+    }
+
+    fn globbed_external_path(
+        &self,
+        index: &mut Index<'_>,
+        module: usize,
+        name: &str,
+        seen: &mut HashSet<(usize, String)>,
+    ) -> Option<Vec<String>> {
+        if let Ok(crate::index::Found::Item(id)) = index.resolve(module, name) {
+            return self.indexed_external_path(index, id);
+        }
+        let mut globs = Vec::new();
+        for item in &index.modules[module].items {
+            if let Item::Use(item) = item {
+                uses(&item.tree, &mut Vec::new(), &mut |path, alias| {
+                    if alias.is_none() {
+                        globs.push(path);
+                    }
+                });
+            }
+        }
+        for glob in globs {
+            let target = if let Some(path) = self.resolve_external(index, module, &glob, seen) {
+                let mut path = path;
+                path.push(name.to_owned());
+                index.resolve_path(module, &path).ok()
+            } else {
+                Self::indexed_module(index, module, &glob)
+                    .and_then(|target| index.resolve(target, name).ok())
+            };
+            if let Some(crate::index::Found::Item(id)) = target
+                && let Some(path) = self.indexed_external_path(index, id)
+            {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    /// Loads an indexed module named by a local path, including `crate::` and `super::` paths.
+    fn indexed_module(index: &mut Index<'_>, module: usize, path: &[String]) -> Option<usize> {
+        Self::resolve_indexed_module(index, module, path, &mut HashSet::new())
+    }
+
+    fn resolve_indexed_module(
+        index: &mut Index<'_>,
+        module: usize,
+        path: &[String],
+        seen: &mut HashSet<(usize, String)>,
+    ) -> Option<usize> {
+        if let Some((krate, path)) = index.absolute(module, path)
+            && let Ok(target) = index.module(krate, &path)
+        {
+            return Some(target);
+        }
+
+        let (first, rest) = path.split_first()?;
+        if !seen.insert((module, first.clone())) {
+            return None;
+        }
+        let mut imported = None;
+        for item in &index.modules[module].items {
+            match item {
+                Item::Use(item) => uses(&item.tree, &mut Vec::new(), &mut |path, alias| {
+                    if alias.as_deref() == Some(first.as_str()) {
+                        imported = Some(path);
+                    }
+                }),
+                Item::ExternCrate(item) => {
+                    let alias = item
+                        .rename
+                        .as_ref()
+                        .map_or_else(|| item.ident.to_string(), |(_, name)| name.to_string());
+                    if alias == *first {
+                        imported = Some(vec![item.ident.to_string()]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let target = Self::resolve_indexed_module(index, module, &imported?, seen)?;
+        if rest.is_empty() {
+            Some(target)
+        } else {
+            Self::resolve_indexed_module(index, target, rest, seen)
+        }
+    }
+
+    fn resolve_external(
+        &self,
+        index: &mut Index<'_>,
         module: usize,
         path: &[String],
         seen: &mut HashSet<(usize, String)>,
     ) -> Option<Vec<String>> {
-        let (first, rest) = path.split_first()?;
-        if self.crates.contains(first) {
-            return Some(path.to_vec());
-        }
-
-        let krate = index.modules.get(module)?.krate;
-        if let Some(real) = self
-            .dependencies
-            .get(krate)
-            .and_then(|aliases| aliases.get(first))
-        {
-            return Some(
-                std::iter::once(real.clone())
-                    .chain(rest.iter().cloned())
-                    .collect(),
-            );
-        }
-
         // Resolve `crate::`, `self::` and `super::` before looking for imports in that module.
+        let (first, _) = path.split_first()?;
+        let krate = index.modules.get(module)?.krate.clone();
         let (scope, path) = match first.as_str() {
             "crate" | "self" | "super" => {
                 let mut scope_path = index.modules[module].path.clone();
@@ -194,13 +336,30 @@ impl OutsideSeam {
             _ => (module, path),
         };
         let (first, rest) = path.split_first()?;
+
+        // A local module shadows a crate with the same spelling. Follow it before checking the
+        // external workspace crate and import aliases.
+        if !rest.is_empty()
+            && let Some(target) = Self::indexed_module(index, scope, std::slice::from_ref(first))
+        {
+            let target_module = &index.modules[target];
+            if self.crates.contains(&target_module.krate) {
+                return Some(
+                    std::iter::once(target_module.krate.to_owned())
+                        .chain(target_module.path.iter().cloned())
+                        .chain(rest.iter().cloned())
+                        .collect(),
+                );
+            }
+            return self.resolve_external(index, target, rest, seen);
+        }
         if self.crates.contains(first) {
             return Some(path.to_vec());
         }
-        let krate = index.modules.get(scope)?.krate;
+        let krate = index.modules.get(scope)?.krate.clone();
         if let Some(real) = self
             .dependencies
-            .get(krate)
+            .get(&krate)
             .and_then(|aliases| aliases.get(first))
         {
             return Some(
@@ -213,16 +372,12 @@ impl OutsideSeam {
         if !seen.insert((scope, first.clone())) {
             return None;
         }
-        let items = &index.modules[scope].items;
         let mut named = None;
-        let mut globs = Vec::new();
-        for item in items {
+        for item in &index.modules[scope].items {
             match item {
                 Item::Use(item) => uses(&item.tree, &mut Vec::new(), &mut |imported, alias| {
                     if alias.as_deref() == Some(first.as_str()) {
                         named = Some(imported);
-                    } else if alias.is_none() {
-                        globs.push(imported);
                     }
                 }),
                 Item::ExternCrate(item) => {
@@ -242,16 +397,14 @@ impl OutsideSeam {
                 resolved.extend(rest.iter().cloned());
                 return Some(resolved);
             }
+            if !rest.is_empty()
+                && let Some(target) = Self::indexed_module(index, scope, &imported)
+            {
+                return self.resolve_external(index, target, rest, seen);
+            }
             return None;
         }
-        for glob in globs {
-            if let Some(mut resolved) = self.resolve_external(index, scope, &glob, seen) {
-                resolved.push(first.clone());
-                resolved.extend(rest.iter().cloned());
-                return Some(resolved);
-            }
-        }
-        None
+        self.globbed_external_path(index, scope, first, seen)
     }
 
     pub(crate) fn error(item: &str, path: &[String]) -> String {

@@ -517,7 +517,7 @@ struct Impls {
 
 fn module_name(index: &Index<'_>, module: usize) -> String {
     let m = &index.modules[module];
-    std::iter::once(m.krate)
+    std::iter::once(m.krate.as_str())
         .chain(m.path.iter().map(String::as_str))
         .collect::<Vec<_>>()
         .join("::")
@@ -659,17 +659,19 @@ pub(crate) fn build(
     }
     notes.extend(expand::expand_modules(index, &expanded));
     let outside = OutsideSeam::read(root)?;
+    outside.add_to_index(index);
     let mut walker = walk::Walker::new(index);
     let public = walker.public(&outside)?;
     notes.extend(public.notes.iter().cloned());
     // Inherent items and impls live in any module of the crate that defines the type.
-    let mut crates: BTreeSet<&'static str> = BTreeSet::from(["mod_api", "sunrise_mod_api"]);
+    let mut crates: BTreeSet<String> =
+        BTreeSet::from(["mod_api".to_owned(), "sunrise_mod_api".to_owned()]);
     for id in public.items.keys() {
-        crates.insert(walker.index.modules[id.module].krate);
+        crates.insert(walker.index.modules[id.module].krate.clone());
     }
     let mut modules = Vec::new();
     for krate in crates {
-        modules.extend(walker.all_modules(krate)?);
+        modules.extend(walker.all_modules(&krate)?);
     }
     notes.extend(walker.take_notes());
     let roles = Roles::resolve(index, boundary, &mut notes);
