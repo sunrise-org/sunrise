@@ -5309,6 +5309,57 @@ mod same_vehicle_push_tests {
         assert_eq!(pushed, vec![3], "the camel pushes the zombie");
     }
 
+    /// `LivingEntity.pushEntities` has no cap: in a pen of twelve chickens one pushes every
+    /// other (11), in vanilla's order.
+    #[test]
+    #[ignore = "daily"]
+    fn a_mob_in_a_crowded_pen_pushes_every_mob_it_overlaps() {
+        let mut pen = None;
+        assert!(
+            with_test_world(&[], |_, types| {
+                let chicken = |id: u32| {
+                    // All inside one another's boxes, none exactly on the pusher.
+                    let at = Vec3::new(0.5 + f64::from(id) * 0.02, 64.0, 0.5);
+                    Mob::new(
+                        id,
+                        std::sync::Arc::new(types.types["minecraft:chicken"].clone()),
+                        at,
+                        0.0,
+                    )
+                };
+                pen = Some((0..12).map(chicken).collect::<Vec<_>>());
+            }),
+            "vanilla data is missing"
+        );
+        let Some(pen) = pen else {
+            return;
+        };
+        let crowd: Vec<crate::mobs::Seen> = pen
+            .iter()
+            .map(|m| m.seen(None, &crate::items::Items::empty()))
+            .collect();
+        let mut pusher = pen[0].clone();
+        let mut events = Vec::new();
+        assert!(
+            with_test_world(&crowd, |w, _| {
+                let mut level = crate::health::TestLevel::new(0);
+                push_entities(&mut pusher, w, &mut level.level(), &mut events)
+            }),
+            "vanilla data is missing"
+        );
+        let pushed: Vec<u32> = events
+            .iter()
+            .filter_map(|e| match e {
+                MobEvent::Push {
+                    target: Who::Mob(id),
+                    ..
+                } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pushed, (1..12).collect::<Vec<u32>>());
+    }
+
     #[test]
     #[ignore = "daily"]
     fn sleeping_villager_vetoes_only_pushes_received_during_other_mobs_ticks() {

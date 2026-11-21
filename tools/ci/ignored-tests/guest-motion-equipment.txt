@@ -1,2 +1,3 @@
 sunrise-client game::lan_actions::guest_body::tests::guest_equipment_changes_powder_snow_support_on_the_same_move lib daily resources
+sunrise-client game::native_bots::tests::a_guest_eating_walks_at_the_items_use_speed lib daily resources
 sunrise-client game::native_bots::tests::guest_equipment_and_item_use_shape_native_movement lib daily resources

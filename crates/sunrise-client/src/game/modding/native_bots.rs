@@ -461,6 +461,58 @@ mod tests {
         });
     }
 
+    /// `LocalPlayer.aiStep`: a player using an item (eating) walks at the item's use speed.
+    #[test]
+    #[ignore = "daily"]
+    fn a_guest_eating_walks_at_the_items_use_speed() {
+        use crate::game::native_entity_refs::tests::with_game;
+        use crate::game::native_item_places::tests::{guest, open_to_lan};
+        use sunrise_client::{chunk::Chunk, items::ItemStack};
+
+        with_game(|game| {
+            open_to_lan(game);
+            game.streaming
+                .insert_remote(&mut game.world, Chunk::empty(0, 0));
+            let stone = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:stone")
+                .unwrap();
+            game.world.set(1, 63, 1, stone).unwrap();
+            let mut guest = guest(1);
+            guest.position = [1.5, 64.0, 1.5];
+            guest.on_ground = true;
+            guest.loaded = true;
+            guest.motion = Some(Box::new(
+                PlayerMotion::new(game.motion, Vec3::new(1.5, 64.0, 1.5)).unwrap(),
+            ));
+            let slot = guest.selected;
+            guest.inventory[slot] = Some(ItemStack::new("minecraft:bread", 1));
+            let uuid = guest.uuid;
+            game.lan.as_mut().unwrap().hub.guests.push(guest);
+            let player = game.player(uuid).unwrap();
+
+            let walked = |game: &mut Game<'_>| {
+                let moved = game.player_simulate_move(player, input(1.0, 0.0)).unwrap();
+                moved.position[2] - 1.5
+            };
+            let free = walked(game);
+            game.as_guest(1, |game| game.using = Some((slot, 0)))
+                .unwrap();
+            let eating = walked(game);
+            let speed = f64::from(game.res.items().get("minecraft:bread").unwrap().use_speed);
+            assert!(
+                free > 0.0 && speed < 1.0,
+                "walked {free}, use speed {speed}"
+            );
+            assert!(
+                (eating / free - speed).abs() < 1.0e-5,
+                "eating walked {eating} of {free}, use speed {speed}"
+            );
+        });
+    }
+
     #[test]
     fn boxes_round_trip_and_bad_boxes_are_refused() {
         let b = [0.0, 1.0, 2.0, 3.0, 4.5, 6.0];

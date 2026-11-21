@@ -204,9 +204,15 @@ fn a_veto_drops_the_report_and_corrects_the_client() {
     let mut hub = standing(true, vec![at(0.5)]);
     let conn = hub.guests[0].conn;
     drain(&mut hub);
+    // handleMovePlayer counts the packet (receivedMovePacketCount) before the hook rules on it.
+    assert_eq!(
+        hub.guests[0].received_moves, 1,
+        "the speed check's window counted it"
+    );
     let counter = hub.guests[0].teleport_counter;
     hub.resolve_move(conn, false);
     let g = &hub.guests[0];
+    assert_eq!(g.received_moves, 1, "the veto doesn't take it back");
     assert_eq!(g.position, [0.0, 64.0, 0.0], "the report is not applied");
     assert_eq!(
         g.teleport_counter,
