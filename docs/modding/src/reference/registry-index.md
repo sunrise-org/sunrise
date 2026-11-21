@@ -299,15 +299,16 @@ icon = "icons/coords_hud.png"
 categories = ["utility"]        # 1 to 3 from your kind's list
 tags = ["hud"]                  # up to 10, lowercase
 screenshots = ["screenshots/coords_hud/main.png"]  # 1 to 8, files kept in the registry
-# key = "RWT..."                # optional minisign public key: every version must then carry a signature
+key = "RWT..."                 # the project's minisign public key
 
 [[versions]]                    # newest first
 version = "0.1.0"
 published = "2026-11-16"
 game = "26.3"
-file = "coords_hud-0.1.0.smod"  # the name players download, with the kind's extension
+sunrise = "26.3-0.1.0"
+file = "https://github.com/you/coords_hud/releases/download/v0.1.0/coords_hud-0.1.0.smod"
 sha256 = "<lowercase hex>"      # of that file
-# signature = """<the .minisig text>"""
+signature = """<the .minisig text>"""
 changelog = ""
 ```
 
@@ -316,13 +317,18 @@ A mod's API, side, capabilities and dependencies are read from the file, not lis
 or source pin; adding a new binary build does not require another source version.
 The category lists are in `crates/sunrise-mod-package/src/index/page.rs`.
 
-A version can declare `sunrise = "26.3-0.1.0"`: the tag is the Minecraft version (dotted numbers, matching `game`),
-a hyphen, and Sunrise's `X.Y.Z` without prerelease or build metadata. This field is optional during migration.
-`registry check`, `registry review` and `registry build` accept `--releases <file>`: a JSON array of objects with
-`tag` and `commit` (40 hex digits, published as lowercase), one per stable release. A declared tag must be in the
-list (a reader of an index that lists releases leaves out a version naming another), and a row that declares one is refused when no file is given; a row without `sunrise` needs none. When package
-files are checked, a native package's `[native] sunrise` pin must match the named commit. Once a version is listed
-with `sunrise`, `registry review` refuses changing or removing it.
+`registry review` requires every new or changed version row to declare `sunrise = "26.3-0.1.0"`. The tag is
+the Minecraft version (dotted numbers, matching `game`), a hyphen, and Sunrise's `X.Y.Z` without prerelease or
+build metadata. `registry check`, `registry review` and `registry build` accept `--releases <file>`: a JSON array
+of objects with `tag` and `commit` (40 hex digits, published as lowercase), one per stable release. A declared tag
+must be in the list; the commands refuse it when no list is given. An index reader leaves out rows whose tags
+are absent from the releases listed in that index. When package files are checked, a native package's
+`[native] sunrise` pin must match the named commit.
+
+Unchanged legacy rows may still omit `sunrise`. `registry check` warns for each such row, and `registry build`
+still includes it without a stable release tag. `registry review` lets a legacy row leave its entry without a
+takedown. For a row published with `sunrise`, the tag cannot change and removing the row requires a takedown
+in `revoked.toml` naming the project id and that file's exact SHA-256. Removing a whole entry is still refused.
 
 `cargo sunrise-mod registry releases --out releases.json` discovers published, non-draft stable releases
 from `sunrise-org/sunrise` (no prereleases), resolves lightweight and annotated tags to full commits, and

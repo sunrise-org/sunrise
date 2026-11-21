@@ -259,6 +259,14 @@ pub fn main(args: &[String]) -> Result<(), String> {
                     binary_checks: binary_checks(sdk_data),
                 },
             );
+            for e in &head.entries {
+                for v in e.versions.iter().filter(|v| v.sunrise.is_none()) {
+                    eprintln!(
+                        "warning: {} {}: legacy version row needs sunrise = \"<stable release tag>\"",
+                        e.id, v.version
+                    );
+                }
+            }
             let mut reports = Vec::new();
             let errors = match assembled {
                 Err(errors) => errors,

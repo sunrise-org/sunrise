@@ -403,7 +403,8 @@ fn owner_ids_are_optional_and_kept() {
 
 #[test]
 fn owner_only_nightly_changes_are_routine() {
-    let old: Entry = toml::from_str(&hud_entry()).unwrap();
+    let mut old: Entry = toml::from_str(&hud_entry()).unwrap();
+    old.versions[0].sunrise = Some("26.3-0.1.0".into());
     let mut with_source = old.clone();
     with_source.nightly = Some(NightlySource {
         repo: "ludovic111/coords_hud".into(),
@@ -484,14 +485,15 @@ fn the_release_list_refuses_malformed_or_ambiguous_releases() {
 #[test]
 fn a_review_protects_published_files() {
     let base: Entry = toml::from_str(&hud_entry()).unwrap();
-    let cozy: Entry = toml::from_str(COZY).unwrap();
+    let mut cozy: Entry = toml::from_str(COZY).unwrap();
+    cozy.versions[0].sunrise = Some("26.3-0.1.0".into());
     let one = std::slice::from_ref(&base);
-    let same = review(one, one, "someone");
-    assert_eq!(same, Review::default());
+    assert_eq!(review(one, one, "someone"), Review::default());
 
     let mut update = base.clone();
     let mut next = update.versions[0].clone();
     next.version = "0.2.0".into();
+    next.sunrise = Some("26.3-0.1.0".into());
     update.versions.insert(0, next);
     let r = review(one, std::slice::from_ref(&update), "ludovic111");
     assert!(r.errors.is_empty(), "{r:?}");
@@ -501,6 +503,7 @@ fn a_review_protects_published_files() {
 
     let mut swapped = base.clone();
     swapped.versions[0].sha256 = SPACK.into();
+    swapped.versions[0].sunrise = Some("26.3-0.1.0".into());
     swapped.kind = Kind::ResourcePack;
     swapped.key = None;
     let r = review(&[base.clone(), cozy.clone()], &[swapped], "ludovic111");
@@ -511,6 +514,7 @@ fn a_review_protects_published_files() {
     assert!(r.notes.iter().any(|n| n.contains("signing key")));
 
     let r = review(&[], &[cozy], "newcomer");
+    assert!(r.errors.is_empty(), "{r:?}");
     assert_eq!(r.notes, ["cozy: a new modpack by ludovic111"]);
 
     // A row may gain a stable release; once published, the release it names stays.
@@ -528,9 +532,51 @@ fn a_review_protects_published_files() {
 }
 
 #[test]
+fn review_requires_a_stable_release_on_a_new_row() {
+    let base: Entry = toml::from_str(&hud_entry()).unwrap();
+    let mut head = base.clone();
+    let mut next = base.versions[0].clone();
+    next.version = "0.2.0".into();
+    head.versions.push(next);
+    for (before, version) in [(std::slice::from_ref(&base), "0.2.0"), (&[][..], "0.1.0")] {
+        let r = review(before, std::slice::from_ref(&head), "ludovic111");
+        assert!(
+            r.errors
+                .iter()
+                .any(|e| e.contains(&format!("coords_hud {version}:"))
+                    && e.contains("needs sunrise")),
+            "{r:?}"
+        );
+    }
+}
+
+#[test]
+fn review_requires_a_stable_release_on_a_changed_row() {
+    let base: Entry = toml::from_str(&hud_entry()).unwrap();
+    let mut head = base.clone();
+    head.versions[0].changelog = "An edited changelog.".into();
+    let r = review(&[base], &[head], "ludovic111");
+    assert_eq!(
+        r.errors,
+        ["coords_hud 0.1.0: a new or changed version row needs sunrise = \"<stable release tag>\""]
+    );
+}
+
+#[test]
+fn review_refuses_deleting_an_entry_even_with_only_legacy_rows() {
+    let base: Entry = toml::from_str(&hud_entry()).unwrap();
+    let r = review(&[base], &[], "ludovic111");
+    assert_eq!(
+        r.errors,
+        ["coords_hud: removed; take its files down in revoked.toml instead"]
+    );
+}
+
+#[test]
 fn a_version_taken_down_by_hash_may_leave_its_entry() {
     // A lost signing key: the next version comes under a new key, and the old one is dropped.
-    let base: Entry = toml::from_str(&hud_entry()).unwrap();
+    let mut base: Entry = toml::from_str(&hud_entry()).unwrap();
+    base.versions[0].sunrise = Some("26.3-0.1.0".into());
     let old = base.versions[0].clone();
     let mut rotated = base.clone();
     rotated.versions[0].version = "0.2.0".into();

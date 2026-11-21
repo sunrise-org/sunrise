@@ -3,9 +3,9 @@
 Sunrise's registry, [sunrise-org/sunrise-mods](https://github.com/sunrise-org/sunrise-mods), lists mods, modpacks,
 resource packs and shader packs at [playsunrise.net/mods](https://playsunrise.net/mods). The
 [registry submission form](https://playsunrise.net/mods/submit) uploads your package and opens a pull request for a
-person to review. To prepare a mod submission locally, follow the steps below with `cargo sunrise-mod publish`,
-then upload the package and open the pull request yourself. Native mods for stable releases use the
-[stable source submission](#publishing-a-stable-source-version) below.
+person to review. Every new registry version row must name a stable Sunrise release in `sunrise`. To submit a
+mod yourself, use [the stable source submission](#publishing-a-stable-source-version). The steps below also show
+how to prepare and check a local draft.
 
 ## 1. Build and write the submission
 
@@ -99,8 +99,10 @@ not written into the entry. The dependencies are read from the package itself, s
 `--registry`, the registry's CI checks both when the pull request opens; it also checks sides and what the dependencies
 themselves require.
 
-Published source versions never change. A file that must go is taken down by the registry's maintainers in
-`revoked.toml`. The only update `publish` makes to an existing version is an [append of signed native builds](#publishing-native-binaries).
+Published source files never change. Removing a row published with `sunrise` requires a takedown by the
+registry's maintainers in `revoked.toml` naming the project id and file hash. Legacy rows without `sunrise`
+can be removed without a takedown, but the project entry must stay. The only update `publish` makes to an
+existing version is an [append of signed native builds](#publishing-native-binaries).
 
 ## Signing
 
