@@ -89,6 +89,109 @@ fn assert_padding(chunk: &Chunk, bytes: usize) {
 
 #[test]
 #[ignore = "daily"]
+fn deferred_stream_retirement_replans_at_common_frontier_and_stops_repeating_checkpoints() {
+    const NAME: &str = "game::native_live_worlds_tests::checkpoint_adverse_tests::budget_tests::deferred_stream_retirement_replans_at_common_frontier_and_stops_repeating_checkpoints";
+    if fresh(NAME) {
+        return;
+    }
+    actual_game(
+        vec![ModEntry::new("pose_fixture", Box::new(PublicationFixture))],
+        |game, root| {
+            let source = prepare_named(game, A);
+            bind_actual_save_tables(game, source);
+            let parent = game.level("minecraft:overworld").unwrap();
+            let projection = source
+                .project(
+                    game,
+                    parent,
+                    MEMBERS,
+                    LiveWorldPose::at([10., 16., 10.]),
+                    LiveWorldLimits::default(),
+                )
+                .unwrap();
+            let sample = projection.sample(game).unwrap();
+            // Keep unrelated generated/meshed arrivals out of this constructed fixture's
+            // repeated save observations. Streaming remains unpaused and its real planning,
+            // common admission, ownership removal and unload callbacks run normally.
+            for dimension in [Dim::Overworld, Dim::from_id(source.dimension_id())] {
+                game.enter_level(dimension).unwrap();
+                game.streaming.abort_generation();
+                game.streaming.paused = false;
+                game.streaming.mesh = false;
+                game.streaming.center = (0, 0);
+                game.streaming.radius = 0;
+            }
+            let far = (64, 0);
+            game.world
+                .chunks
+                .insert(far, Arc::new(Chunk::empty(far.0, far.1)));
+            let stone = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:stone")
+                .unwrap();
+            game.world.set(far.0 * 16 + 5, 71, 5, stone).unwrap();
+            game.world.with_chunk_extras((far.0 * 16, 0, 0), |extras| {
+                extras
+                    .root
+                    .insert(PAD.into(), Tag::ByteArray(vec![37; 128]));
+            });
+            source.checkpoint(game).unwrap();
+            let before = wal::read_epoch(root).unwrap();
+            assert!(before > 0);
+            assert!(!game.save.live_world_barrier_pending());
+            assert!(!game.streaming.forced.contains(&far));
+
+            // A due ordinary sweep requests common admission and keeps the live owner.
+            // Frontier service must re-plan that actual retirement, rather than save an
+            // empty fresh plan and leave the same far column for every later sweep.
+            game.update_world();
+            assert!(game.world.chunks.contains_key(&far));
+            assert!(game.save.live_world_barrier_pending());
+            assert_eq!(wal::read_epoch(root).unwrap(), before);
+            game.service_live_world_saves().unwrap();
+            assert!(
+                !game.world.chunks.contains_key(&far),
+                "the acknowledged common decision must actually retire the deferred column"
+            );
+            assert!(wal::read_epoch(root).unwrap() > before);
+            let reopened = reopen_column(game, far.0);
+            assert_eq!(reopened.block(5, 71, 5), stone);
+            assert_padding(&reopened, 128);
+
+            // Ordinary post-unload entity cleanup may itself queue a save. Preserve and
+            // acknowledge it before checking that unchanged future sweeps need no more WAL.
+            for _ in 0..4 {
+                if !game.save.live_world_barrier_pending() {
+                    break;
+                }
+                game.service_live_world_saves().unwrap();
+            }
+            assert!(!game.save.live_world_barrier_pending());
+            let settled = wal::read_epoch(root).unwrap();
+            for _ in 0..27 {
+                game.update_world();
+                game.service_live_world_saves().unwrap();
+                assert!(!game.world.chunks.contains_key(&far));
+                assert_eq!(
+                    wal::read_epoch(root).unwrap(),
+                    settled,
+                    "unchanged ordinary sweeps cannot repeatedly checkpoint a retired column"
+                );
+            }
+            assert_eq!(projection.sample(game).unwrap(), sample);
+            assert_eq!(source.live_world(game).unwrap(), Some(projection));
+            assert!(game.world.chunks.contains_key(&(0, 0)));
+            assert!(game.world.chunks.contains_key(&(1, 0)));
+            assert_actual_fixture_contents(game, source, MEMBERS);
+            assert!(!root.join("data/sunrise_live_world_journal.bin").exists());
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
 fn common_ordinary_save_omits_clean_far_terrain_keeps_opaque_and_dirty_budget_ack() {
     const NAME: &str = "game::native_live_worlds_tests::checkpoint_adverse_tests::budget_tests::common_ordinary_save_omits_clean_far_terrain_keeps_opaque_and_dirty_budget_ack";
     if fresh(NAME) {

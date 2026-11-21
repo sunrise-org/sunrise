@@ -687,3 +687,33 @@ ran the preserved formatter and source-only checks, not Cargo, a compiler, Game,
 network, installation or publication. Actual executable traces remain the coordinator's
 next gate. The detailed authoring input record accompanies the diagnostic documentation;
 AI authorship and pending human/upstream eligibility decisions remain explicit.
+
+## Deferred streaming retirement investigation: regression before correction
+
+The coordinator supplied a sanitized own-engine event window and a symptom-triggered
+Server thread OS stack excerpt. The window shows distinct global server ticks/publications
+in bursts while client frames continue. The triggered stack places the actual delay in
+ordinary frontier save service, through streaming retirement and the common checkpoint's
+durable write/flush operations. Only the expressly authorized generic excerpts were read;
+no native caller implementation, physical solver, private logs or neighboring port was used.
+
+Own source inspection found that a due sweep's out-of-range columns request a barrier, but
+ordinary admission discards its removal list after resetting the periodic sweep age. The
+frontier's next fresh plan can therefore be empty, acknowledge a common save and retire no
+column. Later sweeps request another checkpoint for the same resident column. This is a
+local engine investigation, not an upstream approval or system-wide latency explanation.
+
+The tests-only checkpoint adds a real Game/Streaming/common-WAL regression with independently
+reopened terrain and unchanged later sweep epochs. Its constructed fixture holds generation
+workers idle via the existing abort operation to keep unrelated arrivals out of the save
+observations; streaming planning/admission/unload remains unpaused and real. Existing tests
+and durability rules are unchanged. The author ran only formatting/source checks. Actual
+failing-before execution is assigned to the coordinator before any production correction.
+No App Nap, sleep, presentation, trajectory, physical step or carry change is included.
+
+The ignored-inventory invocation did not pass: the default Python lacked `tomllib`; a
+retry with the installed Python 3.14 reached its Rust parser subprocess, but `cargo` was
+absent from PATH and was not started. The author did not add a compiler to PATH or run a
+build to complete this check. The new daily row remains subject to the coordinator's
+normal configured inventory gate. Formatting, diff and the actual local commit hook are
+reported separately; these inventory attempts are retained nonpasses.
