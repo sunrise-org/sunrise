@@ -1499,7 +1499,7 @@ impl Streaming {
         for ([bx, by, bz], state) in writes.blocks {
             let _ = world.set(bx, by, bz, sunrise_world::registry::BlockStateId(state));
         }
-        self.publish_proto_light_support(world, (x, z));
+        Self::publish_proto_light_support(world, (x, z), self.proto_sections(x, z));
         // After the blocks: the write of a block with a block entity made a
         // default one, which the generated one replaces.
         for (pos, entity) in writes.block_entities {
@@ -1583,10 +1583,11 @@ impl Streaming {
                 for dx in -1..=1 {
                     let neighbour = (key.0 + dx, key.1 + dz);
                     if neighbour != key && !world.chunks.contains_key(&neighbour) {
-                        let support = self.proto_light_support(world, neighbour);
-                        if !support.is_empty() {
-                            world.set_proto_light_support(neighbour, support);
-                        }
+                        Self::publish_proto_light_support(
+                            world,
+                            neighbour,
+                            self.proto_sections(neighbour.0, neighbour.1),
+                        );
                     }
                 }
             }
@@ -1713,33 +1714,25 @@ impl Streaming {
         (self.non_air_sections)(self.protos.get(&(x, z))?.as_ref()?)
     }
 
-    fn proto_light_support(&self, world: &World, key: (i32, i32)) -> SectionMask {
+    fn publish_proto_light_support(
+        world: &mut World,
+        key: (i32, i32),
+        sections: Option<SectionMask>,
+    ) {
+        // None means the proto is not initialized or is checked out, not that its
+        // published support was withdrawn. Eviction/promotion retire it separately.
+        let Some(sections) = sections else { return };
+        let first = world.layout().min_y() >> 4;
         let mut support = SectionMask::EMPTY;
-        if let Some(sections) = self.proto_sections(key.0, key.1) {
-            let first = world.layout().min_y() >> 4;
-            for s in sections
-                .iter()
-                .filter(|s| world.shape.has_section(first + *s as i32))
-            {
-                for padded in s..=s + 2 {
-                    support.insert(padded);
-                }
+        for s in sections
+            .iter()
+            .filter(|s| world.shape.has_section(first + *s as i32))
+        {
+            for padded in s..=s + 2 {
+                support.insert(padded);
             }
         }
-        support
-    }
-
-    fn publish_proto_light_support(&self, world: &mut World, key: (i32, i32)) {
-        if (-1..=1).any(|dz| {
-            (-1..=1).any(|dx| {
-                world
-                    .chunks
-                    .get(&(key.0 + dx, key.1 + dz))
-                    .is_some_and(|c| c.light_loaded)
-            })
-        }) {
-            world.set_proto_light_support(key, self.proto_light_support(world, key));
-        }
+        world.set_proto_light_support(key, support);
     }
     /// `ChunkMap.getLatestStatus` for the loading screen's chunk map: the
     /// furthest step this column has reached, `None` before it is asked for.
@@ -1935,7 +1928,11 @@ impl Streaming {
                         self.protos.insert((x, z), Some(proto));
                         if decorated || !self.decorates {
                             self.decorated.insert((x, z));
-                            self.publish_proto_light_support(world, (x, z));
+                            Self::publish_proto_light_support(
+                                world,
+                                (x, z),
+                                self.proto_sections(x, z),
+                            );
                         }
                     }
                 }
@@ -2279,7 +2276,7 @@ impl Streaming {
                 self.submit(Some((x, z)), 1, Job::Decorate(x, z, region, finals));
             }
             for key in initialized {
-                self.publish_proto_light_support(world, key);
+                Self::publish_proto_light_support(world, key, self.proto_sections(key.0, key.1));
             }
         }
         hz_laps.lap("st_decorate");
@@ -3737,6 +3734,37 @@ fn checkout_protos(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checked_out_initialized_proto_supports_a_newly_loaded_saved_column() {
+        use crate::{chunk::MIN_Y, light::light_from_saved_layers};
+        use sunrise_world::registry::BlockStateId;
+
+        let key = (1, 0);
+        let proto: Proto = Box::new(SectionMask::single(0));
+        let mut protos = [(key, Some(proto))].into_iter().collect();
+        let initialized_sections = |protos: &FxHashMap<_, Option<Proto>>| {
+            protos[&key]
+                .as_ref()?
+                .downcast_ref::<SectionMask>()
+                .copied()
+        };
+        let mut world = World::new(BlockStateId(0), 0);
+        Streaming::publish_proto_light_support(&mut world, key, initialized_sections(&protos));
+
+        let checked_out = checkout_protos(&mut protos, &mut Default::default(), [key]);
+        assert_eq!(checked_out.len(), 1);
+        // The arrival path cannot read the proto's sections while a save owns it.
+        Streaming::publish_proto_light_support(&mut world, key, initialized_sections(&protos));
+        let mut saved = Chunk::empty(0, 0);
+        light_from_saved_layers::<&[u8]>(&mut saved, &[], true);
+        world.install_light_column(saved);
+        assert_eq!(
+            world.chunks[&(0, 0)].stored_light_layers(0),
+            Some([true; 2])
+        );
+        assert_eq!(world.light(0, MIN_Y - 1, 0), 0);
+    }
 
     /// The queue hands out the wanted chunks in the order the full sort did
     /// (every chunk measured, sorted by distance, the new ones ranked in that
