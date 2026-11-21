@@ -2348,13 +2348,19 @@ impl Game<'_> {
                 _ => None,
             };
     }
-    /// Save and remove the entities of chunks that unloaded.
+    /// `PersistentEntitySectionManager.processChunkUnload`: save and remove entities
+    /// when their terrain unloads, but leave pending entity chunks in memory.
     pub(super) fn unload_entities(&mut self, unloaded: &[Arc<Chunk>]) {
         if unloaded.is_empty() {
             return;
         }
         self.spawn_loaded_entities();
-        let keys: HashSet<(i32, i32)> = unloaded.iter().map(|c| (c.x, c.z)).collect();
+        let keys = self
+            .save
+            .entity_chunks_ready_to_unload(unloaded.iter().map(|c| (c.x, c.z)));
+        if keys.is_empty() {
+            return;
+        }
         let chunks = self.entity_chunks(&keys, true);
         let counts: Vec<_> = chunks
             .iter()

@@ -2941,6 +2941,14 @@ impl SaveDir {
         }
         Ok(out)
     }
+    /// Failed reads leave entity chunks pending, even when their terrain unloads.
+    pub fn entity_chunks_ready_to_unload(
+        &self,
+        keys: impl Iterator<Item = (i32, i32)>,
+    ) -> HashSet<(i32, i32)> {
+        let failed = self.failed_entity_reads.lock().unwrap();
+        keys.filter(|key| !failed.contains(key)).collect()
+    }
     /// Write `chunks` into their region files and wait until they are on disk.
     pub fn save(
         &self,
