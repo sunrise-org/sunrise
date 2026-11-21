@@ -694,9 +694,14 @@ impl LevelAccess for GameLevel<'_> {
     ) {
         // Asked on both sides: a client's placement prediction asks it too.
         if let Some(fluid) = native_world_read::api_fluid_state(fluid) {
-            self.view(ticks)
-                .previewing(preview)
-                .native_state_for_placement(self.dimension, state, context, fluid, answer);
+            let level = self.view(ticks).previewing(preview);
+            super::native_hooks::LevelView::new(&level, self.world).native_state_for_placement(
+                self.dimension,
+                state,
+                context,
+                fluid,
+                answer,
+            );
         }
     }
     fn must_survive(&self, item: &str) -> Option<bool> {
@@ -718,7 +723,8 @@ impl LevelAccess for GameLevel<'_> {
         survives: &mut Option<bool>,
     ) -> bool {
         let mut inert = false;
-        self.view(ticks).previewing(preview).native_can_survive(
+        let level = self.view(ticks).previewing(preview);
+        super::native_hooks::LevelView::new(&level, self.world).native_can_survive(
             self.dimension,
             pos,
             state,
@@ -737,16 +743,15 @@ impl LevelAccess for GameLevel<'_> {
         sustains: &mut Option<bool>,
     ) -> bool {
         let mut inert = false;
-        self.view(ticks)
-            .previewing(preview)
-            .native_can_sustain_plant(
-                self.dimension,
-                state,
-                ground,
-                ground_pos,
-                sustains,
-                &mut inert,
-            );
+        let level = self.view(ticks).previewing(preview);
+        super::native_hooks::LevelView::new(&level, self.world).native_can_sustain_plant(
+            self.dimension,
+            state,
+            ground,
+            ground_pos,
+            sustains,
+            &mut inert,
+        );
         inert
     }
     fn asks_is_fertile(&self) -> bool {
@@ -790,7 +795,8 @@ impl LevelAccess for GameLevel<'_> {
         may: &mut Option<bool>,
     ) -> bool {
         let mut inert = false;
-        self.view(ticks).previewing(preview).native_may_place_on(
+        let level = self.view(ticks).previewing(preview);
+        super::native_hooks::LevelView::new(&level, self.world).native_may_place_on(
             self.dimension,
             state,
             ground,

@@ -534,6 +534,24 @@ impl Levels {
             .map(|(_, level)| &level.world)
     }
 
+    /// Block ticks belonging to an open level that is not currently in place.
+    pub(in crate::game) fn parked_block_ticks_of(&self, dimension: &str) -> Option<&Ticks> {
+        self.parked
+            .iter()
+            .find(|(dim, _)| dim.id() == dimension)
+            .map(|(_, level)| &level.block_ticks)
+    }
+
+    pub(in crate::game) fn parked_lid_openers_of(
+        &self,
+        dimension: &str,
+    ) -> Option<&HashMap<(i32, i32, i32), i32>> {
+        self.parked
+            .iter()
+            .find(|(dim, _)| dim.id() == dimension)
+            .map(|(_, level)| &level.lid_openers)
+    }
+
     /// The world of the level not in place whose dimension is `dimension`, to
     /// change.
     pub(super) fn parked_world_mut_of(&mut self, dimension: &str) -> Option<&mut World> {

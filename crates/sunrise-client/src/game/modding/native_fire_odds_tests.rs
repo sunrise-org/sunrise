@@ -67,6 +67,15 @@ fn a_block_part_answers_fire_odds_for_one_face() {
             };
             assert!(stands(game, 0), "the Part makes the west face flammable");
             assert!(!stands(game, 2), "the east face keeps vanilla's never");
+
+            use super::api_values::TryIntoApi;
+            let level = game.level(game.dim.id()).unwrap();
+            let fire = fire.try_into_api().unwrap();
+            assert_eq!(
+                level.can_survive(game, [0, 65, 0], fire),
+                Ok(true),
+                "handle survival dispatches the face-sensitive fire-odds Part"
+            );
         });
         with_client_game(|game| {
             let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();

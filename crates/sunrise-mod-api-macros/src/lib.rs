@@ -303,6 +303,7 @@ pub fn host_area(_attribute: TokenStream, input: TokenStream) -> TokenStream {
             !attr.path().is_ident("static_call")
                 && !attr.path().is_ident("service")
                 && !attr.path().is_ident("read_stack")
+                && !attr.path().is_ident("game_method")
         });
         let operation = method.sig.ident.to_string();
         let label = format!("{union}::{operation}");

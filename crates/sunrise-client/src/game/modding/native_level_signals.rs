@@ -7,12 +7,67 @@ use sunrise_client::{items::Items, world::World};
 use sunrise_core::{geometry::Direction, position::BlockPos};
 use sunrise_world::{level::signal_access::SignalAccess, registry::BlockStateId};
 
-/// Created for the game's current level (`self.level(self.dim.id())` or after
-/// `level_in_place` confirms the level matches `self.world`). No mutable world,
-/// random source, entity snapshots or transaction is needed by a signal read.
+/// A read-only view of the level named by its handle. The selected world,
+/// dimension and per-level signal inputs follow that handle, including a
+/// loaded parked server level. No mutable world or transaction is needed.
 pub(super) struct ReadLevel<'g, 'a> {
     pub game: &'g Game<'a>,
     pub level: mod_api::LevelRef,
+}
+
+impl ReadLevel<'_, '_> {
+    /// The world addressed by this handle. Callers validate residency before constructing a
+    /// reader; keeping the lookup here prevents Parts from silently seeing the active level.
+    pub(super) fn world(&self) -> &World {
+        self.game
+            .native_level_read_world(self.level)
+            .expect("read level handle is resident")
+    }
+
+    pub(super) fn dimension(&self) -> sunrise_core::dimension::Dimension {
+        super::Dim::from_id(self.level.dimension_id()).level()
+    }
+
+    pub(super) fn border(&self) -> &sunrise_client::worldborder::WorldBorder {
+        if self.level.dimension() == self.game.native_level_key() {
+            &self.game.border
+        } else {
+            self.game
+                .levels
+                .parked_border(super::Dim::from_id(self.level.dimension_id()))
+                .expect("resident parked level has its world border")
+        }
+    }
+
+    fn lid_openers(&self) -> &std::collections::HashMap<(i32, i32, i32), i32> {
+        if self.level.dimension() == self.game.native_level_key() {
+            &self.game.lid_openers
+        } else {
+            self.game
+                .levels
+                .parked_lid_openers_of(self.level.dimension_id())
+                .expect("resident parked level has its lid openers")
+        }
+    }
+
+    fn shulker_is_closed(&self, pos: BlockPos) -> Option<bool> {
+        let key = [pos.x, pos.y, pos.z];
+        if self.level.dimension() == self.game.native_level_key() {
+            self.game
+                .be_anims
+                .shulkers
+                .get(&key)
+                .map(|s| s.status == sunrise_client::block_entity_anim::ShulkerStatus::Closed)
+        } else {
+            let dim = super::Dim::from_id(self.level.dimension_id());
+            self.game
+                .levels
+                .parked_anims(dim)?
+                .shulkers
+                .get(&key)
+                .map(|s| s.status == sunrise_client::block_entity_anim::ShulkerStatus::Closed)
+        }
+    }
 }
 
 super::native_tags::impl_tags!(ReadLevel<'_, '_>, level, level.game.native_tag_items());
@@ -51,14 +106,10 @@ pub(super) fn block_entity_signal(
 
 impl SignalAccess for ReadLevel<'_, '_> {
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
-        self.game.world.block(pos.x, pos.y, pos.z)
+        self.world().block(pos.x, pos.y, pos.z)
     }
     fn shulker_is_closed(&self, pos: BlockPos) -> Option<bool> {
-        self.game
-            .be_anims
-            .shulkers
-            .get(&[pos.x, pos.y, pos.z])
-            .map(|s| s.status == sunrise_client::block_entity_anim::ShulkerStatus::Closed)
+        self.shulker_is_closed(pos)
     }
     fn published_collision_shape(
         &self,
@@ -68,7 +119,7 @@ impl SignalAccess for ReadLevel<'_, '_> {
         if !self.game.collision.publishes_shapes(state) {
             return None;
         }
-        match self.game.world.block_entities.get(&(pos.x, pos.y, pos.z))? {
+        match self.world().block_entities.get(&(pos.x, pos.y, pos.z))? {
             sunrise_client::containers::BlockEntity::Mod(entity) => {
                 entity.shapes().map(|shapes| shapes.collision().clone())
             }
@@ -110,7 +161,7 @@ impl SignalAccess for ReadLevel<'_, '_> {
         let mut check = vanilla;
         mod_api::dispatch_should_check_weak_power(
             self,
-            self.game.dim.level(),
+            self.dimension(),
             pos,
             state,
             direction,
@@ -141,7 +192,7 @@ impl SignalAccess for ReadLevel<'_, '_> {
         let mut connected = vanilla;
         mod_api::dispatch_should_redstone_wire_connect_to(
             self,
-            self.game.dim.level(),
+            self.dimension(),
             pos,
             state,
             direction,
@@ -167,7 +218,7 @@ impl SignalAccess for ReadLevel<'_, '_> {
         adjust_signal(direction, vanilla, |face, signal| {
             mod_api::dispatch_block_signal(
                 self,
-                self.game.dim.level(),
+                self.dimension(),
                 pos,
                 state,
                 face,
@@ -178,10 +229,10 @@ impl SignalAccess for ReadLevel<'_, '_> {
     }
     fn block_entity_signal(&self, pos: BlockPos, state: BlockStateId, _: Direction) -> i32 {
         block_entity_signal(
-            &self.game.world,
+            self.world(),
             self.game.pack.assets.registry,
             self.game.items(),
-            &self.game.lid_openers,
+            self.lid_openers(),
             pos,
             state,
         )
@@ -208,23 +259,13 @@ impl LevelHost for ReadLevel<'_, '_> {
         self.game.block_entity(self.level, pos)
     }
     fn container_size(&self, at: mod_api::BlockSide) -> Option<usize> {
-        if at.level != self.level
-            || !self
-                .game
-                .world
-                .is_loaded_at(at.pos[0], at.pos[1], at.pos[2])
-        {
+        if at.level != self.level || !self.world().is_loaded_at(at.pos[0], at.pos[1], at.pos[2]) {
             return None;
         }
         self.game.container_size(at)
     }
     fn container_stack(&self, at: mod_api::BlockSide, slot: usize) -> Option<mod_api::ItemStack> {
-        if at.level != self.level
-            || !self
-                .game
-                .world
-                .is_loaded_at(at.pos[0], at.pos[1], at.pos[2])
-        {
+        if at.level != self.level || !self.world().is_loaded_at(at.pos[0], at.pos[1], at.pos[2]) {
             return None;
         }
         self.game.container_stack(at, slot)?.try_into_api().ok()
@@ -236,10 +277,12 @@ impl LevelHost for ReadLevel<'_, '_> {
         name: &str,
     ) -> Result<mod_api::AttachmentBatch, mod_api::PartStateError> {
         super::native_block_entity_refs::part_snapshot(
-            &self.game.world,
+            self.world(),
             Some(self.level),
             self.game.native_authoritative(),
-            self.game.attachment_indexes.get(&self.game.dim),
+            self.game
+                .attachment_indexes
+                .get(&super::Dim::from_id(self.level.dimension_id())),
             entity,
             namespace,
             name,
@@ -252,7 +295,7 @@ impl LevelHost for ReadLevel<'_, '_> {
             .flatten()
     }
     fn block_state(&self, [x, y, z]: [i32; 3]) -> Option<mod_api::BlockState> {
-        self.game.world.block(x, y, z).try_into_api().ok()
+        self.world().block(x, y, z).try_into_api().ok()
     }
     fn state_block(&self, state: mod_api::BlockState) -> Option<&str> {
         self.game
@@ -273,10 +316,10 @@ impl LevelHost for ReadLevel<'_, '_> {
             .block_state_string(state.try_into_engine(&()).ok()?)
     }
     fn min_y(&self) -> i32 {
-        self.game.world.shape.min_y
+        self.world().shape.min_y
     }
     fn height(&self) -> i32 {
-        self.game.world.shape.height
+        self.world().shape.height
     }
     fn block_in_tag(&self, block: mod_api::BlockKey, tag: &str) -> Option<bool> {
         super::native_world_read::block_in_tag(block, tag)
@@ -285,10 +328,9 @@ impl LevelHost for ReadLevel<'_, '_> {
         self
     }
     fn fluid_state(&self, [x, y, z]: [i32; 3]) -> Option<mod_api::FluidState> {
-        self.game
-            .world
+        self.world()
             .is_loaded_at(x, y, z)
-            .then(|| self.game.world.block(x, y, z))
+            .then(|| self.world().block(x, y, z))
             .and_then(|state| self.game.state_fluid_state(state))
     }
     fn state_fluid_state(&self, state: mod_api::BlockState) -> Option<mod_api::FluidState> {
@@ -318,7 +360,7 @@ impl LevelHost for ReadLevel<'_, '_> {
         .ok()
     }
     fn brightness(&self, layer: mod_api::LightLayer, pos: [i32; 3]) -> i32 {
-        super::native_level_refs::world_brightness(&self.game.world, layer, pos)
+        super::native_level_refs::world_brightness(self.world(), layer, pos)
     }
     fn raw_brightness(&self, pos: [i32; 3], sky_darken: i32) -> i32 {
         // Java's unchecked subtraction: a listener may pass any darkening, including
@@ -329,7 +371,7 @@ impl LevelHost for ReadLevel<'_, '_> {
         )
     }
     fn is_loaded(&self, [x, y, z]: [i32; 3]) -> bool {
-        self.game.world.is_loaded_at(x, y, z)
+        self.world().is_loaded_at(x, y, z)
     }
     fn is_raining_at(&self, pos: [i32; 3]) -> bool {
         self.game

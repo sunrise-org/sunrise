@@ -126,4 +126,5 @@ pub(in crate::game) use living_change_target::NativeHookHost;
 use mod_api::ModBlockEntity;
 use sound_and_shader_helpers::{finite, finite_params, local_sound_ok};
 pub(super) use sound_and_shader_helpers::{level_sound_playable, mod_sound_ok, sound_id};
+pub(in crate::game) use survival_query_guard::enter_query as enter_survival_query;
 include!("shared.rs");
