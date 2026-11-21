@@ -567,6 +567,20 @@ pub const MAX_BUTTONS: usize = 56;              // and `register` refuses one wi
   block to also clear the logo and edition banner shows fewer rows — the ones that fit.
 - With no button shown the title screen is vanilla's.
 
+### Item catalog (`sunrise_platform::items`)
+
+Reads of vanilla's own item catalogs, which any crate may use (an inventory tool, a search, a sorter); the engine
+fills them from the data it loaded, and nothing in them is per feature.
+
+```rust
+fn creative_order(stack: &containers::Stack) -> Option<u32>;  // its place in the creative inventory's search tab
+```
+
+- The place of the same stack (same item and components, by `Stack::kind`), else its item's first place; `None`
+  for an item the creative tabs don't show, or before the game has loaded them.
+- The window's creative inventory publishes the table each time its tabs are built (loading, permissions, the
+  mods' and packs' additions), so a read is two hash lookups, never a scan.
+
 ### Lang files (`sunrise_platform::lang`)
 
 A crate keeps the text for its keys in its own folder, `crates/<name>/assets/lang/<code>.json`, with the same

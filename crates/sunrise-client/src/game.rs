@@ -11506,6 +11506,10 @@ impl<'a> Game<'a> {
             player_model: None,
         };
         game.reset_entity_residency();
+        // The window's creative inventory is the one the item catalog reads.
+        if game.options.execution_role.is_client() {
+            game.creative_screen.publish_order();
+        }
         Ok(game)
     }
 }

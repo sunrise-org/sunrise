@@ -9,7 +9,6 @@ use super::{
 };
 use crate::game::{Game, Screen};
 use std::cell::RefCell;
-use std::hash::{Hash, Hasher};
 use sunrise_client::{
     containers::{BlockEntity, FurnaceKind, ModMenuType},
     hud::{HudAtlas, HudBatch, rgba},
@@ -90,13 +89,6 @@ pub(in crate::game) fn local_menu_id(local: Local) -> Option<String> {
     Some(id)
 }
 
-/// What tells two stacks apart that don't merge: the item, its damage and its components.
-fn kind_of(stack: &ItemStack) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    (&*stack.item, stack.damage, stack.data()).hash(&mut hasher);
-    hasher.finish()
-}
-
 /// The role of game slot `slot` in mod menu `menu`, whose slots are game slots 300 and up however
 /// many it has: `None` outside them.
 fn mod_menu_role(menu: &ModMenuType, slot: usize) -> Option<Role> {
@@ -150,7 +142,7 @@ impl<'g> Open<'_, 'g> {
             stack.item.to_string(),
             stack.count,
             self.game().max_stack(stack),
-            kind_of(stack),
+            stack.merge_kind(),
             seen.len() as u64 - 1,
         )
     }
@@ -707,10 +699,10 @@ mod tests {
             book(["minecraft:unbreaking", "minecraft:mending"]),
         );
         assert_eq!(a, b);
-        assert_eq!(kind_of(&a), kind_of(&b));
+        assert_eq!(a.merge_kind(), b.merge_kind());
         assert_ne!(
-            kind_of(&a),
-            kind_of(&ItemStack::new("minecraft:enchanted_book", 1))
+            a.merge_kind(),
+            ItemStack::new("minecraft:enchanted_book", 1).merge_kind()
         );
     }
 

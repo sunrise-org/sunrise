@@ -85,6 +85,8 @@ pub struct Creative {
     pub search: EditBox,
     /// The search tab's stacks, in its display order.
     search_items: Vec<ItemStack>,
+    /// The window's own creative inventory: each rebuild publishes its order to the item catalog.
+    publishes: bool,
     search_index: Vec<SearchEntry>,
     /// Definitions from the same catalog snapshot, rendered in the active language.
     holders: Arc<sunrise_items::creative_catalog::Holders>,
@@ -482,6 +484,7 @@ impl Creative {
                 search
             },
             search_items: Vec::new(),
+            publishes: false,
             search_index: Vec::new(),
             holders: Default::default(),
             items: Default::default(),
@@ -591,6 +594,21 @@ impl Creative {
             })
             .collect();
         self.forget_items();
+        self.publish_catalog_order();
+    }
+    /// This is the window's creative inventory: publish its order now and after every rebuild.
+    pub fn publish_order(&mut self) {
+        self.publishes = true;
+        self.publish_catalog_order();
+    }
+    fn publish_catalog_order(&self) {
+        if self.publishes {
+            let stacks = self.search_items.iter();
+            let order = stacks.map(|s| (s.item.as_ref(), s.merge_kind()));
+            sunrise_hooks::items::engine::set_creative_order(
+                sunrise_hooks::items::engine::CreativeOrder::new(order),
+            );
+        }
     }
 
     /// Tag reload changes the search UI, not the cached catalog membership.
@@ -2080,6 +2098,30 @@ mod tests {
         assert_eq!(c.search_items().len(), 1);
         assert!(c.search_results("command", &names).is_empty());
         assert_eq!(c.search_results("", &names), [0]);
+    }
+
+    #[test]
+    fn the_window_publishes_its_order_and_every_rebuild_updates_it() {
+        use sunrise_hooks::{containers::Stack, items::creative_order};
+        let order = |id: &str| {
+            let stack = ItemStack::new(id, 1);
+            creative_order(&Stack::new(id.into(), 1, 64, stack.merge_kind(), 0))
+        };
+        let mut c = with_operator_tab();
+        let names = Names::default();
+        c.publish_order();
+        publish(&mut c, false, &names);
+        assert_eq!(order("minecraft:stone"), Some(0));
+        assert_eq!(
+            order("minecraft:barrier"),
+            None,
+            "an operator item, no permissions"
+        );
+        publish(&mut c, true, &names);
+        assert_eq!(order("minecraft:barrier"), Some(2));
+        // The same as the screen's own order.
+        let barrier = ItemStack::new("minecraft:barrier", 1);
+        assert_eq!(Creative::order_of(&c.search_items, &barrier), Some(2));
     }
 
     #[test]
