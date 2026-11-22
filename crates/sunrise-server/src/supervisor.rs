@@ -197,8 +197,6 @@ pub fn run(dir: &Path) -> Result<(), String> {
     let resources = launch::resources(&config, dir, Some(&program))?;
     // Half-copied game files would only crash the engine again at every restart: name what is missing.
     engine::check_prepared(&resources)?;
-    // A game the system can't load would only crash again at every restart: say why at once.
-    engine::check_starts(&program)?;
     let _lock = lock(dir)?;
     let shared = Shared::new(dir);
     let _endpoint = api::start(shared.clone())?;
@@ -251,6 +249,14 @@ pub fn run(dir: &Path) -> Result<(), String> {
             && let Ok(found_resources) = launch::resources(&config, dir, Some(&found))
         {
             (program, resources) = (found, found_resources);
+        }
+        // A restart can resolve a different build even when the path (through `current`) is the same.
+        if let Err(e) = launch::check_contract(&program) {
+            if let Some(w) = watch.take() {
+                roll_back(&shared, dir, &config, &w, &e);
+                continue;
+            }
+            return Err(e);
         }
         let written = config
             .write_properties(dir)
@@ -421,7 +427,7 @@ fn apply_queued(shared: &Shared, dir: &Path, config: &Config) -> Option<Watch> {
 }
 
 /// With the game stopped: backs the world up, points `current` at the release `to` and checks that its game
-/// loads on this system. What to watch while it starts; `None` when it stayed on the release it was on.
+/// can be launched by this manager. What to watch while it starts; `None` when it stayed on the release it was on.
 fn switch(
     shared: &Shared,
     dir: &Path,
@@ -465,7 +471,7 @@ fn switch(
         return None;
     }
     if let Err(e) =
-        launch::program_in(config, dir, Some(install)).and_then(|p| engine::check_starts(&p))
+        launch::program_in(config, dir, Some(install)).and_then(|p| launch::check_contract(&p))
     {
         let back = install
             .switch_back(&from, previous.as_deref())

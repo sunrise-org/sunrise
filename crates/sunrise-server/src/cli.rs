@@ -8,7 +8,7 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
-use sunrise_server_launch::config;
+use sunrise_server_launch::{self as launch, config};
 
 /// How long `start` waits for the game's `Done`, and `stop` for the server to end.
 const START_TIMEOUT: Duration = Duration::from_secs(300);
@@ -30,7 +30,8 @@ pub fn start(dir: &Path) -> Result<(), String> {
         println!("The server is running.");
         return Ok(());
     }
-    config::Config::load(dir)?;
+    let config = config::Config::load(dir)?;
+    launch::check_contract(&launch::program(&config, dir)?)?;
     // Left by a supervisor that was killed: the new one writes its own.
     let endpoint = dir.join(".sunrise/api.json");
     let _ = std::fs::remove_file(&endpoint);

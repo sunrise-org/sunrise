@@ -2,8 +2,10 @@
 //! `--launch-api`'s reply, the exit codes, and docs/api/launch-reference.md, generated from them.
 //! Update it with: `SUNRISE_WRITE_DOCS=1 cargo test -p sunrise-client --lib launch_api`.
 
+use sunrise_server_files::dedicated_launch;
+
 /// The Launch API's version (docs/api/stability.md): an addition makes the next patch.
-pub const VERSION: &str = "0.1.1";
+pub const VERSION: &str = "0.1.2";
 
 /// One option of the contract: its name, its value's placeholder (none for a flag), what it does.
 pub struct LaunchOption {
@@ -31,7 +33,7 @@ pub const OPTIONS: &[LaunchOption] = &[
         "Restricts this run to account-free single-player: no session loading, external connections or LAN hosting. Not a sandbox for native mods.",
     ),
     option(
-        "--resources",
+        dedicated_launch::RESOURCES,
         Some("DIR"),
         "The prepared resources (sunrise-prepare's output). Default: `resources` beside the executable, else `.local/sunrise-client/26.3`.",
     ),
@@ -169,6 +171,12 @@ fn reply_value(sunrise: &str) -> serde_json::Value {
         "exit_codes": EXIT_CODES.iter().map(|(code, _)| code).collect::<Vec<_>>(),
         "crash_report_line": sunrise_client::crash::SAVED_LINE,
         "content": content(),
+        "dedicated": {
+            "contract": dedicated_launch::CONTRACT,
+            "options": dedicated_launch::OPTIONS,
+            "control": dedicated_launch::CONTROL_PROTOCOL,
+            "log": dedicated_launch::LOG_FORMAT,
+        },
     })
 }
 
@@ -227,6 +235,11 @@ pub fn markdown() -> String {
          new as vanilla marks them); modpacks of `modpack.format`; the mod index of \
          `index.schema`.\n"
     );
+    let _ = writeln!(
+        w,
+        "`dedicated` describes what a server manager can start and supervise: its launch contract, \
+         dedicated option names, control protocol and stdout log format. See [launch.md](launch.md#dedicated-server).\n"
+    );
     let _ = writeln!(w, "## Exit codes\n\n| Code | Meaning |\n| --- | --- |");
     for (code, what) in EXIT_CODES {
         let _ = writeln!(w, "| {code} | {what} |");
@@ -257,6 +270,33 @@ mod tests {
                 .collect();
             assert!(parse(&args).is_ok(), "{} is refused", o.name);
         }
+    }
+
+    #[test]
+    fn launch_api_dedicated_options_are_accepted_together() {
+        let reply = reply_value("test-build");
+        let args: Vec<_> = reply["dedicated"]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|option| {
+                let name = option.as_str().unwrap();
+                std::iter::once(name).chain(match name {
+                    "--resources" => Some("prepared"),
+                    "--control-socket" => Some("engine.json"),
+                    "--transfers" => Some("max_expected=8"),
+                    _ => None,
+                })
+            })
+            .collect();
+        let options = parse(&args).unwrap().unwrap();
+        assert_eq!(options.resources, std::path::Path::new("prepared"));
+        assert_eq!(
+            options.control.as_deref(),
+            Some(std::path::Path::new("engine.json"))
+        );
+        assert_eq!(options.transfers.unwrap().max_expected, 8);
+        assert_eq!(options.dedicated.unwrap(), ["--nogui"]);
     }
 
     #[test]

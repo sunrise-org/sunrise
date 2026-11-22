@@ -1,6 +1,7 @@
 # Functions that start a child process, called from tests in another file (tools/ci/check_process_tests.py follows a
 # helper of the test's own file by itself): `function`, `module::function` or `Type::function`, one per line.
-check_starts                # sunrise-server: runs the game program to see that it starts
+check_contract              # sunrise-server-launch: runs the game program to check its launch contract
+probe_contract              # sunrise-server-launch: runs the game program to read its launch contract
 engine::spawn               # sunrise-server: starts the game
 isolated_test               # sunrise-mod-package: reruns the test in a child process of its own
 load_with_child_command

@@ -7,59 +7,9 @@ use std::{
     io::{BufRead, BufReader, Write},
     net::{Ipv4Addr, TcpStream},
     path::Path,
-    process::{Child, Stdio},
+    process::Child,
     time::Duration,
 };
-
-/// Checks that the game program starts at all: `--help` loads no game files, so it fails only when the
-/// system can't load the program, as on a Linux without the ALSA and udev libraries the full game links
-/// (the server build doesn't). The reason, with what to install.
-pub fn check_starts(program: &Path) -> Result<(), String> {
-    let mut command = crate::process::command(program);
-    let output = command
-        .arg("--help")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("the game ({}) can't start: {e}", program.display()))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    Err(start_failure(program, output.status.code(), &stderr))
-}
-
-/// What to tell the owner when the game program exits at once.
-fn start_failure(program: &Path, code: Option<i32>, stderr: &str) -> String {
-    let reason = stderr
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim();
-    let mut text = format!(
-        "the game ({}) can't start{}{}",
-        program.display(),
-        code.map_or(String::new(), |c| format!(" (exit status {c})")),
-        if reason.is_empty() {
-            String::new()
-        } else {
-            format!(": {reason}")
-        }
-    );
-    if reason.contains("error while loading shared libraries")
-        && (reason.contains("libasound") || reason.contains("libudev"))
-    {
-        text.push_str(
-            "\nThe full game needs ALSA's and udev's libraries (libasound.so.2, libudev.so.1). Install the \
-             server build, which needs neither (packaging/server/install.sh picks it on Linux), or the \
-             libraries:\n  Debian, Ubuntu: sudo apt install libasound2 libudev1   (Ubuntu 24.04 and later: \
-             libasound2t64)\n  Fedora, RHEL: sudo dnf install alsa-lib systemd-libs\n  Arch: sudo pacman -S \
-             alsa-lib systemd-libs\n  NixOS: enable programs.nix-ld with alsa-lib and udev in its libraries",
-        );
-    }
-    text
-}
 
 /// The files `sunrise-prepare` derives from the game and the engine reads at start (docs/hosting.md: a folder
 /// prepared before `registries.json` and `commands.json` were kept stops with "registries.json not found").
@@ -481,35 +431,6 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    #[test]
-    fn a_missing_library_says_what_to_install() {
-        let program = Path::new("/opt/sunrise/sunrise-client");
-        let text = start_failure(
-            program,
-            Some(127),
-            "/opt/sunrise/sunrise-client: error while loading shared libraries: libasound.so.2: cannot open \
-             shared object file: No such file or directory\n",
-        );
-        assert!(text.starts_with(
-            "the game (/opt/sunrise/sunrise-client) can't start (exit status 127): /opt/sunrise/sunrise-client: \
-             error while loading shared libraries: libasound.so.2"
-        ));
-        assert!(text.contains("sudo apt install libasound2 libudev1"));
-        // Another library: no ALSA advice (the server build, sunrise-engine, links neither).
-        let engine = start_failure(
-            Path::new("/opt/sunrise/sunrise-engine"),
-            Some(127),
-            "/opt/sunrise/sunrise-engine: error while loading shared libraries: libgcc_s.so.1: cannot open \
-             shared object file: No such file or directory\n",
-        );
-        assert!(!engine.contains("libasound"), "{engine}");
-        let other = start_failure(program, Some(1), "something else\n");
-        assert_eq!(
-            other,
-            "the game (/opt/sunrise/sunrise-client) can't start (exit status 1): something else"
-        );
-    }
-
     #[cfg(unix)]
     #[test]
     #[ignore = "daily"]
@@ -555,20 +476,20 @@ mod tests {
         assert!(status.success(), "{status}");
     }
 
-    /// `check_starts` on a script this test process just wrote. Another test's spawn can fork while the
+    /// `check_contract` on a script this test process just wrote. Another test's spawn can fork while the
     /// script's write handle is still open, and its child keeps that handle until it execs: running the
     /// script meanwhile fails with ETXTBSY (Linux), so that one error is retried.
     #[cfg(unix)]
     fn check_written(program: &Path) -> Result<(), String> {
         for _ in 0..50 {
-            match check_starts(program) {
+            match sunrise_server_launch::check_contract(program) {
                 Err(e) if e.contains("Text file busy") => {
                     std::thread::sleep(std::time::Duration::from_millis(20))
                 }
                 other => return other,
             }
         }
-        check_starts(program)
+        sunrise_server_launch::check_contract(program)
     }
 
     #[cfg(unix)]
@@ -585,7 +506,11 @@ mod tests {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
             path
         };
-        assert_eq!(check_written(&script("starts", "exit 0")), Ok(()));
+        let valid = script(
+            "starts",
+            r#"test "$1" = --launch-api && printf '%s\n' '{"sunrise":"26.3-0.1.0"}'"#,
+        );
+        assert_eq!(check_written(&valid), Ok(()));
         let fails = script("fails", "echo 'no luck' >&2; exit 3");
         assert_eq!(
             check_written(&fails),

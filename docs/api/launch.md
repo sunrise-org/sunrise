@@ -8,9 +8,9 @@ reference implementation. Proposed in horizon-rust/horizon#3545.
 
 | | |
 | --- | --- |
-| Version | 0.1.1, printed by `sunrise-client --launch-api` and `sunrise-prepare --launch-api` |
+| Version | 0.1.2, printed by `sunrise-client --launch-api` and `sunrise-prepare --launch-api` |
 | Level | experimental ([stability.md](stability.md)): preview once preparing and the guide are covered too |
-| Covers | starting `sunrise-client`: its options, the session JSON, the exit codes, the crash report's path; preparing with `sunrise-prepare`: `--launch-api`, `--output`, `--check`, `--complete`, `--progress json` |
+| Covers | starting `sunrise-client`: its options, the session JSON, the exit codes, the crash report's path and the dedicated server contract; preparing with `sunrise-prepare`: `--launch-api`, `--output`, `--check`, `--complete`, `--progress json` |
 | Not yet | finding a build (see Not there yet) |
 
 ## Guide
@@ -53,6 +53,25 @@ The account the game joins online-mode servers with ([microsoft-account.md](../m
   older than two minutes is refused (and deleted).
 - A session the game can't read is reported on stderr (`Sunrise: not signed in: …`), and online-mode servers
   will refuse the player.
+
+### Dedicated server
+
+Before starting a dedicated server, `sunrise-server` queries its game with `--launch-api` and reads `dedicated`:
+
+- `contract`: the version of the dedicated launch contract. Builds without this object speak contract 1.
+- `options`: the names of the options promised to the manager. Pass `--resources DIR`, `--control-socket PATH`
+  and optional `--transfers SETTINGS` before `--dedicated`, and `--nogui` after it.
+- `control`: the protocol version of the local game endpoint, not the manager's HTTP API. Version 1 uses a JSON
+  endpoint file with a localhost TCP port and a token. On each connection, send `auth TOKEN` first, then one
+  text request per line; each request gets one JSON reply line.
+- `log`: the version of the stdout lines the manager reads. Version 1 uses the vanilla INFO prefix
+  `[HH:mm:ss] [Server thread/INFO]: `, with `Done (` for readiness and `Stopping server` or `Stopping in `
+  for shutdown.
+
+The manager refuses a contract, control protocol or log format it does not support, or a game missing an option
+it needs. Update the manager with `sunrise-server self-update` or the game with `sunrise-server update` to get
+compatible versions. Adding an option, request or log line does not bump the dedicated contract. Changing the
+meaning of a promised option, request or parsed log line bumps it and gets a changelog entry here.
 
 ## Preparing
 
@@ -120,6 +139,7 @@ test keeps the contract and the code together.
 
 ## Changelog
 
+- 0.1.2: `sunrise-client` advertises dedicated launch contract 2. Builds without `dedicated` remain contract 1.
 - 0.1.1: `sunrise-client` advertises `--developer-single-player` and the
   `developer_single_player` capability for unsigned developer launches; the shared preparer
   version moves with the game's Launch API.

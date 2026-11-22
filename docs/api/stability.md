@@ -100,7 +100,7 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 | `sunrise-server engine-command --json` ([engine-command.md](engine-command.md)) | experimental | `"format": 1` |
 | Server control API | stable | `/api/v1` |
 | `sunrise-launcher` commands and MCP tools | preview | none yet (unversioned) |
-| Launch API: `sunrise-client`'s launch options, session JSON, exit codes; `sunrise-prepare`'s output and progress | experimental | 0.1.1, `sunrise-client --launch-api` and `sunrise-prepare --launch-api` |
+| Launch API: `sunrise-client`'s launch options, session JSON, exit codes and dedicated launch contract; `sunrise-prepare`'s output and progress | experimental | 0.1.2, `sunrise-client --launch-api` and `sunrise-prepare --launch-api` |
 | `sunrise-prepare needs`, `missing-extras` and `extras` with `--json` ([prepare-extras.md](prepare-extras.md)) | experimental | `"format": 1` |
 | Benchmark report | stable | `"version": 1` |
 | `sunrise-graphics.txt`, `sunrise-extras.txt`, `sunrise-mods.txt` | preview | none |

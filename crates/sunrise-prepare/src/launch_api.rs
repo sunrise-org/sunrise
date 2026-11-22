@@ -7,7 +7,7 @@ use crate::pyjson::{self, Value};
 
 /// The Launch API's version, the same line as `sunrise-client --launch-api`'s
 /// (docs/api/stability.md): an addition makes the next patch.
-pub const VERSION: &str = "0.1.1";
+pub const VERSION: &str = "0.1.2";
 
 /// What a launcher may pass, with its value's placeholder (none for a flag). The asset commands
 /// (`sounds`, `fonts`...) stay out: `--complete` runs what a launcher needs of them.

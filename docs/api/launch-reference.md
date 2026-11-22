@@ -1,7 +1,7 @@
 <!-- Generated from crates/sunrise-client/src/game/runtime/launch_api.rs; a test fails when this file is out of date. Update it with: SUNRISE_WRITE_DOCS=1 cargo test -p sunrise-client --lib launch_api -->
 # Launch API reference
 
-What `sunrise-client` promises a launcher that starts it, Launch API 0.1.1. The guide: [launch.md](launch.md); stability and versions: [stability.md](stability.md).
+What `sunrise-client` promises a launcher that starts it, Launch API 0.1.2. The guide: [launch.md](launch.md); stability and versions: [stability.md](stability.md).
 
 ## Options
 
@@ -65,13 +65,25 @@ Prints one JSON object on stdout and exits 0. `sunrise` is the build's version; 
     }
   },
   "crash_report_line": "Sunrise: crash report saved to ",
+  "dedicated": {
+    "contract": 2,
+    "control": 1,
+    "log": 1,
+    "options": [
+      "--resources",
+      "--control-socket",
+      "--transfers",
+      "--dedicated",
+      "--nogui"
+    ]
+  },
   "exit_codes": [
     0,
     1,
     2,
     101
   ],
-  "launch_api": "0.1.1",
+  "launch_api": "0.1.2",
   "minecraft": "26.3",
   "options": [
     {
@@ -132,6 +144,8 @@ Prints one JSON object on stdout and exits 0. `sunrise` is the build's version; 
 ```
 
 `content` is what this build loads ([content.md](content.md)), so a launcher offers only what works on it: content mods of the manifest `api` lines in `mod.api`; native mods built for this exact game build (`native_mod.exact_build`), which need the game rebuilt (`rebuild`); shader packs of `shader.schema` and the lines in `shader.api` (a newer line is read, not drawn); resource and data packs of `format` (`[major, minor]`; others still load, marked too old or too new as vanilla marks them); modpacks of `modpack.format`; the mod index of `index.schema`.
+
+`dedicated` describes what a server manager can start and supervise: its launch contract, dedicated option names, control protocol and stdout log format. See [launch.md](launch.md#dedicated-server).
 
 ## Exit codes
 

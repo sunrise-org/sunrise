@@ -220,7 +220,7 @@ pub fn run(dir: &Path, answers: Answers) -> Result<(), String> {
     match launch::program(&cfg, dir) {
         Ok(program) => {
             println!("Game: {}", program.display());
-            if let Err(e) = engine::check_starts(&program) {
+            if let Err(e) = launch::check_contract(&program) {
                 println!("Warning: {e}");
             }
             match launch::resources(&cfg, dir, Some(&program)) {

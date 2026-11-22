@@ -5265,6 +5265,7 @@ version = "0.1.0"
 dependencies = [
  "dunce",
  "serde",
+ "serde_json",
  "sunrise-core",
  "sunrise-platform",
  "toml",

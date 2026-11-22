@@ -2,16 +2,21 @@
 //! Shared by the supervisor and launcher without starting either or loading supervisor services.
 
 pub mod config;
+mod contract;
 mod install;
 pub mod prune;
 
 use config::Config;
+pub use contract::{
+    ContractRange, GameContract, SUPPORTED_CONTRACTS, check_contract, probe_contract,
+};
 pub use install::Install;
 use std::{
     fmt, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
+use sunrise_platform::server_files::dedicated_launch;
 
 /// The game's program names, most specific first: the server build (the game without sound or
 /// controllers, so it needs neither ALSA nor udev on Linux; `sunrise-server-linux-x86_64.tar.gz` holds it),
@@ -227,15 +232,15 @@ pub fn command_with_transfers(
     let resources = std::path::absolute(resources)?;
     let mut command = Command::new(program);
     command
-        .arg("--resources")
+        .arg(dedicated_launch::RESOURCES)
         .arg(resources)
-        .arg("--control-socket")
+        .arg(dedicated_launch::CONTROL_SOCKET)
         .arg(control_path(&dir));
     if let Some(transfers) = transfers {
-        command.arg("--transfers").arg(transfers);
+        command.arg(dedicated_launch::TRANSFERS).arg(transfers);
     }
     command
-        .args(["--dedicated", "--nogui"])
+        .args([dedicated_launch::DEDICATED, dedicated_launch::NOGUI])
         .current_dir(&dir)
         .env("SUNRISE_NO_AUDIO", "1")
         .stdin(Stdio::piped())

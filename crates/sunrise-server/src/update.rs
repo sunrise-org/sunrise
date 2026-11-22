@@ -7,7 +7,7 @@
 //! `current`; the supervisor then restarts the game on it and switches back by itself if the new game doesn't come
 //! up.
 
-use crate::{api::Client, backup, engine, supervisor};
+use crate::{api::Client, backup, supervisor};
 use serde_json::{Value, json};
 use std::{
     io::Read,
@@ -911,7 +911,7 @@ fn switch_to(dir: &Path, install: &Install, tag: &str, timeout: Duration) -> Res
 }
 
 /// The switch for a stopped server (or outside any server folder): the world backed up, `current` moved,
-/// and the new game checked to load on this system, else switched back.
+/// and the new game's launch contract checked, else switched back.
 fn switch_stopped(dir: &Path, install: &Install, tag: &str) -> Result<(), String> {
     let from = install
         .current()
@@ -937,7 +937,7 @@ fn switch_stopped(dir: &Path, install: &Install, tag: &str) -> Result<(), String
     let previous = install.previous();
     install.switch(tag)?;
     if let Err(e) =
-        launch::program_in(&config, dir, Some(install)).and_then(|p| engine::check_starts(&p))
+        launch::program_in(&config, dir, Some(install)).and_then(|p| launch::check_contract(&p))
     {
         install.switch_back(&from, previous.as_deref())?;
         return Err(format!("stayed on {from}: {e}"));
