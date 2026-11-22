@@ -343,6 +343,7 @@ pub const MAX_UPDATE_TIMEOUT: Duration = Duration::from_secs(24 * 3600);
 pub struct Updates {
     /// A release newer than the one in use, from the last check.
     pub available: Option<String>,
+    pub mod_warnings: Vec<String>,
     /// What is happening now, or nothing.
     pub busy: Option<String>,
     /// How the last update or rollback ended, and whether it went well.
@@ -455,7 +456,9 @@ impl Shared {
             update.busy = Some("Looking for the newest release".into());
         }
         if let Some(tag) = tag {
-            if !install.release(&tag).is_dir() || tag.contains(['/', '\\']) {
+            if sunrise_mod_install::lock::ReleaseTag::try_from(tag.clone()).is_err()
+                || !install.release(&tag).is_dir()
+            {
                 self.update.lock().unwrap().busy = None;
                 return Err(format!(
                     "{tag} isn't installed (`sunrise-server update` downloads it)"
@@ -585,7 +588,7 @@ fn updates(shared: &Shared) -> Value {
         return Value::Null;
     };
     let update = shared.update.lock().unwrap();
-    json!({
+    let mut body = json!({
         "installed": install.current(),
         "previous": install.previous(),
         "available": update.available,
@@ -593,7 +596,11 @@ fn updates(shared: &Shared) -> Value {
         "last": update.last,
         "ok": update.ok,
         "finished": update.finished,
-    })
+    });
+    if !update.mod_warnings.is_empty() {
+        body["mod_warnings"] = json!(update.mod_warnings);
+    }
+    body
 }
 
 /// A random token: 128 bits from the OS's random generator, as 32 hex digits.

@@ -48,6 +48,15 @@ pub const MIXINS_TOOL_RELEASES: &str = "https://github.com/sunrise-org/sunrise/r
 /// overrides it.
 pub const SDK_RELEASES: &str = "https://github.com/sunrise-org/sunrise/releases/download";
 
+/// The official Rust components and their published checksums.
+pub const RUST_DIST: &str = "https://static.rust-lang.org/dist";
+
+/// The pinned Windows x64 compiler and GNU runtime used for native builds.
+pub const NATIVE_MINGW_X64: &str = "https://github.com/brechtsanders/winlibs_mingw/releases/download/16.2.0posix-23.1.3-14.0.0-msvcrt-r3/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64msvcrt-14.0.0-r3.zip";
+
+/// The reviewed mod registry's package/version index. `SUNRISE_MOD_INDEX` overrides it.
+pub const MOD_INDEX: &str = "https://sunrise-org.github.io/sunrise-mods/index.json";
+
 /// A file of the game's source at one commit; the commit and the file's path follow. `native-lock`
 /// reads the pinned build's `Cargo.lock` from it.
 pub const GAME_SOURCE_FILES: &str = "https://raw.githubusercontent.com/sunrise-org/sunrise";

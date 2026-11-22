@@ -1,0 +1,1 @@
+sunrise-server start_and_run_refuse_drift_without_writing_the_server_folder test:managed_mods daily child-process

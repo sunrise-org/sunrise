@@ -37,6 +37,7 @@ mod registry_runtime;
 pub mod registry_rustc;
 mod registry_shared;
 pub mod rust;
+pub mod sdk_fetch;
 
 pub use mixins_patch::MixinsIdentity;
 pub use prebuilt::{Refusal, compiling};

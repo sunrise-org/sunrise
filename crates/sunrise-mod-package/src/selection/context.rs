@@ -123,7 +123,7 @@ impl LaunchArguments {
     /// Help and capability replies do not read mod packages or prepare jar data.
     pub fn is_information_request(&self) -> bool {
         self.rest.iter().any(|arg| {
-            matches!(arg, Argument::Switch(name) if matches!(name.as_str(), "--help" | "-h" | "--launch-api"))
+            matches!(arg, Argument::Switch(name) if matches!(name.as_str(), "--help" | "-h" | "--launch-api" | "--build-id"))
         })
     }
 
@@ -152,7 +152,7 @@ impl LaunchArguments {
                     rest.push(Argument::Dedicated(args.collect()));
                     break;
                 }
-                "--help" | "-h" | "--launch-api" => {
+                "--help" | "-h" | "--launch-api" | "--build-id" => {
                     rest.push(Argument::Switch(arg));
                     break;
                 }
@@ -251,12 +251,17 @@ mod tests {
             cwd.join("data/sunrise")
         };
         assert_eq!(launch.context.home, expected);
-        command.args(["--help", "--missing-value"]);
-        assert!(
-            LaunchArguments::for_command(&command)
-                .unwrap()
-                .is_information_request()
-        );
+    }
+
+    #[test]
+    fn information_requests_stop_before_reading_trailing_options() {
+        let cwd = std::env::current_dir().unwrap();
+        for option in ["--help", "--build-id"] {
+            let args = [option.to_owned(), "--dev-mod".to_owned()];
+            let launch = LaunchArguments::parse(args.into_iter(), &cwd, &cwd, None).unwrap();
+            assert!(launch.is_information_request());
+            assert_eq!(launch.rest, [Argument::Switch(option.into())]);
+        }
     }
 
     #[test]

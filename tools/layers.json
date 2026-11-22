@@ -86,6 +86,7 @@
     "sunrise-mod-render": "platform",
     "sunrise-server-launch": "platform",
     "sunrise-mod-package": "engine",
+    "sunrise-mod-install": "platform",
     "sunrise-mod-runtime": "engine",
     "sunrise-mod-dimension-game": "tool",
     "sunrise-hot-paths-game": "tool",

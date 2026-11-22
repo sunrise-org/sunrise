@@ -386,25 +386,10 @@ fn fetch_index(
         return Err(format!("{}: {e}", dir.display()));
     }
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let sums = base
-        .read(&tag, sunrise_release_sign::SUMS, SMALL)
-        .map_err(|e| format!("game build {build} has no signed SDK (release {tag}): {e}"))?;
-    let signature = base.read(&tag, sunrise_release_sign::SIGNATURE, SMALL)?;
-    let listed =
-        sunrise_release_sign::verify(&tag, &sums, &String::from_utf8_lossy(&signature), keys)?;
-    let bytes = base.read(&tag, sdk::INDEX, SMALL)?;
-    let digest = format!("{:x}", Sha256::digest(&bytes));
-    if !listed
-        .iter()
-        .any(|(name, sha)| name == sdk::INDEX && *sha == digest)
-    {
-        return Err(format!(
-            "{tag}: its {} is not the one its signed {} list",
-            sdk::INDEX,
-            sunrise_release_sign::SUMS
-        ));
-    }
-    let index = Index::read(&bytes, build).map_err(|e| format!("{tag}: {e}"))?;
+    let (index, bytes) =
+        sunrise_native_build::sdk_fetch::index(build, keys, |tag, name, limit| {
+            base.read(tag, name, limit)
+        })?;
     let surface = base.read(&tag, SURFACE, SMALL)?;
     index
         .verify(SURFACE, surface.as_slice())
@@ -481,16 +466,14 @@ fn unpack(
     limit: u64,
 ) -> Result<(), String> {
     let tag = format!("sdk-{}", index.build.commit);
-    let archive = dir.join(name);
-    // One byte past the listed size is enough for the check to refuse it.
-    let size = index.asset(name).map_err(|e| format!("{tag}: {e}"))?.size;
-    let mut body = base.open(&tag, name)?.take(size.saturating_add(1));
-    let mut file = fs::File::create(&archive).map_err(|e| format!("{}: {e}", archive.display()))?;
-    std::io::copy(&mut body, &mut file).map_err(|e| format!("{tag}/{name}: {e}"))?;
-    drop(file);
-    sdk::unpack(index, name, &archive, &dir.join(into), limit)
-        .map_err(|e| format!("{tag}: {e}"))?;
-    fs::remove_file(&archive).map_err(|e| format!("{}: {e}", archive.display()))
+    sunrise_native_build::sdk_fetch::unpack(
+        index,
+        name,
+        &dir.join(into),
+        limit,
+        base.open(&tag, name)?,
+    )
+    .map_err(|e| format!("{tag}: {e}"))
 }
 
 fn pinned(index: &Index, dir: &Path) -> PinnedSdk {

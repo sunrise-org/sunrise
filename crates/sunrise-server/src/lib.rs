@@ -19,6 +19,7 @@ mod management_methods;
 mod management_schema;
 mod management_tls;
 mod mcp;
+mod mods;
 mod panel;
 mod process;
 mod prune;
@@ -51,7 +52,7 @@ Usage: sunrise-server [--dir DIR] <command>
 
   init        Set up a server here: the EULA, the world, the port, who may join (asks, or takes flags:
               --eula --world NAME --seed SEED --port N --whitelist/--no-whitelist --player NAME... --op NAME
-              --offline --yes)
+              --offline --yes --mods ID[@RANGE],... --pack ID|FILE|URL --trust-native-code --json)
   run         Run the server in the foreground; type console commands, Ctrl-C stops it cleanly. It
               restarts the game if it crashes.
   start       Run the server in the background, or resume a stopped supervisor (output goes to logs/supervisor.log)
@@ -87,6 +88,8 @@ Usage: sunrise-server [--dir DIR] <command>
               restart on it; goes back by itself if the game isn't up within the timeout (300 s).
               --archive FILE --version NAME installs an archive you have
   rollback    Back to the release used before the update
+  mods <command> [--json]
+              Manage registry content and packs. `sunrise-server mods --help` lists the commands
   config [--json]
               The settings in server.toml
   config set KEY=VALUE... [--json]
@@ -113,6 +116,23 @@ Usage: sunrise-server [--dir DIR] <command>
 Settings live in server.toml; the server writes server.properties from it before every start.
 ";
 
+enum StartError {
+    Other(String),
+    Mods(mods::Refusal),
+}
+
+impl From<String> for StartError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<mods::Refusal> for StartError {
+    fn from(error: mods::Refusal) -> Self {
+        Self::Mods(error)
+    }
+}
+
 /// Run the server CLI with the process's arguments.
 pub fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -128,7 +148,28 @@ pub fn main() -> ExitCode {
     if args.first().map(String::as_str) == Some("engine-command") {
         return engine_command::command(&dir, &args[1..]);
     }
-    let result = match args.first().map(String::as_str) {
+    let command = args.first().map(String::as_str);
+    if matches!(command, Some("start" | "run")) {
+        let result = if command == Some("start") {
+            cli::start(&dir)
+        } else {
+            let result = supervisor::run(&dir);
+            signals::stopped();
+            result
+        };
+        return match result {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(StartError::Mods(error)) => {
+                eprintln!("error: {error}");
+                ExitCode::from(2)
+            }
+            Err(StartError::Other(error)) => {
+                eprintln!("sunrise-server: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    let result = match command {
         None | Some("help" | "-h" | "--help") => {
             print!("{HELP}");
             Ok(())
@@ -137,13 +178,13 @@ pub fn main() -> ExitCode {
             println!("sunrise-server {VERSION}");
             Ok(())
         }
-        Some("init") => init_answers(&args[1..]).and_then(|a| init::run(&dir, a)),
-        Some("run") => {
-            let done = supervisor::run(&dir);
-            signals::stopped();
-            done
+        Some("init") if args[1..] == ["--help"] || args[1..] == ["-h"] => {
+            println!(
+                "Usage: sunrise-server init [--eula] [--world NAME] [--seed SEED] [--port N]\n  [--whitelist|--no-whitelist] [--player NAME] [--op NAME] [--offline] [--yes]\n  [--mods ID[@RANGE],…] [--pack ID|FILE.spack|URL] [--trust-native-code] [--json]"
+            );
+            Ok(())
         }
-        Some("start") => cli::start(&dir),
+        Some("init") => init_answers(&args[1..]).and_then(|a| init::run(&dir, a)),
         Some("stop") => cli::stop(&dir, false),
         Some("restart") => cli::stop(&dir, true),
         Some("status") => cli::status(&dir, args[1..].iter().any(|a| a == "--json")),
@@ -176,6 +217,7 @@ pub fn main() -> ExitCode {
         Some("import-resources") => import_resources::command(&dir, &args[1..]),
         Some("import") => import(&dir, &args[1..]),
         Some("config") => settings::command(&dir, &args[1..]),
+        Some("mods") => mods::command(&dir, &args[1..]),
         Some("update") => update::command(&dir, &args[1..]),
         Some("rollback") => update::rollback(&dir, &args[1..]),
         Some(command @ ("op" | "deop" | "whitelist")) => lists::run(&dir, command, &args[1..]),
@@ -226,6 +268,7 @@ fn init_answers(args: &[String]) -> Result<init::Answers, String> {
         };
         match arg.as_str() {
             "--eula" => answers.eula = true,
+            "--trust-native-code" => answers.trust_native = true,
             "--yes" | "-y" => answers.yes = true,
             "--world" => answers.world = Some(value(arg)?),
             "--seed" => answers.seed = Some(value(arg)?),
@@ -241,6 +284,21 @@ fn init_answers(args: &[String]) -> Result<init::Answers, String> {
             "--player" => answers.players.push(value(arg)?),
             "--op" => answers.op = Some(value(arg)?),
             "--offline" => answers.online = Some(false),
+            "--json" => answers.json = true,
+            "--mods" => {
+                for id in value(arg)?.split(',') {
+                    answers
+                        .mods
+                        .push(sunrise_mod_install::input::ModRequest::try_from(
+                            id.to_owned(),
+                        )?);
+                }
+            }
+            "--pack" if answers.pack.is_none() => {
+                answers.pack = Some(sunrise_mod_install::selection::PackSource::try_from(
+                    value(arg)?,
+                )?);
+            }
             other => return Err(format!("init: unknown option {other}")),
         }
     }

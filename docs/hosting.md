@@ -3,7 +3,7 @@
 `sunrise-server` hosts a Minecraft Java Edition 26.3 server with Sunrise's own game as the engine: one native
 program, no Java, one settings file, a command line, and a web panel. Vanilla 26.3 clients and Sunrise clients
 can join it. This page covers what works on `main` today and says plainly what doesn't yet. The design and the
-plan are in [server.md](server.md).
+plan are in [server.md](server.md). To add mods, see [Host a modded server](hosting-mods.md).
 
 ## Before you start
 
@@ -225,6 +225,47 @@ restart: there is no live reload yet.
 One retired key is the exception: `max_view_distance` under `[server]`, the old far ring, is ignored with a note
 at each start, and can be removed. For more reach, raise `view_distance` (up to 32); unlike the far ring, that
 loads and, where the world hasn't been generated yet, generates the chunks it sends.
+
+### Managed mods
+
+Leave `[mods]` out of a manually configured server. If the table is present, even if empty, `start` and `run`
+require `mods.lock` beside `server.toml`. The setup, change, and repair commands in
+[Host a modded server](hosting-mods.md) keep the settings, lock, and files in sync.
+
+```toml
+[mods]
+pack = "cozy@1.0.0"                       # optional registry pack or path to a .spack
+list = ["better_paths@^0.9", "coords_hud"] # optional extra requests (an ID or ID@SemVer-range)
+off = ["quarry_tweaks"]                    # keep installed, but off
+trust_native_code = false                 # only opt in if you trust the authors' code
+```
+
+`mods.lock` is TOML. Format 1 has these fields:
+
+```toml
+format = 1
+sunrise = "0123456789abcdef0123456789abcdef01234567" # exact engine build commit
+release = "26.3-0.1.0"                            # optional installed release tag
+input = { list = ["coords_hud"] }                  # the [mods] settings this lock records
+
+[[mods]]
+id = "coords_hud"
+version = "1.4.0"
+sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+url = "https://example.com/coords_hud-1.4.0.smod"
+file = "sunrise-mods/coords_hud.smod"
+reason = "requested"                              # requested, pack or required
+on = true
+```
+
+The optional `pack`, `list`, `off` and `trust_native_code` fields in `input` have the same defaults as in
+`[mods]`: no pack, empty lists, and no native consent. `required_by = ["mod_id", …]` is required for a
+`required` row and empty or omitted otherwise. `file` is relative to the server folder, with `/` separators,
+no `..`, and no symlinks that lead outside the folder. SHA-256 values and commits use lowercase hex.
+
+A native row's `file` is the verified source `.smod` under `native/sources/`. `native = { prebuilt = "<archive sha256>" }` names a signed prebuilt mod, or `native = { built = "<SDK commit>" }` names a build made here. A disabled native mod has `native = "inactive"` and no loaded library. The lock hashes every active runtime file, and the supervisor compares `native-mods.json` and the SDK identity with the lock.
+
+`sunrise-server mods list [--json]` lists the lock, not what the running engine actually loaded. `start` and `run` check the input and file hashes before starting, and compare the lock with the installed release when known. Native mods need an installed release with a matching SDK runtime; content-only mods can also run on a custom engine. Missing files or mismatches stop startup with exit status 2 and a repair command. The check neither downloads anything nor changes mods.
 
 ### Operators' commands: `admin_feedback_to_ops`
 

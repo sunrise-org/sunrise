@@ -4,8 +4,9 @@
 //! back by itself when the new game doesn't come up.
 
 use crate::{
+    StartError,
     api::{self, Phase, Shared},
-    backup, engine, prune, signals,
+    backup, engine, mods, prune, signals,
     update::{self, UpdateInstall},
 };
 use serde_json::json;
@@ -188,13 +189,20 @@ struct Watch {
     deadline: Instant,
     /// `updates.keep`: the other releases kept once the game is up.
     keep: u32,
+    managed: bool,
 }
 
-pub fn run(dir: &Path) -> Result<(), String> {
+pub fn run(dir: &Path) -> Result<(), StartError> {
     signals::install();
+    let mut lease = mods::read_lease(dir)?;
     let config = Config::load(dir)?;
-    let program = launch::program(&config, dir)?;
-    let resources = launch::resources(&config, dir, Some(&program))?;
+    let install = launch::Install::find();
+    let program = match mods::check_start(dir, &config, install.as_ref())? {
+        Some(checked) => checked,
+        None => launch::program_in(&config, dir, install.as_ref())?,
+    };
+    let resource_program = launch::program_in(&config, dir, install.as_ref()).ok();
+    let resources = launch::resources(&config, dir, resource_program.as_deref())?;
     // Half-copied game files would only crash the engine again at every restart: name what is missing.
     engine::check_prepared(&resources)?;
     // A game the system can't load would only crash again at every restart: say why at once.
@@ -238,57 +246,111 @@ pub fn run(dir: &Path) -> Result<(), String> {
     let mut crashes: Vec<Instant> = Vec::new();
     let mut watch: Option<Watch> = None;
     let (mut program, mut resources) = (program, resources);
+    let mut first = Some(config);
     loop {
-        // Read again before every start: edits to server.toml apply on the next restart, and so does a
-        // switch to another release.
-        let config = Config::load(dir)?;
-        // Queued while the game ran, stopped or was already stopping: applied before this start,
-        // whatever ended the last game, not left for some later restart.
-        if let Some(w) = apply_queued(&shared, dir, &config) {
-            watch = Some(w);
-        }
-        if let Ok(found) = launch::program_in(&config, dir, shared.install.as_ref())
-            && let Ok(found_resources) = launch::resources(&config, dir, Some(&found))
-        {
-            (program, resources) = (found, found_resources);
-        }
-        let written = config
-            .write_properties(dir)
-            .map_err(|e| format!("server.properties: {e}"))?;
-        for key in written.writer_collisions() {
+        let config = if let Some(config) = first.take() {
+            config
+        } else {
+            // Edits to server.toml and a switch to another release apply on the next restart.
+            let mut config = Config::load(dir)?;
+            if let Some(w) = apply_queued(&shared, dir, &config) {
+                watch = Some(w);
+                match Config::load(dir) {
+                    Ok(current) => config = current,
+                    Err(error) => {
+                        let w = watch.take().expect("just switched");
+                        roll_back(&shared, dir, &config, &w, &error);
+                        continue;
+                    }
+                }
+            }
+            lease = mods::read_lease(dir)?;
+            match mods::check_start(dir, &config, shared.install.as_ref()) {
+                Ok(Some(checked)) => {
+                    let resource_program =
+                        launch::program_in(&config, dir, shared.install.as_ref()).ok();
+                    match launch::resources(&config, dir, resource_program.as_deref()) {
+                        Ok(found) => resources = found,
+                        Err(error) => {
+                            if let Some(w) = watch.take() {
+                                drop(lease.take());
+                                roll_back(&shared, dir, &config, &w, &error);
+                                continue;
+                            }
+                            return Err(error.into());
+                        }
+                    }
+                    program = checked;
+                }
+                Ok(None) => {
+                    if let Ok(found) = launch::program_in(&config, dir, shared.install.as_ref())
+                        && let Ok(found_resources) = launch::resources(&config, dir, Some(&found))
+                    {
+                        (program, resources) = (found, found_resources);
+                    }
+                }
+                Err(error) => {
+                    if let Some(w) = watch.take() {
+                        drop(lease.take());
+                        roll_back(&shared, dir, &config, &w, &error.to_string());
+                        continue;
+                    }
+                    return Err(error.into());
+                }
+            }
+            config
+        };
+        let start = (|| -> Result<_, String> {
+            let written = config
+                .write_properties(dir)
+                .map_err(|e| format!("server.properties: {e}"))?;
+            for key in written.writer_collisions() {
+                note(
+                    &shared,
+                    "WARN",
+                    &format!(
+                        "Will not copy server.properties key {key:?} back to server.toml: the game's UTF-8 writer cannot distinguish it from another key"
+                    ),
+                );
+            }
+            prepare_world(&shared, dir, &config)?;
             note(
                 &shared,
-                "WARN",
+                "INFO",
                 &format!(
-                    "Will not copy server.properties key {key:?} back to server.toml: the game's UTF-8 writer cannot distinguish it from another key"
+                    "Starting {} with the game files in {}",
+                    program.display(),
+                    resources.display()
                 ),
             );
-        }
-        prepare_world(&shared, dir, &config)?;
-        note(
-            &shared,
-            "INFO",
-            &format!(
-                "Starting {} with the game files in {}",
-                program.display(),
-                resources.display()
-            ),
-        );
-        shared.set_phase(Phase::Starting);
-        let transfers = config.transfer.engine_arg();
-        let mut child = engine::spawn(
-            &program,
-            &resources,
-            dir,
-            config.engine.low_memory,
-            config.engine.parallel_tick,
-            (
-                config.engine.droppable_clientbound,
-                config.engine.droppable_serverbound,
-            ),
-            transfers.as_deref(),
-        )
-        .map_err(|e| format!("{}: {e}", program.display()))?;
+            shared.set_phase(Phase::Starting);
+            let transfers = config.transfer.engine_arg();
+            let child = engine::spawn(
+                &program,
+                &resources,
+                dir,
+                config.engine.low_memory,
+                config.engine.parallel_tick,
+                (
+                    config.engine.droppable_clientbound,
+                    config.engine.droppable_serverbound,
+                ),
+                transfers.as_deref(),
+            )
+            .map_err(|e| format!("{}: {e}", program.display()))?;
+            Ok((child, written))
+        })();
+        drop(lease.take());
+        let (mut child, written) = match start {
+            Ok(started) => started,
+            Err(error) => {
+                if let Some(w) = watch.take() {
+                    roll_back(&shared, dir, &config, &w, &error);
+                    continue;
+                }
+                return Err(error.into());
+            }
+        };
         {
             let mut state = shared.state.lock().unwrap();
             state.engine_pid = Some(child.id());
@@ -358,7 +420,8 @@ pub fn run(dir: &Path) -> Result<(), String> {
         if !config.engine.restart_on_crash {
             return Err(format!(
                 "the game stopped unexpectedly ({status}); engine.restart_on_crash is off"
-            ));
+            )
+            .into());
         }
         let now = Instant::now();
         crashes.retain(|t| now.duration_since(*t) < CRASH_WINDOW);
@@ -368,7 +431,7 @@ pub fn run(dir: &Path) -> Result<(), String> {
                 "the game stopped unexpectedly {MAX_CRASHES} times in {} minutes: not restarting it. \
                  See logs/latest.log and crash-reports/",
                 CRASH_WINDOW.as_secs() / 60
-            ));
+            ).into());
         }
         let wait = backoff(crashes.len());
         note(
@@ -442,6 +505,17 @@ fn switch(
         shared.finish_update(false, "Not updated: `current` points at no release".into());
         return None;
     };
+    let change = match mods::carry_release(dir, config, to) {
+        Ok(change) => change,
+        Err(e) => {
+            shared.finish_update(false, format!("Stayed on {from}: {e}"));
+            return None;
+        }
+    };
+    if to == from && change.is_none() {
+        shared.finish_update(true, format!("Already on {to}"));
+        return None;
+    }
     let made = backup::file_name(std::time::SystemTime::now(), Some(&update::backup_name(to)))
         .and_then(|file| backup::create(dir, config, &file).map(|_| file));
     let backup = match made {
@@ -460,20 +534,13 @@ fn switch(
         ),
     );
     let previous = install.previous();
-    if let Err(e) = install.switch(to) {
-        shared.finish_update(false, format!("Stayed on {from}: {e}"));
-        return None;
-    }
-    if let Err(e) =
-        launch::program_in(config, dir, Some(install)).and_then(|p| engine::check_starts(&p))
-    {
-        let back = install
-            .switch_back(&from, previous.as_deref())
-            .err()
-            .map_or(String::new(), |e| format!(" ({e})"));
-        shared.finish_update(false, format!("Stayed on {from}{back}: {e}"));
-        return None;
-    }
+    let managed = match update::switch_with_mods(dir, install, to, &from, change) {
+        Ok(managed) => managed,
+        Err(e) => {
+            shared.finish_update(false, e);
+            return None;
+        }
+    };
     shared.update.lock().unwrap().busy = Some(format!("Starting the game on {to}"));
     Some(Watch {
         from,
@@ -483,6 +550,7 @@ fn switch(
         timeout,
         deadline: Instant::now() + timeout,
         keep: config.updates.keep,
+        managed,
     })
 }
 
@@ -490,6 +558,11 @@ fn switch(
 /// kept are deleted.
 fn came_up(shared: &Shared, w: &Watch) {
     let mut message = format!("Now on {} (was {}): the game is up", w.to, w.from);
+    if w.managed
+        && let Err(e) = update::finish_mod_release(&shared.dir, w.from != w.to)
+    {
+        message = format!("{message}; could not retain the old mod set: {e}");
+    }
     if let Some(install) = &shared.install {
         let (removed, failed) = install.prune(w.keep);
         let pruned = update::pruned(&removed, &failed);
@@ -514,16 +587,17 @@ fn roll_back(shared: &Shared, dir: &Path, config: &Config, w: &Watch, reason: &s
     let Some(install) = shared.install.as_ref() else {
         return;
     };
-    if let Err(e) = install.switch_back(&w.from, w.previous.as_deref()) {
-        shared.finish_update(
-            false,
-            format!(
-                "{} didn't come up ({reason}), and going back to {} failed: {e}",
-                w.to, w.from
-            ),
-        );
-        return;
-    }
+    let release = if w.from != w.to {
+        install.switch_back(&w.from, w.previous.as_deref())
+    } else {
+        Ok(())
+    };
+    let mods = if w.managed {
+        update::undo_mod_release(dir)
+    } else {
+        Ok(())
+    };
+    let trouble: Vec<_> = [release.err(), mods.err()].into_iter().flatten().collect();
     let world = match backup::restore(dir, config, &w.backup) {
         Ok(Some(old)) => format!(
             "; the world is back as it was before the switch (the one {} left is in {})",
@@ -535,10 +609,19 @@ fn roll_back(shared: &Shared, dir: &Path, config: &Config, w: &Watch, reason: &s
     };
     shared.finish_update(
         false,
-        format!(
-            "Rolled back to {}: {} didn't come up ({reason}){world}",
-            w.from, w.to
-        ),
+        if trouble.is_empty() {
+            format!(
+                "Rolled back to {}: {} didn't come up ({reason}){world}",
+                w.from, w.to
+            )
+        } else {
+            format!(
+                "{} didn't come up ({reason}), and going back to {} failed: {}{world}",
+                w.to,
+                w.from,
+                trouble.join("; ")
+            )
+        },
     );
 }
 
@@ -582,6 +665,12 @@ fn check_updates(shared: Arc<Shared>) {
                         );
                     }
                     shared.update.lock().unwrap().available = newer;
+                }
+                if let Ok(warnings) = mods::refresh_takedowns(&shared.dir) {
+                    let old = std::mem::replace(&mut shared.update.lock().unwrap().mod_warnings, warnings.clone());
+                    for warning in warnings.into_iter().filter(|warning| !old.contains(warning)) {
+                        note(&shared, "WARN", &warning);
+                    }
                 }
                 thread::sleep(Duration::from_secs(6 * 3600));
             }

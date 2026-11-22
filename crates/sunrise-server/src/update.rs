@@ -7,7 +7,7 @@
 //! `current`; the supervisor then restarts the game on it and switches back by itself if the new game doesn't come
 //! up.
 
-use crate::{api::Client, backup, engine, supervisor};
+use crate::{api::Client, backup, engine, mods, supervisor};
 use serde_json::{Value, json};
 use std::{
     io::Read,
@@ -745,6 +745,14 @@ pub fn command(dir: &Path, args: &[String]) -> Result<(), String> {
     let current = install
         .current()
         .ok_or("the installer's `current` points at no release")?;
+    if !check
+        && archive.is_none()
+        && let Some(tag) = version.as_ref()
+        && sunrise_mod_install::lock::ReleaseTag::try_from(tag.clone()).is_ok()
+        && install.release(tag).join(exe("sunrise-server")).is_file()
+    {
+        return switch_to(dir, &install, tag, timeout);
+    }
     let (tag, archive, downloaded) = match archive {
         Some(_) if check => return Err("--check looks at GitHub's releases: drop --archive".into()),
         Some(archive) => {
@@ -790,8 +798,10 @@ pub fn command(dir: &Path, args: &[String]) -> Result<(), String> {
         }
     };
     if tag == current {
-        println!("Already on {tag}.");
-        return Ok(());
+        if downloaded {
+            let _ = std::fs::remove_file(&archive);
+        }
+        return switch_to(dir, &install, &tag, timeout);
     }
     let unpacked = unpack(&install, &archive, &tag);
     if downloaded {
@@ -927,6 +937,11 @@ fn switch_stopped(dir: &Path, install: &Install, tag: &str) -> Result<(), String
     } else {
         Config::default()
     };
+    let change = mods::carry_release(dir, &config, tag)?;
+    if tag == from && change.is_none() {
+        println!("Already on {tag}.");
+        return Ok(());
+    }
     let backed_up = if server {
         let file = backup::file_name(std::time::SystemTime::now(), Some(&backup_name(tag)))?;
         backup::create(dir, &config, &file)?;
@@ -934,13 +949,9 @@ fn switch_stopped(dir: &Path, install: &Install, tag: &str) -> Result<(), String
     } else {
         String::new()
     };
-    let previous = install.previous();
-    install.switch(tag)?;
-    if let Err(e) =
-        launch::program_in(&config, dir, Some(install)).and_then(|p| engine::check_starts(&p))
-    {
-        install.switch_back(&from, previous.as_deref())?;
-        return Err(format!("stayed on {from}: {e}"));
+    let switched = switch_with_mods(dir, install, tag, &from, change)?;
+    if switched {
+        finish_mod_release(dir, tag != from)?;
     }
     println!(
         "Switched from {from} to {tag}.{backed_up}{} `sunrise-server rollback` goes back to {from}.",
@@ -956,6 +967,71 @@ fn switch_stopped(dir: &Path, install: &Install, tag: &str) -> Result<(), String
         println!("{pruned}.");
     }
     Ok(())
+}
+
+/// Switch the release and its checked mod generation before letting the next child start.
+/// If the executable does not even load, restore both now instead of starting a boot watch.
+pub(crate) fn switch_with_mods(
+    dir: &Path,
+    install: &Install,
+    tag: &str,
+    from: &str,
+    change: Option<mods::ReleaseChange>,
+) -> Result<bool, String> {
+    let previous = install.previous();
+    let managed = change
+        .map(|mods| {
+            mods.folder.commit_release(mods.stage, &mods.text)?;
+            Ok::<_, String>(mods.folder)
+        })
+        .transpose()?;
+    let checked = (|| {
+        if tag != from {
+            install.switch(tag)?;
+        }
+        let config = if dir.join(config::FILE).is_file() {
+            Config::load(dir)?
+        } else {
+            Config::default()
+        };
+        let program =
+            match mods::check_start(dir, &config, Some(install)).map_err(|e| e.to_string())? {
+                Some(program) => program,
+                None => launch::program_in(&config, dir, Some(install))?,
+            };
+        engine::check_starts(&program)
+    })();
+    if let Err(e) = checked {
+        let back = (|| {
+            if tag != from {
+                install.switch_back(from, previous.as_deref())?;
+            }
+            if let Some(folder) = managed {
+                let text = std::fs::read_to_string(dir.join(config::FILE))
+                    .map_err(|err| err.to_string())?;
+                folder.undo_release(&text)?;
+            }
+            Ok::<_, String>(())
+        })();
+        return Err(match back {
+            Ok(()) => format!("Stayed on {from}: {e}"),
+            Err(back) => format!(
+                "{e}; restoring {from} failed: {back}\n  Recover the mods: sunrise-server mods rollback"
+            ),
+        });
+    }
+    Ok(managed.is_some())
+}
+
+pub(crate) fn finish_mod_release(dir: &Path, switched: bool) -> Result<(), String> {
+    sunrise_mod_install::transaction::ServerFolder::open(dir)?.finish_release(switched)
+}
+
+pub(crate) fn undo_mod_release(dir: &Path) -> Result<(), String> {
+    let folder = sunrise_mod_install::transaction::ServerFolder::open(dir)?;
+    let text =
+        std::fs::read_to_string(folder.root().join(config::FILE)).map_err(|e| e.to_string())?;
+    folder.undo_release(&text)
 }
 
 #[cfg(test)]

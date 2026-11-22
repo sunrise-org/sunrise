@@ -14,7 +14,7 @@ Usage: sunrise-server [--dir DIR] <command>
 
   init        Set up a server here: the EULA, the world, the port, who may join (asks, or takes flags:
               --eula --world NAME --seed SEED --port N --whitelist/--no-whitelist --player NAME... --op NAME
-              --offline --yes)
+              --offline --yes --mods ID[@RANGE],... --pack ID|FILE|URL --trust-native-code --json)
   run         Run the server in the foreground; type console commands, Ctrl-C stops it cleanly. It
               restarts the game if it crashes.
   start       Run the server in the background, or resume a stopped supervisor (output goes to logs/supervisor.log)
@@ -50,6 +50,8 @@ Usage: sunrise-server [--dir DIR] <command>
               restart on it; goes back by itself if the game isn't up within the timeout (300 s).
               --archive FILE --version NAME installs an archive you have
   rollback    Back to the release used before the update
+  mods <command> [--json]
+              Manage registry content and packs. `sunrise-server mods --help` lists the commands
   config [--json]
               The settings in server.toml
   config set KEY=VALUE... [--json]

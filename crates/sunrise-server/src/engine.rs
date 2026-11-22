@@ -129,7 +129,7 @@ pub fn check_prepared(resources: &Path) -> Result<(), String> {
     ))
 }
 
-fn sha256_file(path: &Path) -> std::io::Result<String> {
+pub(crate) fn sha256_file(path: &Path) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};
     let mut file = std::fs::File::open(path)?;
     let mut hash = Sha256::new();

@@ -95,7 +95,8 @@ pub fn is_unresolved(version: &semver::Version) -> bool {
         && version.build.split('.').next() == Some(UNRESOLVED_BUILD)
 }
 
-fn version_from_str<'de, D: serde::Deserializer<'de>>(
+/// Read a mod version at a Serde boundary using the package's semver rules.
+pub fn version_from_str<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<semver::Version, D::Error> {
     let version = String::deserialize(deserializer)?;
@@ -395,7 +396,8 @@ pub fn revision(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-pub(super) fn valid_mod_id(id: &str) -> bool {
+/// Whether `id` can name a mod and its storage folder on every supported host.
+pub fn valid_mod_id(id: &str) -> bool {
     (1..=64).contains(&id.len())
         && !reserved_mod_id(id)
         && id

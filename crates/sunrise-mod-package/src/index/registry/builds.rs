@@ -468,6 +468,15 @@ fn check_library(bytes: &[u8], host: &str, extension: &str) -> Result<(), String
 /// Check an archive's structure, encoded library and stamp without loading it. This does not
 /// authenticate the bytes; an archive submitted to the registry must also pass signature checks.
 pub fn verify_archive_identity(bytes: Vec<u8>, target: &str, expected: &str) -> Result<(), String> {
+    read_archive(bytes, target, expected).map(drop)
+}
+
+/// Return the checked stamp and library bytes without extracting archive paths.
+pub fn read_archive(
+    bytes: Vec<u8>,
+    target: &str,
+    expected: &str,
+) -> Result<(Identity, Vec<u8>), String> {
     let extension = library_extension(target)?;
     // Two files only; raw iteration does not allocate PAX/GNU extension entries. Bound both the
     // decoder dictionary and total output, including tar headers, zero padding and the trailer.
@@ -510,7 +519,7 @@ pub fn verify_archive_identity(bytes: Vec<u8>, target: &str, expected: &str) -> 
                 return Err("truncated library".into());
             }
             check_library(&bytes, target, extension)?;
-            library = Some((name, crate::index::sha256(&bytes)));
+            library = Some((name, bytes));
         } else {
             return Err(format!(
                 "unexpected, repeated or oversized archive member {name:?}"
@@ -532,17 +541,17 @@ pub fn verify_archive_identity(bytes: Vec<u8>, target: &str, expected: &str) -> 
         return Err("decoded archive exceeds its size limit".into());
     }
     let stamp = stamp.ok_or("the archive has no identity.json")?;
-    let (name, sha256) = library.ok_or("the archive has no library")?;
+    let (name, bytes) = library.ok_or("the archive has no library")?;
     if stamp.target != target
         || stamp.identity != expected
         || stamp.file != name
-        || stamp.sha256 != sha256
+        || stamp.sha256 != crate::index::sha256(&bytes)
     {
         return Err(format!(
             "identity.json does not match host {target}, its library or expected identity {expected:?}"
         ));
     }
-    Ok(())
+    Ok((stamp, bytes))
 }
 
 #[cfg(test)]
