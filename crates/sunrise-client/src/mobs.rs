@@ -3404,6 +3404,12 @@ pub struct PlayerView {
     /// The boat or nautilus the player rides and steers
     /// (`getControllingPassenger`).
     pub vehicle: Option<Vehicle>,
+    /// A player the mob targeted who went to another level (#1278): the same
+    /// entity, alive, so `TargetGoal.canContinueToUse` keeps it until the
+    /// follow range or lost sight ends it, but never in sight
+    /// (`LivingEntity.hasLineOfSight` refuses another level), and no query
+    /// of this level finds it: only the target reads it (`target_player`).
+    pub elsewhere: bool,
 }
 /// What a player rides, for the mobs that follow it (`FollowPlayerRiddenEntityGoal`).
 #[derive(Clone, Debug)]
@@ -3614,6 +3620,13 @@ impl MobWorld<'_> {
     /// The currently selected player view. The ordinary tick uses `player`;
     /// target-change callbacks can switch a scoped selection during a tick.
     pub fn selected_player(&self) -> Option<&PlayerView> {
+        self.target_player().filter(|p| !p.elsewhere)
+    }
+
+    /// The player `Who::Player` names, including one the mob targeted who
+    /// went to another level ([`PlayerView::elsewhere`]): only the target
+    /// reads it; every query of this level asks [`Self::selected_player`].
+    pub fn target_player(&self) -> Option<&PlayerView> {
         match self.player_selection {
             Some(selection) => selection.selected().map(|player| &player.view),
             None => self.player.as_ref(),

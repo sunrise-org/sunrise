@@ -23,6 +23,8 @@ use sunrise_core::geometry::{Axis, Vec3};
 use sunrise_core::random::RandomSource as EngineRandom;
 
 #[cfg(test)]
+mod departed_listener_tests;
+#[cfg(test)]
 mod interception_tests;
 mod live_backend;
 mod live_entity;

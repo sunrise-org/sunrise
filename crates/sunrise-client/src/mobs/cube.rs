@@ -671,6 +671,7 @@ mod golem_touch_tests {
                 passenger: false,
                 riding_vehicle: None,
                 vehicle: None,
+                elsewhere: false,
             });
             let mut slime = Mob::new(
                 1,

@@ -41,6 +41,31 @@ impl Game<'_> {
         views
     }
 
+    /// How a mob targeting a guest who went to another level sees them
+    /// (#1278): the same player, alive, never in sight, and found by no query
+    /// of this level ([`PlayerView::elsewhere`]).
+    pub(super) fn lan_guests_elsewhere(&mut self) -> GuestViews {
+        let Some(host) = self.lan.as_ref() else {
+            return Vec::new();
+        };
+        let conns: Vec<(u32, u128)> = host
+            .hub
+            .guests
+            .iter()
+            .filter(|g| !host.hub.here(g) && g.loaded && !g.dead && !g.is_fake())
+            .map(|g| (g.conn, g.uuid))
+            .collect();
+        let mut views = Vec::new();
+        for (conn, uuid) in conns {
+            if let Some(Some(v)) = self.as_guest(conn, |g| g.player_view()) {
+                let mut v = guest_view(v, uuid, [0.0; 3]);
+                v.elsewhere = true;
+                views.push((conn, v));
+            }
+        }
+        views
+    }
+
     /// The guest `conn`'s real identity — the uuid its lent view carries and
     /// its entity id — when the guest is a player the tick can name: a fake
     /// guest resolves as none, as the write handle refuses it (#1077).
@@ -94,7 +119,16 @@ impl Game<'_> {
             return;
         }
         for (conn, mob, e) in super::creatures::RemainingActions::new(events) {
-            self.guest_hit_by(conn, |g| g.guest_mob_event(mob, e));
+            // A mob's target in another level is out of its reach (#1278).
+            let here = self.lan.as_ref().is_some_and(|host| {
+                host.hub
+                    .guests
+                    .iter()
+                    .any(|g| g.conn == conn && host.hub.here(g))
+            });
+            if here {
+                self.guest_hit_by(conn, |g| g.guest_mob_event(mob, e));
+            }
         }
     }
 
@@ -311,7 +345,7 @@ impl Game<'_> {
 mod tests {
     use super::*;
     use sunrise_client::mobs::{Mob, PlayerView};
-    use sunrise_gameplay::lan::mob_players::choose;
+    use sunrise_gameplay::lan::mob_players::{choose, departed};
 
     #[test]
     fn a_guests_view_keeps_who_hurt_them_and_who_they_hurt() {
@@ -362,6 +396,7 @@ mod tests {
             passenger: false,
             riding_vehicle: None,
             vehicle: None,
+            elsewhere: false,
         }
     }
 
@@ -433,7 +468,7 @@ mod tests {
                 Some(7)
             );
         }
-        // A targeted guest who left: the mob looks again.
+        // A targeted guest who left is `player_for`'s to keep (`departed`): `choose` looks again.
         assert_eq!(
             choose(MOB, true, true, Some(&view(2.0, false)), &guests, Some(9)),
             None
@@ -494,9 +529,14 @@ mod tests {
 
     /// The mob of the prepared resources' type `kind` (None without them).
     fn mob_of(kind: &str) -> Option<Mob> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/sunrise-client")
-            .join(sunrise_core::VANILLA_VERSION);
+        // The daily run names its prepared root; a checkout keeps it in `.local`.
+        let root = std::env::var_os("SUNRISE_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.local/sunrise-client")
+                    .join(sunrise_core::VANILLA_VERSION)
+            });
         let types = sunrise_client::mobs::MobTypes::load(&root).ok()?;
         let t = std::sync::Arc::new(types.types.get(kind)?.clone());
         Some(Mob::new(1, t, MOB, 0.0))
@@ -523,5 +563,20 @@ mod tests {
         golem.extra.anger = 0;
         golem.extra.angry_at = None;
         assert_eq!(player_for(&golem, None, &guests, Some(7)), Some(8));
+    }
+
+    /// #1278 cases 5 and 6: the guest a mob aims at (or a golem is angry at)
+    /// disconnects or changes dimension, leaving this level's guests. The
+    /// binding stays on that departed player, so the mob sees no one until its
+    /// own goals let go; it never moves to the nearest player. A guest still
+    /// here, the host, or a mob that holds no one, change nothing.
+    #[test]
+    fn a_mob_stays_bound_to_a_guest_who_left_until_it_lets_go() {
+        let here = vec![(8, view(2.0, false))];
+        assert_eq!(departed(true, &here, Some(7)), Some(7));
+        assert_eq!(departed(true, &Vec::new(), Some(7)), Some(7));
+        assert_eq!(departed(true, &here, Some(8)), None);
+        assert_eq!(departed(true, &here, None), None);
+        assert_eq!(departed(false, &here, Some(7)), None);
     }
 }

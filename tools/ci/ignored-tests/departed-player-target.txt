@@ -1,0 +1,7 @@
+# #1278: a mob whose player target left the level keeps that departed player until its own goals let go (hosted tick, prepared resources)
+sunrise-client game::creatures::departed_guest_tests::a_departed_attacker_hands_nothing_to_the_bystander lib daily resources
+sunrise-client game::creatures::departed_guest_tests::a_disconnected_target_drops_at_the_first_full_selector_pass lib daily resources
+sunrise-client game::creatures::departed_guest_tests::a_frozen_turn_keeps_the_departed_target_and_drops_it_on_resume lib daily resources
+sunrise-client game::creatures::departed_guest_tests::a_target_in_another_dimension_is_kept_until_the_zombie_loses_it lib daily resources
+sunrise-client game::native_goal_ticks::departed_listener_tests::a_listener_can_cancel_the_clear_of_a_departed_target lib daily resources
+sunrise-client game::native_goal_ticks::departed_listener_tests::a_listener_can_redirect_the_clear_to_the_bystander lib daily resources
