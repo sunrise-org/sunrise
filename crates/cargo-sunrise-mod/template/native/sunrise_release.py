@@ -173,7 +173,7 @@ def plan_outputs(batch):
             print("matrix=" + json.dumps({"include": batch.plan["hosts"]}, separators=(",", ":")), file=file)
 
 
-def build(batch, project, name):
+def build(batch, project, name, *, dependency_index=None, dependency_files=None):
     batch.check_tool()
     host = batch.hosts[name]
     release, triple = batch.plan["rust"], host["triple"]
@@ -188,22 +188,29 @@ def build(batch, project, name):
         env["RUSTUP_TOOLCHAIN"] = rust
     if not batch.initial:
         project = batch.prepare(batch.work / "build-project", build=True, env=env)
-    lock = project / "Cargo.lock"
-    reviewed = lock.read_bytes() if lock.is_file() else None
-    tool("check", cwd=project, env=env)
-    if reviewed is not None:
-        require(lock.is_file() and lock.read_bytes() == reviewed, "cargo check would change the reviewed Cargo.lock; fix it before releasing")
-    call("cargo", "test", "--locked", cwd=project, env=env)
     out = batch.work / "host-results" / name
     out.mkdir(parents=True)
-    args = ["build"]
-    if host["archive"]:
-        args.extend(["--binaries", out, "--sunrise-release", batch.plan["target"]["tag"], "--releases", batch.releases])
-        if host["side"] == "server":
-            args.append("--server")
-    tool(*args, cwd=project, env=env)
-    if reviewed is not None:
-        require(lock.read_bytes() == reviewed, "the release build changed the reviewed Cargo.lock")
+    manifest = tomllib.loads((project / "sunrise-mod.toml").read_text(encoding="utf-8"))
+    if batch.plan["mode"] == "source-only" and manifest.get("dependencies"):
+        args = ["release", "source", "--tag", batch.tag, "--releases", batch.releases]
+        if dependency_index is not None:
+            args.extend(["--index", dependency_index, "--files", dependency_files])
+        tool(*args, cwd=project, env=env)
+    else:
+        lock = project / "Cargo.lock"
+        reviewed = lock.read_bytes() if lock.is_file() else None
+        tool("check", cwd=project, env=env)
+        if reviewed is not None:
+            require(lock.is_file() and lock.read_bytes() == reviewed, "cargo check would change the reviewed Cargo.lock; fix it before releasing")
+        call("cargo", "test", "--locked", cwd=project, env=env)
+        args = ["build"]
+        if host["archive"]:
+            args.extend(["--binaries", out, "--sunrise-release", batch.plan["target"]["tag"], "--releases", batch.releases])
+            if host["side"] == "server":
+                args.append("--server")
+        tool(*args, cwd=project, env=env)
+        if reviewed is not None:
+            require(lock.read_bytes() == reviewed, "the release build changed the reviewed Cargo.lock")
     if host["source_producer"]:
         shutil.copyfile(project / "target" / "sunrise-mod" / f"{batch.id}.smod", out / batch.source)
     require(files(out) == batch.outputs(host), f"{name}: build did not produce the planned files")

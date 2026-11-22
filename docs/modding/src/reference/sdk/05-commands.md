@@ -13,6 +13,7 @@ folder.
 | [`release plan`](#release-plan) | Writes a native release or rebuild plan and fetches the SDK metadata it needs, without building or publishing. |
 | [`release scripts`](#release-scripts) | Writes the workflow scripts embedded in this tool. |
 | [`release prepare-rebuild`](#release-prepare-rebuild) | Checks the exact reviewed package and prepares a disposable project or manifest. |
+| [`release source`](#release-source) | Checks and tests a tagged native mod with its reviewed library dependencies, then packs its source. |
 | `keygen [--out <dir>] [--no-password]` | Makes a Minisign pair in the [mod’s per-user key folder](../../how-to/publish.md#signing) or the named folder. Prints the public key; the private key is passphrase-encrypted by default and always on Windows. Refuses to overwrite either file. |
 | `sign <file> [--key <path>] [--no-password]` or `sign <file> --key-env` | Writes the detached `<file>.minisig`, without overwriting an existing signature. Uses the current mod’s per-user signing key by default. For CI, `--key-env` reads `SUNRISE_MOD_SIGNING_KEY` and optional `SUNRISE_MOD_SIGNING_PASSPHRASE` with no prompt; see [Signing](../../how-to/publish.md#signing). |
 | `run [--resources <folder>] [--jars <dir>] [-- <game args>]` | For a native mod, builds, stages the game with the mod in `target/sunrise-mod/run/` and starts it. |
@@ -101,6 +102,17 @@ checks that a signed native package is the exact reviewed source named by the re
 standalone eligibility and lock rules as the registry. With `--build` it unpacks into a new directory and repins
 that directory's manifest to the plan's target SDK. Without `--build` it writes only the original manifest so
 signing and publication can read metadata without unpacking source. Neither mode runs Cargo or modifies the input.
+
+## `release source`
+
+`cargo sunrise-mod release source --tag <vVERSION> --releases <file> [--update-lock]` resolves the
+mod's required dependencies on the stable release it pins, verifies each selected native library's source
+against the published registry, and checks and tests with those libraries in a disposable copy. Without
+`--update-lock` it requires the reviewed lock and runs Cargo with `--locked`. Use `--update-lock` explicitly
+to prepare a new lock before committing it. The only package produced is your mod's own unsigned `.smod`.
+
+For a local registry snapshot, pass `--index <file>` and optionally `--files <dir>` containing the
+source packages named by SHA-256. Verification still uses the snapshot's size, hash and author signature.
 
 ## `fits`
 

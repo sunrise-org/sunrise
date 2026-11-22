@@ -211,6 +211,55 @@ pub fn install(
     plan
 }
 
+/// Plan the registry dependencies of an unpublished mod, treating its own manifest as
+/// the single requested version. A published version of the same id cannot replace it.
+pub fn for_manifest<'a>(
+    index: &'a Index,
+    manifest: &crate::Manifest,
+    game: &str,
+    side: Side,
+    native_fits: impl Fn(&Project, &Version) -> bool,
+) -> Result<Vec<(&'a Project, &'a Version)>, String> {
+    let deps = super::manifest_dependencies(manifest);
+    let id = manifest.id.as_str();
+    let version = manifest.version.to_string();
+    let (optional, required) = deps
+        .iter()
+        .filter(|dep| dep.applies(side))
+        .map(|row| Range {
+            parsed: row.range(id, &version),
+            row,
+        })
+        .partition(|dep| dep.row.optional);
+    let mut catalog = Catalog::new(index, game, side, native_fits, &Present::new());
+    catalog.mods.insert(
+        id,
+        vec![Candidate {
+            version: &version,
+            installed: false,
+            unindexed: false,
+            number: Some(manifest.version.clone()),
+            fit: Fit::Yes,
+            required,
+            optional,
+        }],
+    );
+    let selected = catalog.solve(&Roots::from([(id, Vec::new())]), &Selected::new())?;
+    Ok(selected
+        .into_iter()
+        .filter(|(name, _)| *name != id)
+        .map(|(name, candidate)| {
+            let project = index.project(name).expect("selected indexed project");
+            let version = project
+                .versions
+                .iter()
+                .find(|v| v.version == candidate.version)
+                .expect("selected indexed version");
+            (project, version)
+        })
+        .collect())
+}
+
 /// List installed mods that directly or transitively require `id`, from the indexed metadata
 /// for matching installed artifacts. An optional or out-of-side dependency is not a blocker.
 pub fn removal_dependents(

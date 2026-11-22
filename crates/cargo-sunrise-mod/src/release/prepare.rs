@@ -128,10 +128,22 @@ fn prepare(plan: &Rebuild, package: &Path, out: &Path, build: bool) -> Result<()
         bundle.files.insert(MANIFEST.to_owned(), text.into_bytes());
     }
     let stage = tempfile::tempdir_in(parent).map_err(|error| error.to_string())?;
-    for (name, bytes) in bundle.files {
-        if name == USES_FILE || (!build && name != MANIFEST) {
-            continue;
-        }
+    write_files(
+        stage.path(),
+        bundle
+            .files
+            .into_iter()
+            .filter(|(name, _)| name != USES_FILE && (build || name == MANIFEST)),
+    )?;
+    fs::rename(stage.path(), &out).map_err(|error| format!("{}: {error}", out.display()))
+}
+
+/// Write already checked flat package paths to a private, fresh directory.
+pub(super) fn write_files(
+    directory: &Path,
+    files: impl IntoIterator<Item = (String, Vec<u8>)>,
+) -> Result<(), String> {
+    for (name, bytes) in files {
         #[cfg(windows)]
         if name.split('/').any(|part| {
             // Win32 strips trailing spaces/dots and can treat DOS device names as files.
@@ -156,10 +168,10 @@ fn prepare(plan: &Rebuild, package: &Path, out: &Path, build: bool) -> Result<()
                 })
         }) {
             return Err(format!(
-                "{name}: a rebuild cannot write a Windows-aliased path"
+                "{name}: the release cannot stage a Windows-aliased path"
             ));
         }
-        let file = stage.path().join(&name);
+        let file = directory.join(&name);
         let write = || -> std::io::Result<()> {
             fs::create_dir_all(file.parent().expect("file in the staging directory"))?;
             // Also detects case-folding collisions on case-insensitive hosts.
@@ -171,7 +183,7 @@ fn prepare(plan: &Rebuild, package: &Path, out: &Path, build: bool) -> Result<()
         };
         write().map_err(|error| format!("{name}: {error}"))?;
     }
-    fs::rename(stage.path(), &out).map_err(|error| format!("{}: {error}", out.display()))
+    Ok(())
 }
 
 #[cfg(test)]

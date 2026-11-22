@@ -1,0 +1,1 @@
+cargo-sunrise-mod tagged_source_release_checks_and_tests_a_required_library test:release_smoke daily own-sdk # Builds and signs the generated template releases against the daily SDK, including a tagged dependent and its library.

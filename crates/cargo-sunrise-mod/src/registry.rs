@@ -17,7 +17,7 @@ use sunrise_mod_package::index::{
 
 /// Where this registry publishes its release assets and its site (icons and screenshots).
 const RELEASE: &str = "https://github.com/sunrise-org/sunrise-mods/releases/download/";
-const SITE: &str = "https://sunrise-org.github.io/sunrise-mods/";
+pub(crate) const SITE: &str = "https://sunrise-org.github.io/sunrise-mods/";
 
 const USAGE: &str = "usage: cargo sunrise-mod registry build <checkout> --files <dir> --out <index.json> [--release <url>] [--site <url>] [--generated <time>] [--counts <counts.json>] [--releases <file>] [--nightly <file>] [--nightly-build <file>] [--sdk-data <dir>]
        cargo sunrise-mod registry review <base checkout> <head checkout> --author <login> [--files <dir>] [--releases <file>] [--sdk-data <dir>] [--json]
