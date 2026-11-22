@@ -61,6 +61,12 @@
   "command_exec": "1 or 2 of its 19,566 commands differ in every run on main since #15161, other ones each time, on all three runners (#15158, #15316): automatic runs would fail regardless of the change; back in automatic runs with the fix",
   "hoglin_repeat_attack": "has never passed on CI since #12823 added it, and fails whatever a pull request changes (#15158): the pig's HurtTime and health after repeated hits differ; take it off this list with the fix",
   "last_hurt_by_mob": "has never passed on CI since #12843 added it, and fails whatever a pull request changes (#15158): a pig summoned with last_hurt_by_mob loses it, and the saved key order differs; take it off this list with the fix",
-  "mob_command_damage_vibration": "has never passed on CI since #11179 added it, and fails whatever a pull request changes (#15158): 25 of 184 records differ, mostly sensor messages; take it off this list with the fix"
+  "mob_command_damage_vibration": "has never passed on CI since #11179 added it, and fails whatever a pull request changes (#15158): 25 of 184 records differ, mostly sensor messages; take it off this list with the fix",
+  "invulnerable_time": "has never passed on CI since #12861 added it, and fails whatever a pull request changes (#15158): only the attributes order differs (#15157); take it off this list with the fix",
+  "allay_pickup_cooldown": "has never passed on CI since #12893 added it, and fails whatever a pull request changes (#15158): the allay keeps item_pickup_cooldown_ticks and never picks up the diamond, and an advancement message is missing; take it off this list with the fix",
+  "kill_die_vibration": "has never passed on CI since #12160 added it, and fails whatever a pull request changes (#15158): the sculk sensor's listener.event.source and listener.selector.event.source are missing, and a pig's HurtTime is off by one; take it off this list with the fix",
+  "interaction_data": "has never passed on CI since #12160 added it, and fails whatever a pull request changes (#15158): an Interaction's saved body lacks width; take it off this list with the fix",
+  "world_test_def_lifecycle": "has never passed on CI since #11992 added it, and fails whatever a pull request changes (#15158): /execute if loaded passes in Sunrise where vanilla's chunk is already unloaded; take it off this list with the fix",
+  "inline_feature_parse": "has never passed on CI since #12177 added it, and fails whatever a pull request changes (#15158): the error text differs (MapLike[{}] against MapLike[{config:{},type:\"minecraft:simple_block\"}]); take it off this list with the fix"
  }
 }
