@@ -1,0 +1,1 @@
+sunrise-client game::native_block_tables::tests::is_fire_reads_the_fire_tag_and_rejects_a_bad_state lib daily resources

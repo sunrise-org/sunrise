@@ -18,15 +18,31 @@ use sunrise_world::registry::BlockStateId;
 pub(in crate::game) struct BlockTables<'a> {
     res: &'a Resources,
     pack: &'a PackResources,
+    /// Whether [`Game::native_tag_items`] would currently answer `Some`.
+    ///
+    /// `BlockTables` only holds `res` and `pack`, so the same availability
+    /// condition `Game::block_in_tag` uses has to be captured when the view is
+    /// built (`BlockTables::of`): on a client, the tags the server has sent;
+    /// elsewhere, once the world lock is installed. The view is short-lived, so
+    /// the flag stays current for this read.
+    tag_tables: bool,
 }
 
 impl<'a> BlockTables<'a> {
-    pub(in crate::game) fn new(res: &'a Resources, pack: &'a PackResources) -> Self {
-        Self { res, pack }
+    pub(in crate::game) fn new(
+        res: &'a Resources,
+        pack: &'a PackResources,
+        tag_tables: bool,
+    ) -> Self {
+        Self {
+            res,
+            pack,
+            tag_tables,
+        }
     }
 
     pub(in crate::game) fn of(game: &'a Game<'_>) -> Self {
-        Self::new(&game.res, &game.pack)
+        Self::new(&game.res, &game.pack, game.native_tag_items().is_some())
     }
 
     /// The item table the generated forwarders convert item values with.
@@ -274,6 +290,16 @@ impl<'a> BlockTables<'a> {
         self.pack.assets.registry.state(state)?;
         Some(self.res.facts().get(state).solid_render)
     }
+    /// `#minecraft:fire` (`BlockTags.FIRE`). None for an unknown state, or when
+    /// the tag tables are unavailable (`tag_tables`, from `Game::native_tag_items`).
+    pub(in crate::game) fn block_state_is_fire(&self, state: BlockStateId) -> Option<bool> {
+        let name = &self.pack.assets.registry.state(state)?.name;
+        let key = mod_api::__private::block_key(name)?;
+        if !self.tag_tables {
+            return None;
+        }
+        super::native_world_read::block_in_tag(key, "minecraft:fire")
+    }
     /// `BlockState.isRedstoneConductor` for a state alone, not a block in a level.
     pub(in crate::game) fn block_state_is_redstone_conductor(
         &self,
@@ -437,5 +463,49 @@ fn fluid_measures(id: &str, kind: Option<FluidKind>) -> FluidMeasures {
                 .map_or(id, |fluid| fluid.get().id.as_str());
             sunrise_client::mod_content::fluid_measures(source).unwrap_or_default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mod_api::{HostBlockStates, prelude::BlockStatesHost};
+
+    #[test]
+    #[ignore = "daily"]
+    fn is_fire_reads_the_fire_tag_and_rejects_a_bad_state() {
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            assert!(game.native_tag_items().is_none());
+            let fire = BlockStatesHost::block_state_id(game, "minecraft:fire").unwrap();
+            let soul = BlockStatesHost::block_state_id(game, "minecraft:soul_fire").unwrap();
+            let stone = BlockStatesHost::block_state_id(game, "minecraft:stone").unwrap();
+            let invalid = mod_api::__private::block_state_from_ordinal(fire.block(), u16::MAX);
+            let facts = game.block_states();
+            assert_eq!(facts.is_fire(fire), None);
+            assert_eq!(facts.is_fire(soul), None);
+            assert_eq!(facts.is_fire(stone), None);
+            assert_eq!(facts.is_fire(invalid), None);
+        });
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            // with_game already ran resolve_parts (so BLOCK_TAGS is published)
+            // but stops short of world open. Native tag reads use the session
+            // lock to tell that the tables are ready (`finish_open_world`).
+            let dir = std::env::temp_dir().join(format!(
+                "sunrise-block-state-is-fire-{}",
+                std::process::id()
+            ));
+            game.session_lock = Some(sunrise_client::save::SessionLock::acquire(&dir).unwrap());
+            assert!(game.native_tag_items().is_some());
+            let facts = game.block_states();
+            let fire = BlockStatesHost::block_state_id(game, "minecraft:fire").unwrap();
+            let soul = BlockStatesHost::block_state_id(game, "minecraft:soul_fire").unwrap();
+            let stone = BlockStatesHost::block_state_id(game, "minecraft:stone").unwrap();
+            assert_eq!(facts.is_fire(fire), Some(true));
+            assert_eq!(facts.is_fire(soul), Some(true));
+            assert_eq!(facts.is_fire(stone), Some(false));
+            let invalid = mod_api::__private::block_state_from_ordinal(fire.block(), u16::MAX);
+            assert_eq!(facts.is_fire(invalid), None);
+            game.session_lock = None;
+            let _ = std::fs::remove_dir_all(dir);
+        });
     }
 }

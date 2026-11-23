@@ -1,0 +1,2 @@
+ids = ["handle:BlockStates::is_fire"]
+why = "Mods can ask whether a block state belongs to the minecraft:fire tag without resolving the block first. A bad state answers None. So does a view whose tag tables are not yet available: BlockTables captures Game::native_tag_items when it is built, the same condition Game::block_in_tag uses (on a client, the tags the server sent; elsewhere, once the world lock is installed)."

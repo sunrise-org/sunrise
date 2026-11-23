@@ -251,6 +251,9 @@ impl BlockStatesBackend for NoBlockTables {
     fn block_state_is_solid_render(&self, _: BlockState) -> Option<bool> {
         None
     }
+    fn block_state_is_fire(&self, _: BlockState) -> Option<bool> {
+        None
+    }
     fn block_state_is_redstone_conductor(&self, _: BlockState) -> Option<bool> {
         None
     }
@@ -435,6 +438,11 @@ impl BlockStates<'_> {
     pub fn is_solid_render(&self, state: BlockState) -> Option<bool> {
         self.backend.block_state_is_solid_render(state)
     }
+    /// Whether `state`'s block is in `#minecraft:fire` (`BlockTags.FIRE`: fire and soul fire).
+    /// None for an unknown state, or when the tag tables are unavailable.
+    pub fn is_fire(&self, state: BlockState) -> Option<bool> {
+        self.backend.block_state_is_fire(state)
+    }
     /// Whether `state`'s block is of vanilla class `class`, subclasses included (Java's
     /// `instanceof`). It reads the engine's class of the block, never a tag, so it does not move
     /// when a pack edits a tag. `Ok(None)` for an unknown state; the refusal the read met
@@ -507,6 +515,7 @@ mod tests {
         let facts = Double.block_states();
         let state: BlockState = crate::__private::block_state_from_ordinal(crate::BlockKey(0), 0);
         assert_eq!(facts.replaceable(state), None);
+        assert_eq!(facts.is_fire(state), None);
         assert_eq!(facts.destroy_speed(state), None);
         assert_eq!(
             facts.is_correct_tool_for_drops(&crate::ItemStack::of(crate::ItemKey(0)), state),

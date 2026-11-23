@@ -5577,6 +5577,8 @@ impl Game<'_> {
         let rules = self.level_rules();
         let native_authoritative = self.native_authoritative();
         let liquid_transaction_open = self.has_level_transaction();
+        // Capture tag availability before GameLevel's mutable field borrows.
+        let tag_tables = self.native_tag_items().is_some();
         let environment = self.res.environment_of(&self.dimension_type().id);
         let other_entities = entity::entity_lists_of!(self, without_carts);
         let mut level = GameLevel {
@@ -5611,7 +5613,7 @@ impl Game<'_> {
             trigger_extras,
             world: &mut self.world,
             facts: self.res.facts(),
-            tables: native_block_tables::BlockTables::new(&self.res, &self.pack),
+            tables: native_block_tables::BlockTables::new(&self.res, &self.pack, tag_tables),
             collision: self.collision,
             events: &mut self.level_events,
             dimension,
