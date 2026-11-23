@@ -56,6 +56,7 @@ impl Game<'_> {
         self.save_stats();
         self.save_advancements();
         self.save_scoreboard();
+        self.save_server_attachments();
         self.save_bossbars();
         self.save_schedule();
         self.save_warden_tracker();

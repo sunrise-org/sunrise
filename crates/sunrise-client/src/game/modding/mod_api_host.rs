@@ -137,6 +137,10 @@ impl Game<'_> {
         if self.client_attachment_entity_exists(holder) {
             self.initialize_entity_on_access(holder);
         }
+        if holder == mod_api::Holder::Server {
+            // Never synced: the server's own data, which no client holds a copy of.
+            return self.attachment_map_quiet(holder, access);
+        }
         if self.native_authoritative() {
             self.world.attachment_syncs.insert(holder);
             return self.attachment_map_quiet(holder, access);
@@ -288,6 +292,9 @@ impl Game<'_> {
                 self.bind_resident_entity_attachments(id)?;
             }
             return Ok(self.entity_attachments.entry(id).or_default());
+        }
+        if holder == mod_api::Holder::Server {
+            return self.server_attachment_map();
         }
         if let mod_api::Holder::Player(uuid) = holder {
             let cloning = self.cloning_guest(uuid).map(|guest| guest.conn);
@@ -783,6 +790,12 @@ impl mod_api::AttachmentHost for super::GameLevel<'_> {
     ) -> Result<&mut mod_api::Attachments, mod_api::AttachmentError> {
         if !self.native_authoritative {
             return Err(mod_api::AttachmentError::MissingHolder);
+        }
+        if holder == mod_api::Holder::Server {
+            return self
+                .server_attachments
+                .as_deref_mut()
+                .ok_or(mod_api::AttachmentError::MissingHolder);
         }
         self.world.attachment_syncs.insert(holder);
         world_attachments(self.world, holder)

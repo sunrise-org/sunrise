@@ -130,6 +130,13 @@ Unknown mods' saved entries survive load and save without being decoded. Level
 attachments use the dimension's `data/sunrise/attachments.dat` SavedData
 file, not `level.dat`.
 
+`Holder::Server` is one holder for the whole world, NeoForge's `SavedData` on
+`MinecraftServer#getDataStorage`: every level's server hooks reach the same map, so a
+value written while the Nether ticks is the one the Overworld reads. It is saved in
+the Overworld's `data/sunrise/server_attachments.dat` and journaled like any holder's
+map. Only the logical server has it: a client is refused with `MissingHolder`, and its
+values are never synced. Queries visit the current dimension's holders, not this one.
+
 ## Synchronization
 
 You cannot supply a holder-aware default, custom copy handler, conditional serialization,

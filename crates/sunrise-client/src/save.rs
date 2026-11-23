@@ -2544,31 +2544,11 @@ impl SaveDir {
     /// saved data over when its file is broken), so the next save can't overwrite it.
     pub fn load_attachments(&self) -> sunrise_mod_runtime::attachments::Attachments {
         let mut path = self.attachments_path();
-        let mut read = try_read_dat(&path);
-        if matches!(read, Err(DatIssue::Missing)) {
+        if !path.exists() && horizon_names::horizon_attachments_path(&self.root).exists() {
             // A dimension Horizon saved: its file, written under Sunrise's name at the next save.
             path = horizon_names::horizon_attachments_path(&self.root);
-            read = try_read_dat(&path);
         }
-        let data = match read {
-            Err(DatIssue::Missing) => return Default::default(),
-            Ok(root) => match root.get("data") {
-                Some(Tag::Compound(data)) => Ok(data.clone()),
-                _ => Err("no data compound".to_owned()),
-            },
-            Err(DatIssue::Unreadable(why)) => Err(why),
-        };
-        data.map(sunrise_mod_runtime::attachments::Attachments::from_nbt)
-            .unwrap_or_else(|why| {
-                let aside = path.with_extension("dat.corrupt");
-                log::warn!(
-                    "{}: {why}; mod attachments start over, the file is kept as {}",
-                    path.display(),
-                    aside.display()
-                );
-                let _ = fs::rename(&path, &aside);
-                Default::default()
-            })
+        load_attachments_file(&path)
     }
 
     /// Save this dimension's server-owned mod attachments; nothing while it has none and never had.
@@ -2576,22 +2556,9 @@ impl SaveDir {
         &self,
         attachments: &sunrise_mod_runtime::attachments::Attachments,
     ) -> Result<()> {
-        let path = self.attachments_path();
-        let data = attachments.to_nbt();
         // Emptied after a Horizon file was read: an empty file under Sunrise's name keeps it unread.
-        if data.is_empty()
-            && !path.exists()
-            && !horizon_names::horizon_attachments_path(&self.root).exists()
-        {
-            return Ok(());
-        }
-        write_dat(
-            &path,
-            Tag::compound([
-                ("data", Tag::Compound(data)),
-                ("DataVersion", Tag::Int(DATA_VERSION)),
-            ]),
-        )
+        let horizon = horizon_names::horizon_attachments_path(&self.root).exists();
+        save_attachments_file(&self.attachments_path(), attachments, horizon)
     }
 
     fn attachments_path(&self) -> PathBuf {
@@ -3304,6 +3271,50 @@ fn back_up_unreadable_player(path: &Path) {
     }
 }
 /// Write a gzip NBT file the way vanilla does (`<name>_new`, keep `_old`).
+/// A mod attachment map saved at `path` (`{data: {...}, DataVersion}`), or an empty one when there
+/// is no file. An unreadable file is set aside as `.dat.corrupt` and the map starts over.
+pub fn load_attachments_file(path: &Path) -> sunrise_mod_runtime::attachments::Attachments {
+    let data = match try_read_dat(path) {
+        Err(DatIssue::Missing) => return Default::default(),
+        Ok(root) => match root.get("data") {
+            Some(Tag::Compound(data)) => Ok(data.clone()),
+            _ => Err("no data compound".to_owned()),
+        },
+        Err(DatIssue::Unreadable(why)) => Err(why),
+    };
+    data.map(sunrise_mod_runtime::attachments::Attachments::from_nbt)
+        .unwrap_or_else(|why| {
+            let aside = path.with_extension("dat.corrupt");
+            log::warn!(
+                "{}: {why}; mod attachments start over, the file is kept as {}",
+                path.display(),
+                aside.display()
+            );
+            let _ = fs::rename(path, &aside);
+            Default::default()
+        })
+}
+
+/// Write a mod attachment map to `path`; nothing while it has none and no file is there, unless
+/// `keep_empty` asks for the empty file anyway.
+pub fn save_attachments_file(
+    path: &Path,
+    attachments: &sunrise_mod_runtime::attachments::Attachments,
+    keep_empty: bool,
+) -> Result<()> {
+    let data = attachments.to_nbt();
+    if data.is_empty() && !keep_empty && !path.exists() {
+        return Ok(());
+    }
+    write_dat(
+        path,
+        Tag::compound([
+            ("data", Tag::Compound(data)),
+            ("DataVersion", Tag::Int(DATA_VERSION)),
+        ]),
+    )
+}
+
 pub fn write_dat(path: &Path, tag: Tag) -> Result<()> {
     write_dat_as(path, tag, false)
 }

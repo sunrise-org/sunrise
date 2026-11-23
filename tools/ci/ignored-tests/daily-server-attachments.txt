@@ -1,0 +1,4 @@
+# PACKAGE TEST TARGET daily REASON; Holder::Server needs a booted game with prepared resources.
+sunrise-client game::server_attachments_tests::a_client_is_refused lib daily resources
+sunrise-client game::server_attachments_tests::every_level_reaches_one_map_and_an_abort_puts_it_back lib daily resources
+sunrise-client game::server_attachments_tests::the_map_is_saved_with_the_world lib daily resources

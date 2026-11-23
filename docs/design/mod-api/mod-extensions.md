@@ -290,7 +290,7 @@ NETWORKS.get_mut(host)  // reached only through a ServerHost
 | `ClientSession` | on first use after the client logs in | after `ClientPlayerNetworkEvent.LoggingOut` | `ClientHost` |
 
 - **No new lifecycle callbacks.** A library that wants to act at a scope's start or end listens to the existing hooks named in the table (one hook per moment).
-- **Not saved.** Saved data goes through attachments. A level-scoped state saves through `AttachmentType` on `AttachmentHolder::Level`, which is NeoForge's `SavedData` on a level. Server-wide saved data has no holder today; question 4 asks whether to add `AttachmentHolder::Server`. A service keeps runtime state (graphs, caches, indexes) and rebuilds it from attachments when its scope starts.
+- **Not saved.** Saved data goes through attachments. A level-scoped state saves through `AttachmentType` on `AttachmentHolder::Level`, which is NeoForge's `SavedData` on a level. Server-wide saved data goes through `Holder::Server` (question 4). A service keeps runtime state (graphs, caches, indexes) and rebuilds it from attachments when its scope starts.
 - **Threads and types.** `T: Send + 'static`. Only the scope's thread reaches it, which the host type enforces, so `T` needn't be `Sync`. `get_mut` takes `&mut` of the host, so the borrow is exclusive: a listener can't hold `NETWORKS` while posting a hook whose listeners reach for it too. Code that needs both takes the state out for the call or ends the borrow first.
 - **Names.** Namespaced by the declaring mod, declared once, with the same refusals as hooks.
 

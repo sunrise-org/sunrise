@@ -1,0 +1,3 @@
+ids = ["type:Holder", "type:Holder.Server"]
+why = "Holder::Server is one attachment map for the whole world, reached from every level's server hooks, saved in the overworld's data folder and journaled like any holder's map. A client is refused with MissingHolder."
+migrate = "Let the non-exhaustive match handle the new variant, or match it explicitly when the mod needs to tell the server's holder apart."
