@@ -1,1 +1,1 @@
-pub use world::snapshots::{LootContext, LootStack, PlacementContext, PlacementPlacer};
+pub use world::snapshots::{LootContext, LootOdds, LootStack, PlacementContext, PlacementPlacer};

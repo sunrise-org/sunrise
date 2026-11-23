@@ -1,0 +1,1 @@
+sunrise-client game::native_entity_refs::roll_loot_tests::odds_are_the_world_packs_table_judged_with_the_tool lib daily resources

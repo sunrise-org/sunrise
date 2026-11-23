@@ -601,6 +601,49 @@ impl Game<'_> {
         };
         self.roll_table_at(table, Some(origin), tool, this.as_ref())
     }
+    /// The odds of one roll of the world's loot table `table` (`LootData::odds`), its data
+    /// packs merged, with `tool` the plain item `match_tool` is judged with. Items the item
+    /// registry lacks are left out. Draws nothing. `Ok(None)` for a missing table or an unknown
+    /// tool; `Stale` for a stale handle, `Unavailable` on a client.
+    pub(super) fn level_loot_odds(
+        &self,
+        level: LevelRef,
+        table: &str,
+        tool: Option<mod_api::ItemKey>,
+    ) -> Result<Option<Vec<mod_api::LootOdds>>, mod_api::LevelReadError> {
+        if !self.is_logical_server() {
+            return Err(mod_api::LevelReadError::Unavailable);
+        }
+        if !self.level_handle_current(level) {
+            return Err(mod_api::LevelReadError::Stale);
+        }
+        let tool = match tool {
+            Some(key) => match mod_api::__private::item_key_id(key) {
+                Some(id) => Some(id),
+                None => return Ok(None),
+            },
+            None => None,
+        };
+        let Some(loot) = self.server_loot.get() else {
+            return Ok(None);
+        };
+        let Some(odds) = loot.odds(table, tool) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            odds.into_iter()
+                .filter_map(|o| {
+                    Some(mod_api::LootOdds::new(
+                        mod_api::__private::item_key(&o.item)?,
+                        o.chance,
+                        o.min,
+                        o.max,
+                        o.conditions,
+                    ))
+                })
+                .collect(),
+        ))
+    }
     /// Set a block through Level.setBlock. Typed errors distinguish stale/unavailable
     /// levels; Ok(false) preserves vanilla's position/no-change refusal.
     pub(super) fn level_set_block(

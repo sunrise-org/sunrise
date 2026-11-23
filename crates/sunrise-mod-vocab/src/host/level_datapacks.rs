@@ -54,6 +54,21 @@ pub trait LevelDatapacksBackend {
         recipe_type: &Identifier,
         inputs: &RecipeInput,
     ) -> Result<Option<RecipeMatch>, RecipeLookupError>;
+    /// Side: server.
+    /// The odds of one roll of the loot table `table` (`mymod:sifting/gravel`, the world's data
+    /// packs merged), worked out instead of rolled: each item it can give, the chance at least
+    /// one comes, the fewest and most that come, and the conditions it could not judge (taken
+    /// as met and named). Weights, rolls, alternatives, groups, sequences, nested tables, random
+    /// chances and counts count; luck and enchantments are none. `tool` is a plain item that
+    /// `match_tool` conditions are judged with; without one they are taken as met. It rolls
+    /// nothing and draws no random. `Ok(None)` for a table that isn't there; `Stale` for a
+    /// stale handle and `Unavailable` on a client. Items the item registry lacks are left out.
+    fn level_loot_odds(
+        &self,
+        level: LevelRef,
+        table: &str,
+        tool: Option<ItemKey>,
+    ) -> Result<Option<Vec<LootOdds>>, LevelReadError>;
 }
 /// The handles' writes of the `level_datapacks` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
