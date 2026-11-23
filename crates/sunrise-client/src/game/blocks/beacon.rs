@@ -656,7 +656,11 @@ impl Game<'_> {
         self.draw_hovered_slot_highlight(batch, false, ox, oy);
         for i in slots {
             let (sx, sy) = self.slot_position(i);
-            if let Some(stack) = self.slot_mut(i).clone() {
+            if i < 36 {
+                if let Some(stack) = self.inventory[i].as_ref() {
+                    self.draw_item(batch, stack, ox + sx, oy + sy);
+                }
+            } else if let Some(stack) = self.slot_mut(i).clone() {
                 self.draw_item(batch, &stack, ox + sx, oy + sy);
             }
         }

@@ -2266,10 +2266,12 @@ impl Game<'_> {
         };
         use sunrise_assets::item_model::DisplayContext;
         use sunrise_client::mobs::render::part_matrix;
-        let owner = super::item_draw::owner_at(
+        let owner = super::item_draw::living_owner_at(
             [a.position.x, a.position.y, a.position.z],
             a.yaw,
             "minecraft:armor_stand",
+            false,
+            self.mob_team(a.id),
         );
         // `useBabyOffset`: small stands use the baby hand offsets.
         let (ox, oy, oz) = if a.small {

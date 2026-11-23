@@ -338,7 +338,7 @@ fn as_number(value: &Value) -> f64 {
         Value::Argb([r, g, b, a]) => {
             f64::from((byte(*a) << 24 | byte(*r) << 16 | byte(*g) << 8 | byte(*b)) as i32)
         }
-        Value::AmbientParticles(_) | Value::Other(_) => 0.0,
+        Value::MoonPhase(_) | Value::AmbientParticles(_) | Value::Other(_) => 0.0,
     }
 }
 
@@ -842,13 +842,31 @@ impl Resolver {
     }
 }
 
+/// Synchronized server registries that override or extend local data files when building a
+/// remote level's environment ([`Environment::with_type_synced`]).
+#[derive(Default)]
+pub struct SyncedEnvironment {
+    /// Synced `minecraft:timeline` entries as JSON (`None` when the server synced no timeline
+    /// registry, in which case local timeline files are read).
+    pub timelines: Option<HashMap<String, Json>>,
+    /// Synced `minecraft:timeline` tags (`tag id -> ordered member ids`).
+    pub timeline_tags: HashMap<String, Vec<String>>,
+    /// Synced `minecraft:worldgen/biome` entries as JSON, overlaid on the local biomes.
+    pub biomes: HashMap<String, Json>,
+}
+
 /// The dimension's timeline selection, applying ordered tag members in place.
-fn timeline_ids(root: &ResourceSource, json: &Json) -> Vec<String> {
+fn timeline_ids(root: &ResourceSource, json: &Json, synced: &SyncedEnvironment) -> Vec<String> {
     let timeline_path = |id: &str| {
         let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
         format!("data/{namespace}/timeline/{path}.json")
     };
-    let tags = crate::pack_tags::bind(root, "timeline", |id| root.contains(&timeline_path(id)));
+    let tags = crate::pack_tags::bind(root, "timeline", |id| {
+        synced.timelines.as_ref().map_or_else(
+            || root.contains(&timeline_path(id)),
+            |timelines| timelines.contains_key(id),
+        )
+    });
     let entries = match json {
         Json::Array(items) => items.as_slice(),
         entry => std::slice::from_ref(entry),
@@ -864,7 +882,12 @@ fn timeline_ids(root: &ResourceSource, json: &Json) -> Vec<String> {
             let Ok(tag) = sunrise_core::identifier::Identifier::parse(tag) else {
                 continue;
             };
-            let Some(members) = tags.get(tag.to_string().as_str()) else {
+            let tag_key = tag.to_string();
+            let Some(members) = synced
+                .timeline_tags
+                .get(tag_key.as_str())
+                .or_else(|| tags.get(tag_key.as_str()))
+            else {
                 continue;
             };
             members.as_slice()
@@ -905,7 +928,13 @@ impl Environment {
         dimension: &str,
         packs: &PackModifiers,
     ) -> Result<Self> {
-        Self::load_dimension_attributes(root, dimension, packs, &Json::Null)
+        Self::load_dimension_attributes(
+            root,
+            dimension,
+            packs,
+            &Json::Null,
+            &SyncedEnvironment::default(),
+        )
     }
 
     /// Builds the data attributes first, then applies the selected resource packs.
@@ -914,6 +943,7 @@ impl Environment {
         dimension: &str,
         packs: &PackModifiers,
         extra: &Json,
+        synced: &SyncedEnvironment,
     ) -> Result<Self> {
         let mut json: Json = serde_json::from_slice(
             &root.read(&format!("data/minecraft/dimension_type/{dimension}.json"))?,
@@ -1001,20 +1031,51 @@ impl Environment {
             }
             biomes.insert(name, map);
         }
+        for (name, biome) in &synced.biomes {
+            let mut map = match AttributeMap::parse(&biome["attributes"]) {
+                Ok(map) => map,
+                Err(e) => {
+                    log::warn!("synced biome {name}: {e}");
+                    continue;
+                }
+            };
+            let mut post_map = AttributeMap::default();
+            for m in &packs.biomes {
+                let in_tag = |tag: &str| tags.contains("worldgen/biome", tag, name);
+                if m.targets.matches(name, in_tag) {
+                    resolver.apply(&mut map, &m.base);
+                    resolver.apply(&mut post_map, &m.post_process);
+                }
+            }
+            if post_map.is_empty() {
+                post.remove(name);
+            } else {
+                post.insert(name.clone(), post_map);
+            }
+            biomes.insert(name.clone(), map);
+        }
         builder.biome_layer(biomes.values());
         // Ambient emission uses the active level's registry, including synchronized biomes.
         builder
             .biome_attribute(attribute(AMBIENT_PARTICLES).expect("registered ambient particles"));
-        for id in timeline_ids(root, &json["timelines"]) {
+        for id in timeline_ids(root, &json["timelines"], synced) {
             let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", &id));
-            let file = format!("data/{namespace}/timeline/{path}.json");
-            match root
-                .read(&file)
-                .map_err(|e| e.to_string())
-                .and_then(|bytes| serde_json::from_slice::<Json>(&bytes).map_err(|e| e.to_string()))
-                .map_err(|e| e.to_string())
-                .and_then(|t| Timeline::parse(&t))
-            {
+            let parsed = if let Some(timelines) = &synced.timelines {
+                let key = format!("{namespace}:{path}");
+                timelines
+                    .get(&key)
+                    .ok_or_else(|| "not in synced registry".to_owned())
+                    .and_then(Timeline::parse)
+            } else {
+                let file = format!("data/{namespace}/timeline/{path}.json");
+                root.read(&file)
+                    .map_err(|e| e.to_string())
+                    .and_then(|bytes| {
+                        serde_json::from_slice::<Json>(&bytes).map_err(|e| e.to_string())
+                    })
+                    .and_then(|t| Timeline::parse(&t))
+            };
+            match parsed {
                 Ok(timeline) => {
                     builder.timeline_layer(&timeline);
                 }
@@ -1087,9 +1148,15 @@ impl Environment {
             return base;
         };
         made.get_or_init(|| {
-            Self::load_dimension_attributes(&base.source, &base.dimension, &base.packs, attributes)
-                .map_err(|e| log::warn!("dimension {level}: attributes refused: {e}"))
-                .ok()
+            Self::load_dimension_attributes(
+                &base.source,
+                &base.dimension,
+                &base.packs,
+                attributes,
+                &SyncedEnvironment::default(),
+            )
+            .map_err(|e| log::warn!("dimension {level}: attributes refused: {e}"))
+            .ok()
         })
         .as_ref()
         .unwrap_or(base)
@@ -1100,7 +1167,17 @@ impl Environment {
     /// client has no file for is skipped with a warning. None when the type's attributes are
     /// refused.
     pub fn with_type(base: &Environment, extra: &Json) -> Option<Environment> {
-        Self::load_dimension_attributes(&base.source, &base.dimension, &base.packs, extra)
+        Self::with_type_synced(base, extra, &SyncedEnvironment::default())
+    }
+
+    /// [`Self::with_type`] with the server's synchronized timeline, timeline-tag and biome
+    /// registries applied over local data files.
+    pub fn with_type_synced(
+        base: &Environment,
+        extra: &Json,
+        synced: &SyncedEnvironment,
+    ) -> Option<Environment> {
+        Self::load_dimension_attributes(&base.source, &base.dimension, &base.packs, extra, synced)
             .map_err(|e| log::warn!("the server's dimension type: attributes refused: {e}"))
             .ok()
     }
@@ -1109,6 +1186,27 @@ impl Environment {
     /// a biome.
     pub fn value(&self, id: &str, at: &Sample) -> Option<Value> {
         self.value_at(attribute(id)?, at, &|_| at.day_time)
+    }
+
+    /// `EnvironmentAttributes.MOON_PHASE`, on the clock named by each timeline and the optional
+    /// biome at the owner's position.
+    pub fn moon_phase(&self, biome: Option<&str>, clock: &dyn Fn(&str) -> i64) -> i32 {
+        let sample = Sample {
+            biome: biome.and_then(|id| self.biome(id)),
+            post_biome: biome.and_then(|id| self.biome_post(id)),
+            ..Sample::default()
+        };
+        let Some(Value::MoonPhase(phase)) =
+            attribute("visual/moon_phase").and_then(|attr| self.value_at(attr, &sample, clock))
+        else {
+            unreachable!("visual/moon_phase has a moon phase type and default")
+        };
+        phase.index()
+    }
+
+    /// Whether any biome layer sets `visual/moon_phase`.
+    pub fn moon_phase_is_positional(&self) -> bool {
+        self.system.is_positional("visual/moon_phase")
     }
 
     /// Sample a known attribute with the level's clock values.
@@ -1129,8 +1227,8 @@ impl Environment {
             post_blend: at.post_blend,
             post_biome: Some(&post_biome),
         };
-        match (at.blend, at.biome) {
-            (None, None) => self.system.dimension_value(attribute, &conditions),
+        match (at.blend, at.biome, at.post_blend, at.post_biome) {
+            (None, None, None, None) => self.system.dimension_value(attribute, &conditions),
             _ => self.system.value(attribute, &conditions),
         }
     }

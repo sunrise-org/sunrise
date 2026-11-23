@@ -53,7 +53,14 @@ impl Game<'_> {
                     .map(|c| ItemStack { count: *count, ..c });
                 (carried.as_ref(), *capped)
             }
-            None => (stack.as_ref(), false),
+            None => {
+                let live = match slot {
+                    0..36 => self.inventory[slot].as_ref(),
+                    504 => self.offhand.as_ref(),
+                    _ => stack.as_ref(),
+                };
+                (live, false)
+            }
         };
         if let Some(stack) = stack {
             self.draw_item_model(batch, stack, x, y);
@@ -69,16 +76,23 @@ impl Game<'_> {
     /// `extractCarriedItem`: the carried stack at the cursor, showing what a
     /// quick craft drag over several slots leaves in hand.
     pub(super) fn draw_carried(&mut self, batch: &mut HudBatch) {
-        let Some(mut stack) = self.carried.clone() else {
+        if self.carried.is_none() {
             return;
-        };
-        if let Some(left) = self.drag_view().and_then(|d| d.left) {
+        }
+        let drag_left = self.drag_view().and_then(|d| d.left);
+        if let Some(left) = drag_left {
             if left == 0 {
                 return;
             }
-            stack.count = left;
+            if let Some(mut stack) = self.carried.clone() {
+                stack.count = left;
+                self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
+            }
+            return;
         }
-        self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
+        if let Some(stack) = self.carried.as_ref() {
+            self.draw_item(batch, stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
+        }
     }
     /// The quick craft drag in progress, as the menu engine previews it.
     pub(super) fn drag_view(&mut self) -> Option<DragView> {

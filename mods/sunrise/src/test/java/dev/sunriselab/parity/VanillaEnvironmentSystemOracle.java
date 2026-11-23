@@ -27,6 +27,7 @@ import net.minecraft.world.timeline.AttributeTrack;
 import net.minecraft.util.KeyframeTrackSampler;
 import java.util.Optional;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.level.MoonPhase;
 import org.joml.Vector3fc;
 import org.joml.Vector4fc;
 
@@ -37,7 +38,8 @@ import org.joml.Vector4fc;
  */
 public final class VanillaEnvironmentSystemOracle {
     private static final Set<String> PORTED = Set.of(
-        "minecraft:boolean", "minecraft:float", "minecraft:angle_degrees", "minecraft:rgb_color", "minecraft:argb_color");
+        "minecraft:boolean", "minecraft:float", "minecraft:angle_degrees", "minecraft:rgb_color", "minecraft:argb_color",
+        "minecraft:moon_phase");
     private static final Map<String, EnvironmentAttributeMap> MAPS = new HashMap<>();
     /** The dimension's timelines in tag order, as JSON (their clocks need registries to parse). */
     private static final List<JsonObject> TIMELINES = new ArrayList<>();
@@ -170,6 +172,9 @@ public final class VanillaEnvironmentSystemOracle {
         }
         if (value instanceof Vector3fc v) {
             return bits(v.x()) + " " + bits(v.y()) + " " + bits(v.z());
+        }
+        if (value instanceof MoonPhase phase) {
+            return phase.getSerializedName();
         }
         return String.valueOf(value);
     }

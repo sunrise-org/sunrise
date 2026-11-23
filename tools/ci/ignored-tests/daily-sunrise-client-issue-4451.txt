@@ -762,7 +762,7 @@ sunrise-client game::item_abilities_tests::without_parts_the_vanilla_item_checks
 sunrise-client game::item_attack_tests::a_part_cancels_the_blow_before_it_lands lib daily resources
 sunrise-client game::item_attack_tests::a_part_keeps_the_swing_from_starting lib daily resources
 sunrise-client game::item_contact_tests::the_active_stack_survives_a_partial_contact_and_consumption_removes_the_entity lib daily resources
-sunrise-client game::item_draw::tests::a_mods_item_model_type_answers_with_the_draws_context lib daily resources
+sunrise-client game::item_draw::tests::a_mods_item_model_type_answers_with_the_draws_context lib daily child-process
 sunrise-client game::item_draw::tests::item_model_property_is_asked_only_while_a_mod_answers lib daily resources
 sunrise-client game::item_draw::tests::item_model_range_property_reads_the_mods_number lib daily resources
 sunrise-client game::item_draw::tests::item_model_select_property_reads_the_mods_value lib daily resources

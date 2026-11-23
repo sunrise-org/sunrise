@@ -367,6 +367,11 @@ impl System {
             None => attribute.default_value(),
         }
     }
+
+    /// Whether `id` has a biome layer whose value can depend on position.
+    pub fn is_positional(&self, id: &str) -> bool {
+        self.samplers.get(id).is_some_and(|s| s.positional)
+    }
 }
 
 /// `ARGB.as8BitChannel` then `from8BitChannel`: a float color channel through a byte.

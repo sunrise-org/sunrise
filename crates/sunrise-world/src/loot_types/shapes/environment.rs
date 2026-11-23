@@ -72,19 +72,6 @@ const CATEGORIES: &[&str] = &[
 ];
 const OTHER: &[Row] = &[
     Row {
-        name: "visual/moon_phase",
-        kind: Enum(&[
-            "full_moon",
-            "waning_gibbous",
-            "third_quarter",
-            "waning_crescent",
-            "new_moon",
-            "waxing_crescent",
-            "first_quarter",
-            "waxing_gibbous",
-        ]),
-    },
-    Row {
         name: "visual/default_dripstone_particle",
         kind: Named("particle"),
     },
@@ -282,6 +269,7 @@ pub(super) fn value(id: &str) -> Option<Kind> {
         },
         AttributeKind::RgbColor => Named("rgb_string"),
         AttributeKind::ArgbColor => Named("argb_string"),
+        AttributeKind::MoonPhase => Enum(attributes::MoonPhase::NAMES),
         AttributeKind::AmbientParticles | AttributeKind::Other => {
             OTHER.iter().find(|row| row.name == attribute.id)?.kind
         }

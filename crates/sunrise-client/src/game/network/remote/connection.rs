@@ -256,6 +256,7 @@ impl Game<'_> {
             r.chunk_format =
                 Arc::new(ChunkFormat::new(&r.dimension, biomes, bits).in_column(column));
             r.registries = registries;
+            r.level_environments.clear();
             r.resolve_clocks();
             self.install_server_items();
             self.reset_creative_contents();

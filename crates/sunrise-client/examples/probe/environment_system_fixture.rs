@@ -17,6 +17,7 @@ fn format(value: &Value) -> String {
         Value::Float(f) => bits(*f),
         Value::Rgb(v) => v.map(bits).join(" "),
         Value::Argb(v) => v.map(bits).join(" "),
+        Value::MoonPhase(phase) => phase.serialized_name().to_owned(),
         Value::AmbientParticles(list) => format!("{list:?}"),
         Value::Other(json) => json.to_string(),
     }

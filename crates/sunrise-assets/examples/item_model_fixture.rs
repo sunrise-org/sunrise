@@ -302,6 +302,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let derived = &row["derived"];
             OwnerState {
                 entity_type: o["entity_type"].as_str().unwrap().to_owned(),
+                living: true,
                 main_arm_left: o["main_arm"] == "left",
                 using_this_item: o["using"].as_bool().unwrap(),
                 use_item_remaining_ticks: o["remaining"].as_i64().unwrap() as i32,

@@ -24,6 +24,16 @@ impl Game<'_> {
         self.refresh_infiniburn();
         self.refresh_creative_search_tags();
         self.install_remote_tags();
+        if tags
+            .registries
+            .iter()
+            .any(|tags| tags.registry == "minecraft:timeline")
+        {
+            if let Some(r) = self.remote.as_mut() {
+                r.level_environments.clear();
+            }
+            self.build_level_environments();
+        }
         if self.recipe_ui.server_stations.is_some()
             && tags
                 .registries

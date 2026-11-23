@@ -5,7 +5,10 @@
 use super::Remote;
 use crate::game::{Dim, remote_chunks::ChunkFormat};
 use std::sync::{Arc, Weak};
-use sunrise_client::{chunk::LevelShape, environment::Environment};
+use sunrise_client::{
+    chunk::LevelShape,
+    environment::{Environment, SyncedEnvironment},
+};
 use sunrise_protocol::{packets::play, registry::DimensionType};
 use sunrise_world::dimension_type::DimensionFacts;
 
@@ -83,15 +86,18 @@ impl crate::game::Game<'_> {
             .filter(|e| e.json == *json)
         {
             if !same_stacks(e.stacks.as_ref(), stacks) {
-                e.pack = pack_environment(name, json, stacks);
+                let synced = synced_environment(&r.registries);
+                e.pack = pack_environment(name, json, &synced, stacks);
                 e.stacks = stacks.map(Arc::downgrade);
             }
             r.level_environment = e.own.clone();
             r.level_pack_environment = e.pack.clone();
             return;
         }
-        let own = Environment::with_type(self.res.environment_of(name), json).map(Arc::new);
-        let pack = pack_environment(name, json, stacks);
+        let synced = synced_environment(&r.registries);
+        let own = Environment::with_type_synced(self.res.environment_of(name), json, &synced)
+            .map(Arc::new);
+        let pack = pack_environment(name, json, &synced, stacks);
         r.level_environments.insert(
             name.clone(),
             LevelEnvironments {
@@ -108,7 +114,7 @@ impl crate::game::Game<'_> {
 
 /// The environments `Game::build_level_environments` built from one synchronized dimension type,
 /// and what they were built from.
-pub(super) struct LevelEnvironments {
+pub(in crate::game) struct LevelEnvironments {
     /// The type's JSON both were built from.
     json: serde_json::Value,
     /// Over the client's own environment of the type: gameplay's.
@@ -120,11 +126,22 @@ pub(super) struct LevelEnvironments {
     pack: Option<Arc<Environment>>,
 }
 
+fn synced_environment(registries: &sunrise_protocol::registry::Dynamic) -> SyncedEnvironment {
+    SyncedEnvironment {
+        timelines: registries.registry_json_map("minecraft:timeline"),
+        timeline_tags: registries.registry_tag_names("minecraft:timeline"),
+        biomes: registries
+            .registry_json_map("minecraft:worldgen/biome")
+            .unwrap_or_default(),
+    }
+}
+
 /// The frame's environment of the synchronized type `name` with `json`: the type over the packs'
 /// stack of that type, or `None` without pack modifiers or for a type with no pack stack.
 fn pack_environment(
     name: &str,
     json: &serde_json::Value,
+    synced: &SyncedEnvironment,
     stacks: Option<&Arc<[Environment; 3]>>,
 ) -> Option<Arc<Environment>> {
     let base = match name {
@@ -133,7 +150,7 @@ fn pack_environment(
         "minecraft:the_end" => &stacks?[2],
         _ => return None,
     };
-    Environment::with_type(base, json).map(Arc::new)
+    Environment::with_type_synced(base, json, synced).map(Arc::new)
 }
 
 /// Whether `built` are the packs' current stacks `now`.

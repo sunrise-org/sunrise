@@ -8,10 +8,9 @@ use super::{Dim, Game, entity_culling::EntityCullDecision};
 use serde_json::Value;
 use std::{cell::RefCell, collections::HashMap};
 use sunrise_assets::item_model::{
-    Components, ComponentsView, DisplayContext, FluidAppearance, GlobalPos, ItemEnv,
-    LayerTransform, LevelState, ModelChoice, OwnerState, RegisteredItemModel,
-    RegisteredRangeProperty, RegisteredSelectKey, RegisteredSelectProperty, RegisteredTintSource,
-    StackView,
+    Components, DisplayContext, FluidAppearance, GlobalPos, ItemEnv, LayerTransform, LevelState,
+    ModelChoice, OwnerState, RegisteredItemModel, RegisteredRangeProperty, RegisteredSelectKey,
+    RegisteredSelectProperty, RegisteredTintSource, StackView,
 };
 use sunrise_client::{
     block_entity_render::{diffuse_lights, vertex_light},
@@ -22,6 +21,8 @@ use sunrise_client::{
     item_render::{self, ItemRenderState, SpecialHost, WorldSink},
     items::ItemStack,
     mesher::Vertex,
+    mobs::Mob,
+    scoreboard::{Team, team_color_rgb},
 };
 use sunrise_core::geometry::{Aabb, Vec3};
 
@@ -423,40 +424,33 @@ pub(super) fn block_entity_pose(key: (i32, i32, i32), camera: glam::DVec3) -> jo
     pose
 }
 
-/// `ItemOwner` of an entity holding or showing an item.
+/// `ItemOwner` of a non-living entity, or the positional owner of a block display.
 pub(super) fn owner_at(position: [f64; 3], yaw: f32, entity_type: &str) -> OwnerState {
     OwnerState {
         position,
         visual_rotation_y_degrees: yaw,
         entity_type: entity_type.to_owned(),
+        living: false,
         ..Default::default()
     }
 }
-/// `UseDuration` of a stack (`Item.getUseDuration`): 72000 for drawn items
-/// and for `blocks_attacks` items (shields), the consume time for food.
-fn use_duration(components: ComponentsView<'_>) -> i32 {
-    if let Some(c) = components.get("minecraft:consumable") {
-        let seconds = c["consume_seconds"].as_f64().unwrap_or(1.6);
-        return (seconds * 20.0) as i32;
-    }
-    if components.get("minecraft:blocks_attacks").is_some()
-        || components.get("minecraft:kinetic_weapon").is_some()
-    {
-        return 72_000;
-    }
-    let item_model = components
-        .get("minecraft:item_model")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    match item_model {
-        "minecraft:bow"
-        | "minecraft:crossbow"
-        | "minecraft:trident"
-        | "minecraft:spyglass"
-        | "minecraft:goat_horn" => 72_000,
-        // BrushItem.USE_DURATION.
-        "minecraft:brush" => 200,
-        _ => 0,
+
+/// `ItemOwner.asLivingEntity` supplies the holder's main arm, type and team tint.
+pub(super) fn living_owner_at(
+    position: [f64; 3],
+    yaw: f32,
+    entity_type: &str,
+    main_arm_left: bool,
+    team: Option<&Team>,
+) -> OwnerState {
+    OwnerState {
+        living: true,
+        main_arm_left,
+        team_color: team
+            .and_then(|t| t.color.as_deref())
+            .and_then(team_color_rgb)
+            .map(|rgb| (0xff00_0000 | rgb) as i32),
+        ..owner_at(position, yaw, entity_type)
     }
 }
 
@@ -492,18 +486,28 @@ impl Game<'_> {
         *cached = Some((key, level.clone()));
         level
     }
+    pub(super) fn item_moon_phase(&self, position: Option<[f64; 3]>) -> i32 {
+        let environment = self.dim_environment();
+        let biome = position.map(|pos| self.biome_at(pos));
+        environment.moon_phase(biome, &|clock| {
+            self.remote.as_ref().map_or_else(
+                || self.command_clock_time(clock),
+                |remote| remote.named_clock_time(clock),
+            )
+        })
+    }
     fn level_state_now(&self, dimension: &'static str) -> LevelState {
-        let sky = self
-            .dim_environment()
-            .sample(&sunrise_client::environment::Sample {
-                day_time: self.world.day_time,
-                ..Default::default()
-            });
+        let environment = self.dim_environment();
+        let sky = environment.sample(&sunrise_client::environment::Sample {
+            day_time: self.world.day_time,
+            ..Default::default()
+        });
+        let moon_phase = self.item_moon_phase(None);
         LevelState {
             dimension: dimension.to_owned(),
             game_time: self.world.game_time,
             sun_angle: sky.sun_angle,
-            moon_phase: (self.world.day_time.div_euclid(24_000)).rem_euclid(8) as i32,
+            moon_phase,
             respawn: self.spawn.map(|s| GlobalPos {
                 dimension: self
                     .level
@@ -522,8 +526,13 @@ impl Game<'_> {
             .player
             .as_ref()
             .map_or([0.0; 3], |p| [p.position.x, p.position.y, p.position.z]);
-        let mut owner = owner_at(position, self.yaw, "minecraft:player");
-        owner.main_arm_left = self.settings.main_hand_left;
+        let mut owner = living_owner_at(
+            position,
+            self.yaw,
+            "minecraft:player",
+            self.settings.main_hand_left,
+            self.own_team(),
+        );
         owner.is_local_player = true;
         owner.is_view_entity = true;
         owner.last_death_location = self
@@ -532,13 +541,12 @@ impl Game<'_> {
             .clone()
             .map(|(dimension, pos)| GlobalPos { dimension, pos });
         if let (Some((slot, ticks)), Some(stack)) = (self.using, stack)
-            && self.stack_in(slot) == Some(stack)
+            && self
+                .stack_in(slot)
+                .is_some_and(|active| std::ptr::eq(active, stack))
         {
-            let view = item_render::stack_view(stack);
-            let mut duration = use_duration(self.pack.item_renderer.models.components_view(&view));
-            self.native_use_duration(stack, &mut duration);
             owner.using_this_item = true;
-            owner.use_duration = duration;
+            owner.use_duration = self.use_duration(stack);
             // getUseItemRemainingTicks: the duration the use started with,
             // as LivingEntityUseItemEvent.Start and .Tick left it (`game/items/item_use.rs`).
             owner.use_item_remaining_ticks = self.use_duration - ticks as i32;
@@ -547,10 +555,32 @@ impl Game<'_> {
         owner.fishing_cast_with_this_item = stack
             .zip(self.cast_rod())
             .is_some_and(|(s, rod)| std::ptr::eq(s, rod));
-        owner.is_selected =
-            stack.is_some() && self.inventory.get(self.selected).and_then(Option::as_ref) == stack;
-        owner.is_carried = owner.is_selected;
+        owner.is_selected = stack
+            .zip(self.inventory.get(self.selected).and_then(Option::as_ref))
+            .is_some_and(|(s, selected)| std::ptr::eq(s, selected));
+        owner.is_carried = stack
+            .zip(self.carried.as_ref())
+            .is_some_and(|(s, carried)| std::ptr::eq(s, carried));
         owner
+    }
+    /// A third-person living owner. Players' teams use their profile names;
+    /// mobs' teams use their UUIDs (or the team they inherit when tamed).
+    pub(super) fn mob_item_owner(&self, mob: &Mob, local_player: bool) -> OwnerState {
+        let team = if local_player {
+            self.own_team()
+        } else if &*mob.kind.id == "minecraft:player" {
+            self.remote_player_name(mob.id)
+                .and_then(|name| self.score.board.players_team(name))
+        } else {
+            self.mob_team_of(mob)
+        };
+        living_owner_at(
+            [mob.position.x, mob.position.y, mob.position.z],
+            mob.body_yaw,
+            &mob.kind.id,
+            mob.main_arm_left(),
+            team,
+        )
     }
     /// `ItemModelResolver.updateForTopItem`.
     pub(super) fn resolve_item(
@@ -583,7 +613,13 @@ impl Game<'_> {
         seed: i32,
         hand: CitHand,
     ) -> ItemRenderState {
-        self.resolve_item_in_level(stack, display, owner, Some(&self.item_level()), seed, hand)
+        let mut level = self.item_level();
+        if let Some(owner) = owner
+            && self.dim_environment().moon_phase_is_positional()
+        {
+            level.moon_phase = self.item_moon_phase(Some(owner.position));
+        }
+        self.resolve_item_in_level(stack, display, owner, Some(&level), seed, hand)
     }
     /// Tint only the resolved draw, never the model shared by other holders or contexts.
     pub(super) fn tint_held_item(
@@ -1100,10 +1136,13 @@ fn item_hdr_light(state: &ItemRenderState, light: u32) -> u32 {
 }
 
 #[cfg(test)]
+#[path = "tests/item_owner_tests.rs"]
+mod owner_tests;
+
+#[cfg(test)]
 pub(in crate::game) mod tests {
     use super::*;
     use mod_api::ClientHost;
-    use serde_json::json;
 
     /// `ClientLevel.setRespawnData`: the client keeps the packet's level beside its position,
     /// so the spawn compass's target names the level the world spawn is in.
@@ -1522,103 +1561,114 @@ pub(in crate::game) mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_mods_item_model_type_answers_with_the_draws_context() {
-        use mod_api::__private::game::*;
-        use sunrise_assets::item_model::{Context, DisplayContext, LevelState, OwnerState};
-        let fields = serde_json::json!({"type": "cellmod:cell"})
-            .as_object()
-            .cloned()
-            .unwrap();
-        let owner = OwnerState {
-            entity_type: "minecraft:zombie".into(),
-            ..OwnerState::default()
-        };
-        let level = LevelState {
-            dimension: "minecraft:the_nether".into(),
-            ..LevelState::default()
-        };
-        let in_screen = Context {
-            display: DisplayContext::Gui,
-            owner: None,
-            level: None,
-            seed: 7,
-        };
-        let on_ground = Context {
-            display: DisplayContext::Ground,
-            owner: Some(&owner),
-            level: Some(&level),
-            seed: 42,
-        };
-        let drawn =
-            |env: &Env<'_, '_>, model: &RegisteredItemModel, count: i32, ctx: &Context<'_>| {
-                let mut models = Vec::new();
-                env.item_model_update(
-                    model,
-                    &StackView::new("minecraft:stick", count),
-                    ctx,
-                    &mut models,
-                );
-                models
-                    .into_iter()
-                    .map(|choice| (choice.model, choice.transform == LayerTransform::None))
-                    .collect::<Vec<_>>()
-            };
-        let mods: mod_api::Mods = vec![mod_api::ModEntry::new("cellmod", Box::new(Cell))].into();
-        mod_platform::testing::with_mods(mods, || {
-            let mut types = Vec::new();
-            Game::native_register_item_models(&mod_api::RegistrationContext::new(), &mut types);
-            let (factories, kept) = item_render::bind_item_model_factories(types);
-            assert_eq!(kept, ["cellmod:cell"]);
-            let bound = item_render::decode_item_model(
-                Some(&factories),
-                "cellmod:cell",
-                &fields,
-                &sunrise_assets::item_model::ItemModelNode::decode,
-            )
-            .unwrap()
-            .expect("registered item model")
-            .model;
-            assert!(
-                item_render::decode_item_model(
-                    Some(&factories),
-                    "othermod:cell",
-                    &fields,
-                    &sunrise_assets::item_model::ItemModelNode::decode,
-                )
-                .unwrap()
-                .is_none()
-            );
-            super::super::native_entity_refs::tests::with_game(|game| {
-                let env = Env { game };
-                assert_eq!(
-                    drawn(&env, &bound, 1, &in_screen),
-                    [("gui/empty".to_owned(), false), ("seed 7".to_owned(), true)]
-                );
-                assert_eq!(
-                    drawn(&env, &bound, 2, &on_ground),
-                    [
-                        ("ground/full".to_owned(), false),
-                        ("seed 42".to_owned(), true),
-                        ("owner minecraft:zombie".to_owned(), false),
-                        ("level minecraft:the_nether".to_owned(), false)
-                    ]
-                );
-            });
-        });
-        mod_platform::testing::with_mods(Vec::new().into(), || {
-            let mut types = Vec::new();
-            Game::native_register_item_models(&mod_api::RegistrationContext::new(), &mut types);
-            let (factories, _) = item_render::bind_item_model_factories(types);
-            assert!(
-                item_render::decode_item_model(
-                    Some(&factories),
-                    "cellmod:cell",
-                    &fields,
-                    &sunrise_assets::item_model::ItemModelNode::decode,
-                )
-                .unwrap()
-                .is_none()
-            );
-        });
+        crate::game::in_own_process(
+            "game::item_draw::tests::a_mods_item_model_type_answers_with_the_draws_context",
+            || {
+                use mod_api::__private::game::*;
+                use sunrise_assets::item_model::{Context, DisplayContext, LevelState};
+                let fields = serde_json::json!({"type": "cellmod:cell"})
+                    .as_object()
+                    .cloned()
+                    .unwrap();
+                let owner = living_owner_at([0.0; 3], 0.0, "minecraft:zombie", false, None);
+                let level = LevelState {
+                    dimension: "minecraft:the_nether".into(),
+                    ..LevelState::default()
+                };
+                let in_screen = Context {
+                    display: DisplayContext::Gui,
+                    owner: None,
+                    level: None,
+                    seed: 7,
+                };
+                let on_ground = Context {
+                    display: DisplayContext::Ground,
+                    owner: Some(&owner),
+                    level: Some(&level),
+                    seed: 42,
+                };
+                let drawn = |env: &Env<'_, '_>,
+                             model: &RegisteredItemModel,
+                             count: i32,
+                             ctx: &Context<'_>| {
+                    let mut models = Vec::new();
+                    env.item_model_update(
+                        model,
+                        &StackView::new("minecraft:stick", count),
+                        ctx,
+                        &mut models,
+                    );
+                    models
+                        .into_iter()
+                        .map(|choice| (choice.model, choice.transform == LayerTransform::None))
+                        .collect::<Vec<_>>()
+                };
+                let mods: mod_api::Mods =
+                    vec![mod_api::ModEntry::new("cellmod", Box::new(Cell))].into();
+                mod_platform::testing::with_mods(mods, || {
+                    let mut types = Vec::new();
+                    Game::native_register_item_models(
+                        &mod_api::RegistrationContext::new(),
+                        &mut types,
+                    );
+                    let (factories, kept) = item_render::bind_item_model_factories(types);
+                    assert_eq!(kept, ["cellmod:cell"]);
+                    let bound = item_render::decode_item_model(
+                        Some(&factories),
+                        "cellmod:cell",
+                        &fields,
+                        &sunrise_assets::item_model::ItemModelNode::decode,
+                    )
+                    .unwrap()
+                    .expect("registered item model")
+                    .model;
+                    assert!(
+                        item_render::decode_item_model(
+                            Some(&factories),
+                            "othermod:cell",
+                            &fields,
+                            &sunrise_assets::item_model::ItemModelNode::decode,
+                        )
+                        .unwrap()
+                        .is_none()
+                    );
+                    super::super::native_entity_refs::tests::with_game(|game| {
+                        let env = Env { game };
+                        assert_eq!(
+                            drawn(&env, &bound, 1, &in_screen),
+                            [("gui/empty".to_owned(), false), ("seed 7".to_owned(), true)]
+                        );
+                        assert_eq!(
+                            drawn(&env, &bound, 2, &on_ground),
+                            [
+                                ("ground/full".to_owned(), false),
+                                ("seed 42".to_owned(), true),
+                                ("owner minecraft:zombie".to_owned(), false),
+                                ("level minecraft:the_nether".to_owned(), false)
+                            ]
+                        );
+                    });
+                });
+                mod_platform::testing::with_mods(Vec::new().into(), || {
+                    let mut types = Vec::new();
+                    Game::native_register_item_models(
+                        &mod_api::RegistrationContext::new(),
+                        &mut types,
+                    );
+                    let (factories, _) = item_render::bind_item_model_factories(types);
+                    assert!(
+                        item_render::decode_item_model(
+                            Some(&factories),
+                            "cellmod:cell",
+                            &fields,
+                            &sunrise_assets::item_model::ItemModelNode::decode,
+                        )
+                        .unwrap()
+                        .is_none()
+                    );
+                });
+            },
+        );
     }
 
     /// A mod registers its item tint source once at start.
@@ -1692,29 +1742,6 @@ pub(in crate::game) mod tests {
         assert_eq!(civil(0), (1970, 1, 1));
         assert_eq!(civil(19_716), (2023, 12, 25));
         assert_eq!(civil(11_016), (2000, 2, 29));
-    }
-
-    #[test]
-    fn a_shield_is_used_for_the_vanilla_s_time() {
-        // Item.getUseDuration: an item with `blocks_attacks` (a shield) is
-        // used for 72000 ticks, so its use animation (the arm held up)
-        // runs instead of ending at once (#2289).
-        let mut shield = Components::new();
-        shield.insert("minecraft:blocks_attacks".into(), json!({}));
-        assert_eq!(use_duration(ComponentsView::of(&shield)), 72_000);
-        // Food is used for as long as it takes to eat it.
-        let mut food = Components::new();
-        food.insert(
-            "minecraft:consumable".into(),
-            json!({"consume_seconds": 1.6}),
-        );
-        assert_eq!(use_duration(ComponentsView::of(&food)), 32);
-        // The bow keeps its own use time.
-        let mut bow = Components::new();
-        bow.insert("minecraft:item_model".into(), json!("minecraft:bow"));
-        assert_eq!(use_duration(ComponentsView::of(&bow)), 72_000);
-        // Anything else is not used at all.
-        assert_eq!(use_duration(ComponentsView::of(&Components::new())), 0);
     }
 
     /// 26.3 parity: `Game::submit_item_world`, `Game::submit_item_unlit`, and

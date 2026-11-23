@@ -556,7 +556,7 @@ impl RemoteTextDisplay {
             self.update_culling();
         }
     }
-    fn tick(&mut self) {
+    pub(in crate::game) fn tick(&mut self) {
         self.age = self.age.wrapping_add(1);
         self.previous = self.position;
         self.old_rotation = self.rotation;
@@ -1249,8 +1249,15 @@ impl Game<'_> {
                         9 => DisplayContext::OnShelf,
                         _ => DisplayContext::None,
                     };
-                    // updateForNonLiving: seeded by the entity id; rotateY(PI) in JOML order.
-                    let state = self.resolve_item(stack, context, None, id);
+                    // DisplayRenderer.ItemDisplayRenderer.extractRenderState: passes the display
+                    // entity as the non-living ItemOwner (position + visual Y rotation, no living
+                    // owner), seeded by the entity id; rotateY(PI) in JOML order.
+                    let owner = super::item_draw::owner_at(
+                        position.to_array(),
+                        rotation[0],
+                        "minecraft:item_display",
+                    );
+                    let state = self.resolve_item(stack, context, Some(&owner), id);
                     let mut item_pose = pose;
                     item_pose.rotate_y(std::f32::consts::PI);
                     translucent.scratch.clear();

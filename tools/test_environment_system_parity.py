@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare EnvironmentAttributeSystem layer stacks: a dimension's attributes, the biome layer (one
 biome, or a Gaussian mix of a grid of biomes) and the rain and thunder layers, for every float,
-angle, color and boolean attribute, with the vanilla biome and dimension type data."""
+angle, color, boolean and moon-phase attribute, with the vanilla biome and dimension type data."""
 import json
 import random
 import struct

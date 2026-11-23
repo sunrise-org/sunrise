@@ -21,11 +21,12 @@ BAD_EASINGS = ['"in_out_nope"', '{"cubic_bezier": [1.5, 0, 0, 1]}', '{"cubic_bez
 
 # Bases for each attribute a track can change.
 BASES = {'float': [1.0, 0.25], 'wide': [1.0, 15.0, 0.25, -3.0], 'rgb': ['#c0d8ff', '#000000', [1.5, 0.2, 0.9]],
-         'argb': ['#ccffffff', '#00000000'], 'bool': [True, False]}
+         'argb': ['#ccffffff', '#00000000'], 'bool': [True, False], 'moon_phase': ['full_moon', 'new_moon']}
 KINDS = {
     'minecraft:visual/sky_light_factor': 'float', 'minecraft:gameplay/sky_light_level': 'float',
     'minecraft:visual/star_brightness': 'float', 'minecraft:visual/sun_angle': 'wide',
     'minecraft:visual/moon_angle': 'wide', 'minecraft:visual/star_angle': 'wide',
+    'minecraft:visual/moon_phase': 'moon_phase',
     'minecraft:gameplay/cat_waking_up_gift_chance': 'float', 'minecraft:gameplay/turtle_egg_hatch_chance': 'float',
     'minecraft:gameplay/surface_slime_spawn_chance': 'float', 'minecraft:visual/cloud_height': 'wide',
     'minecraft:visual/fog_color': 'rgb', 'minecraft:visual/sky_color': 'rgb', 'minecraft:visual/sky_light_color': 'rgb',

@@ -15,6 +15,7 @@ import net.minecraft.util.KeyframeTrackSampler;
 import net.minecraft.world.attribute.EnvironmentAttribute;
 import net.minecraft.world.attribute.modifier.AttributeModifier;
 import net.minecraft.world.timeline.AttributeTrack;
+import net.minecraft.world.level.MoonPhase;
 import org.joml.Vector3fc;
 import org.joml.Vector4fc;
 
@@ -82,6 +83,9 @@ public final class VanillaEnvironmentTimelineOracle {
         }
         if (value instanceof Vector3fc v) {
             return bits(v.x()) + " " + bits(v.y()) + " " + bits(v.z());
+        }
+        if (value instanceof MoonPhase phase) {
+            return phase.getSerializedName();
         }
         return String.valueOf(value);
     }

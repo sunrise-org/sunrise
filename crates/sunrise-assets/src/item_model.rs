@@ -1342,12 +1342,14 @@ pub struct GlobalPos {
     pub dimension: String,
     pub pos: [i32; 3],
 }
-/// The living entity holding the item (`ItemOwner`).
+/// The entity holding or displaying the item (`ItemOwner`).
 #[derive(Clone, Debug, Default)]
 pub struct OwnerState {
     pub position: [f64; 3],
     pub visual_rotation_y_degrees: f32,
     pub entity_type: String,
+    /// Whether `ItemOwner.asLivingEntity` supplies this owner to living-only properties.
+    pub living: bool,
     pub main_arm_left: bool,
     /// `isUsingItem() && getUseItem() == stack`.
     pub using_this_item: bool,
@@ -1360,6 +1362,7 @@ pub struct OwnerState {
     pub is_selected: bool,
     pub is_carried: bool,
     pub is_view_entity: bool,
+    /// The living owner's scoreboard team colour, as opaque ARGB.
     pub team_color: Option<i32>,
     /// `ItemCooldowns.getCooldownPercent(stack, 0)`.
     pub cooldown_percent: f32,
@@ -2059,8 +2062,9 @@ impl<F: FnMut(Layer, &StackView) -> ControlFlow<()>> Resolve<'_, '_, F> {
             }
         }
     }
+    /// `SelectItemModel.update`: select properties see only the living owner, if any.
     fn select_value(&self, property: &SelectProperty) -> Option<Value> {
-        let owner = self.ctx.owner;
+        let owner = self.ctx.owner.filter(|o| o.living);
         match property {
             SelectProperty::Registered(_) => unreachable!(),
             SelectProperty::CustomModelData(i) => self
@@ -2334,6 +2338,7 @@ impl<F: FnMut(Layer, &StackView) -> ControlFlow<()>> Resolve<'_, '_, F> {
             TintSource::Team(default) => opaque(
                 self.ctx
                     .owner
+                    .filter(|o| o.living)
                     .and_then(|o| o.team_color)
                     .unwrap_or(*default),
             ),

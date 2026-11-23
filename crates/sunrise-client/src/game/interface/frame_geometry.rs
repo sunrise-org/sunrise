@@ -344,17 +344,15 @@ impl Game<'_> {
                 }
                 continue;
             }
-            let mut owner = self.player_owner(Some(&stack));
-            // The other hand may hold an equal stack: only the used
-            // hand's item is in use, only the main hand's selected.
+            let hand_slot = if hand == Hand::Off {
+                super::shield::OFFHAND_SLOT
+            } else {
+                self.selected
+            };
+            // Resolve active/selected/cast flags against the live hand slot's stack identity.
+            let live_stack = self.stack_in(hand_slot).filter(|live| *live == &stack);
+            let mut owner = self.player_owner(live_stack);
             owner.using_this_item &= used_hand == Some(hand);
-            if hand == Hand::Off {
-                owner.is_selected = false;
-                owner.is_carried = false;
-            }
-            // The hand renderer's copy of the main hand stack.
-            owner.fishing_cast_with_this_item =
-                self.main_hand_rod() && self.cast_rod() == Some(&stack);
             let using = owner.using_this_item && owner.use_item_remaining_ticks > 0;
             let ticks_used =
                 owner.use_duration as f32 - (owner.use_item_remaining_ticks as f32 - a + 1.0);

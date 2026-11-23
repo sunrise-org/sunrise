@@ -1,0 +1,4 @@
+sunrise-client game::item_draw::owner_tests::item_display_passes_non_living_owner_with_position_and_yaw lib daily child-process
+sunrise-client game::item_draw::owner_tests::item_draw_uses_the_stack_duration_even_when_its_model_is_replaced lib daily child-process
+sunrise-client game::item_draw::owner_tests::item_moon_phase_follows_the_dimension_timeline lib daily child-process
+sunrise-client game::item_draw::owner_tests::item_team_tint_uses_the_living_owners_scoreboard_color lib daily child-process

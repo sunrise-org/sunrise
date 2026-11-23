@@ -403,7 +403,7 @@ pub(super) struct Remote {
     synced_type: Option<(String, serde_json::Value)>,
     /// Both environments by synchronized type name, with what they were built from, so that a
     /// level of an unchanged type is entered again without reading the biome files.
-    level_environments: HashMap<String, level_format::LevelEnvironments>,
+    pub(in crate::game) level_environments: HashMap<String, level_format::LevelEnvironments>,
     /// Connection-owned facts, cached by level and the full named type identity.
     facts_cache: HashMap<
         String,

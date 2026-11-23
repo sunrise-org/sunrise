@@ -756,7 +756,7 @@ impl Game<'_> {
                 .is_some_and(|p| !p.health.dead_or_dying())
     }
     /// The player's own team: a server's client is in it by its profile name.
-    fn own_team(&self) -> Option<&sunrise_client::scoreboard::Team> {
+    pub(super) fn own_team(&self) -> Option<&sunrise_client::scoreboard::Team> {
         match &self.remote {
             Some(r) => self.score.board.players_team(&r.profile_name),
             None => self.player_team(),

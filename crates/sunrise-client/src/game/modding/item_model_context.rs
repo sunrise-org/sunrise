@@ -55,7 +55,7 @@ impl TryIntoApi for OwnerState {
             is_selected: self.is_selected,
             is_carried: self.is_carried,
             is_view_entity: self.is_view_entity,
-            team_color: self.team_color,
+            team_color: self.team_color.map(|c| c & 0x00ff_ffff),
             cooldown_percent: self.cooldown_percent,
             is_local_player: self.is_local_player,
             last_death_location: self.last_death_location.as_ref().and_then(global_pos),

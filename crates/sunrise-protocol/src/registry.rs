@@ -364,6 +364,43 @@ impl Dynamic {
         let tag = self.data("minecraft:dimension_type", id)?;
         Some((name, tag_json(tag)))
     }
+    /// Every entry with data in `registry` as JSON keyed by its normalized identifier
+    /// (`namespace:path`). `None` when the server did not sync `registry`.
+    pub fn registry_json_map(&self, registry: &str) -> Option<HashMap<String, serde_json::Value>> {
+        let list = self.registries.get(registry)?;
+        let map = list
+            .iter()
+            .filter_map(|(name, data)| {
+                let key =
+                    Identifier::parse(name).map_or_else(|_| name.clone(), |id| id.to_string());
+                Some((key, tag_json(data.as_ref()?)))
+            })
+            .collect();
+        Some(map)
+    }
+    /// Every tag the server synced for `registry`, with its numeric member ids resolved to entry
+    /// identifiers in tag order.
+    pub fn registry_tag_names(&self, registry: &str) -> HashMap<String, Vec<String>> {
+        let Some(tags) = self.tags.get(registry) else {
+            return HashMap::new();
+        };
+        tags.iter()
+            .map(|(tag, ids)| {
+                let key = Identifier::parse(tag).map_or_else(|_| tag.clone(), |id| id.to_string());
+                let names = ids
+                    .iter()
+                    .filter_map(|&id| {
+                        let name = self.name(registry, id)?;
+                        Some(
+                            Identifier::parse(name)
+                                .map_or_else(|_| name.to_owned(), |parsed| parsed.to_string()),
+                        )
+                    })
+                    .collect();
+                (key, names)
+            })
+            .collect()
+    }
     /// The dimension type's vertical range and sky light, from its
     /// synchronized data or the vanilla defaults for known names.
     pub fn dimension(&self, id: i32) -> DimensionType {
