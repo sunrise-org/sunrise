@@ -9,58 +9,6 @@ use sunrise_client::{
 };
 use sunrise_core::{position::ChunkPos, random::RandomSource};
 
-/// `LocationCheck.test` / `BlockPredicate`: the measured loaded block-state subset.
-fn loot_location_block(
-    condition: &serde_json::Value,
-    origin: [i32; 3],
-    chunks: &sunrise_client::chunk_map::ChunkMap,
-    registry: &sunrise_world::registry::BlockRegistry,
-    items: &sunrise_client::items::Items,
-) -> Option<bool> {
-    let condition = condition.as_object()?;
-    if condition.keys().any(|k| {
-        !matches!(
-            k.as_str(),
-            "type" | "predicate" | "offsetX" | "offsetY" | "offsetZ"
-        )
-    }) {
-        return None;
-    }
-    let predicate = condition.get("predicate")?.as_object()?;
-    if predicate.len() != 1 || !predicate.contains_key("block") {
-        return None;
-    }
-    let block = predicate.get("block")?.as_object()?;
-    if block
-        .keys()
-        .any(|k| !matches!(k.as_str(), "blocks" | "state"))
-        || block.get("blocks")?.as_str().is_none()
-    {
-        return None;
-    }
-    if let Some(state) = block.get("state")
-        && state.as_object()?.values().any(|v| !v.is_string())
-    {
-        return None;
-    }
-    let mut at = origin;
-    for (axis, key) in ["offsetX", "offsetY", "offsetZ"].iter().enumerate() {
-        let offset = match condition.get(*key) {
-            None => 0,
-            Some(value) => i32::try_from(value.as_i64()?).ok()?,
-        };
-        // floor(integer block origin + .5 + integer offset), also for negatives.
-        at[axis] = origin[axis].checked_add(offset)?;
-    }
-    // Unloaded positions are unsupported: never load or invent a block here.
-    // `LocationPredicate.matches`: a block check fails where `Level.isLoaded` is false.
-    let Some(chunk) = chunks.get(&(at[0] >> 4, at[2] >> 4)) else {
-        return Some(false);
-    };
-    let state = registry.state(chunk.block(at[0] & 15, at[1], at[2] & 15))?;
-    Some(items.matches_block_state(&predicate["block"], &state.name, &state.properties))
-}
-
 fn num(n: impl std::fmt::Display) -> Text {
     Text::literal(n.to_string())
 }
@@ -758,24 +706,10 @@ impl Game<'_> {
                     Some(Some(target)) => crate::game::native_entities::target_id(target),
                     Some(None) => None,
                 };
-                // The hook may borrow the live level mutably. Keep a read-only
-                // view of the location for this roll rather than borrow Game.
-                let mut chunks = sunrise_client::chunk_map::ChunkMap::default();
-                for (&key, chunk) in self.world.chunks.iter() {
-                    chunks.insert(key, chunk.clone());
-                }
-                let items = self
-                    .server_items
-                    .clone()
-                    .unwrap_or_else(|| std::sync::Arc::new(world_items!(self).clone()));
-                let registry = self.pack.assets.registry;
-                let location = |condition: &serde_json::Value| {
-                    loot_location_block(condition, p, &chunks, registry, &items)
-                };
+                // The roll's location checks read the level at the block's centre.
                 let roll = sunrise_client::items::BlockLootRoll {
                     held: tool.as_ref(),
                     keep_empty,
-                    location: Some(&location),
                     breaker: entity.is_some(),
                     ..Default::default()
                 };
@@ -1685,74 +1619,6 @@ mod loot_mine_location_tests {
                 "actual offset block predicate differences: {differences:?}"
             );
         });
-    }
-}
-
-#[cfg(test)]
-mod loot_location_shape_tests {
-    use super::*;
-    use serde_json::json;
-    use std::sync::Arc;
-    use sunrise_client::{chunk::Chunk, chunk_map::ChunkMap};
-    use sunrise_world::registry::BlockRegistry;
-
-    #[test]
-    fn location_shape_uses_loaded_facts_and_rejects_whole_unsupported_conjunctions() {
-        let registry = BlockRegistry::from_facts_json(
-            &br#"{"defaults":{"minecraft:air":0,"minecraft:oak_log":1},"states":[
-            ["air",true,false,"","minecraft:air"],
-            ["log",false,false,"",{"id":"minecraft:oak_log","properties":{"axis":"x"}}]
-        ]}"#[..],
-        )
-        .unwrap();
-        let mut positive = Chunk::empty(0, 0);
-        positive.set(5, 200, 4, 1);
-        let mut negative = Chunk::empty(-1, -1);
-        negative.set(13, 200, 12, 1);
-        let mut chunks = ChunkMap::default();
-        chunks.insert((0, 0), Arc::new(positive));
-        chunks.insert((-1, -1), Arc::new(negative));
-        let items = sunrise_client::items::Items::for_tests(Default::default());
-        let valid = json!({"type":"minecraft:location_check","offsetX":1,"predicate":{"block":{"blocks":"minecraft:oak_log","state":{"axis":"x"}}}});
-        assert_eq!(
-            loot_location_block(&valid, [4, 200, 4], &chunks, &registry, &items),
-            Some(true)
-        );
-        assert_eq!(
-            loot_location_block(&valid, [-4, 200, -4], &chunks, &registry, &items),
-            Some(true)
-        );
-        assert_eq!(
-            loot_location_block(&valid, [8, 200, 4], &chunks, &registry, &items),
-            Some(false)
-        );
-        for (key, value) in [
-            ("biomes", json!("minecraft:plains")),
-            ("light", json!({"light":15})),
-            ("dimension", json!("minecraft:overworld")),
-        ] {
-            let mut unsupported = valid.clone();
-            unsupported["predicate"][key] = value;
-            assert_eq!(
-                loot_location_block(&unsupported, [4, 200, 4], &chunks, &registry, &items),
-                None
-            );
-        }
-        for value in [json!(1.5), json!(2147483648_i64), json!("1")] {
-            let mut unsupported = valid.clone();
-            unsupported["offsetX"] = value;
-            assert_eq!(
-                loot_location_block(&unsupported, [4, 200, 4], &chunks, &registry, &items),
-                None
-            );
-        }
-        let count = chunks.len();
-        assert_eq!(
-            loot_location_block(&valid, [32, 200, 32], &chunks, &registry, &items),
-            Some(false),
-            "an unloaded counterpart fails, as Level.isLoaded does"
-        );
-        assert_eq!(chunks.len(), count, "no chunk is loaded as a side effect");
     }
 }
 

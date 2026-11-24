@@ -5,22 +5,24 @@ use super::*;
 #[derive(Clone, Copy, Default)]
 pub struct ContainerLootContext<'a> {
     pub biome: Option<&'a str>,
+    /// `ORIGIN` and the level the table's location checks read; None without an origin.
+    pub location: Option<LootLocation<'a>>,
     pub luck: f32,
     pub entity: Option<&'a LootEntity>,
 }
 
 impl LootData {
     /// LootTable.fill into an empty container of `slots` slots with
-    /// `RandomSource.create(seed)`; `biome` is the container's biome for
-    /// location checks (None: no origin, checks fail).
+    /// `RandomSource.create(seed)`; `location` is the container's centre and level
+    /// for location checks (None: no origin, checks fail).
     pub fn fill(
         &self,
         table: &str,
         seed: i64,
         slots: usize,
-        biome: Option<&str>,
+        location: Option<LootLocation<'_>>,
     ) -> Vec<Option<LootStack>> {
-        self.fill_with(table, &mut LegacyRandom::new(seed), slots, biome)
+        self.fill_with(table, &mut LegacyRandom::new(seed), slots, location)
     }
     /// LootTable.fill drawing from `random` (a seeded random or the table's
     /// random sequence), which is advanced.
@@ -29,20 +31,20 @@ impl LootData {
         table: &str,
         random: &mut R,
         slots: usize,
-        biome: Option<&str>,
+        location: Option<LootLocation<'_>>,
     ) -> Vec<Option<LootStack>> {
         self.fill_in(
             table,
             random,
             slots,
             ContainerLootContext {
-                biome,
+                location,
                 ..Default::default()
             },
         )
     }
     /// [`Self::fill_with`] with the parameters the filling caller supplies
-    /// (`THIS_ENTITY`, luck, biome).
+    /// (`THIS_ENTITY`, luck, biome, origin and level).
     pub fn fill_in<R: RandomSource + Clone>(
         &self,
         table: &str,
@@ -76,6 +78,7 @@ impl LootData {
             data: self,
             random: random.clone(),
             biome: context.biome,
+            location: context.location,
             visited: Vec::new(),
             luck: context.luck,
             open_water: None,

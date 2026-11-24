@@ -200,7 +200,7 @@ fn container_context_supplies_luck_and_this_entity() {
                 ContainerLootContext {
                     luck,
                     entity,
-                    biome: None,
+                    ..Default::default()
                 },
             )
             .unwrap();

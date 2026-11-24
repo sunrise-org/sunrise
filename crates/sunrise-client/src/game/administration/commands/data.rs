@@ -1356,7 +1356,8 @@ impl Game<'_> {
     /// Comparators and decorated pots come from their own views; any other
     /// entry gets what the model keeps outside it: the hopper's
     /// `TransferCooldown` (`HopperBlockEntity.saveAdditional`), the custom
-    /// name and the pending loot table.
+    /// name and the pending loot table, over the NBT it was loaded from (stored
+    /// components and keys Sunrise does not model, as `live_full_metadata` gives a loot roll).
     fn full_block_entity_data(&self, p: [i32; 3]) -> Option<Tag> {
         if let Some(tag) = self.comparator_data(p).or_else(|| self.pot_data(p)) {
             return Some(tag);
@@ -1371,7 +1372,7 @@ impl Game<'_> {
             .and_then(|chunk| chunk.saved.as_ref())
             .and_then(|saved| saved.pending_loot.get(&key));
         let items = self.items();
-        Some(save::block_entity_encode::data_with(
+        let current = save::block_entity_encode::data_with(
             key,
             e,
             &name,
@@ -1383,6 +1384,15 @@ impl Game<'_> {
             },
             items,
             |row| self.capture_block_entity_payload(key, &name, row, items),
+        );
+        // Over the NBT it was loaded from, as the chunk save and a loot roll read it.
+        Some(crate::game::spill::live_full_metadata(
+            &self.world,
+            key,
+            e,
+            &name,
+            items,
+            current,
         ))
     }
     pub(in crate::game) fn set_data_of(&mut self, r: &DataRef, tag: Tag) -> R<()> {

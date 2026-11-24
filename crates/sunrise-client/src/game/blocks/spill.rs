@@ -44,20 +44,30 @@ pub(super) fn source_snapshot(
             fields.insert("lock".into(), lock.clone());
         }
     }
-    let nbt = block_entity_nbt::canonical(&saved).unwrap_or(saved);
+    let mut nbt = block_entity_nbt::canonical(&saved).unwrap_or(saved);
+    // `saveWithFullMetadata` writes no chunk bookkeeping: `keepPacked` is the chunk's.
+    if let Tag::Compound(fields) = &mut nbt {
+        fields.remove(&"keepPacked".into());
+    }
     let components = block_entity_item::collected_components(&nbt);
     sunrise_world::loot::copy::BlockSource { nbt, components }
 }
 
+/// The loot source of the block entity at `pos` (`BlockEntity.saveWithFullMetadata`): a live
+/// one encoded by `encode` over the NBT it was loaded from, as the chunk save writes it, else
+/// its saved row, else its type's empty entity.
 pub(super) fn world_source(
     world: &sunrise_client::world::World,
     pos: [i32; 3],
     block: &str,
+    items: &Items,
     encode: impl FnOnce((i32, i32, i32), &BlockEntity, &str) -> Tag,
 ) -> Option<std::sync::Arc<sunrise_world::loot::copy::BlockSource>> {
     let key = (pos[0], pos[1], pos[2]);
     let saved = match world.block_entities.get(&key) {
-        Some(entity) => encode(key, entity, block),
+        Some(entity) => {
+            live_full_metadata(world, key, entity, block, items, encode(key, entity, block))
+        }
         None => saved_entity(world, pos).or_else(|| {
             // Sparse storage can omit an empty block entity, but its type's
             // implicit components still belong to the loot source. Use the
@@ -79,6 +89,32 @@ pub(super) fn world_source(
         world.block_names.get(&key).cloned(),
         world.block_lock(key),
     )))
+}
+
+/// `BlockEntity.saveWithFullMetadata` of the live `entity` at `key`: its encoding `current`
+/// over the NBT it was loaded from, as the chunk save writes it, so a loot roll sees the
+/// stored components and fields Sunrise does not model, and not the ones the entity cleared.
+pub(in crate::game) fn live_full_metadata(
+    world: &sunrise_client::world::World,
+    key: (i32, i32, i32),
+    entity: &BlockEntity,
+    block: &str,
+    items: &Items,
+    current: Tag,
+) -> Tag {
+    let original = world
+        .chunks
+        .get(&(key.0 >> 4, key.2 >> 4))
+        .and_then(|chunk| chunk.saved.as_deref())
+        .and_then(|saved| saved.block_entity_sources.iter().find(|(p, _)| *p == key))
+        .map(|(_, original)| original)
+        .filter(|original| block_entity_nbt::id(original) == block_entity_nbt::id(&current));
+    match original {
+        Some(original) => sunrise_client::save::overlay_block_entity_source(
+            original, entity, block, &current, items,
+        ),
+        None => current,
+    }
 }
 
 impl Pending {
@@ -656,6 +692,19 @@ pub(super) fn saved_entity(
         .cloned()
 }
 
+/// `BlockEntity.saveWithFullMetadata` of the block entity Sunrise keeps only as a saved row
+/// at `pos`: the row without the chunk's `keepPacked`.
+pub(in crate::game) fn saved_full_metadata(
+    world: &sunrise_client::world::World,
+    pos: [i32; 3],
+) -> Option<Tag> {
+    let mut tag = saved_entity(world, pos)?;
+    if let Tag::Compound(fields) = &mut tag {
+        fields.remove(&"keepPacked".into());
+    }
+    Some(tag)
+}
+
 /// The read-only payload of an entity kept in packed chunk data, not its loader metadata.
 pub(super) fn packed_block_entity_payload(tag: Tag) -> Option<Compound> {
     let Tag::Compound(mut data) = tag else {
@@ -785,33 +834,11 @@ impl GameLevel<'_> {
         // advancement path's `LocationPredicate` over this level's own state.
         // The roll draws from a copy of the level random, which the location
         // reads of the world leave no hand on.
-        let origin = [pos.x, pos.y, pos.z];
-        let level = super::location_world::LevelLocation {
-            world: &*self.world,
-            registry: self.registry,
-            facts: self.facts,
-            biomes: self.biomes,
-            items: self.items,
-            collision: self.collision,
-            hoppers: &*self.positions.hoppers,
-            raining: self.raining,
-            thundering: self.thundering,
-            refs: self.location,
-        };
-        let location = |condition: &serde_json::Value| {
-            let centre = origin.map(|c| f64::from(c) + 0.5);
-            let at = sunrise_client::advancements::location_check_position(
-                condition,
-                Some(origin),
-                centre,
-            );
-            // `LocationPredicate.matches`: nothing matches in an unloaded chunk.
-            Some(
-                level
-                    .world
-                    .loaded(at[0].floor() as i32, at[2].floor() as i32)
-                    && sunrise_client::advancements::location(&condition["predicate"], at, &level),
-            )
+        let origin = [pos.x, pos.y, pos.z].map(|c| f64::from(c) + 0.5);
+        let mut sequences = std::mem::take(&mut *self.rand_sequences);
+        let level = self.location_view();
+        let read = |predicate: &serde_json::Value, at: [f64; 3]| {
+            sunrise_client::advancements::location(predicate, at, &level)
         };
         let mut random = self.world.random.clone();
         let drops = self.items.interact_loot(
@@ -819,12 +846,13 @@ impl GameLevel<'_> {
             self.registry,
             state,
             interacting,
-            Some(&location),
+            Some(sunrise_client::advancements::loot_location(origin, &read)),
             &mut random,
-            self.rand_sequences,
+            &mut sequences,
             self.seed,
         );
         self.world.random = random;
+        *self.rand_sequences = sequences;
         let start = self.spill.spawns.len();
         for stack in drops {
             if &*stack.item != "minecraft:air" && stack.count > 0 {
@@ -850,7 +878,9 @@ impl GameLevel<'_> {
         let at = [pos.x, pos.y, pos.z];
         self.unpack_loot(super::container_loot::LootTarget::Block(key), None);
         let packed_data = if let Some(entity) = self.world.block_entities.get(&key) {
-            let saved = self.encode_live_block_entity(key, entity, &self.facts.get(state).name);
+            let name = &self.facts.get(state).name;
+            let current = self.encode_live_block_entity(key, entity, name);
+            let saved = live_full_metadata(self.world, key, entity, name, self.items, current);
             self.pending.record_from(self.world, at, saved);
             None
         } else if let Some(tag) = saved_entity(self.world, at) {
@@ -926,8 +956,10 @@ impl GameLevel<'_> {
         let at = [pos.x, pos.y, pos.z];
         let mut copied = Pending::default();
         if let Some(block_entity) = self.world.block_entities.get(&key) {
+            let name = &self.facts.get(state).name;
+            let current = self.encode_live_block_entity(key, block_entity, name);
             let saved =
-                self.encode_live_block_entity(key, block_entity, &self.facts.get(state).name);
+                live_full_metadata(self.world, key, block_entity, name, self.items, current);
             copied.record_from(self.world, at, saved);
         } else if let Some(tag) = saved_entity(self.world, at) {
             copied.record_saved(at, &tag);
@@ -1398,9 +1430,15 @@ impl Game<'_> {
     ) -> Vec<ItemStack> {
         let source = self.pending.source(pos).or_else(|| {
             self.pack.assets.registry.state(state).and_then(|block| {
-                world_source(&self.world, pos, &block.name, |key, entity, block| {
-                    self.encode_live_block_entity(key, entity, block, world_items!(self))
-                })
+                world_source(
+                    &self.world,
+                    pos,
+                    &block.name,
+                    world_items!(self),
+                    |key, entity, block| {
+                        self.encode_live_block_entity(key, entity, block, world_items!(self))
+                    },
+                )
             })
         });
         let storage = self.score.storage.snapshot();
@@ -1413,13 +1451,31 @@ impl Game<'_> {
                         level.roll_block_loot(at, state, entity, roll, source.as_deref())
                     });
                 }
-                world_items!(self).block_drops(
-                    self.pack.assets.registry,
-                    state,
-                    roll,
-                    &mut self.world.random,
-                    Some((&mut self.rand_sequences, self.level.seed)),
-                )
+                // ORIGIN is the block's centre; its location checks read the level, so
+                // the roll draws from copies of the randoms put back after it.
+                let mut random = self.world.random.clone();
+                let mut sequences = std::mem::take(&mut self.rand_sequences);
+                let drops = {
+                    let level = crate::game::advancements::View(&*self);
+                    let read = |predicate: &serde_json::Value, at: [f64; 3]| {
+                        sunrise_client::advancements::location(predicate, at, &level)
+                    };
+                    let origin = pos.map(|c| f64::from(c) + 0.5);
+                    let roll = BlockLootRoll {
+                        location: Some(sunrise_client::advancements::loot_location(origin, &read)),
+                        ..roll
+                    };
+                    world_items!(self).block_drops(
+                        self.pack.assets.registry,
+                        state,
+                        roll,
+                        &mut random,
+                        Some((&mut sequences, self.level.seed)),
+                    )
+                };
+                self.world.random = random;
+                self.rand_sequences = sequences;
+                drops
             })
         })
     }
@@ -1513,6 +1569,10 @@ impl Game<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "loot_context_tests.rs"]
+mod loot_context_tests;
 
 #[cfg(test)]
 mod tests {

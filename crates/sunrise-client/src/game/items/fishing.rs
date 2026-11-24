@@ -55,6 +55,7 @@ fn fishing_loot(
     level_random: &mut LegacyRandom,
     world_seed: i64,
     biome: Option<&str>,
+    location: Option<sunrise_world::loot::LootLocation<'_>>,
     open_water: bool,
     params: &sunrise_world::loot::EntityLootParams,
 ) -> Vec<sunrise_world::loot::LootStack> {
@@ -63,10 +64,18 @@ fn fishing_loot(
             table,
             sequences.get(sequence, world_seed),
             biome,
+            location,
             Some(open_water),
             params,
         ),
-        None => loot.roll_as(table, level_random, biome, Some(open_water), params),
+        None => loot.roll_as(
+            table,
+            level_random,
+            biome,
+            location,
+            Some(open_water),
+            params,
+        ),
     }
 }
 
@@ -735,18 +744,30 @@ impl Game<'_> {
                 Some([hook.position.x, hook.position.y, hook.position.z]),
                 Some(super::creatures::to_loot(rod)),
             );
+            // ORIGIN is the hook's position; its location checks read the level, so
+            // the roll draws from copies of the randoms put back after it.
+            let origin = [hook.position.x, hook.position.y, hook.position.z];
+            let mut random = self.world.random.clone();
+            let mut sequences = std::mem::take(&mut self.rand_sequences);
             let items = caller.with(|| {
+                let level = crate::game::advancements::View(&*self);
+                let read = |predicate: &serde_json::Value, at: [f64; 3]| {
+                    sunrise_client::advancements::location(predicate, at, &level)
+                };
                 fishing_loot(
                     &loot,
                     table,
-                    &mut self.rand_sequences,
-                    &mut self.world.random,
+                    &mut sequences,
+                    &mut random,
                     self.level.seed,
                     biome.as_deref(),
+                    Some(sunrise_client::advancements::loot_location(origin, &read)),
                     hook.open_water,
                     &params,
                 )
             });
+            self.world.random = random;
+            self.rand_sequences = sequences;
             let mut caught: Vec<ItemStack> = items
                 .into_iter()
                 .map(|stack| {
@@ -2654,6 +2675,7 @@ pub(in crate::game) mod tests {
                 &mut sequences,
                 &mut level_random,
                 seed,
+                None,
                 None,
                 true,
                 &super::hook_params(0.0, None),

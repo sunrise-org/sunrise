@@ -526,6 +526,7 @@ fn a_fishing_roll_names_the_hook_its_owner_the_rod_and_the_position() {
                 "test:caller",
                 &mut LegacyRandom::new(3),
                 None,
+                None,
                 Some(open),
                 &params(owner),
             )

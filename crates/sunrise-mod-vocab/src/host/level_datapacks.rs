@@ -67,6 +67,10 @@ pub trait LevelDatapacksBackendMut {
     /// the context `/loot … fish <table> <pos> <tool>` gives. The roll draws from the table's
     /// random sequence, else the level random, as vanilla's does, so it moves later draws: that
     /// is why this is a write. The stacks come split to their stack sizes, empties left out.
+    /// A `minecraft:location_check` tests this level at `origin` moved by its offsets
+    /// (`LocationCheck.test`): its biome, structure, smoke, light, block and fluid tests fail
+    /// where that position isn't loaded (`LocationPredicate.matches`). There is no
+    /// BLOCK_STATE or BLOCK_ENTITY, so a `minecraft:match_block` fails.
     /// Mods' loot kinds see `origin` and this level; no `loot_drops` event, since nothing
     /// drops. None for a table that isn't there, a stale or parked handle, a client, and a
     /// stale `entity`.

@@ -18,6 +18,56 @@ pub fn block_entity_id<'a>(e: &'a crate::containers::BlockEntity, block: &'a str
         _ => e.id(),
     }
 }
+/// A live block entity's `current` encoding over the `original` NBT it was loaded from:
+/// what the game left unchanged keeps its original form, what it changed or cleared takes the
+/// current value, and keys Sunrise never models (a stored `components` patch, a mod's
+/// fields) stay. The chunk save and a loot roll's `saveWithFullMetadata` both write this.
+/// `original` must have the entity's own id.
+pub fn overlay_block_entity_source(
+    original: &Tag,
+    e: &crate::containers::BlockEntity,
+    block: &str,
+    current: &Tag,
+    items: &crate::items::Items,
+) -> Tag {
+    let hopper_cooldown = (block == "minecraft:hopper")
+        .then(|| number(original.get("TransferCooldown")).unwrap_or(-1) as i32);
+    let items_are_payload =
+        matches!(e, crate::containers::BlockEntity::Mod(_)) && !block_has_mod_item_slots(block);
+    let loaded = decode_block_entity_with_history(original, None, !items_are_payload).map_or_else(
+        || current.clone(),
+        |(q, e)| {
+            // External name removal must win over the source overlay.
+            let custom_name = (!matches!(
+                e,
+                crate::containers::BlockEntity::Banner(_)
+                    | crate::containers::BlockEntity::Sign(_)
+                    | crate::containers::BlockEntity::Mod(_)
+            ))
+            .then(|| {
+                original
+                    .get("CustomName")
+                    .and_then(crate::block_entity_nbt::component)
+            })
+            .flatten();
+            block_entity_encode::encode_with(
+                q,
+                &e,
+                block,
+                block_entity_encode::DataFields {
+                    lock: original.get("lock"),
+                    custom_name: custom_name.as_ref(),
+                    pending: PendingContainerLoot::from_tag(original).as_ref(),
+                    hopper_cooldown,
+                },
+                items,
+                |_| None,
+            )
+        },
+    );
+    merge_block_entity(original, &loaded, current, items_are_payload)
+}
+
 /// `block_entity_nbt::overlay`, then a container that now holds items loses its
 /// loot table (vanilla clears it when the loot is generated into the container).
 pub(super) fn merge_block_entity(

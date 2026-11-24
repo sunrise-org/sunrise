@@ -627,6 +627,11 @@ pub trait World {
     fn can_see_sky(&self, pos: [i32; 3]) -> bool;
     fn light(&self, pos: [i32; 3]) -> i32;
     fn smokey(&self, pos: [i32; 3]) -> bool;
+    /// `Level.isLoaded`: inside the build height, in a loaded chunk. A fixture that holds
+    /// every position it is asked about keeps the default.
+    fn loaded(&self, _pos: [i32; 3]) -> bool {
+        true
+    }
     fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool;
     /// The block entity's `saveWithFullMetadata` at `pos`, `None` without one.
     fn block_entity_nbt(&self, _pos: [i32; 3]) -> Option<sunrise_core::nbt::Tag> {
@@ -902,10 +907,13 @@ pub fn can_unlock(
     let empty = ItemView::default();
     spectator || item(lock, main_hand.unwrap_or(&empty), w)
 }
-/// `BlockPredicate`.
+/// `BlockPredicate.matches(level, pos)`: nothing matches where the level is not loaded.
 pub fn block(v: &Value, pos: [i32; 3], w: &dyn World) -> bool {
     if v.is_null() {
         return true;
+    }
+    if !w.loaded(pos) {
+        return false;
     }
     let borrowed = w.block_state(pos);
     let owned = borrowed.is_none().then(|| w.block(pos));
@@ -938,44 +946,39 @@ pub fn block(v: &Value, pos: [i32; 3], w: &dyn World) -> bool {
             }
         }
     }
-    // `matchesBlockEntity`: the block entity's data holds the pattern
-    // (`NbtPredicate.matches`, `NbtUtils.compareNbt`); no block entity fails.
-    if let Some(nbt) = v["nbt"].as_str() {
-        let Ok((pattern, _)) = sunrise_core::nbt::parse_snbt(nbt) else {
-            return false;
+    // `matchesBlockEntity`: the block entity's `saveWithFullMetadata` holds the NBT
+    // pattern and its collected components pass the matchers; no block entity fails.
+    if sunrise_world::loot::reads_block_entity(v) {
+        let nbt = w.block_entity_nbt(pos);
+        let components = || {
+            nbt.as_ref()
+                .map(crate::block_entity_item::collected_components)
         };
-        if !crate::nbt_path::compare_nbt(&pattern, w.block_entity_nbt(pos).as_ref()) {
+        let tags = |registry: &str, tag: &str, id: &str| w.in_tag(registry, tag, id);
+        if !sunrise_world::loot::block_entity_matches(v, nbt.as_ref(), components, &tags) {
             return false;
         }
     }
     true
 }
-/// Where `LocationCheck.test` looks: the block centre of `block_pos` (else
-/// `origin`) plus the check's offsets.
-pub fn location_check_position(
-    v: &Value,
-    block_pos: Option<[i32; 3]>,
-    origin: [f64; 3],
-) -> [f64; 3] {
-    let base = block_pos.map_or(origin, |b| b.map(|c| f64::from(c) + 0.5));
-    [
-        base[0] + v["offsetX"].as_f64().unwrap_or(0.0),
-        base[1] + v["offsetY"].as_f64().unwrap_or(0.0),
-        base[2] + v["offsetZ"].as_f64().unwrap_or(0.0),
-    ]
-}
-/// `LocationCheck.test`: [`location`] at [`location_check_position`].
+/// `LocationCheck.test` for a predicate context: [`location`] at the block centre of
+/// `block_pos` (else `origin`), through the loot engines' [`sunrise_world::loot::LootLocation`].
 pub fn location_check(
     v: &Value,
     block_pos: Option<[i32; 3]>,
     origin: [f64; 3],
     w: &dyn World,
 ) -> bool {
-    location(
-        &v["predicate"],
-        location_check_position(v, block_pos, origin),
-        w,
-    )
+    let origin = block_pos.map_or(origin, |b| b.map(|c| f64::from(c) + 0.5));
+    loot_location(origin, &|predicate, at| location(predicate, at, w)).check(v)
+}
+/// The `ORIGIN` and level a loot roll's location checks read, with `level` answering
+/// [`location`] against the roll's world.
+pub fn loot_location<'a>(
+    origin: [f64; 3],
+    level: &'a dyn Fn(&Value, [f64; 3]) -> bool,
+) -> sunrise_world::loot::LootLocation<'a> {
+    sunrise_world::loot::LootLocation { origin, level }
 }
 /// `LocationPredicate`.
 pub fn location(v: &Value, p: [f64; 3], w: &dyn World) -> bool {
@@ -996,15 +999,39 @@ pub fn location(v: &Value, p: [f64; 3], w: &dyn World) -> bool {
     {
         return false;
     }
-    if !v["biomes"].is_null() && !id_matches(&v["biomes"], "worldgen/biome", &w.biome(pos), w) {
+    // Biome, structure, smoke, light, block and fluid read only a loaded position;
+    // the sky check asks the level itself.
+    let loaded = w.loaded(pos);
+    if !v["biomes"].is_null()
+        && !(loaded && id_matches(&v["biomes"], "worldgen/biome", &w.biome(pos), w))
+    {
         return false;
     }
-    if !v["structures"].is_null() {
-        let here = w.structures(pos);
-        if !here
-            .iter()
-            .any(|s| id_matches(&v["structures"], "worldgen/structure", s, w))
-        {
+    if !v["structures"].is_null()
+        && !(loaded
+            && w.structures(pos)
+                .iter()
+                .any(|s| id_matches(&v["structures"], "worldgen/structure", s, w)))
+    {
+        return false;
+    }
+    if let Some(b) = v["smokey"].as_bool()
+        && !(loaded && b == w.smokey(pos))
+    {
+        return false;
+    }
+    if !v["light"].is_null() && !(loaded && range_i(&v["light"]["light"], i64::from(w.light(pos))))
+    {
+        return false;
+    }
+    if !v["block"].is_null() && !block(&v["block"], pos, w) {
+        return false;
+    }
+    if !v["fluid"].is_null() {
+        let Some(f) = w.fluid(pos).filter(|_| loaded) else {
+            return false;
+        };
+        if !id_matches(&v["fluid"]["fluids"], "fluid", &f, w) {
             return false;
         }
     }
@@ -1012,25 +1039,6 @@ pub fn location(v: &Value, p: [f64; 3], w: &dyn World) -> bool {
         && b != w.can_see_sky(pos)
     {
         return false;
-    }
-    if let Some(b) = v["smokey"].as_bool()
-        && b != w.smokey(pos)
-    {
-        return false;
-    }
-    if !v["light"].is_null() && !range_i(&v["light"]["light"], i64::from(w.light(pos))) {
-        return false;
-    }
-    if !v["block"].is_null() && !block(&v["block"], pos, w) {
-        return false;
-    }
-    if !v["fluid"].is_null() {
-        let Some(f) = w.fluid(pos) else {
-            return false;
-        };
-        if !id_matches(&v["fluid"]["fluids"], "fluid", &f, w) {
-            return false;
-        }
     }
     true
 }

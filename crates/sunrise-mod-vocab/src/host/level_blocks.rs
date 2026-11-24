@@ -237,6 +237,12 @@ pub trait LevelBlocksBackendMut {
     /// entity, tool)`), without breaking it or spawning anything: its loot table rolled with
     /// `tool` (None is an empty hand) and `entity` as the breaker, with what its block entity
     /// copies into the drops (a shulker box's contents, a banner's patterns, a pot's sherds).
+    /// The roll is given the block's centre as ORIGIN and its block entity as BLOCK_ENTITY,
+    /// saved as `BlockEntity.saveWithFullMetadata` gives it (stored components included), so
+    /// a `minecraft:match_block` tests the block state, then its NBT and components against
+    /// that entity. A `minecraft:location_check` tests this level at the centre moved by its
+    /// offsets (`LocationCheck.test`): its biome, structure, smoke, light, block and fluid
+    /// tests fail where that position isn't loaded (`LocationPredicate.matches`).
     /// The roll draws from the table's random sequence, else the level random, as vanilla's
     /// does, so it moves later draws: that is why this is a write. No `block_drops` event,
     /// item entity or experience: that is `destroy_block`. None for a refused write, a stale or

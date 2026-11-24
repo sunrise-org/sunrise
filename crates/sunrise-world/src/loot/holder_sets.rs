@@ -334,22 +334,18 @@ mod tests {
             json!(["minecraft:sing"])
         );
         assert!(
-            data.roll(
+            crate::loot::in_biome(&data, Some("minecraft:plains"), |location| data.roll(
                 "test:horn",
                 &mut LegacyRandom::new(1),
                 0.0,
-                Some("minecraft:plains"),
+                location,
                 None
-            )
+            ))
             .is_empty()
         );
-        let drops = data.roll(
-            "test:horn",
-            &mut LegacyRandom::new(1),
-            0.0,
-            Some("minecraft:desert"),
-            None,
-        );
+        let drops = crate::loot::in_biome(&data, Some("minecraft:desert"), |location| {
+            data.roll("test:horn", &mut LegacyRandom::new(1), 0.0, location, None)
+        });
         assert_eq!(drops.len(), 1);
         assert_eq!(
             drops[0].components,

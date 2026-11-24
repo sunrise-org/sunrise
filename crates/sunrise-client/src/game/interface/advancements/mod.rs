@@ -359,8 +359,15 @@ impl adv::World for View<'_, '_> {
     fn smokey(&self, p: [i32; 3]) -> bool {
         sunrise_client::beehive::smokey(&self.0.mob_world_base(&[]), p)
     }
+    fn loaded(&self, p: [i32; 3]) -> bool {
+        self.0.world.is_loaded_at(p[0], p[1], p[2])
+    }
+    /// The same `saveWithFullMetadata` a loot roll's `match_block` reads: the live block
+    /// entity over the NBT it was loaded from, else its saved row.
     fn block_entity_nbt(&self, p: [i32; 3]) -> Option<sunrise_core::nbt::Tag> {
-        self.0.block_entity_nbt(p)
+        self.0
+            .block_entity_nbt(p)
+            .or_else(|| crate::game::spill::saved_full_metadata(&self.0.world, p))
     }
     fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool {
         let tags = TagSources {

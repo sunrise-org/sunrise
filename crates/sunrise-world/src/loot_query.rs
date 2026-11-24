@@ -30,13 +30,14 @@ impl LootContext<'_> {
 }
 impl LootData {
     /// LootTable.getRandomItems with the given random (its state is
-    /// advanced), luck and, for fishing, whether the hook is in open water.
+    /// advanced), luck, the origin and level its location checks read, and, for
+    /// fishing, whether the hook is in open water.
     pub fn roll<R: RandomSource + Clone>(
         &self,
         table: &str,
         random: &mut R,
         luck: f32,
-        biome: Option<&str>,
+        location: Option<LootLocation<'_>>,
         open_water: Option<bool>,
     ) -> Vec<LootStack> {
         let Some(json) = self.tables.get(table) else {
@@ -46,7 +47,8 @@ impl LootData {
             query: query::current_query(),
             data: self,
             random: random.clone(),
-            biome,
+            biome: None,
+            location,
             visited: Vec::new(),
             luck,
             open_water,
@@ -61,12 +63,13 @@ impl LootData {
     /// [`Self::roll`] with the entity parameters of `params` (a fishing hook
     /// as `this` and its owner as the attacker), and `params.luck` as the
     /// luck. The entity predicates read them, and a hook's `in_open_water`
-    /// still reads `open_water`.
+    /// still reads `open_water`; `location` is the hook's position and level.
     pub fn roll_as<R: RandomSource + Clone>(
         &self,
         table: &str,
         random: &mut R,
         biome: Option<&str>,
+        location: Option<LootLocation<'_>>,
         open_water: Option<bool>,
         params: &EntityLootParams,
     ) -> Vec<LootStack> {
@@ -78,6 +81,7 @@ impl LootData {
             data: self,
             random: random.clone(),
             biome,
+            location,
             visited: Vec::new(),
             luck: params.luck,
             open_water,
@@ -100,6 +104,7 @@ impl LootData {
             data: self,
             random: random.clone(),
             biome: None,
+            location: None,
             visited: Vec::new(),
             luck: 0.0,
             open_water: None,

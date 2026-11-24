@@ -5234,7 +5234,16 @@ impl Game<'_> {
         let key = (pos[0], pos[1], pos[2]);
         match self.world.block_entities.get(&key) {
             Some(entity) => {
-                Some(self.encode_live_block_entity(key, entity, block, self.res.items()))
+                let items = self.res.items();
+                let current = self.encode_live_block_entity(key, entity, block, items);
+                Some(spill::live_full_metadata(
+                    &self.world,
+                    key,
+                    entity,
+                    block,
+                    items,
+                    current,
+                ))
             }
             None => spill::saved_entity(&self.world, pos),
         }

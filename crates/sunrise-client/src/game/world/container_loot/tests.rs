@@ -3,7 +3,7 @@ use super::*;
 use crate::game::minecarts::{CartKind, Minecart};
 use std::sync::{Arc, Mutex};
 use sunrise_client::{items::ItemStack, save::PendingContainerLoot};
-use sunrise_core::{geometry::Vec3, nbt::Tag, position::BlockPos};
+use sunrise_core::{geometry::Vec3, nbt::Tag, position::BlockPos, random::RandomSource};
 use sunrise_world::loot::{LootData, PackOverlay};
 
 const POS: (i32, i32, i32) = (8, 64, 8);
@@ -812,16 +812,11 @@ fn random_selection_streams() {
             seed,
         };
         let mut slots = vec![None; 27];
-        fill_with_random(
-            &pending,
-            &mut slots,
-            &loot,
-            random,
-            sequences,
-            123,
-            Default::default(),
-            |_| {},
-        );
+        if let Some((items, source)) =
+            roll_fill(&pending, &loot, random, sequences, 123, Default::default())
+        {
+            place_fill(items, &mut slots, &loot, source, random, sequences, 123);
+        }
         slots
             .iter()
             .enumerate()

@@ -11,6 +11,11 @@
 mod component_validation;
 mod fill;
 pub mod global_modifiers;
+mod location;
+pub use location::{
+    LootLocation, block_entity_matches, components_match, location_offset, location_offset_tag,
+    reads_block_entity,
+};
 pub mod number;
 pub mod query;
 use component_validation::retain_valid;
@@ -1087,6 +1092,7 @@ impl LootData {
             data: self,
             random: LegacyRandom::new(0),
             biome: None,
+            location: None,
             visited: Vec::new(),
             luck: 0.0,
             open_water: None,
@@ -1186,6 +1192,7 @@ impl LootData {
             data: self,
             random: random.clone(),
             biome: None,
+            location: None,
             visited: Vec::new(),
             luck: params.luck,
             open_water: None,
@@ -1328,6 +1335,8 @@ struct Context<'a, R> {
     data: &'a LootData,
     random: R,
     biome: Option<&'a str>,
+    /// `ORIGIN` and the level, for `location_check`; None without an origin.
+    location: Option<LootLocation<'a>>,
     visited: Vec<String>,
     /// LootContext.getLuck.
     luck: f32,
@@ -1548,21 +1557,8 @@ impl<R: RandomSource> Context<'_, R> {
                     let chance = self.float(&c["chance"]);
                     self.random.next_float() < chance
                 }
-                "minecraft:location_check" => {
-                    let Some(biome) = self.biome else {
-                        return false;
-                    };
-                    // `LocationPredicate.biomes`: a HolderSet, so a `#tag`
-                    // (the loot data's biome tags, packs included), an id or
-                    // a list of ids.
-                    match &c["predicate"]["biomes"] {
-                        Value::Null => true,
-                        set => data
-                            .holder_set("worldgen/biome", set)
-                            .iter()
-                            .any(|b| b == biome),
-                    }
-                }
+                // `LocationCheck.test`: false without an origin.
+                "minecraft:location_check" => self.location.is_some_and(|at| at.check(c)),
                 // A validated registered condition runs in the current roll's order.
                 k if k.contains(':') && !k.starts_with("minecraft:") => {
                     self.registered_condition(k, c)
@@ -1773,7 +1769,7 @@ impl<R: RandomSource> Context<'_, R> {
             // (it drops the map when nothing is found, as the filtered
             // map_id check after it would).
             "minecraft:exploration_map" => {
-                stack.map = self.biome.is_some();
+                stack.map = self.location.is_some();
                 if stack.map {
                     stack.exploration = Some(Box::new(ExplorationMap::from_json(f)));
                 }
@@ -3626,6 +3622,28 @@ mod native_kinds_tests {
 #[path = "recipe_result_tests.rs"]
 mod recipe_result_tests;
 
+/// A level that answers a location predicate's `biomes` with the loot data's own biome
+/// tags, standing in for the game's level in tests; `None` rolls without an origin.
+#[cfg(test)]
+pub(crate) fn in_biome<T>(
+    data: &LootData,
+    biome: Option<&str>,
+    roll: impl FnOnce(Option<LootLocation<'_>>) -> T,
+) -> T {
+    let level = |predicate: &Value, _: [f64; 3]| match &predicate["biomes"] {
+        Value::Null => true,
+        set => biome.is_some_and(|biome| {
+            data.holder_set("worldgen/biome", set)
+                .iter()
+                .any(|b| b == biome)
+        }),
+    };
+    roll(biome.map(|_| LootLocation {
+        origin: [0.0; 3],
+        level: &level,
+    }))
+}
+
 #[cfg(test)]
 mod location_check_biome_tests {
     use super::*;
@@ -3657,15 +3675,17 @@ mod location_check_biome_tests {
     }
 
     fn drops(data: &LootData, biome: Option<&str>) -> bool {
-        !data
-            .roll(
-                "minecraft:test",
-                &mut LegacyRandom::new(1),
-                0.0,
-                biome,
-                None,
-            )
-            .is_empty()
+        in_biome(data, biome, |location| {
+            !data
+                .roll(
+                    "minecraft:test",
+                    &mut LegacyRandom::new(1),
+                    0.0,
+                    location,
+                    None,
+                )
+                .is_empty()
+        })
     }
 
     /// `LocationPredicate.biomes` is a HolderSet: a `#tag` names the biomes

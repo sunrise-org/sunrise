@@ -41,6 +41,19 @@ fn validate_partial_predicates(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// `BlockPredicate.CODEC`: its component matchers, and its `nbt` read as a compound
+/// (`NbtPredicate.CODEC`, SNBT text or a JSON object).
+fn validate_block_predicate(value: &Value) -> Result<(), String> {
+    validate_item_predicate(value)?;
+    match &value["nbt"] {
+        Value::Null => Ok(()),
+        nbt => match super::nbt_predicate_tag(nbt) {
+            Some(Tag::Compound(_)) => Ok(()),
+            _ => Err(format!("nbt: not a compound: {nbt}")),
+        },
+    }
+}
+
 /// `EntityPredicate.CODEC`'s registered component-bearing sub-predicates.
 /// Unknown/native sub-predicate payloads and NBT are intentionally opaque.
 pub fn validate_entity_predicate(value: &Value) -> Result<(), String> {
@@ -89,7 +102,11 @@ pub fn validate_loot_condition(value: &Value) -> Result<(), String> {
             validate_entity_predicate(&value["predicate"]["direct_entity"])?;
             validate_entity_predicate(&value["predicate"]["source_entity"])
         }
-        "location_check" => validate_item_predicate(&value["predicate"]["block"]),
+        "location_check" => {
+            super::location_offset(value)?;
+            validate_block_predicate(&value["predicate"]["block"])
+        }
+        "match_block" => validate_block_predicate(value),
         "random_chance" => super::number_validation::number(&value["chance"]),
         "int_value_check" | "float_value_check" => {
             super::number_validation::number(&value["value"])?;

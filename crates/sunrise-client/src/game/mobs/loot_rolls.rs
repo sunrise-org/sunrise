@@ -293,14 +293,29 @@ impl Game<'_> {
             )
         });
         self.caller_loot(origin, None).with(|| {
-            let items = world_items!(self);
-            match items.loot_sequence(table) {
-                Some(sequence) => {
-                    let random = self.rand_sequences.get(&sequence, self.level.seed);
-                    items.roll_loot_table(table, held, this, random)
+            // Location checks read the level at ORIGIN, so the roll draws from copies
+            // of the randoms put back after it.
+            let mut random = self.world.random.clone();
+            let mut sequences = std::mem::take(&mut self.rand_sequences);
+            let drops = {
+                let level = crate::game::advancements::View(&*self);
+                let read = |predicate: &serde_json::Value, at: [f64; 3]| {
+                    sunrise_client::advancements::location(predicate, at, &level)
+                };
+                let location =
+                    origin.map(|origin| sunrise_client::advancements::loot_location(origin, &read));
+                let items = world_items!(self);
+                match items.loot_sequence(table) {
+                    Some(sequence) => {
+                        let random = sequences.get(&sequence, self.level.seed);
+                        items.roll_loot_table(table, held, this, location, random)
+                    }
+                    None => items.roll_loot_table(table, held, this, location, &mut random),
                 }
-                None => items.roll_loot_table(table, held, this, &mut self.world.random),
-            }
+            };
+            self.world.random = random;
+            self.rand_sequences = sequences;
+            drops
         })
     }
 }

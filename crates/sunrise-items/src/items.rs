@@ -2093,7 +2093,7 @@ impl Items {
         random: &mut R,
         keep_empty: bool,
     ) -> Vec<ItemStack> {
-        self.table_root(id, killed_by_player, held, None, random, keep_empty)
+        self.table_root(id, killed_by_player, held, None, None, random, keep_empty)
             .unwrap_or_default()
     }
     /// `LootTable.getRandomItems(LootParams)` of table `id` with an ORIGIN,
@@ -2106,9 +2106,10 @@ impl Items {
         id: &str,
         held: Option<&ItemStack>,
         this: Option<EntityTarget<'_>>,
+        location: Option<sunrise_world::loot::LootLocation<'_>>,
         random: &mut R,
     ) -> Option<Vec<ItemStack>> {
-        self.table_root(id, false, held, this, random, false)
+        self.table_root(id, false, held, this, location, random, false)
     }
     /// A named root with no block; command replacement may retain emitted empties.
     fn table_root<R: RandomSource>(
@@ -2117,6 +2118,7 @@ impl Items {
         killed_by_player: bool,
         held: Option<&ItemStack>,
         target: Option<EntityTarget<'_>>,
+        location: Option<sunrise_world::loot::LootLocation<'_>>,
         random: &mut R,
         keep_empty: bool,
     ) -> Option<Vec<ItemStack>> {
@@ -2136,7 +2138,7 @@ impl Items {
             target,
             target_entity: None,
             interacting_entity: None,
-            location: None,
+            location,
             keep_empty,
         };
         // LootTable.getRandomItemsRaw visits the table itself first.
@@ -2160,7 +2162,7 @@ impl Items {
         block: &str,
         properties: &sunrise_world::chunk::BlockProperties,
         interacting: Option<EntityTarget<'_>>,
-        location: Option<&dyn Fn(&Value) -> Option<bool>>,
+        location: Option<sunrise_world::loot::LootLocation<'_>>,
         random: &mut R,
     ) -> Vec<ItemStack> {
         let ctx = LootContext {
@@ -2408,8 +2410,9 @@ pub type BlockLootLevels<'a> = dyn Fn(&str, u32) -> u32 + 'a;
 /// `BlockState.getDrops` is given them).
 #[derive(Clone, Copy, Default)]
 pub struct BlockLootRoll<'a> {
-    /// Location predicate reader for command block loot, absent for ordinary breaks.
-    pub location: Option<&'a dyn Fn(&Value) -> Option<bool>>,
+    /// `LootContextParams.ORIGIN` (the block's centre) and the level its location checks
+    /// read; without one every `location_check` fails.
+    pub location: Option<sunrise_world::loot::LootLocation<'a>>,
     /// Retain emitted empty slots for command replacement output.
     pub keep_empty: bool,
     /// `LootContextParams.TOOL`; none is the empty stack.
@@ -2451,8 +2454,8 @@ struct LootContext<'a, R> {
     target_entity: Option<EntityTarget<'a>>,
     /// `LootContextParams.INTERACTING_ENTITY`.
     interacting_entity: Option<EntityTarget<'a>>,
-    /// Bound only for the actual loot-mine location subset.
-    location: Option<&'a dyn Fn(&Value) -> Option<bool>>,
+    /// `ORIGIN` and the level, for `location_check`; None without an origin.
+    location: Option<sunrise_world::loot::LootLocation<'a>>,
     /// Command replacement consumes the emitted list positions, including empty stacks.
     keep_empty: bool,
 }
@@ -2581,9 +2584,33 @@ impl<R: RandomSource> LootContext<'_, R> {
                     .unwrap_or(0.0) as f32;
                 random.next_float() < chance
             }
-            "minecraft:match_block" | "minecraft:block_state_property" => self
-                .items
-                .matches_block_state(c, self.block, self.properties),
+            "minecraft:block_state_property" => {
+                self.items
+                    .matches_block_state(c, self.block, self.properties)
+            }
+            // `MatchBlock.test`: the BLOCK_STATE first, then the predicate's NBT and
+            // component tests against the BLOCK_ENTITY the roll supplied.
+            "minecraft:match_block" => {
+                !self.block.is_empty()
+                    && self
+                        .items
+                        .matches_block_state(c, self.block, self.properties)
+                    && (!sunrise_world::loot::reads_block_entity(c) || {
+                        let place = sunrise_world::loot::current_native_loot_place();
+                        let place = place.as_deref();
+                        let item_tags = |registry: &str, tag: &str, id: &str| match registry {
+                            "item" => self.items.item_in_tag(tag, id),
+                            "enchantment" => self.items.enchantments.in_tag(tag, id),
+                            _ => false,
+                        };
+                        sunrise_world::loot::block_entity_matches(
+                            c,
+                            place.and_then(|p| p.block_entity.as_ref()),
+                            || place.and_then(|p| p.block_components.clone()),
+                            &item_tags,
+                        )
+                    })
+            }
             "minecraft:match_tool" => {
                 let items = &c["predicate"]["items"];
                 let items_ok = match (self.held, items) {
@@ -2649,13 +2676,9 @@ impl<R: RandomSource> LootContext<'_, R> {
             // Entity flags, equipment and damage-source predicates: none hold
             // for an unenchanted player kill without fire or lightning.
             "minecraft:damage_source_properties" => false,
-            // LocationCheck reads the world at its offset, which this engine
-            // does not have: held true (a double plant's other half is taken
-            // as there). Unknown types fail, as in loot.rs.
-            "minecraft:location_check" => self
-                .location
-                .and_then(|location| location(c))
-                .unwrap_or(true),
+            // `LocationCheck.test`: false without an origin. Unknown types fail, as in
+            // loot.rs.
+            "minecraft:location_check" => self.location.is_some_and(|at| at.check(c)),
             // A registered condition answers using the current roll context.
             k if !c.is_null() && k.contains(':') && !k.starts_with("minecraft:") => {
                 if !self.items.loot_types.contains(k, false) {
@@ -4841,7 +4864,7 @@ mod tests {
                        {"type":"minecraft:item","name":"minecraft:emerald","weight":3}],
             "modifier":[{"type":"minecraft:set_count","count":{"type":"minecraft:uniform","min":1,"max":4}}]
         }]}))].into_iter().collect());
-        let unused = |_: &Value| -> Option<bool> {
+        let unused = |_: &Value, _: [f64; 3]| -> bool {
             panic!("unaffected conditions must not invoke location reader")
         };
         for seed in [0, 1, 79, i64::MAX] {
@@ -4864,7 +4887,10 @@ mod tests {
                         BlockStateId(0),
                         BlockLootRoll {
                             held: held.as_ref(),
-                            location: Some(&unused),
+                            location: Some(sunrise_world::loot::LootLocation {
+                                origin: [0.5; 3],
+                                level: &unused,
+                            }),
                             ..Default::default()
                         },
                         &mut contextual,
@@ -4877,26 +4903,37 @@ mod tests {
         }
     }
 
+    /// `LocationCheck.test`: no origin fails, an origin with no predicate holds, and
+    /// otherwise the level answers at the offset position.
     #[test]
-    fn location_context_keeps_unbound_and_unsupported_legacy_behavior() {
+    fn location_check_needs_an_origin_and_asks_the_level() {
         let items = Items::for_tests(HashMap::new());
         let properties = sunrise_world::chunk::BlockProperties::new();
-        let condition = json!({"type":"minecraft:location_check","predicate":{"block":{"blocks":"minecraft:stone"}}});
-        let table = json!({"pools":[{"rolls":1,"condition":condition,"entries":[{"type":"minecraft:item","name":"minecraft:diamond"}]}]});
-        let unbound = ctx(&items, None, &properties, "minecraft:stone");
-        assert_eq!(
-            unbound.evaluate(&table, &mut LegacyRandom::new(79)).len(),
-            1
-        );
-        for value in [Some(false), Some(true), None] {
-            let reader = |_: &Value| value;
-            let bound = LootContext {
-                location: Some(&reader),
+        let drops = |condition: Value, location: Option<sunrise_world::loot::LootLocation<'_>>| {
+            let table = json!({"pools":[{"rolls":1,"condition":condition,"entries":[{"type":"minecraft:item","name":"minecraft:diamond"}]}]});
+            LootContext {
+                location,
                 ..ctx(&items, None, &properties, "minecraft:stone")
+            }
+            .evaluate(&table, &mut LegacyRandom::new(79))
+            .len()
+        };
+        let check = json!({"type":"minecraft:location_check","offsetY":-1,"predicate":{"block":{"blocks":"minecraft:stone"}}});
+        assert_eq!(drops(check.clone(), None), 0);
+        assert_eq!(drops(json!({"type":"minecraft:location_check"}), None), 0);
+        for answer in [false, true] {
+            let level = |_: &Value, at: [f64; 3]| {
+                assert_eq!(at, [0.5, 63.5, 0.5]);
+                answer
             };
+            let location = sunrise_world::loot::LootLocation {
+                origin: [0.5, 64.5, 0.5],
+                level: &level,
+            };
+            assert_eq!(drops(check.clone(), Some(location)), usize::from(answer));
             assert_eq!(
-                bound.evaluate(&table, &mut LegacyRandom::new(79)).len(),
-                usize::from(value.unwrap_or(true))
+                drops(json!({"type":"minecraft:location_check"}), Some(location)),
+                1
             );
         }
     }
