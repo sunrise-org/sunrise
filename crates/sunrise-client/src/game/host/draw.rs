@@ -352,6 +352,12 @@ impl BlockEntityDrawContext for GameBlockEntityDrawContext<'_, '_> {
     fn unlit(&mut self, on: bool) {
         self.game.native_draw_unlit(&mut *self.surface, on)
     }
+    fn crumbling_stage(&self) -> Option<u8> {
+        self.game.native_draw_crumbling_stage(&*self.surface)
+    }
+    fn crumbling(&mut self, on: bool) {
+        self.game.native_draw_crumbling(&mut *self.surface, on)
+    }
     fn quad(&mut self, sprite: &str, corners: [[f32; 3]; 4], uv: [f32; 4], tint: u32) -> bool {
         self.game
             .native_draw_quad(&mut *self.surface, sprite, corners, uv, tint)

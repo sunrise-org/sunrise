@@ -8732,13 +8732,14 @@ impl Game<'_> {
                         r.block_entity_section_in_eye_view(block.0, camera, view.as_ref(), radius),
                     )
                 });
-                self.mod_block_entity_geometry(
+                let mod_cracks = self.mod_block_entity_geometry(
                     mods.chain(untemplated_eye),
                     camera,
                     alpha as f32,
                     &mut out,
                 );
                 self.mark_stage(out.len(), "DESTROY");
+                out.extend(mod_cracks);
                 for &(pos, stage) in &cracks {
                     let state = self.world.block(pos[0], pos[1], pos[2]);
                     self.res

@@ -329,6 +329,31 @@ pub trait BlockEntityDrawContext {
     fn unlit(&mut self, on: bool) {
         unimplemented!("BlockEntityDrawContext::draw_unlit")
     }
+    /// The breaking stage, `0..=9`, being drawn at this block entity's position, or `None`
+    /// when nobody is mining it or the draw is not a world block entity's (an entity, a mob
+    /// model or a preview). It is `Some` at the cracked block and at each extra position its
+    /// `break_progress_positions` answer gave, for the local player's crack and for other
+    /// players' (`BlockEntityRenderState.breakProgress`; the highest stage at a position when
+    /// several players mine it). Read when the block entity is submitted: geometry kept with
+    /// `keep` is not submitted again as the stage changes, so mark it with
+    /// [`Self::crumbling`] and let the game apply the stage each frame.
+    fn crumbling_stage(&self) -> Option<u8> {
+        unimplemented!("BlockEntityDrawContext::draw_crumbling_stage")
+    }
+    /// While `on`, what is drawn next by `quad`, `cube`, `block`, `model` and `terrain_model`
+    /// receives the breaking crack at this position (`ModelFeatureRenderer.CrumblingOverlay`, as
+    /// `ChestRenderer` covers the parts it chooses): that geometry is drawn again under the
+    /// stage's `destroy_stage_0..9` sprite in the frame's `DESTROY` pass, after the block
+    /// entities, wherever [`Self::crumbling_stage`] is `Some` at draw time. Items, text,
+    /// `model_part` and `fluid_box` are never covered. Off by default; lasts until
+    /// `crumbling(false)` or the end of the draw. With `keep`, the marked geometry shows
+    /// the current stage, starting, advancing and clearing as the crack does, with no new
+    /// `block_entity_submit`, and under `spin` the crack turns with it. Models drawn
+    /// under it are drawn as vertices, not instanced copies, while their block is
+    /// cracked. Display only, a client's call.
+    fn crumbling(&mut self, on: bool) {
+        unimplemented!("BlockEntityDrawContext::draw_crumbling")
+    }
     /// Draws a quad with `corners` in blocks under `draw`'s pose, in a model
     /// face's order (top left, bottom left, bottom right, top right as seen
     /// from its front), textured with the `uv` rectangle (u0, v0, u1, v1 in

@@ -32,13 +32,7 @@ impl Game<'_> {
             let mut remaining = positions.into_iter();
             while let Some(candidate) = remaining.next() {
                 let candidate = [candidate.x, candidate.y, candidate.z];
-                let delta: [i64; 3] =
-                    std::array::from_fn(|i| i64::from(candidate[i]) - i64::from(pos[i]));
-                if candidate == pos
-                    || extras.contains(&candidate)
-                    || !delta.iter().all(|d| d.abs() <= 8)
-                    || delta.iter().map(|d| d * d).sum::<i64>() > 64
-                {
+                if candidate == pos || extras.contains(&candidate) {
                     refused += 1;
                 } else {
                     extras.push(candidate);
@@ -50,7 +44,7 @@ impl Game<'_> {
             }
             if refused > 0 {
                 log::debug!(
-                    "break_progress_positions refused {refused} extras outside the crack display bounds or duplicated positions"
+                    "break_progress_positions refused {refused} extras: the origin, duplicates and those past the 64 kept"
                 );
             }
             if game.native_client_level() == Some(level) {

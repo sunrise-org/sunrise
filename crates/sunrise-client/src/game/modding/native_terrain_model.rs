@@ -97,6 +97,7 @@ fn draw_terrain_model(
         |vertex| vertices.push(vertex),
     );
     draw.lit_since(start, BlockEntityDraw::cell_centre, draw.light() & 0xffff);
+    draw.crumbling_since(start);
     drawn.then_some(()).ok_or(TerrainModelError::Refused)
 }
 

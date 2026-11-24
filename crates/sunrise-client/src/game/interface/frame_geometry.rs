@@ -34,10 +34,25 @@ impl Game<'_> {
         stages
     }
 
+    /// The stage stored at each cracked position, origin and extras alike: what a mod block
+    /// entity's draw reads as `crumbling_stage`. Empty, with nothing allocated, when no crack is live.
+    pub(super) fn crack_stage_map(&self) -> sunrise_client::fast_hash::FxHashMap<[i32; 3], u8> {
+        self.crack_stages()
+            .into_iter()
+            .filter_map(|(pos, stage)| Some((pos, u8::try_from(stage).ok()?)))
+            .collect()
+    }
+
+    /// The atlas origin of the `destroy_stage_*` sprite drawn for `stage`, if the atlas has it.
+    pub(super) fn crack_origin(&self, stage: u32) -> Option<[f32; 2]> {
+        let name = crack_stage_names(self.settings.improved_transparency).get(stage as usize)?;
+        let r = self.gui.atlas.sprites.get(*name)?;
+        Some([r.u0, r.v0])
+    }
+
     /// `renderBlockDestroyAnimation`: eligible cells within 32 blocks of the camera,
     /// with each stage sprite's atlas origin. No hook is asked during extraction.
     pub(super) fn cracks(&self, camera: glam::DVec3) -> Vec<([i32; 3], [f32; 2])> {
-        let names = crack_stage_names(self.settings.improved_transparency);
         self.crack_stages()
             .into_iter()
             .filter(|(pos, _)| {
@@ -50,11 +65,7 @@ impl Game<'_> {
                 let state = self.world.block(pos[0], pos[1], pos[2]);
                 self.res.facts().get(state).destroy_overlay
             })
-            .filter_map(|(pos, stage)| {
-                let name = names.get(stage as usize)?;
-                let r = self.gui.atlas.sprites.get(*name)?;
-                Some((pos, [r.u0, r.v0]))
-            })
+            .filter_map(|(pos, stage)| Some((pos, self.crack_origin(stage)?)))
             .collect()
     }
     /// SkyRenderer.renderSunMoonAndStars: bodies on a frame rotated Y -90 then X by angle.
