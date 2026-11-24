@@ -36,8 +36,9 @@ use sunrise_core::{
     nbt::{Compound, JavaString, Limits, Tag},
 };
 use sunrise_mod_package::content::{
-    Block, BlockEntityType, BlockShapes, Content, ContextCollision, CreativeTab, EntityType,
-    FluidLook, Item, LocalDeclaration, MenuType, MobEffect, Rarity, StateProperty, StateValues,
+    Block, BlockEntityType, BlockShapes, BlockSounds, Content, ContextCollision, CreativeTab,
+    EntityType, FluidLook, Item, LocalDeclaration, MenuType, MobEffect, Rarity, StateProperty,
+    StateValues,
 };
 use sunrise_mod_package::manifest::{
     JarInputsError, JarRef, collect_jar_requirements, missing_jars,
@@ -830,13 +831,14 @@ struct NewBlock<'a> {
 }
 impl NewBlock<'_> {
     /// The item its gameplay row names when that is not the template's item
-    /// renamed: `block_item`, or `minecraft:air` for a block with no item
-    /// (a sign's wall form keeps the paired sign's). `Block.asItem` and, unless
+    /// renamed: `block_item`, the paired block's item for a wall form (its
+    /// template's item may be the template itself, which the block's own rename
+    /// would turn into the wall form), or `minecraft:air` for a block with no item. `Block.asItem` and, unless
     /// the block has a `pick_item` row of its own, pick-block read this value.
     fn item_row(&self) -> Option<&str> {
         match &self.decl.block_item {
             Some(item) => Some(item),
-            None => (!self.decl.item && self.wall_of.is_none()).then_some("minecraft:air"),
+            None => (!self.decl.item).then(|| self.wall_of.as_deref().unwrap_or("minecraft:air")),
         }
     }
 
@@ -1728,7 +1730,7 @@ impl<'a> Plan<'a> {
                     u32::try_from(states.len() as u64 * combos.len() as u64).unwrap_or(u32::MAX);
                 next = next.saturating_add(count);
                 rename.states = states;
-                if let Some(s) = &decl.properties.sounds {
+                if let Some(BlockSounds::Block(s)) = &decl.properties.sounds {
                     if !defaults.contains_key(s) {
                         return Err(format!("{}: sounds {s} is not a block", decl.id).into());
                     }
@@ -2168,8 +2170,25 @@ impl<'a> Plan<'a> {
             let col = if v == 0 { 0 } else { MAP_COLORS[v as usize] };
             row.set("map_color", J::Num(col.into()));
         }
-        if let Some(s) = &p.sounds {
-            row.set("sound", self.sounds[s].clone());
+        match &p.sounds {
+            Some(BlockSounds::Block(s)) => row.set("sound", self.sounds[s].clone()),
+            // The block's own `SoundType`, in the vanilla rows' shape.
+            Some(BlockSounds::Own(own)) => {
+                let event = |id: &String| J::Obj(vec![("id".into(), J::Str(id.clone()))]);
+                row.set(
+                    "sound",
+                    J::Obj(vec![
+                        ("volume".into(), J::f64(own.volume.into())),
+                        ("pitch".into(), J::f64(own.pitch.into())),
+                        ("break".into(), event(&own.break_sound)),
+                        ("step".into(), event(&own.step)),
+                        ("place".into(), event(&own.place)),
+                        ("hit".into(), event(&own.hit)),
+                        ("fall".into(), event(&own.fall)),
+                    ]),
+                );
+            }
+            None => {}
         }
     }
 
@@ -2225,9 +2244,37 @@ impl<'a> Plan<'a> {
                 fields.set("block", J::Str(i.rename.to.clone()));
             }
             if let Some(wall) = &i.wall_block
-                && let Some(fields) = v.get_mut("fields")
+                && !components
             {
-                fields.set("wallBlock", J::Str(wall.clone()));
+                // `StandingAndWallBlockItem`: a sign's or torch's item already is one; a plain
+                // `BlockItem` becomes one, its standing form attached below (`Direction.DOWN`).
+                let classes: Vec<&str> = match v.get("class") {
+                    Some(J::Arr(classes)) => classes.iter().filter_map(J::as_str).collect(),
+                    _ => Vec::new(),
+                };
+                if !classes.contains(&"StandingAndWallBlockItem") {
+                    if classes.iter().any(|c| !matches!(*c, "BlockItem" | "Item")) {
+                        return Err(format!(
+                            "{}: wall_block needs a template whose item is a BlockItem, not {}",
+                            i.rename.to, classes[0]
+                        )
+                        .into());
+                    }
+                    v.set(
+                        "class",
+                        J::Arr(
+                            ["StandingAndWallBlockItem", "BlockItem", "Item"]
+                                .map(|c| J::Str(c.into()))
+                                .into(),
+                        ),
+                    );
+                }
+                if let Some(fields) = v.get_mut("fields") {
+                    fields.set("wallBlock", J::Str(wall.clone()));
+                    if fields.get("attachmentDirection").is_none() {
+                        fields.set("attachmentDirection", J::Str("DOWN".into()));
+                    }
+                }
             }
             if components {
                 if let Some(n) = i.max_stack_size {

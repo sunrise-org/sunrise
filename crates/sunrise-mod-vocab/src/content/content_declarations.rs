@@ -45,6 +45,18 @@ mod gate_sound_tests {
     }
 }
 
+/// A declared block's `SoundType`: a vanilla block's, by name (`minecraft:glass`), or one of its
+/// own (`BlockBehaviour.Properties.sound` with a mod-built `SoundType`, NeoForge's
+/// `DeferredSoundType`), whose sound events may be vanilla's or the mod's own.
+// exhaustive: the declaration format has exactly these two forms.
+#[derive(Clone, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
+pub enum BlockSounds {
+    /// A vanilla block whose sounds this block uses.
+    Block(String),
+    /// The block's own volume, pitch and sound event ids.
+    Own(crate::BlockSoundType),
+}
+
 /// BlockProperties in a load-time content declaration.
 #[derive(Clone, Debug, PartialEq, Default)]
 // exhaustive: declaration drafts mirror the closed content schema and support record construction.
@@ -65,8 +77,8 @@ pub struct BlockProperties {
     pub friction: Option<f32>,
     /// A `MapColor` id, 0 to 61.
     pub map_color: Option<u8>,
-    /// A vanilla block whose sounds this block uses.
-    pub sounds: Option<String>,
+    /// The block's `SoundType` (`BlockBehaviour.Properties.sound`): a vanilla block's, or its own.
+    pub sounds: Option<BlockSounds>,
     /// Which states tick randomly, whatever the template does (`isRandomlyTicking`).
     pub random_ticks: Option<RandomTicks>,
     /// How the block is drawn, whatever the template does (`BlockBehaviour.getRenderShape`).
@@ -314,10 +326,9 @@ pub struct Block {
     /// background: `<namespace>:<path>` a mod's texture, a bare name vanilla's.
     /// The template's when unset.
     pub wood_type: Option<String>,
-    /// The block a standing or ceiling sign's item places on a wall
-    /// (`StandingAndWallBlockItem.wallBlock`): one of this mod's blocks (a bare
-    /// name is this mod's), whose template is the matching wall sign and which
-    /// has no item. The template's when unset.
+    /// The block this block's item places on a wall (`StandingAndWallBlockItem.wallBlock`), as
+    /// a torch, a head or a sign does: one of this mod's blocks (a bare name is this mod's), with
+    /// no item of its own. A sign's is the matching wall sign. The template's when unset.
     pub wall_block: Option<String>,
     /// A sign's new text colour (`SignBlockEntity.createDefaultSignText`): a `DyeColor` name,
     /// black when unset. Applies to a sign when it is placed, front and back.

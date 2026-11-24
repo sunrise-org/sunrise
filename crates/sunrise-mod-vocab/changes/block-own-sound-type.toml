@@ -1,0 +1,3 @@
+ids = ["type:BlockProperties.sounds", "type:BlockSounds", "type:BlockSoundType"]
+why = "A declared block's sounds are now a vanilla block's (BlockSounds::Block, the former string) or its own SoundType (BlockSounds::Own, a BlockSoundType of volume, pitch and five sound event ids, vanilla's or the mod's own), as BlockBehaviour.Properties.sound takes a mod-built SoundType (NeoForge's DeferredSoundType). The draft Wire form changes as part of the clean break."
+migrate = "Rebuild against the current SDK. Wrap an existing vanilla block name in BlockSounds::Block; content JSON keeps its \"sounds\": \"minecraft:...\" string and also takes an object {volume, pitch, break, step, place, hit, fall}."

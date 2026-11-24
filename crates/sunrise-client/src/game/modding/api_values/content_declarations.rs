@@ -64,7 +64,18 @@ impl TryIntoEngine<()> for mod_api::BlockProperties {
             requires_tool: self.requires_tool,
             friction: self.friction,
             map_color: self.map_color,
-            sounds: self.sounds.clone(),
+            sounds: self.sounds.as_ref().map(|sounds| match sounds {
+                mod_api::BlockSounds::Block(block) => engine::BlockSounds::Block(block.clone()),
+                mod_api::BlockSounds::Own(own) => engine::BlockSounds::Own(engine::SoundType {
+                    volume: own.volume,
+                    pitch: own.pitch,
+                    break_sound: own.break_sound.to_string(),
+                    step: own.step.to_string(),
+                    place: own.place.to_string(),
+                    hit: own.hit.to_string(),
+                    fall: own.fall.to_string(),
+                }),
+            }),
             random_ticks: self.random_ticks.as_ref().map(|v| match v {
                 mod_api::RandomTicks::All(b) => engine::RandomTicks::All(*b),
                 mod_api::RandomTicks::States { property, values } => engine::RandomTicks::States {
@@ -654,7 +665,7 @@ mod tests {
                 explosion_resistance: Some(7.0),
                 requires_tool: Some(true),
                 map_color: Some(9),
-                sounds: Some("minecraft:glass".into()),
+                sounds: Some(mod_api::BlockSounds::Block("minecraft:glass".into())),
                 random_ticks: Some(mod_api::RandomTicks::States {
                     property: "powered".into(),
                     values: vec!["true".into()],
@@ -684,7 +695,7 @@ mod tests {
                 explosion_resistance: Some(7.0),
                 requires_tool: Some(true),
                 map_color: Some(9),
-                sounds: Some("minecraft:glass".into()),
+                sounds: Some(engine::BlockSounds::Block("minecraft:glass".into())),
                 random_ticks: Some(engine::RandomTicks::States {
                     property: "powered".into(),
                     values: vec!["true".into()]

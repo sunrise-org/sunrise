@@ -159,8 +159,9 @@ pub struct BlockProperties {
     pub friction: Option<f32>,
     /// A `MapColor` id, 0 to 61.
     pub map_color: Option<u8>,
-    /// A vanilla block whose sounds this block uses.
-    pub sounds: Option<String>,
+    /// The block's `SoundType` (`BlockBehaviour.Properties.sound`): a vanilla block's
+    /// whose sounds it uses, or its own volume, pitch and sound events.
+    pub sounds: Option<BlockSounds>,
     /// Which states tick randomly, whatever the template does (`isRandomlyTicking`).
     pub random_ticks: Option<RandomTicks>,
     /// How the block is drawn, whatever the template does (`BlockBehaviour.getRenderShape`).
@@ -616,6 +617,40 @@ fn yes() -> bool {
     true
 }
 
+/// A block's `SoundType`: a vanilla block's, by name (`"minecraft:glass"`), or one of its own
+/// (`BlockBehaviour.Properties.sound` with a mod-built `SoundType`, NeoForge's
+/// `DeferredSoundType`), whose sound events may be vanilla's or the mod's own.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum BlockSounds {
+    /// A vanilla block whose sounds this block uses.
+    Block(String),
+    /// The block's own `SoundType`.
+    Own(SoundType),
+}
+
+/// Vanilla's `SoundType`: the volume and pitch its sounds play at, and a sound event id
+/// for each moment.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SoundType {
+    /// `SoundType.getVolume`.
+    pub volume: f32,
+    /// `SoundType.getPitch`.
+    pub pitch: f32,
+    /// `getBreakSound`: the block broken.
+    #[serde(rename = "break")]
+    pub break_sound: String,
+    /// `getStepSound`: walked on.
+    pub step: String,
+    /// `getPlaceSound`: placed.
+    pub place: String,
+    /// `getHitSound`: hit while being mined.
+    pub hit: String,
+    /// `getFallSound`: landed on.
+    pub fall: String,
+}
+
 /// A fence gate's sound event at every site, or only the named sites.
 /// Missing sites keep the template wood's sounds.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -706,10 +741,9 @@ pub struct Block {
     /// background: `<namespace>:<path>` a mod's texture, a bare name vanilla's.
     /// The template's when unset.
     pub wood_type: Option<String>,
-    /// The block a standing or ceiling sign's item places on a wall
-    /// (`StandingAndWallBlockItem.wallBlock`): one of this mod's blocks, whose
-    /// template is the matching wall sign and which has no item. The
-    /// template's when unset.
+    /// The block this block's item places on a wall (`StandingAndWallBlockItem.wallBlock`),
+    /// as a torch, a head or a sign does: one of this mod's blocks, with no item of its own.
+    /// A sign's is the matching wall sign. The template's when unset.
     pub wall_block: Option<String>,
     /// A sign's new text colour (`SignBlockEntity.createDefaultSignText`): a `DyeColor` name,
     /// black when unset. Applies to a sign when it is placed, front and back.
@@ -1672,7 +1706,7 @@ impl Content {
                 Err(reason) => refuse(DeclarationKind::Block, id, reason),
             }
         }
-        sign_wall_refusals(&all_blocks)
+        wall_block_refusals(&all_blocks)
             .for_each(|(id, reason)| refuse(DeclarationKind::Block, id, reason));
         let mut valid_items = Vec::new();
         for (item, fields) in items {
@@ -1872,7 +1906,7 @@ impl Content {
         }
         // After every block, so a wall form may be declared in a later file.
         if let Some((id, reason)) =
-            sign_wall_refusals(&self.blocks.iter().collect::<Vec<_>>()).next()
+            wall_block_refusals(&self.blocks.iter().collect::<Vec<_>>()).next()
         {
             return Err(format!("{id}: {reason}"));
         }
@@ -2433,8 +2467,21 @@ fn check_block(file: &Block) -> Result<(), String> {
     if p.map_color.is_some_and(|c| c > 61) {
         return Err("map_color is a MapColor id, 0 to 61".into());
     }
-    if p.sounds.as_deref().is_some_and(|s| !vanilla_id(s)) {
-        return Err("sounds names a vanilla block (minecraft:...)".into());
+    match &p.sounds {
+        Some(BlockSounds::Block(block)) if !vanilla_id(block) => {
+            return Err("sounds names a vanilla block (minecraft:...)".into());
+        }
+        Some(BlockSounds::Own(own))
+            if ![&own.break_sound, &own.step, &own.place, &own.hit, &own.fall]
+                .into_iter()
+                .all(|id| namespaced_id(id)) =>
+        {
+            return Err(
+                "sounds' break, step, place, hit and fall are sound event ids, namespace:path"
+                    .into(),
+            );
+        }
+        _ => {}
     }
     if !file.item && !file.components.is_empty() {
         return Err("item is false, so the block has no item to take components".into());
@@ -2563,7 +2610,7 @@ fn check_block(file: &Block) -> Result<(), String> {
         return Err("pick_item is an item id, namespace:path".into());
     }
     if let Some(wall) = &file.wall_block {
-        if !sign || file.template.contains("_wall_") {
+        if sign && file.template.contains("_wall_") {
             return Err("wall_block needs a standing or ceiling sign template".into());
         }
         if !file.item {
@@ -2576,26 +2623,29 @@ fn check_block(file: &Block) -> Result<(), String> {
     Ok(())
 }
 
-/// A sign's `wall_block` is one of the mod's own blocks: the wall form of its
-/// kind, with no item of its own and no other sign. Checked here, a pair that
-/// doesn't fit leaves out its mod alone.
-fn sign_wall_refusals<'a>(blocks: &'a [&'a Block]) -> impl Iterator<Item = (&'a str, String)> + 'a {
+/// A block's `wall_block` is one of the mod's own blocks, with no item of its own and paired with
+/// no other block; a sign's is the wall form of its kind, with the same text. Checked here, a
+/// pair that doesn't fit leaves out its mod alone.
+fn wall_block_refusals<'a>(
+    blocks: &'a [&'a Block],
+) -> impl Iterator<Item = (&'a str, String)> + 'a {
     let mut paired = BTreeMap::new();
-    blocks.iter().filter_map(move |sign| {
-        let wall = sign.wall_block.as_ref()?;
-        let id = sign.id.as_str();
-        let form = if sign.template.ends_with("_hanging_sign") {
-            "_wall_hanging_sign"
-        } else {
-            "_wall_sign"
-        };
+    blocks.iter().filter_map(move |standing| {
+        let wall = standing.wall_block.as_ref()?;
+        let id = standing.id.as_str();
         let Some(block) = blocks.iter().find(|b| b.id == *wall) else {
             return Some((
                 id,
                 format!("wall_block {wall} is not one of this mod's blocks"),
             ));
         };
-        if !block.template.ends_with(form) {
+        let sign = standing.template.ends_with("_sign");
+        let form = if standing.template.ends_with("_hanging_sign") {
+            "_wall_hanging_sign"
+        } else {
+            "_wall_sign"
+        };
+        if sign && !block.template.ends_with(form) {
             return Some((
                 id,
                 format!("wall_block {wall} needs a template ending in {form}"),
@@ -2604,19 +2654,19 @@ fn sign_wall_refusals<'a>(blocks: &'a [&'a Block]) -> impl Iterator<Item = (&'a 
         if block.block_item.is_some() {
             return Some((
                 id,
-                format!("wall_block {wall} has this sign's item, so it declares no block_item"),
+                format!("wall_block {wall} has this block's item, so it declares no block_item"),
             ));
         }
         if block.pick_item.is_some() {
             return Some((
                 id,
-                format!("wall_block {wall} picks this sign's item, so it declares no pick_item"),
+                format!("wall_block {wall} picks this block's item, so it declares no pick_item"),
             ));
         }
         if block.item {
             return Some((
                 id,
-                format!("wall_block {wall} has this sign's item, so its own \"item\" is false"),
+                format!("wall_block {wall} has this block's item, so its own \"item\" is false"),
             ));
         }
         fn text(b: &Block) -> (&str, bool) {
@@ -2625,7 +2675,7 @@ fn sign_wall_refusals<'a>(blocks: &'a [&'a Block]) -> impl Iterator<Item = (&'a 
                 b.sign_text_glow.unwrap_or(false),
             )
         }
-        if text(sign) != text(block) {
+        if sign && text(standing) != text(block) {
             return Some((
                 id,
                 format!("wall_block {wall} declares a different sign_text_color or sign_text_glow"),
@@ -3155,7 +3205,7 @@ capabilities = ["registries"]
                 properties: BlockProperties {
                     hardness: Some(4.0),
                     light: Some(3),
-                    sounds: Some("minecraft:amethyst_block".into()),
+                    sounds: Some(BlockSounds::Block("minecraft:amethyst_block".into())),
                     ..BlockProperties::default()
                 },
                 item: true,
@@ -4151,6 +4201,48 @@ capabilities = ["registries"]
     }
 
     #[test]
+    fn a_block_names_vanilla_sounds_or_declares_its_own() {
+        let block = |json: &str| {
+            smod(
+                "sounds",
+                MANIFEST_TEXT,
+                &[("data/ruby/sunrise/block/plate.json", json.as_bytes())],
+            )
+        };
+        let sounds = |json: &str| block(json).unwrap().blocks[0].properties.sounds.clone();
+        assert_eq!(
+            sounds(
+                r#"{"template": "minecraft:stone", "properties": {"sounds": "minecraft:glass"}}"#
+            ),
+            Some(BlockSounds::Block("minecraft:glass".into()))
+        );
+        let own = r#"{"template": "minecraft:stone", "properties": {"sounds": {"volume": 0.5, "pitch": 2.0,
+            "break": "ruby:plate.break", "step": "ruby:plate.step", "place": "minecraft:block.chain.place",
+            "hit": "ruby:plate.hit", "fall": "ruby:plate.fall"}}}"#;
+        assert_eq!(
+            sounds(own),
+            Some(BlockSounds::Own(SoundType {
+                volume: 0.5,
+                pitch: 2.0,
+                break_sound: "ruby:plate.break".into(),
+                step: "ruby:plate.step".into(),
+                place: "minecraft:block.chain.place".into(),
+                hit: "ruby:plate.hit".into(),
+                fall: "ruby:plate.fall".into(),
+            }))
+        );
+        for bad in [
+            r#"{"template": "minecraft:stone", "properties": {"sounds": "ruby:plate"}}"#,
+            r#"{"template": "minecraft:stone", "properties": {"sounds": {"volume": 1.0, "pitch": 1.0,
+                "break": "plate", "step": "ruby:s", "place": "ruby:p", "hit": "ruby:h", "fall": "ruby:f"}}}"#,
+            r#"{"template": "minecraft:stone", "properties": {"sounds": {"volume": 1.0, "pitch": 1.0,
+                "break": "ruby:b", "step": "ruby:s", "place": "ruby:p", "hit": "ruby:h"}}}"#,
+        ] {
+            assert!(block(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn gate_sounds_need_a_fence_gate_and_sound_ids() {
         let block = |json: &str| {
             smod(
@@ -4399,6 +4491,42 @@ capabilities = ["registries"]
     /// A sign's wall form is one of the mod's blocks, of the matching wall
     /// template, with no item and no other sign. Anything else refuses this
     /// mod when it is read, and leaves the other mods alone.
+    #[test]
+    fn any_block_names_a_wall_form_of_its_own_mod() {
+        let pair = |standing: &str, wall: &str| {
+            let files: &[(&str, &[u8])] = &[
+                ("data/ruby/sunrise/block/lamp.json", standing.as_bytes()),
+                ("data/ruby/sunrise/block/wall_lamp.json", wall.as_bytes()),
+            ];
+            smod("walls", MANIFEST_TEXT, files)
+        };
+        let lamp = r#"{"template": "minecraft:stone", "wall_block": "ruby:wall_lamp"}"#;
+        let parsed = pair(lamp, r#"{"template": "minecraft:stone", "item": false}"#).unwrap();
+        assert_eq!(
+            parsed.blocks[0].wall_block.as_deref(),
+            Some("ruby:wall_lamp")
+        );
+        for (wall, wanted) in [
+            (r#"{"template": "minecraft:stone"}"#, "\"item\" is false"),
+            (
+                r#"{"template": "minecraft:stone", "item": false, "pick_item": "minecraft:stick"}"#,
+                "no pick_item",
+            ),
+        ] {
+            let e = pair(lamp, wall).unwrap_err();
+            assert!(e.contains(wanted), "{wanted}: {e}");
+        }
+        let unplaced =
+            r#"{"template": "minecraft:stone", "item": false, "wall_block": "ruby:wall_lamp"}"#;
+        assert!(
+            pair(
+                unplaced,
+                r#"{"template": "minecraft:stone", "item": false}"#
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn a_signs_wall_block_is_its_own_mods_wall_form() {
         let refused = |template: &str, wall_block: &str, wall: &str, wanted: &str| {

@@ -1,0 +1,2 @@
+sunrise-client-lib mod_content::tests::a_content_block_plays_its_own_sound_type lib daily resources
+sunrise-client-lib mod_content::tests::any_content_block_pair_shares_a_standing_and_wall_item lib daily resources

@@ -278,6 +278,19 @@ A block names its template and what differs from it:
   "item": true }
 ```
 
+`"sounds"` names a vanilla block whose sounds the block uses, or gives the block a sound type of its own, as
+`BlockBehaviour.Properties.sound` takes a mod-built `SoundType` (NeoForge's `DeferredSoundType`): its `volume`
+and `pitch`, and a sound event id for each of `break`, `step`, `place`, `hit` and `fall`, vanilla's or one of
+the mod's own `sounds.json`:
+
+```json
+"sounds": { "volume": 1.0, "pitch": 1.2, "break": "factory:metal.break", "step": "factory:metal.step",
+            "place": "minecraft:block.chain.place", "hit": "factory:metal.hit", "fall": "factory:metal.fall" }
+```
+
+All seven keys are required. An id that is not `namespace:path` fails the load. Code declarations use
+`BlockSounds::Block` or `BlockSounds::Own` with a `BlockSoundType`.
+
 A fence gate needs no kind of its own: a block whose template is a vanilla `minecraft:*_fence_gate` is a
 `FenceGateBlock`, with the template wood's open and close sounds. `"open_sound"` and `"close_sound"` accept a sound
 event id, such as `"minecraft:block.chain.break"` or a sound of the mod's own `sounds.json`, to replace that sound at
@@ -293,12 +306,20 @@ A block gets a block item of its own id by default. `"item": false` gives it non
 `Block.asItem` is air (what a block drops comes from its loot table). `"block_item": "<item id>"` (with `"item": false`) makes the block
 that other item instead, an item of the mod or a vanilla one, such as `"minecraft:diamond"`: pick-block and
 `Block.asItem` both read it, and the load fails naming the block when no such item exists. `"none"` is not an item id;
-write `"item": false`. A sign's wall form takes its sign's item through `wall_block`, not `block_item`.
+write `"item": false`. A wall form takes its standing block's item through `wall_block`, not `block_item`.
+
+A block whose item places it can name a `"wall_block"`, as vanilla's torches and heads do
+(`StandingAndWallBlockItem`): the item then places the wall block on a wall and the block itself on a floor, taking
+the first of the two that survives there in the order the player looks (`getNearestLookingDirections`), and places
+nothing where neither survives. The wall block is another of the mod's blocks, with `"item": false`; its own
+placement rule gives its facing (a `minecraft:wall_torch` template faces away from the wall), its item is the
+standing block's, and picking it gives that item. A template whose item is another kind than a block item (a
+door's, a bed's) takes no `wall_block`, and a wall form pairs with one block only.
 
 Pick-block takes the block's item by default. `"pick_item": "<item id>"` names a different one, with any `item` and
 `block_item`: vanilla's `getCloneItemStack`, which lets a mature crop pick its seed while `Block.asItem` stays what it
 is (air for `"item": false`). It is an item of the mod or a vanilla one, and the load fails naming the block when no
-such item exists. A sign's wall form picks its sign's item through `wall_block`, so it declares no `pick_item`.
+such item exists. A wall form picks its standing block's item through `wall_block`, so it declares no `pick_item`.
 
 `"suspicious_stew_effects": [{"id": "minecraft:night_vision", "duration": 100}]` makes the block a suspicious stew
 source. Entries are applied in order; duration is in ticks and defaults to 160 when omitted. An unknown mob effect is
@@ -1334,7 +1355,7 @@ by writing exactly the listed registry and tag path under `data/sunrise/tags/`.
 Other `data/sunrise/` and all `assets/sunrise/` files remain refused; the namespace cannot be claimed.
 Generated `sunrise:class/*` tags are refused by name: attach a part with `block_part_tag` instead.
 The SDK surface's `extension_tags` lists these same declarations, and `sdk diff` treats a removed tag as breaking.
-Templates and `sounds` name vanilla blocks; unknown keys are refused.
+Templates and a `sounds` string name vanilla blocks; unknown keys are refused.
 
 Some Java mods ship their files under other names than their mod id (Towns and Towers, mod id `t_and_t`, under
 `kaisyn` and `towns_and_towers`). A content mod lists those in its manifest:

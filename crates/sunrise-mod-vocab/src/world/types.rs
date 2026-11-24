@@ -1359,9 +1359,10 @@ pub enum ProgressType {
 }
 
 /// A block state's sounds (`BlockState.getSoundType()`, vanilla's `SoundType`): the sound
-/// events, as `LevelRef::play_sound` names them, and the volume and pitch they play at.
+/// events, as `LevelRef::play_sound` names them, and the volume and pitch they play at. A block
+/// declaration builds one for its own sounds ([`BlockSounds::Own`]).
 #[derive(Clone, Debug, PartialEq)]
-// exhaustive: the game builds it with a literal; mods only read it
+// exhaustive: vanilla's `SoundType` has exactly these seven values
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct BlockSoundType {
     /// `SoundType.getVolume`.
